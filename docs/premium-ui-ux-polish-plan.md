@@ -1,5 +1,7 @@
 # Framehouse Premium UI/UX Polish Plan
 
+Application chrome follows the [enforced style contract](ui-style-contract.md). Its current palette, geometry, borders, and spacing take precedence over historical examples in this document.
+
 Status: planning document only. This plan assumes the current workspace architecture mostly stays in place. It is not a big redesign plan.
 
 ## Objective

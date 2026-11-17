@@ -7,7 +7,9 @@
 #include "photo_layer_compiler.h"
 #include "photo_fragment_brush_preset_store.h"
 #include "photo_render_utils.h"
+#include "photo_smart_document.h"
 #include "photo_text_style.h"
+#include "photo_layer_style_codec.h"
 #include "preview_color_pipeline_config.h"
 #include "preview_device_icc_options.h"
 #include "render_plan_store.h"
@@ -95,6 +97,17 @@ QVariantMap plain_text_layer(const QString& id, const QString& text = QStringLit
   };
 }
 
+QVariantMap neutral_group_layer(const QString& id) {
+  return {
+      {QStringLiteral("id"), id},
+      {QStringLiteral("kind"), QStringLiteral("group")},
+      {QStringLiteral("name"), id},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("opacity"), 1.0},
+      {QStringLiteral("blendMode"), QStringLiteral("normal")},
+  };
+}
+
 QImage sdr_source() {
   QImage image(kWidth, kHeight, QImage::Format_RGBA8888);
   image.setColorSpace(QColorSpace(QColorSpace::SRgb));
@@ -171,6 +184,14 @@ bool has_layer_id(const std::vector<PhotoLayer>& layers, const QString& id) {
   return std::any_of(layers.cbegin(), layers.cend(), [&id](const PhotoLayer& layer) {
     return QString::fromStdString(layer.id) == id;
   });
+}
+
+const PhotoLayer* find_compiled_layer(
+    const std::vector<PhotoLayer>& layers, const QString& id) {
+  const auto found = std::find_if(layers.cbegin(), layers.cend(), [&id](const PhotoLayer& layer) {
+    return QString::fromStdString(layer.id) == id;
+  });
+  return found == layers.cend() ? nullptr : &*found;
 }
 
 double srgb_to_linear(double channel) {
@@ -917,6 +938,222 @@ bool verify_system_monitor_icc_preview(
   return true;
 }
 
+bool verify_neutral_group_display_text_suffix(const QImage& source, QString* error) {
+  EditRecipeState grouped_state;
+  grouped_state.photographic_rendering_model = QStringLiteral("aces2-ocio-v1");
+  auto group = neutral_group_layer(QStringLiteral("transform-group"));
+  group.insert(QStringLiteral("x"), 13);
+  group.insert(QStringLiteral("y"), 7);
+  group.insert(QStringLiteral("scale"), 0.91);
+  group.insert(QStringLiteral("rotation"), -4.0);
+  auto nested_text = plain_text_layer(QStringLiteral("grouped-title"));
+  nested_text.insert(QStringLiteral("parentId"), QStringLiteral("transform-group"));
+  grouped_state.layers = QVariantList{group, nested_text};
+  const auto grouped_config = compile_color_pipeline_config(grouped_state);
+  const auto grouped_pipeline = compile_state(grouped_state, source.size(), grouped_config);
+  const auto* compiled_group = find_compiled_layer(
+      grouped_pipeline.display_referred_text_layers, QStringLiteral("transform-group"));
+  const auto* compiled_text = find_compiled_layer(
+      grouped_pipeline.display_referred_text_layers, QStringLiteral("grouped-title"));
+  if (grouped_pipeline.display_referred_text_layers.size() != 2 ||
+      grouped_pipeline.photo_layers.size() != 1 ||
+      compiled_group == nullptr || compiled_group->kind != "group" ||
+      compiled_group->x != 13 || compiled_group->y != 7 ||
+      std::abs(compiled_group->transform_scale - 0.91) > 1e-9 ||
+      std::abs(compiled_group->transform_rotation + 4.0) > 1e-9 ||
+      compiled_text == nullptr || compiled_text->kind != "text" ||
+      has_layer_id(grouped_pipeline.photo_layers, QStringLiteral("grouped-title"))) {
+    *error = QStringLiteral(
+        "A plain text suffix inside a neutral group did not retain its group ancestry and transform.");
+    return false;
+  }
+
+  auto direct_text = nested_text;
+  for (const int target_index : {0, 1}) {
+    auto styled = grouped_state;
+    photo_editor::pipeline::LayerStyleOperation operation;
+    if (!layer_style_codec::create_default_operation(QStringLiteral("color_overlay"),
+            QStringLiteral("display-style"), &operation, error)) return false;
+    photo_editor::pipeline::LayerStyleStack stack{1, true, {operation}};
+    QString serialized;
+    if (!layer_style_codec::encode_stack(stack, &serialized, error)) return false;
+    auto target = styled.layers[target_index].toMap();
+    target.insert(QStringLiteral("layerStyleStack"), serialized);
+    styled.layers[target_index] = target;
+    const auto active = compile_state(styled, source.size(), grouped_config);
+    if (!active.display_referred_text_layers.empty()) {
+      *error = QStringLiteral("Active styles on text or its group must compose in the working-color layer stage.");
+      return false;
+    }
+    stack.operations.front().enabled = false;
+    if (!layer_style_codec::encode_stack(stack, &serialized, error)) return false;
+    target.insert(QStringLiteral("layerStyleStack"), serialized);
+    styled.layers[target_index] = target;
+    const auto bypassed = compile_state(styled, source.size(), grouped_config);
+    if (bypassed.display_referred_text_layers.size() != grouped_pipeline.display_referred_text_layers.size()) {
+      *error = QStringLiteral("Bypassing all layer styles must restore the original text color-domain route.");
+      return false;
+    }
+  }
+  direct_text.remove(QStringLiteral("parentId"));
+  direct_text.insert(QStringLiteral("x"), group.value(QStringLiteral("x")));
+  direct_text.insert(QStringLiteral("y"), group.value(QStringLiteral("y")));
+  direct_text.insert(QStringLiteral("scale"), group.value(QStringLiteral("scale")));
+  direct_text.insert(QStringLiteral("rotation"), group.value(QStringLiteral("rotation")));
+  EditRecipeState direct_state = grouped_state;
+  direct_state.layers = QVariantList{direct_text};
+  const auto grouped_plan = admitted_plan(
+      QStringLiteral("display-text-neutral-group-transform"), grouped_state,
+      source.size(), DisplayRenderingTarget::SrgbSimulation);
+  const auto direct_plan = admitted_plan(
+      QStringLiteral("display-text-neutral-group-direct-transform"), direct_state,
+      source.size(), DisplayRenderingTarget::SrgbSimulation);
+  const auto grouped_render = grouped_plan.has_value()
+      ? render_with_plan(source, grouped_state, *grouped_plan) : QImage{};
+  const auto direct_render = direct_plan.has_value()
+      ? render_with_plan(source, direct_state, *direct_plan) : QImage{};
+  if (grouped_render.isNull() || direct_render.isNull() ||
+      !same_image_pixels(grouped_render, direct_render)) {
+    *error = QStringLiteral(
+        "A transformed neutral group changed display-referred text placement or pixels.");
+    return false;
+  }
+
+  QString component_error;
+  const auto component_stack = smart_object::nested_document::create_component(
+      grouped_state.layers, {}, {QStringLiteral("transform-group")},
+      kWidth, kHeight, &component_error);
+  if (!component_error.isEmpty() || component_stack.size() != 1) {
+    *error = QStringLiteral("Could not create the neutral component wrapper fixture: %1")
+        .arg(component_error);
+    return false;
+  }
+  EditRecipeState component_state = grouped_state;
+  component_state.layers = component_stack;
+  const auto component_config = compile_color_pipeline_config(component_state);
+  const auto component_pipeline = compile_state(
+      component_state, source.size(), component_config);
+  const auto component_groups = std::count_if(
+      component_pipeline.display_referred_text_layers.cbegin(),
+      component_pipeline.display_referred_text_layers.cend(),
+      [](const PhotoLayer& layer) { return layer.kind == "group"; });
+  const auto component_text = std::find_if(
+      component_pipeline.display_referred_text_layers.cbegin(),
+      component_pipeline.display_referred_text_layers.cend(),
+      [](const PhotoLayer& layer) { return layer.kind == "text"; });
+  const auto component_plan = admitted_plan(
+      QStringLiteral("display-text-neutral-component-transform"), component_state,
+      source.size(), DisplayRenderingTarget::SrgbSimulation);
+  const auto component_render = component_plan.has_value()
+      ? render_with_plan(source, component_state, *component_plan) : QImage{};
+  if (component_groups < 2 ||
+      component_text == component_pipeline.display_referred_text_layers.cend() ||
+      component_pipeline.photo_layers.empty() || component_render.isNull() ||
+      !same_image_pixels(component_render, direct_render)) {
+    *error = QStringLiteral(
+        "A transformed component wrapper did not preserve nested display text and its parent group transform.");
+    return false;
+  }
+
+  auto repaired_component_stack = component_stack;
+  auto repaired_component = repaired_component_stack.constFirst().toMap();
+  const auto repaired_component_id =
+      repaired_component.value(QStringLiteral("id")).toString();
+  auto repaired_document =
+      repaired_component.value(QStringLiteral("smartObjectDocument")).toMap();
+  const QVariantMap nested_retouch_marker{
+      {QStringLiteral("id"), QStringLiteral("nested-clone-repair")},
+      {QStringLiteral("kind"), QStringLiteral("brush")},
+      {QStringLiteral("toolRole"), QStringLiteral("retouch")},
+      {QStringLiteral("retouchMode"), QStringLiteral("clone")},
+      {QStringLiteral("repairId"), QStringLiteral("nested-clone-repair")},
+      {QStringLiteral("componentPostCompositeRetouchVersion"), 1},
+      {QStringLiteral("componentRetouchCanvasWidth"), kWidth},
+      {QStringLiteral("componentRetouchCanvasHeight"), kHeight},
+      {QStringLiteral("committed"), true}};
+  repaired_document.insert(QStringLiteral("maskStack"),
+                           QVariantList{nested_retouch_marker});
+  repaired_component.insert(QStringLiteral("smartObjectDocument"), repaired_document);
+  repaired_component_stack[0] = repaired_component;
+
+  auto repaired_component_state = grouped_state;
+  repaired_component_state.layers = repaired_component_stack;
+  const auto repaired_component_pipeline = compile_state(
+      repaired_component_state, source.size(),
+      compile_color_pipeline_config(repaired_component_state));
+  const auto repaired_child_text_id = repaired_component_id +
+      QStringLiteral("::grouped-title");
+  if (!repaired_component_pipeline.display_referred_text_layers.empty() ||
+      !has_layer_id(repaired_component_pipeline.photo_layers, repaired_child_text_id)) {
+    *error = QStringLiteral(
+        "Text inside a component with post-composite repairs must stay in the repaired working-scene composition.");
+    return false;
+  }
+
+  auto parent_text = plain_text_layer(QStringLiteral("unrelated-parent-title"));
+  auto parent_and_repaired_component = repaired_component_state;
+  parent_and_repaired_component.layers =
+      QVariantList{parent_text, repaired_component};
+  const auto parent_text_pipeline = compile_state(
+      parent_and_repaired_component, source.size(),
+      compile_color_pipeline_config(parent_and_repaired_component));
+  if (parent_text_pipeline.display_referred_text_layers.size() != 1 ||
+      !has_layer_id(parent_text_pipeline.display_referred_text_layers,
+                    QStringLiteral("unrelated-parent-title")) ||
+      !has_layer_id(parent_text_pipeline.photo_layers, repaired_child_text_id)) {
+    *error = QStringLiteral(
+        "An unrelated topmost parent text layer must remain display-referred above a repaired component.");
+    return false;
+  }
+
+  auto partial_opacity = group;
+  partial_opacity.insert(QStringLiteral("opacity"), 0.5);
+  auto partial_state = grouped_state;
+  partial_state.layers = QVariantList{partial_opacity, nested_text};
+  const auto partial_pipeline = compile_state(
+      partial_state, source.size(), compile_color_pipeline_config(partial_state));
+  if (!partial_pipeline.display_referred_text_layers.empty() ||
+      !has_layer_id(partial_pipeline.photo_layers, QStringLiteral("grouped-title"))) {
+    *error = QStringLiteral(
+        "Text inside a partially transparent group must stay in the working-scene compositor.");
+    return false;
+  }
+
+  const QVariantMap covering_fill{
+      {QStringLiteral("id"), QStringLiteral("overlying-fill")},
+      {QStringLiteral("kind"), QStringLiteral("fill")},
+      {QStringLiteral("fillColor"), QStringLiteral("#28445e")},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("opacity"), 1.0},
+      {QStringLiteral("blendMode"), QStringLiteral("normal")}};
+  auto covered_state = grouped_state;
+  covered_state.layers = QVariantList{covering_fill, group, nested_text};
+  const auto covered_pipeline = compile_state(
+      covered_state, source.size(), compile_color_pipeline_config(covered_state));
+  if (!covered_pipeline.display_referred_text_layers.empty() ||
+      !has_layer_id(covered_pipeline.photo_layers, QStringLiteral("grouped-title"))) {
+    *error = QStringLiteral(
+        "Nested text below an overlying non-text sibling must not be raised above that sibling.");
+    return false;
+  }
+
+  auto child_cover = covering_fill;
+  child_cover.insert(QStringLiteral("id"), QStringLiteral("group-child-cover"));
+  child_cover.insert(QStringLiteral("parentId"), QStringLiteral("transform-group"));
+  auto child_covered_state = grouped_state;
+  child_covered_state.layers = QVariantList{group, child_cover, nested_text};
+  const auto child_covered_pipeline = compile_state(
+      child_covered_state, source.size(),
+      compile_color_pipeline_config(child_covered_state));
+  if (!child_covered_pipeline.display_referred_text_layers.empty() ||
+      !has_layer_id(child_covered_pipeline.photo_layers, QStringLiteral("grouped-title"))) {
+    *error = QStringLiteral(
+        "Nested text below an overlying group child must remain in its authored stacking position.");
+    return false;
+  }
+  return true;
+}
+
 bool verify_task_owned_photo_fragment_file_effects(QString* error) {
   QTemporaryDir runtime_root;
   if (!runtime_root.isValid()) {
@@ -1092,6 +1329,15 @@ int main(int argc, char** argv) {
       has_layer_id(compiled_overlay_state.photo_layers, QStringLiteral("cover-title"))) {
     std::cerr << "A plain topmost root text layer must move into the display-referred overlay stage\n";
     return 1;
+  }
+  QString grouped_text_error;
+  if (!verify_neutral_group_display_text_suffix(source, &grouped_text_error)) {
+    std::cerr << grouped_text_error.toStdString() << '\n';
+    return 1;
+  }
+  if (app.arguments().contains(QStringLiteral("--neutral-groups-only"))) {
+    std::cout << "photo_group_display_text_test passed\n";
+    return 0;
   }
   const auto base_admission = RenderPlanStore::shared().admit(
       QStringLiteral("display-text-cache-identity"),

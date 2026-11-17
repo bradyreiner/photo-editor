@@ -84,6 +84,7 @@ void CatalogAssetModel::initializeMetadataPersistence() {
       metadata_status_ = QStringLiteral("Metadata recovery could not be read. The original file has been preserved.");
     } else {
       asset_metadata_ = pending_metadata_;
+      invalidateSearchMetadataCache();
       if (!pending_metadata_.isEmpty()) metadata_status_ = QStringLiteral("Recovering pending metadata.");
       QTimer::singleShot(0, this, &CatalogAssetModel::startMetadataPersistence);
     }
@@ -107,6 +108,7 @@ void CatalogAssetModel::initializeMetadataPersistence() {
         for (auto it = records.cbegin(); it != records.cend(); ++it) {
           deferred_metadata_ids_.remove(it.key());
           asset_metadata_.insert(it.key(), merged.value(it.key()));
+          invalidateSearchMetadataCache(it.key());
           if (snapshot_fetch_active_ || snapshot_parse_active_) changed_metadata_during_snapshot_.insert(it.key());
         }
         metadata_persistence_blocked_ = false;
@@ -162,6 +164,7 @@ bool CatalogAssetModel::saveMetadataToSelected(const QVariantMap& patch) {
   for (auto it = changed.cbegin(); it != changed.cend(); ++it) {
     deferred_metadata_ids_.remove(it.key());
     asset_metadata_.insert(it.key(), it.value());
+    invalidateSearchMetadataCache(it.key());
     if (snapshot_fetch_active_ || snapshot_parse_active_) changed_metadata_during_snapshot_.insert(it.key());
   }
   metadata_persistence_blocked_ = false;

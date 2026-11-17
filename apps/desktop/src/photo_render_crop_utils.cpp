@@ -95,7 +95,8 @@ QRectF normalized_crop_rect_for_state(const QSize& size, const RenderEditState& 
 }
 
 QRect crop_rect_for_image(const QSize& size, const RenderEditState& state) {
-  if (!size.isValid()) {
+  // QSize considers zero axes valid; they cannot supply a pixel or bounds.
+  if (!size.isValid() || size.isEmpty()) {
     return {};
   }
 

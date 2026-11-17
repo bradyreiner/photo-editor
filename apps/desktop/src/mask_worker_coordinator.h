@@ -130,6 +130,7 @@ struct InpaintApplyRequest final {
   int generation = 0;
   int state_revision = 0;
   std::shared_ptr<AiInpaintControl> control;
+  std::shared_ptr<std::atomic<int>> source_render_latest_generation;
 };
 
 struct InpaintApplyResult final {
@@ -163,6 +164,7 @@ struct InpaintRegenerateRequest final {
   int generation = 0;
   int state_revision = 0;
   std::shared_ptr<AiInpaintControl> control;
+  std::shared_ptr<std::atomic<int>> source_render_latest_generation;
 };
 
 struct InpaintRegenerateResult final {

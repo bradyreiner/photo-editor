@@ -20,6 +20,15 @@ layout(std140, binding = 0) uniform buf {
     float occlusionReady;
     vec4 fadeColor;
     float fadeAmount;
+    float frameCornerRadius;
+    float clipMaskEnabled;
+    float clipMaskShape;
+    vec4 clipMaskRect;
+    float clipMaskCornerRadius;
+    vec2 clipMaskCanvasSize;
+    vec2 clipMaskFrameCenter;
+    float clipMaskFrameScale;
+    float clipMaskFrameRotationDegrees;
 } ubuf;
 
 void main()

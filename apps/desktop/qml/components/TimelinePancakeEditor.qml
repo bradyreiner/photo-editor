@@ -18,6 +18,8 @@ Item {
     property string editMode: "overwrite"
     property string transferMode: "copy"
     property var transferPreview: ({})
+    property var sequenceTrackRowsSnapshot: []
+    property bool sequenceTrackRowsRefreshQueued: false
     readonly property real sourceDuration: Math.max(0.001, Number(sourcePreview.durationSeconds || 1))
     readonly property real destinationDuration: Math.max(0.001, Number(timelineDocument.totalDurationSeconds || 1))
 
@@ -91,6 +93,22 @@ Item {
                     Number(destinationSeconds), editMode, transferMode)
     }
 
+    function refreshSequenceTrackRowsSnapshot() {
+        if (!root.timelineDocument)
+            return
+        sequenceTrackRowsSnapshot = timelineDocument.snapshotSequenceTracks()
+    }
+
+    function scheduleSequenceTrackRowsSnapshotRefresh() {
+        if (sequenceTrackRowsRefreshQueued)
+            return
+        sequenceTrackRowsRefreshQueued = true
+        Qt.callLater(function() {
+            root.sequenceTrackRowsRefreshQueued = false
+            root.refreshSequenceTrackRowsSnapshot()
+        })
+    }
+
     function commitTransfer(clipIds) {
         const ids = clipIds || selectedClipIds
         const count = timelineDocument.transferFromPancakeSequence(
@@ -112,7 +130,12 @@ Item {
         draggingClipId = ""
     }
 
-    Component.onCompleted: refreshSources("")
+    Component.onCompleted: {
+        refreshSources("")
+        refreshSequenceTrackRowsSnapshot()
+    }
+
+    onTimelineDocumentChanged: scheduleSequenceTrackRowsSnapshotRefresh()
 
     Connections {
         target: root.timelineDocument
@@ -120,6 +143,9 @@ Item {
         function onPancakeSequencesChanged() {
             root.refreshSources(root.sourcePath)
         }
+
+        function onClipsChanged() { root.scheduleSequenceTrackRowsSnapshotRefresh() }
+        function onSequenceChanged() { root.scheduleSequenceTrackRowsSnapshotRefresh() }
     }
 
     ColumnLayout {
@@ -197,7 +223,8 @@ Item {
                               ? Number(root.sourcePreview.frameRate || 0).toFixed(3).replace(/\.000$/, "") + " fps"
                               : "No other saved sequence"
                         color: theme.textFaint
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: theme.typeCaption
                     }
                 }
@@ -233,7 +260,8 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: String(sourceTrackRow.modelData.displayLabel || "V")
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeCaption
                                 font.weight: Font.DemiBold
                             }
@@ -344,6 +372,7 @@ Item {
                     }
 
                     ToneTextField {
+                        numericEntry: true
                         objectName: "timelinePancakeSourceInField"
                         Layout.preferredWidth: 92
                         text: Number(root.sourceInSeconds).toFixed(3)
@@ -357,6 +386,7 @@ Item {
                     }
 
                     ToneTextField {
+                        numericEntry: true
                         objectName: "timelinePancakeSourceOutField"
                         Layout.preferredWidth: 92
                         text: Number(root.sourceOutSeconds).toFixed(3)
@@ -440,6 +470,7 @@ Item {
                     }
 
                     ToneTextField {
+                        numericEntry: true
                         objectName: "timelinePancakeDestinationField"
                         Layout.preferredWidth: 104
                         text: Number(root.destinationSeconds).toFixed(3)
@@ -481,7 +512,7 @@ Item {
                     ListView {
                         id: destinationTrackList
                         anchors.fill: parent
-                        model: root.timelineDocument.sequenceTracks || []
+                        model: root.sequenceTrackRowsSnapshot || []
                         interactive: contentHeight > height
                         clip: true
                         spacing: 2
@@ -500,7 +531,8 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: String(destinationTrackRow.modelData.displayLabel || "V")
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeCaption
                             }
 

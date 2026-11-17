@@ -5366,7 +5366,8 @@ QVariantMap verified_native_composition_completion(
   }
 
   static const QSet<QString> localized_operations{
-      QStringLiteral("add_text"), QStringLiteral("text"), QStringLiteral("typography"),
+      QStringLiteral("add_text"), QStringLiteral("add_paragraph_text"), QStringLiteral("text_range_style"),
+      QStringLiteral("text"), QStringLiteral("typography"),
       QStringLiteral("text_path"), QStringLiteral("transform"), QStringLiteral("perspective"),
       QStringLiteral("move"), QStringLiteral("copy_selection"), QStringLiteral("erase_selection"),
       QStringLiteral("select_subject"), QStringLiteral("lasso_selection"), QStringLiteral("blur"),
@@ -19447,7 +19448,19 @@ QVariantMap AgentEditController::editingFreedomPolicy() const {
 }
 
 QVariantMap AgentEditController::authorizeNativeEditingCommand(const QString& name, bool property) const {
-  const auto style = activeRunStyle();
+  return authorizeNativeEditingCommandForTask(name, property, approved_task_snapshot_);
+}
+
+QVariantMap AgentEditController::authorizeNativeEditingCommandForTask(
+    const QString& name, bool property, const QVariantMap& approved_snapshot) const {
+  if (!approved_snapshot.isEmpty() &&
+      (approved_snapshot.value(QStringLiteral("contract")) != QStringLiteral("agent-approved-session-v1") ||
+       approved_snapshot.value(QStringLiteral("prompt")).toString().trimmed().isEmpty()))
+    return {{QStringLiteral("ok"), false},
+        {QStringLiteral("error"), QStringLiteral("Native task permissions require a valid approved task snapshot.")},
+        {QStringLiteral("blockedByStyle"), true}};
+  const auto style = style_for_approved_task_capabilities(
+      style_for_editing_freedom(selectedStyle(), editing_freedom_), approved_snapshot, editing_freedom_);
   const auto allowed = style.value("allowedTools").toMap();
   QStringList required;
   if (property) {
@@ -19505,10 +19518,18 @@ QVariantMap AgentEditController::renderCurrentProofForSelected(
   setStatus(start_status);
 
   QStringList errors;
+  bool recipe_pending = false;
   if (catalog_model_ == nullptr) {
     errors.append(QStringLiteral("Catalog model is not connected."));
   } else if (catalog_model_->selectedAssetCount() != 1) {
     errors.append(QStringLiteral("Agent proof rendering currently requires exactly one selected photo."));
+  } else {
+    const auto selected_asset_id = catalog_model_->selectedAssetId();
+    if (!catalog_model_->assetRecipeReady(selected_asset_id)) {
+      catalog_model_->requestAssetRecipes({selected_asset_id});
+      recipe_pending = true;
+      errors.append(QStringLiteral("The saved edit recipe is loading; retry proof rendering after it finishes."));
+    }
   }
   const auto style = selectedStyle();
   if (style.isEmpty()) {
@@ -19516,9 +19537,16 @@ QVariantMap AgentEditController::renderCurrentProofForSelected(
   }
   if (!errors.isEmpty()) {
     setRunning(false);
-    setStatus(QStringLiteral("Failed"));
+    setStatus(recipe_pending ? QStringLiteral("Waiting for saved edit recipe")
+                             : QStringLiteral("Failed"));
     setErrorMessage(errors.join(QStringLiteral("; ")));
-    const auto report = result_map(false, errors);
+    auto report = result_map(false, errors);
+    if (recipe_pending) {
+      report.insert(QStringLiteral("pending"), true);
+      report.insert(QStringLiteral("retryable"), true);
+      report.insert(QStringLiteral("mutationNotApplied"), true);
+      report.insert(QStringLiteral("assetId"), catalog_model_->selectedAssetId());
+    }
     setLastRunReport(report);
     return report;
   }
@@ -19931,6 +19959,20 @@ QVariantMap AgentEditController::exportPreflightForScope(
   const auto report_scope = report_scope_for_assets(scope, selected_assets);
   if (catalog_model_ != nullptr && selected_assets.isEmpty()) {
     errors.append(empty_scope_error(scope, QStringLiteral("export preflight")));
+  }
+  QStringList recipes_loading;
+  if (catalog_model_ != nullptr) {
+    for (const auto& value : selected_assets) {
+      const auto asset = value.toMap();
+      if (asset.value(QStringLiteral("mediaType")).toString() != QStringLiteral("photo")) continue;
+      const auto asset_id = asset.value(QStringLiteral("assetId")).toString();
+      if (asset_id.isEmpty() || catalog_model_->assetRecipeReady(asset_id)) continue;
+      recipes_loading.push_back(asset_id);
+    }
+    if (!recipes_loading.isEmpty()) {
+      catalog_model_->requestAssetRecipes(recipes_loading);
+      errors.append(QStringLiteral("Saved edit recipes are loading; retry export after they finish."));
+    }
   }
 
   if (!errors.isEmpty()) {
@@ -32569,6 +32611,7 @@ void AgentEditController::appendRunEvent(
     headline = detail;
     ui_anchor = observation ? QStringLiteral("image")
         : operation.startsWith(QStringLiteral("select")) || operation == QStringLiteral("add_text") ||
+          operation == QStringLiteral("add_paragraph_text") || operation == QStringLiteral("text_range_style") ||
           operation == QStringLiteral("typography") ? QStringLiteral("toolbar") : QStringLiteral("inspector");
     character_mode = status == QStringLiteral("failed") ? QStringLiteral("warning")
         : observation ? QStringLiteral("observe") : QStringLiteral("adjust");

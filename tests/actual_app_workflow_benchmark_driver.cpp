@@ -1,20 +1,26 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <limits>
+#include <mutex>
 #include <numeric>
 #include <thread>
 #include <vector>
 
 #include <QApplication>
+#include <QMetaProperty>
+#include <QAbstractEventDispatcher>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
+#include <QDebug>
 #include <QEventLoop>
 #include <QDataStream>
 #include <QDir>
@@ -22,11 +28,13 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QGuiApplication>
 #include <QImage>
 #include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QJSValue>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -38,6 +46,8 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QScreen>
+#include <QSaveFile>
 #include <QSet>
 #include <QSignalSpy>
 #include <QSettings>
@@ -48,32 +58,44 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTest>
+#include <QSignalSpy>
 #include <QThreadPool>
 #include <QTimer>
 #include <QTime>
 #include <QUrl>
+#include <QUuid>
 #include <QVariant>
+#include <QVideoSink>
+#include <QVideoFrame>
 #include <QVector>
 #include <qqml.h>
 
 #include "app_shell_controller.h"
+#include "timeline_voiceover_recorder.h"
+#include "native_window_test_input.h"
 #include "app_bootstrap.h"
 #include "brush_live_preview_item.h"
 #include "brush_input_schema.h"
 #include "brush_matte_rebuild.h"
 #include "local_mask_compiler.h"
 #include "photo_text_document_style.h"
+#include "scene_library_controller.h"
+#include "scene_video_recorder.h"
+#include "depth_motion_controller.h"
+#include "depth_point_cloud_viewport.h"
 #include "carousel_document_controller.h"
 #include "catalog_asset_model.h"
 #include "recent_user_input_filter.h"
 #include "visual_search_controller.h"
 #include "catalog_similarity_search.h"
+#include "search_model_setup_controller.h"
 #include "search_runtime_bundle.h"
 #include "search_edit_workflow.h"
 #include "agent_edit_controller.h"
 #include "edit_adjustment_patch.h"
 #include "edit_recipe_mask_schema.h"
 #include "editor_preview_controller.h"
+#include "creative_example_thumbnail_image_provider.h"
 #include "photo_render_utils.h"
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 #include "editor_preview_image_provider.h"
@@ -90,7 +112,14 @@
 #include "tablet_input_area.h"
 #include "timeline_audio_output.h"
 #include "timeline_document_controller.h"
+#include "timeline_color_edit_controller.h"
+#include "timeline_asset_store.h"
 #include "timeline_playback_controller.h"
+#include "worker_queue_registry.h"
+#include "workspace_presentation_observer.h"
+#ifdef Q_OS_MACOS
+#include <mach/mach.h>
+#endif
 #if defined(__APPLE__) && defined(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
 #include "gaussian_scene_controller.h"
 #include "gaussian_scene_viewport.h"
@@ -590,8 +619,33 @@ QQuickItem* find_named_item(QObject* root, const QString& object_name) {
   return qobject_cast<QQuickItem*>(find_named_object(root, object_name));
 }
 
+QVector<QQuickItem*> find_named_items(QObject* root, const QString& object_name) {
+  QVector<QQuickItem*> matches;
+  QSet<const QObject*> visited;
+  const auto visit = [&](const auto& self, QObject* candidate) -> void {
+    if (candidate == nullptr || visited.contains(candidate)) return;
+    visited.insert(candidate);
+    if (auto* item = qobject_cast<QQuickItem*>(candidate)) {
+      if (item->objectName() == object_name) matches.push_back(item);
+      for (auto* child : item->childItems()) self(self, child);
+    }
+    if (auto* window = qobject_cast<QQuickWindow*>(candidate)) self(self, window->contentItem());
+    for (auto* child : candidate->children()) self(self, child);
+  };
+  visit(visit, root);
+  return matches;
+}
+
 bool item_visible(const QQuickItem* item) {
   return item != nullptr && item->isVisible() && item->width() > 0.0 && item->height() > 0.0;
+}
+
+bool brush_feedback_surface_visible(const QQuickItem* item) {
+  if (!item_visible(item)) return false;
+  for (auto* ancestor = item; ancestor != nullptr; ancestor = ancestor->parentItem()) {
+    if (ancestor->opacity() <= 0.0) return false;
+  }
+  return true;
 }
 
 QQuickItem* find_visible_named_item(QObject* root, const QString& object_name) {
@@ -644,6 +698,1217 @@ QQuickItem* find_visible_named_item(QObject* root, const QString& object_name) {
 
 bool named_item_visible(QObject* root, const QString& object_name) {
   return item_visible(find_visible_named_item(root, object_name));
+}
+
+struct TimelineScrollBenchmarkConfig final {
+  QString project_path;
+  QString load_path;
+  QString candidate_path;
+  QString timeline_id;
+  QString working_copy_sha256;
+  QString cache_dir;
+  QString expected_document_hash;
+  QString expected_file_sha256;
+  QString report_path;
+  int expected_tracks = 0;
+  int expected_clips = 0;
+  double expected_duration_seconds = 0.0;
+  bool owned_checkpoint = false;
+  bool offscreen_diagnostic = false;
+  bool selection_proof = false;
+  bool scrub_proof = false;
+  int window_width = 1600;
+  int window_height = 1000;
+  int wheel_timeout_ms = 1000;
+  int hydration_timeout_ms = 1200000;
+  qint64 readiness_wait_ms = 0;
+  int readiness_stability_ms = 1000;
+};
+
+struct TimelineClipItemTelemetry final {
+  int live_items = -1;
+  qint64 created_items = -1;
+  qint64 destroyed_items = -1;
+  bool observable = false;
+};
+
+TimelineClipItemTelemetry read_timeline_clip_item_telemetry(QObject* workspace) {
+  TimelineClipItemTelemetry result;
+  if (workspace == nullptr) return result;
+  bool live_ok = false;
+  bool created_ok = false;
+  bool destroyed_ok = false;
+  result.live_items = workspace->property("timelineClipItemCount").toInt(&live_ok);
+  result.created_items = workspace->property("timelineClipItemsCreated").toLongLong(&created_ok);
+  result.destroyed_items = workspace->property("timelineClipItemsDestroyed").toLongLong(&destroyed_ok);
+  result.observable = live_ok && created_ok && destroyed_ok && result.live_items >= 0 &&
+                      result.created_items >= 0 && result.destroyed_items >= 0;
+  return result;
+}
+
+void insert_timeline_scroll_measurement_scope(
+    QJsonObject* report,
+    const bool offscreen_diagnostic) {
+  if (report == nullptr || !offscreen_diagnostic) return;
+  report->insert(QStringLiteral("offscreenDiagnostic"), true);
+  report->insert(QStringLiteral("physicalPerformanceQualified"), false);
+  report->insert(QStringLiteral("measurementScope"),
+                  QStringLiteral("offscreen GUI frame cost; not presented latency"));
+  report->insert(QStringLiteral("qtPlatform"), QGuiApplication::platformName());
+}
+
+void log_timeline_scroll_offscreen_scope(const bool offscreen_diagnostic) {
+  if (!offscreen_diagnostic) return;
+  std::cerr << "TIMELINE_SCROLL_SCOPE physicalPerformanceQualified=false "
+               "measurementScope=\"offscreen GUI frame cost; not presented latency\""
+            << '\n';
+}
+
+QJsonObject timeline_scroll_background_diagnostics(
+    const photo_editor::desktop::TimelineDocumentController& document) {
+  const auto cache = document.cacheBudgetState();
+  const auto background = document.backgroundWorkPriorityState();
+  const auto intent = photo_editor::desktop::WorkerQueueRegistry::userIntentSnapshot();
+  const auto analysis = photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+      QStringLiteral("analysis"), QStringLiteral("timeline"), QString{});
+  const auto proxy = photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+      QStringLiteral("proxy"), QStringLiteral("timeline"), QString{});
+  return {
+      {QStringLiteral("cachePressureLevel"),
+       cache.value(QStringLiteral("pressureLevel")).toString()},
+      {QStringLiteral("cachePressureExplanation"),
+       cache.value(QStringLiteral("pressureExplanation")).toString()},
+      {QStringLiteral("availableMemoryBytes"),
+       cache.value(QStringLiteral("availableMemoryBytes")).toLongLong()},
+      {QStringLiteral("installedMemoryBytes"),
+       cache.value(QStringLiteral("installedMemoryBytes")).toLongLong()},
+      {QStringLiteral("diskAvailableBytes"),
+       cache.value(QStringLiteral("diskAvailableBytes")).toLongLong()},
+      {QStringLiteral("workspaceIntent"), QJsonObject::fromVariantMap(intent)},
+      {QStringLiteral("analysisPriority"),
+       QJsonObject::fromVariantMap(analysis)},
+      {QStringLiteral("proxyPriority"), QJsonObject::fromVariantMap(proxy)},
+      {QStringLiteral("backgroundPriorityState"),
+       QJsonObject::fromVariantMap(background)},
+      {QStringLiteral("agentTaskDocumentReady"),
+       document.agentTaskDocumentReady()},
+      {QStringLiteral("incrementalLoadBusy"), document.incrementalLoadBusy()},
+      {QStringLiteral("incrementalLoadPending"),
+       document.incrementalLoadPendingCount()},
+      {QStringLiteral("incrementalLoadCompleted"),
+       document.incrementalLoadCompletedCount()},
+      {QStringLiteral("incrementalLoadStatus"),
+       document.incrementalLoadStatus()},
+      {QStringLiteral("mediaAnalysisPending"),
+       document.mediaAnalysisPendingCount()},
+      {QStringLiteral("saveInProgress"),
+       document.timelineSaveInProgress()},
+  };
+}
+
+QJsonObject timeline_scroll_checkpoint_semantic_diff(
+    const QString& pinned_copy_path,
+    const QString& expected_hash,
+    const photo_editor::desktop::TimelineDocumentController& document) {
+  QJsonObject result{
+      {QStringLiteral("schema"),
+       QStringLiteral("timeline-scroll-checkpoint-diff:v1")},
+      {QStringLiteral("pinnedCopyName"), QFileInfo(pinned_copy_path).fileName()},
+      {QStringLiteral("expectedDocumentHash"), expected_hash},
+      {QStringLiteral("observedDocumentHash"),
+       document.deterministicDocumentHash()},
+      {QStringLiteral("stateReady"), document.agentTaskDocumentReady()},
+  };
+  const auto observed_bytes = document.agentTaskDocumentState();
+  if (observed_bytes.isEmpty()) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"),
+                  QStringLiteral("controller_document_state_not_ready"));
+    return result;
+  }
+  QFile pinned_copy(pinned_copy_path);
+  if (!pinned_copy.open(QIODevice::ReadOnly)) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), QStringLiteral("cannot_read_pinned_copy"));
+    return result;
+  }
+  QJsonParseError expected_error;
+  const auto expected_document =
+      QJsonDocument::fromJson(pinned_copy.readAll(), &expected_error);
+  if (expected_error.error != QJsonParseError::NoError ||
+      !expected_document.isObject()) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), QStringLiteral("pinned_copy_json_invalid"));
+    result.insert(QStringLiteral("parseErrorOffset"),
+                  static_cast<double>(expected_error.offset));
+    return result;
+  }
+  QJsonParseError observed_error;
+  const auto observed_document =
+      QJsonDocument::fromJson(observed_bytes, &observed_error);
+  if (observed_error.error != QJsonParseError::NoError ||
+      !observed_document.isObject()) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"),
+                  QStringLiteral("controller_document_state_json_invalid"));
+    result.insert(QStringLiteral("parseErrorOffset"),
+                  static_cast<double>(observed_error.offset));
+    return result;
+  }
+
+  auto expected_root = expected_document.object();
+  expected_root.remove(QStringLiteral("updatedAt"));
+  auto observed_root = observed_document.object();
+  observed_root.remove(QStringLiteral("updatedAt"));
+  constexpr qsizetype kMaxDifferences = 30;
+  constexpr qsizetype kMaxValueCharacters = 300;
+  QJsonArray differences;
+  qsizetype difference_count = 0;
+  bool limit_reached = false;
+  const auto type_name = [](const QJsonValue& value) {
+    switch (value.type()) {
+      case QJsonValue::Null: return QStringLiteral("null");
+      case QJsonValue::Bool: return QStringLiteral("boolean");
+      case QJsonValue::Double: return QStringLiteral("number");
+      case QJsonValue::String: return QStringLiteral("string");
+      case QJsonValue::Array: return QStringLiteral("array");
+      case QJsonValue::Object: return QStringLiteral("object");
+      case QJsonValue::Undefined: return QStringLiteral("missing");
+    }
+    return QStringLiteral("unknown");
+  };
+  const auto value_text = [&](const QString& path, const QJsonValue& value) {
+    if (value.isUndefined()) return QStringLiteral("<missing>");
+    if (value.isObject()) return QStringLiteral("<object>");
+    if (value.isArray()) return QStringLiteral("<array:%1>").arg(value.toArray().size());
+    const auto lowered_path = path.toLower();
+    if (lowered_path.contains(QStringLiteral("path")) ||
+        lowered_path.contains(QStringLiteral("url")) ||
+        lowered_path.contains(QStringLiteral("filepath")) ||
+        lowered_path.contains(QStringLiteral("postersource")) ||
+        lowered_path.contains(QStringLiteral("waveformsource"))) {
+      return QStringLiteral("<redacted>");
+    }
+    auto text = QString::fromUtf8(
+        QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact));
+    if (text.size() > kMaxValueCharacters) {
+      text.truncate(kMaxValueCharacters);
+      text.append(QChar(0x2026));
+    }
+    return text;
+  };
+  const auto add_difference = [&](const QString& path,
+                                  const QJsonValue& expected,
+                                  const QJsonValue& observed) {
+    ++difference_count;
+    if (differences.size() >= kMaxDifferences) {
+      limit_reached = true;
+      return;
+    }
+    differences.push_back(QJsonObject{
+        {QStringLiteral("path"), path},
+        {QStringLiteral("expectedType"), type_name(expected)},
+        {QStringLiteral("observedType"), type_name(observed)},
+        {QStringLiteral("expected"), value_text(path, expected)},
+        {QStringLiteral("observed"), value_text(path, observed)},
+    });
+  };
+  std::function<void(const QJsonValue&, const QJsonValue&, const QString&)> compare;
+  compare = [&](const QJsonValue& expected,
+                const QJsonValue& observed,
+                const QString& path) {
+    if (limit_reached || expected == observed) return;
+    if (expected.isObject() && observed.isObject()) {
+      const auto expected_object = expected.toObject();
+      const auto observed_object = observed.toObject();
+      QSet<QString> key_set;
+      for (const auto& key : expected_object.keys()) key_set.insert(key);
+      for (const auto& key : observed_object.keys()) key_set.insert(key);
+      auto keys = key_set.values();
+      std::sort(keys.begin(), keys.end());
+      for (const auto& key : keys) {
+        if (limit_reached) break;
+        compare(expected_object.value(key), observed_object.value(key),
+                path + QLatin1Char('.') + key);
+      }
+      return;
+    }
+    if (expected.isArray() && observed.isArray()) {
+      const auto expected_array = expected.toArray();
+      const auto observed_array = observed.toArray();
+      const auto shared_size = qMin(expected_array.size(), observed_array.size());
+      for (qsizetype index = 0; index < shared_size && !limit_reached; ++index) {
+        compare(expected_array.at(index), observed_array.at(index),
+                path + QStringLiteral("[%1]").arg(index));
+      }
+      if (!limit_reached && expected_array.size() != observed_array.size()) {
+        add_difference(path + QStringLiteral(".length"),
+                       expected_array.size(), observed_array.size());
+      }
+      return;
+    }
+    add_difference(path, expected, observed);
+  };
+  compare(expected_root, observed_root, QStringLiteral("$"));
+  result.insert(QStringLiteral("available"), true);
+  result.insert(QStringLiteral("differenceCountAtLeast"),
+                static_cast<double>(difference_count));
+  result.insert(QStringLiteral("differenceLimitReached"), limit_reached);
+  result.insert(QStringLiteral("firstDifferences"), differences);
+  return result;
+}
+
+bool timeline_scroll_autosave_matches_pinned_input(
+    const QString& pinned_input_path,
+    const QString& autosave_candidate_path,
+    QString* error) {
+  if (error != nullptr) error->clear();
+  QFile pinned_input(pinned_input_path);
+  QFile candidate(autosave_candidate_path);
+  if (!pinned_input.open(QIODevice::ReadOnly) ||
+      !candidate.open(QIODevice::ReadOnly)) {
+    if (error != nullptr) *error = QStringLiteral("candidate_or_input_unreadable");
+    return false;
+  }
+  QJsonParseError pinned_parse_error;
+  QJsonParseError candidate_parse_error;
+  auto pinned_document = QJsonDocument::fromJson(pinned_input.readAll(), &pinned_parse_error);
+  auto candidate_document =
+      QJsonDocument::fromJson(candidate.readAll(), &candidate_parse_error);
+  if (pinned_parse_error.error != QJsonParseError::NoError ||
+      candidate_parse_error.error != QJsonParseError::NoError ||
+      !pinned_document.isObject() || !candidate_document.isObject()) {
+    if (error != nullptr) *error = QStringLiteral("candidate_or_input_json_invalid");
+    return false;
+  }
+  auto pinned_object = pinned_document.object();
+  auto candidate_object = candidate_document.object();
+  pinned_object.remove(QStringLiteral("updatedAt"));
+  candidate_object.remove(QStringLiteral("updatedAt"));
+  if (pinned_object != candidate_object) {
+    if (error != nullptr) *error = QStringLiteral("candidate_semantic_document_mismatch");
+    return false;
+  }
+  return true;
+}
+
+bool parse_sha256(const QString& text) {
+  return text.size() == 64 && std::all_of(text.cbegin(), text.cend(), [](const QChar character) {
+    return (character >= QLatin1Char('0') && character <= QLatin1Char('9')) ||
+           (character.toLower() >= QLatin1Char('a') && character.toLower() <= QLatin1Char('f'));
+  });
+}
+
+bool parse_timeline_scroll_benchmark_config(
+    const QStringList& arguments,
+    TimelineScrollBenchmarkConfig* config,
+    QString* error) {
+  if (config == nullptr || error == nullptr) return false;
+  if (!arguments.contains(QStringLiteral("--timeline-scroll-benchmark"))) {
+    if (arguments.contains(QStringLiteral("--timeline-scroll-offscreen-diagnostic"))) {
+      *error = QStringLiteral(
+          "--timeline-scroll-offscreen-diagnostic requires --timeline-scroll-benchmark.");
+    } else if (arguments.contains(QStringLiteral("--timeline-scroll-selection-proof"))) {
+      *error = QStringLiteral(
+          "--timeline-scroll-selection-proof requires --timeline-scroll-benchmark.");
+    } else if (arguments.contains(QStringLiteral("--timeline-scroll-scrub-proof"))) {
+      *error = QStringLiteral(
+          "--timeline-scroll-scrub-proof requires --timeline-scroll-benchmark.");
+    }
+    return false;
+  }
+
+  config->project_path = option_value(arguments, QStringLiteral("--timeline-scroll-project"));
+  config->cache_dir = option_value(arguments, QStringLiteral("--timeline-scroll-cache-dir"));
+  config->expected_document_hash =
+      option_value(arguments, QStringLiteral("--timeline-scroll-expected-document-hash"));
+  config->expected_file_sha256 =
+      option_value(arguments, QStringLiteral("--timeline-scroll-expected-file-sha256"));
+  config->owned_checkpoint =
+      arguments.contains(QStringLiteral("--timeline-scroll-owned-checkpoint"));
+  config->offscreen_diagnostic =
+      arguments.contains(QStringLiteral("--timeline-scroll-offscreen-diagnostic"));
+  config->selection_proof =
+      arguments.contains(QStringLiteral("--timeline-scroll-selection-proof"));
+  config->scrub_proof =
+      arguments.contains(QStringLiteral("--timeline-scroll-scrub-proof"));
+  config->timeline_id =
+      option_value(arguments, QStringLiteral("--timeline-scroll-timeline-id"));
+  config->report_path = option_value(arguments, QStringLiteral("--timeline-scroll-report"));
+  config->expected_tracks = option_int(arguments, QStringLiteral("--timeline-scroll-expected-tracks"), -1);
+  config->expected_clips = option_int(arguments, QStringLiteral("--timeline-scroll-expected-clips"), -1);
+  config->window_width = option_int(arguments, QStringLiteral("--timeline-scroll-width"), 1600);
+  config->window_height = option_int(arguments, QStringLiteral("--timeline-scroll-height"), 1000);
+  config->wheel_timeout_ms =
+      option_int(arguments, QStringLiteral("--timeline-scroll-wheel-timeout-ms"), 1000);
+  config->hydration_timeout_ms =
+      option_int(arguments, QStringLiteral("--timeline-scroll-hydration-timeout-ms"), 1200000);
+
+  bool duration_ok = false;
+  config->expected_duration_seconds =
+      option_value(arguments, QStringLiteral("--timeline-scroll-expected-duration-seconds"))
+          .toDouble(&duration_ok);
+  if (config->project_path.isEmpty() || !parse_sha256(config->expected_document_hash) ||
+      config->expected_tracks <= 0 || config->expected_clips < 0 || !duration_ok ||
+      !std::isfinite(config->expected_duration_seconds) ||
+      config->expected_duration_seconds <= 0.0 ||
+      !parse_sha256(config->expected_file_sha256) ||
+      (config->owned_checkpoint &&
+       (QUuid(config->timeline_id).isNull() ||
+        QUuid(config->timeline_id).toString(QUuid::WithoutBraces) != config->timeline_id ||
+        config->expected_document_hash != config->expected_document_hash.toLower())) ||
+      (!config->owned_checkpoint && !config->timeline_id.isEmpty()) ||
+      config->window_width < 900 || config->window_height < 650 ||
+      config->wheel_timeout_ms < 100 || config->wheel_timeout_ms > 60000 ||
+      config->hydration_timeout_ms < 1000 || config->hydration_timeout_ms > 1800000) {
+    *error = QStringLiteral(
+        "Timeline scroll benchmark requires --timeline-scroll-project, a 64-character "
+        "--timeline-scroll-expected-document-hash and --timeline-scroll-expected-file-sha256, "
+        "and, for --timeline-scroll-owned-checkpoint, a canonical --timeline-scroll-timeline-id, "
+        "positive expected tracks/duration, nonnegative expected clips, an existing "
+        "canonical cache directory, and valid window/readiness timeout values.");
+    return false;
+  }
+  const QFileInfo cache_info(config->cache_dir);
+  const auto canonical_cache_dir = cache_info.canonicalFilePath();
+  if (!cache_info.exists() || !cache_info.isDir() || cache_info.isSymLink() ||
+      canonical_cache_dir.isEmpty() ||
+      QDir::cleanPath(config->cache_dir) != canonical_cache_dir ||
+      !cache_info.isReadable() || !cache_info.isWritable()) {
+    *error = QStringLiteral(
+        "Timeline scroll benchmark cache must be an existing readable/writable canonical "
+        "directory without a symlink path.");
+    return false;
+  }
+  config->cache_dir = canonical_cache_dir;
+  return true;
+}
+
+QString sha256_file(const QString& path, QString* error = nullptr) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    if (error != nullptr) *error = file.errorString();
+    return {};
+  }
+  QCryptographicHash hash(QCryptographicHash::Sha256);
+  QByteArray block;
+  do {
+    block = file.read(1024 * 1024);
+    if (!block.isEmpty()) hash.addData(block);
+  } while (!block.isEmpty());
+  if (file.error() != QFileDevice::NoError) {
+    if (error != nullptr) *error = file.errorString();
+    return {};
+  }
+  return QString::fromLatin1(hash.result().toHex());
+}
+
+QJsonObject sample_summary_json(const std::vector<double>& samples) {
+  const auto summary = summarize_samples(samples);
+  return {{QStringLiteral("count"), static_cast<qint64>(samples.size())},
+          {QStringLiteral("averageMs"), summary.avg_ms},
+          {QStringLiteral("p50Ms"), summary.p50_ms},
+          {QStringLiteral("p95Ms"), summary.p95_ms},
+          {QStringLiteral("p99Ms"), summary.p99_ms},
+          {QStringLiteral("maxMs"), summary.max_ms}};
+}
+
+QString qt_application_state_name(Qt::ApplicationState state) {
+  switch (state) {
+    case Qt::ApplicationActive: return QStringLiteral("active");
+    case Qt::ApplicationInactive: return QStringLiteral("inactive");
+    case Qt::ApplicationSuspended: return QStringLiteral("suspended");
+    case Qt::ApplicationHidden: return QStringLiteral("hidden");
+  }
+  return QStringLiteral("unknown");
+}
+
+QJsonObject timeline_scroll_native_window_state(const QQuickWindow* window) {
+  return {
+      {QStringLiteral("windowIsActive"), window != nullptr && window->isActive()},
+      {QStringLiteral("windowIsExposed"), window != nullptr && window->isExposed()},
+      {QStringLiteral("windowIsVisible"), window != nullptr && window->isVisible()},
+      {QStringLiteral("applicationState"),
+       qt_application_state_name(QGuiApplication::applicationState())},
+  };
+}
+
+void log_timeline_scroll_window_state(
+    const QString& phase,
+    const QJsonObject& state) {
+  qInfo().noquote().nospace()
+      << QStringLiteral("TIMELINE_SCROLL_WINDOW_STATE phase=%1 state=%2")
+             .arg(phase,
+                  QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)))
+      << Qt::endl;
+}
+
+int run_timeline_scroll_benchmark(
+    QObject* workspace,
+    QQuickWindow* window,
+    photo_editor::desktop::TimelineDocumentController& document,
+    const TimelineScrollBenchmarkConfig& config,
+    const QString& source_sha256_before) {
+  auto* viewport = find_visible_named_item(workspace, QStringLiteral("timelineViewport"));
+  auto* rows_model = find_named_object(workspace, QStringLiteral("timelineVirtualTrackRowsModel"));
+  if (workspace == nullptr || window == nullptr || viewport == nullptr) {
+    return fail(QStringLiteral("Timeline scroll benchmark could not find the visible Timeline viewport."));
+  }
+  if (config.offscreen_diagnostic) {
+    if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+      return fail(QStringLiteral(
+          "Offscreen Timeline scroll diagnostic cannot run on a native platform."));
+    }
+  } else {
+#ifdef Q_OS_MACOS
+    activate_native_test_window(window);
+#else
+    // Non-Cocoa native backends use the same strict foreground gate without
+    // the Cocoa activation helper.
+#endif
+    const auto native_window_ready = wait_for_condition(
+        [window] {
+          return window->isVisible() && window->isExposed() && window->isActive() &&
+                 QGuiApplication::applicationState() == Qt::ApplicationActive;
+        },
+        4000,
+        "timeline-scroll-native-foreground");
+    if (!native_window_ready) {
+      const auto state = timeline_scroll_native_window_state(window);
+      log_timeline_scroll_window_state(
+          QStringLiteral("foreground-qualification-failure"), state);
+#ifdef Q_OS_MACOS
+      const auto foreground_sample = native_window_foreground_sample(window);
+      return fail(QStringLiteral(
+          "ENVIRONMENT_UNQUALIFIED: Timeline scroll benchmark requires an active, exposed, "
+          "visible Cocoa window and active Qt application before measurement (state=%1, "
+          "foregroundSample=%2).")
+                      .arg(QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)),
+                           QString::fromUtf8(QJsonDocument(
+                               QJsonObject::fromVariantMap(foreground_sample))
+                               .toJson(QJsonDocument::Compact))));
+#else
+      return fail(QStringLiteral(
+          "ENVIRONMENT_UNQUALIFIED: Timeline scroll benchmark requires an active, exposed, "
+          "visible native window and active Qt application before measurement (state=%1).")
+                      .arg(QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact))));
+#endif
+    }
+  }
+  const auto window_state_at_scroll_start =
+      timeline_scroll_native_window_state(window);
+  log_timeline_scroll_window_state(
+      QStringLiteral("scroll-start"), window_state_at_scroll_start);
+  const auto document_hash_before = document.deterministicDocumentHash();
+  const auto track_count_before = document.timelineTracks().size();
+  const auto clip_count_before = document.clipCount();
+  const auto duration_before = document.totalDurationSecondsValue();
+  const auto dirty_before = document.dirty();
+  const auto working_copy_sha256_before = sha256_file(config.load_path);
+  const auto autosave_candidate_sha256_before = config.owned_checkpoint
+      ? sha256_file(config.candidate_path) : QString{};
+  QString autosave_semantic_error;
+  const bool autosave_candidate_semantic_before = !config.owned_checkpoint ||
+      timeline_scroll_autosave_matches_pinned_input(
+          config.load_path, config.candidate_path, &autosave_semantic_error);
+  const auto load_mode = config.owned_checkpoint
+      ? QStringLiteral("owned-autosave-checkpoint")
+      : QStringLiteral("normal-readonly-copy");
+  if (config.owned_checkpoint &&
+      (document.agentTaskDocumentId() !=
+           QStringLiteral("timeline:%1").arg(config.timeline_id) ||
+       document_hash_before != config.expected_document_hash ||
+       !document.agentTaskDocumentReady() ||
+       autosave_candidate_sha256_before.isEmpty() ||
+       !autosave_candidate_semantic_before)) {
+    return fail(QStringLiteral(
+        "Owned-checkpoint scroll mode lost its exact accepted Timeline baseline "
+        "(resource=%1 hash=%2 ready=%3 candidateSemantic=%4 candidateError=%5 diagnostics=%6).")
+        .arg(document.agentTaskDocumentId(), document_hash_before)
+        .arg(document.agentTaskDocumentReady())
+        .arg(autosave_candidate_semantic_before)
+        .arg(autosave_semantic_error)
+        .arg(QString::fromUtf8(QJsonDocument(
+                 timeline_scroll_background_diagnostics(document))
+                 .toJson(QJsonDocument::Compact))));
+  }
+  if (clip_count_before <= 0 ||
+      document_hash_before != config.expected_document_hash ||
+      working_copy_sha256_before != config.working_copy_sha256 ||
+      track_count_before != config.expected_tracks || clip_count_before != config.expected_clips ||
+      std::abs(duration_before - config.expected_duration_seconds) > 1.0e-6) {
+    return fail(QStringLiteral(
+        "Timeline document did not match its strict hash/count/duration expectation after "
+        "background readiness or has no clips (dirty is informational): hash=%1 tracks=%2 clips=%3 "
+        "duration=%4 dirty=%5 workingCopySha256=%6 expectedWorkingCopySha256=%7")
+        .arg(document_hash_before)
+        .arg(track_count_before)
+        .arg(clip_count_before)
+        .arg(duration_before, 0, 'f', 9)
+        .arg(dirty_before)
+        .arg(working_copy_sha256_before, config.working_copy_sha256));
+  }
+
+  const auto get_content_x = [&] { return viewport->property("contentX").toDouble(); };
+  const auto get_content_y = [&] { return viewport->property("contentY").toDouble(); };
+  const auto get_content_width = [&] { return viewport->property("contentWidth").toDouble(); };
+  const auto get_content_height = [&] { return viewport->property("contentHeight").toDouble(); };
+  const auto materialized_row_count = [&] {
+    if (rows_model != nullptr) {
+      bool ok = false;
+      const auto count = rows_model->property("count").toInt(&ok);
+      if (ok && count >= 0) return count;
+    }
+    const auto rows_value = workspace->property("timelineVirtualizedTrackRows");
+    if (rows_value.canConvert<QJSValue>()) {
+      const auto rows = rows_value.value<QJSValue>();
+      if (rows.isArray()) return rows.property(QStringLiteral("length")).toInt();
+    }
+    if (rows_value.canConvert<QVariantList>())
+      return static_cast<int>(rows_value.toList().size());
+    return -1;
+  };
+
+  if (!wait_for_condition(
+          [&] {
+            return viewport->width() > 0.0 && viewport->height() > 0.0 &&
+                   get_content_width() > viewport->width() + 1.0 &&
+                   get_content_height() > viewport->height() + 1.0;
+          },
+          std::max(5000, config.wheel_timeout_ms * 10),
+          "timeline-scroll-layout")) {
+    const auto window_state_at_layout_failure =
+        timeline_scroll_native_window_state(window);
+    log_timeline_scroll_window_state(
+        QStringLiteral("scroll-layout-failure"), window_state_at_layout_failure);
+    return fail(QStringLiteral(
+        "Timeline scroll benchmark did not reach a laid out, scrollable 2D viewport "
+        "(windowState=%1).")
+                    .arg(QString::fromUtf8(QJsonDocument(
+                             window_state_at_layout_failure)
+                             .toJson(QJsonDocument::Compact))));
+  }
+
+  QElapsedTimer trace_clock;
+  trace_clock.start();
+  bool capture_frames = false;
+  bool waiting_for_event_frame = false;
+  qint64 event_started_ns = 0;
+  qint64 event_presented_ns = -1;
+  QEventLoop* event_frame_loop = nullptr;
+  std::vector<double> frame_timestamps_ms;
+  QObject frame_connection_context;
+  const auto frame_connection = QObject::connect(window, &QQuickWindow::frameSwapped,
+                                                  &frame_connection_context, [&] {
+    if (!capture_frames) return;
+    const auto now_ns = trace_clock.nsecsElapsed();
+    const auto now_ms = static_cast<double>(now_ns) / 1.0e6;
+    frame_timestamps_ms.push_back(now_ms);
+    if (waiting_for_event_frame && event_presented_ns < 0) {
+      event_presented_ns = now_ns;
+      waiting_for_event_frame = false;
+      if (event_frame_loop != nullptr) event_frame_loop->quit();
+    }
+  });
+  const auto disconnect_frame_connection = qScopeGuard([&] {
+    capture_frames = false;
+    waiting_for_event_frame = false;
+    event_frame_loop = nullptr;
+    QObject::disconnect(frame_connection);
+  });
+
+  struct AxisResult final {
+    QJsonObject json;
+    QString error;
+    bool ok = false;
+  };
+
+  const auto run_axis = [&](const bool horizontal) -> AxisResult {
+    AxisResult result;
+    const auto axis_name = horizontal ? QStringLiteral("horizontal")
+                                     : QStringLiteral("vertical");
+    const auto window_state_at_axis_start =
+        timeline_scroll_native_window_state(window);
+    log_timeline_scroll_window_state(
+        QStringLiteral("%1-scroll-start").arg(axis_name),
+        window_state_at_axis_start);
+    viewport->setProperty("contentX", 0.0);
+    viewport->setProperty("contentY", 0.0);
+    process_layout_events(3);
+    const auto clip_items_materialized_at_start = wait_for_condition(
+        [workspace] {
+          const auto telemetry = read_timeline_clip_item_telemetry(workspace);
+          return telemetry.observable && telemetry.live_items > 0;
+        },
+        5000,
+        "timeline-scroll-materialized-clips-start");
+    const auto clip_items_at_start = read_timeline_clip_item_telemetry(workspace);
+    if (!clip_items_materialized_at_start || !clip_items_at_start.observable ||
+        clip_items_at_start.live_items <= 0) {
+      result.error = QStringLiteral(
+          "Timeline %1 scroll started without observable, materialized clip items "
+          "(observable=%2 liveItems=%3 created=%4 destroyed=%5).")
+          .arg(axis_name)
+          .arg(clip_items_at_start.observable)
+          .arg(clip_items_at_start.live_items)
+          .arg(clip_items_at_start.created_items)
+          .arg(clip_items_at_start.destroyed_items);
+      result.json = QJsonObject{
+          {QStringLiteral("axis"), axis_name},
+          {QStringLiteral("status"), QStringLiteral("failed")},
+          {QStringLiteral("error"), result.error},
+          {QStringLiteral("materializedClipItemsObservable"),
+           clip_items_at_start.observable},
+          {QStringLiteral("materializedClipItemsAtStart"),
+           clip_items_at_start.live_items},
+          {QStringLiteral("materializedClipItemsMin"), clip_items_at_start.live_items},
+          {QStringLiteral("materializedClipItemsMax"), clip_items_at_start.live_items},
+          {QStringLiteral("materializedClipItemsAtEnd"), clip_items_at_start.live_items},
+          {QStringLiteral("timelineClipItemsCreatedAtStart"),
+           clip_items_at_start.created_items},
+          {QStringLiteral("timelineClipItemsCreatedAtEnd"),
+           clip_items_at_start.created_items},
+          {QStringLiteral("timelineClipItemsDestroyedAtStart"),
+           clip_items_at_start.destroyed_items},
+          {QStringLiteral("timelineClipItemsDestroyedAtEnd"),
+           clip_items_at_start.destroyed_items},
+          {QStringLiteral("clipItemsCreatedDelta"), 0},
+          {QStringLiteral("clipItemsDestroyedDelta"), 0},
+          {QStringLiteral("windowStateAtStart"), window_state_at_axis_start},
+          {QStringLiteral("windowStateAtFailureOrEnd"),
+           timeline_scroll_native_window_state(window)}};
+      log_timeline_scroll_window_state(
+          QStringLiteral("%1-scroll-no-materialized-clips").arg(axis_name),
+          result.json.value(QStringLiteral("windowStateAtFailureOrEnd")).toObject());
+      return result;
+    }
+    int materialized_clip_items_min = clip_items_at_start.live_items;
+    int materialized_clip_items_max = clip_items_at_start.live_items;
+    TimelineClipItemTelemetry clip_items_at_end = clip_items_at_start;
+    std::vector<double> materialized_clip_items_samples{
+        static_cast<double>(clip_items_at_start.live_items)};
+    qint64 last_created_clip_items = clip_items_at_start.created_items;
+    qint64 last_destroyed_clip_items = clip_items_at_start.destroyed_items;
+    const auto max_scroll = horizontal
+        ? std::max(0.0, get_content_width() - viewport->width())
+        : std::max(0.0, get_content_height() - viewport->height());
+    if (max_scroll < 1.0) {
+      result.error = horizontal
+          ? QStringLiteral("Timeline horizontal content does not exceed the viewport.")
+          : QStringLiteral("Timeline vertical content does not exceed the viewport.");
+      result.json = QJsonObject{
+          {QStringLiteral("axis"), horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical")},
+          {QStringLiteral("status"), QStringLiteral("failed")},
+          {QStringLiteral("error"), result.error},
+          {QStringLiteral("maxScrollPixels"), max_scroll},
+          {QStringLiteral("materializedClipItemsObservable"),
+           clip_items_at_start.observable},
+          {QStringLiteral("materializedClipItemsAtStart"),
+           clip_items_at_start.live_items},
+          {QStringLiteral("materializedClipItemsMin"), materialized_clip_items_min},
+          {QStringLiteral("materializedClipItemsMax"), materialized_clip_items_max},
+          {QStringLiteral("materializedClipItemsAtEnd"), clip_items_at_end.live_items},
+          {QStringLiteral("timelineClipItemsCreatedAtStart"),
+           clip_items_at_start.created_items},
+          {QStringLiteral("timelineClipItemsCreatedAtEnd"), clip_items_at_end.created_items},
+          {QStringLiteral("timelineClipItemsDestroyedAtStart"),
+           clip_items_at_start.destroyed_items},
+          {QStringLiteral("timelineClipItemsDestroyedAtEnd"), clip_items_at_end.destroyed_items},
+          {QStringLiteral("clipItemsCreatedDelta"), 0},
+          {QStringLiteral("clipItemsDestroyedDelta"), 0},
+          {QStringLiteral("windowStateAtStart"), window_state_at_axis_start},
+          {QStringLiteral("windowStateAtFailureOrEnd"),
+           timeline_scroll_native_window_state(window)}};
+      log_timeline_scroll_window_state(
+          QStringLiteral("%1-scroll-failure-no-range").arg(axis_name),
+          result.json.value(QStringLiteral("windowStateAtFailureOrEnd")).toObject());
+      return result;
+    }
+
+    frame_timestamps_ms.clear();
+    std::vector<double> event_to_present_ms;
+    std::vector<double> dispatch_ms;
+    std::vector<double> materialized_rows_samples;
+    QJsonArray events;
+    capture_frames = true;
+    const auto start_x = get_content_x();
+    const auto start_y = get_content_y();
+    const auto rows_at_start = materialized_row_count();
+    int wheel_count = 0;
+    bool timed_out = false;
+    QString clip_item_telemetry_error;
+    const auto build_axis_receipt = [&](const QString& status, const QString& error) {
+      std::vector<double> frame_intervals;
+      frame_intervals.reserve(frame_timestamps_ms.size());
+      for (std::size_t index = 1; index < frame_timestamps_ms.size(); ++index) {
+        frame_intervals.push_back(frame_timestamps_ms[index] - frame_timestamps_ms[index - 1]);
+      }
+      const auto row_min = materialized_rows_samples.empty()
+          ? -1 : static_cast<int>(*std::min_element(materialized_rows_samples.cbegin(),
+                                                     materialized_rows_samples.cend()));
+      const auto row_max = materialized_rows_samples.empty()
+          ? -1 : static_cast<int>(*std::max_element(materialized_rows_samples.cbegin(),
+                                                     materialized_rows_samples.cend()));
+      QJsonObject receipt{
+          {QStringLiteral("axis"), horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical")},
+          {QStringLiteral("status"), status},
+          {QStringLiteral("viewportSize"), QJsonObject{
+               {QStringLiteral("width"), viewport->width()},
+               {QStringLiteral("height"), viewport->height()}}},
+          {QStringLiteral("maxScrollPixels"), max_scroll},
+          {QStringLiteral("startContentX"), start_x},
+          {QStringLiteral("startContentY"), start_y},
+          {QStringLiteral("endContentX"), get_content_x()},
+          {QStringLiteral("endContentY"), get_content_y()},
+          {QStringLiteral("wheelEvents"), wheel_count},
+          {QStringLiteral("frameSwappedCount"), static_cast<qint64>(frame_timestamps_ms.size())},
+          {QStringLiteral("materializedRowsObservable"), materialized_row_count() >= 0},
+          {QStringLiteral("materializedTrackRowsAtStart"), rows_at_start},
+          {QStringLiteral("materializedTrackRowsMin"), row_min},
+          {QStringLiteral("materializedTrackRowsMax"), row_max},
+          {QStringLiteral("materializedTrackRowsAtEnd"), materialized_row_count()},
+          {QStringLiteral("materializedClipItemsObservable"),
+           clip_items_at_start.observable && clip_items_at_end.observable &&
+               clip_item_telemetry_error.isEmpty()},
+          {QStringLiteral("materializedClipItemsAtStart"), clip_items_at_start.live_items},
+          {QStringLiteral("materializedClipItemsMin"), materialized_clip_items_min},
+          {QStringLiteral("materializedClipItemsMax"), materialized_clip_items_max},
+          {QStringLiteral("materializedClipItemsAtEnd"), clip_items_at_end.live_items},
+          {QStringLiteral("materializedClipItemsSamples"),
+           sample_summary_json(materialized_clip_items_samples)},
+          {QStringLiteral("timelineClipItemsCreatedAtStart"),
+           clip_items_at_start.created_items},
+          {QStringLiteral("timelineClipItemsCreatedAtEnd"), clip_items_at_end.created_items},
+          {QStringLiteral("timelineClipItemsDestroyedAtStart"),
+           clip_items_at_start.destroyed_items},
+          {QStringLiteral("timelineClipItemsDestroyedAtEnd"),
+           clip_items_at_end.destroyed_items},
+          {QStringLiteral("clipItemsCreatedDelta"),
+           clip_items_at_end.created_items - clip_items_at_start.created_items},
+          {QStringLiteral("clipItemsDestroyedDelta"),
+           clip_items_at_end.destroyed_items - clip_items_at_start.destroyed_items},
+          {QStringLiteral("frameIntervalMs"), sample_summary_json(frame_intervals)},
+          {QStringLiteral("wheelToPresentMs"), sample_summary_json(event_to_present_ms)},
+          {QStringLiteral("wheelDispatchMs"), sample_summary_json(dispatch_ms)},
+          {QStringLiteral("eventDeltas"), events},
+          {QStringLiteral("windowStateAtStart"), window_state_at_axis_start},
+          {QStringLiteral("windowStateAtFailureOrEnd"),
+           timeline_scroll_native_window_state(window)}};
+      if (!error.isEmpty()) receipt.insert(QStringLiteral("error"), error);
+      log_timeline_scroll_window_state(
+          QStringLiteral("%1-scroll-%2").arg(axis_name, status),
+          receipt.value(QStringLiteral("windowStateAtFailureOrEnd")).toObject());
+      return receipt;
+    };
+    const auto append_event = [&](const int index,
+                                  const double x_before,
+                                  const double y_before,
+                                  const bool presented,
+                                  const QString& status) {
+      const auto x_after = get_content_x();
+      const auto y_after = get_content_y();
+      const auto row_count = materialized_row_count();
+      const auto clip_items = read_timeline_clip_item_telemetry(workspace);
+      const bool clip_items_valid = clip_items.observable &&
+          clip_items.created_items >= last_created_clip_items &&
+          clip_items.destroyed_items >= last_destroyed_clip_items;
+      QJsonObject event{
+          {QStringLiteral("index"), index},
+          {QStringLiteral("contentXBefore"), x_before},
+          {QStringLiteral("contentXAfter"), x_after},
+          {QStringLiteral("contentXDelta"), x_after - x_before},
+          {QStringLiteral("contentYBefore"), y_before},
+          {QStringLiteral("contentYAfter"), y_after},
+          {QStringLiteral("contentYDelta"), y_after - y_before},
+          {QStringLiteral("materializedTrackRows"), row_count},
+          {QStringLiteral("materializedClipItemsObservable"), clip_items_valid},
+          {QStringLiteral("materializedClipItems"), clip_items.live_items},
+          {QStringLiteral("timelineClipItemsCreated"), clip_items.created_items},
+          {QStringLiteral("timelineClipItemsDestroyed"), clip_items.destroyed_items},
+          {QStringLiteral("wheelDispatchMs"), dispatch_ms.empty() ? 0.0 : dispatch_ms.back()},
+          {QStringLiteral("presented"), presented},
+          {QStringLiteral("status"), status}};
+      if (presented) {
+        event.insert(QStringLiteral("wheelToPresentMs"), event_to_present_ms.empty()
+            ? static_cast<double>(event_presented_ns - event_started_ns) / 1.0e6
+            : event_to_present_ms.back());
+        event.insert(QStringLiteral("presentedAtMs"), static_cast<double>(event_presented_ns) / 1.0e6);
+      }
+      if (clip_items_valid) {
+        event.insert(QStringLiteral("clipItemsCreatedDelta"),
+                     clip_items.created_items - last_created_clip_items);
+        event.insert(QStringLiteral("clipItemsDestroyedDelta"),
+                     clip_items.destroyed_items - last_destroyed_clip_items);
+        last_created_clip_items = clip_items.created_items;
+        last_destroyed_clip_items = clip_items.destroyed_items;
+        clip_items_at_end = clip_items;
+        materialized_clip_items_min = std::min(materialized_clip_items_min,
+                                                clip_items.live_items);
+        materialized_clip_items_max = std::max(materialized_clip_items_max,
+                                                clip_items.live_items);
+        materialized_clip_items_samples.push_back(
+            static_cast<double>(clip_items.live_items));
+      } else {
+        event.insert(QStringLiteral("clipItemsCreatedDelta"), QJsonValue(QJsonValue::Null));
+        event.insert(QStringLiteral("clipItemsDestroyedDelta"), QJsonValue(QJsonValue::Null));
+        clip_item_telemetry_error = QStringLiteral(
+            "Timeline clip-item counters became unobservable or non-monotonic at event %1.")
+            .arg(index);
+      }
+      events.append(event);
+      if (row_count >= 0) materialized_rows_samples.push_back(static_cast<double>(row_count));
+      return clip_items_valid;
+    };
+    qInfo().noquote().nospace()
+        << QStringLiteral("TIMELINE_SCROLL_PHASE axis=%1")
+               .arg(horizontal ? QStringLiteral("horizontal")
+                               : QStringLiteral("vertical"))
+        << Qt::endl;
+    while ((horizontal ? get_content_x() : get_content_y()) < max_scroll - 1.0 &&
+           wheel_count < 4096) {
+      const auto x_before = get_content_x();
+      const auto y_before = get_content_y();
+      const auto point = viewport->mapToScene(QPointF(viewport->width() / 2.0,
+                                                       viewport->height() / 2.0));
+      const auto global_point = window->mapToGlobal(point.toPoint());
+      const QPoint pixel_delta = horizontal ? QPoint(-120, 0) : QPoint(0, -120);
+      const QPoint angle_delta = horizontal ? QPoint(-120, 0) : QPoint(0, -120);
+
+      QEventLoop frame_loop;
+      QTimer timeout;
+      timeout.setSingleShot(true);
+      const auto timeout_connection = QObject::connect(&timeout, &QTimer::timeout, &frame_loop, [&] {
+        timed_out = true;
+        waiting_for_event_frame = false;
+        frame_loop.quit();
+      });
+      QElapsedTimer dispatch_timer;
+      dispatch_timer.start();
+      event_started_ns = trace_clock.nsecsElapsed();
+      event_presented_ns = -1;
+      waiting_for_event_frame = true;
+      event_frame_loop = &frame_loop;
+      QWheelEvent wheel(point, global_point, pixel_delta, angle_delta,
+                        Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+      QCoreApplication::sendEvent(window, &wheel);
+      dispatch_ms.push_back(static_cast<double>(dispatch_timer.nsecsElapsed()) / 1.0e6);
+      ++wheel_count;
+      timeout.start(config.wheel_timeout_ms);
+      if (event_presented_ns < 0) frame_loop.exec();
+      timeout.stop();
+      QObject::disconnect(timeout_connection);
+      event_frame_loop = nullptr;
+      if (timed_out || event_presented_ns < 0) {
+        capture_frames = false;
+        result.error = QStringLiteral("Timeline %1 wheel event %2 did not reach a swapped frame within %3 ms.")
+            .arg(horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical"))
+            .arg(wheel_count)
+            .arg(config.wheel_timeout_ms);
+        append_event(wheel_count, x_before, y_before, false, QStringLiteral("frame-timeout"));
+        result.json = build_axis_receipt(QStringLiteral("failed"), result.error);
+        return result;
+      }
+      event_to_present_ms.push_back(
+          static_cast<double>(event_presented_ns - event_started_ns) / 1.0e6);
+      const auto x_after = get_content_x();
+      const auto y_after = get_content_y();
+      const auto primary_delta = horizontal ? x_after - x_before : y_after - y_before;
+      const auto cross_axis_delta = horizontal ? y_after - y_before : x_after - x_before;
+      if (primary_delta <= 0.1) {
+        capture_frames = false;
+        result.error = QStringLiteral("Timeline %1 wheel event %2 presented but did not advance the viewport (delta=%3).")
+            .arg(horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical"))
+            .arg(wheel_count)
+            .arg(primary_delta, 0, 'f', 3);
+        append_event(wheel_count, x_before, y_before, true, QStringLiteral("no-scroll-change"));
+        result.json = build_axis_receipt(QStringLiteral("failed"), result.error);
+        return result;
+      }
+      if (std::abs(cross_axis_delta) > 0.5) {
+        capture_frames = false;
+        result.error = QStringLiteral("Timeline %1 wheel event %2 unexpectedly changed the other scroll axis (delta=%3).")
+            .arg(horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical"))
+            .arg(wheel_count)
+            .arg(cross_axis_delta, 0, 'f', 3);
+        append_event(wheel_count, x_before, y_before, true, QStringLiteral("cross-axis-scroll"));
+        result.json = build_axis_receipt(QStringLiteral("failed"), result.error);
+        return result;
+      }
+      if (!append_event(wheel_count, x_before, y_before, true,
+                        QStringLiteral("advanced"))) {
+        capture_frames = false;
+        result.error = clip_item_telemetry_error;
+        result.json = build_axis_receipt(QStringLiteral("failed"), result.error);
+        return result;
+      }
+    }
+    capture_frames = false;
+    if (wheel_count >= 4096 && (horizontal ? get_content_x() : get_content_y()) < max_scroll - 1.0) {
+      result.error = QStringLiteral("Timeline %1 scroll exceeded the 4096-event safety bound.")
+          .arg(horizontal ? QStringLiteral("horizontal") : QStringLiteral("vertical"));
+      result.json = build_axis_receipt(QStringLiteral("failed"), result.error);
+      return result;
+    }
+
+    process_layout_events(3, "timeline-scroll-axis-settle");
+    static_cast<void>(wait_for_condition(
+        [workspace] {
+          const auto telemetry = read_timeline_clip_item_telemetry(workspace);
+          return telemetry.observable && telemetry.live_items > 0;
+        },
+        5000,
+        "timeline-scroll-materialized-clips-end"));
+    const auto settled_clip_items = read_timeline_clip_item_telemetry(workspace);
+    if (!settled_clip_items.observable || settled_clip_items.live_items <= 0 ||
+        settled_clip_items.created_items < last_created_clip_items ||
+        settled_clip_items.destroyed_items < last_destroyed_clip_items) {
+      result.error = QStringLiteral(
+          "Timeline %1 scroll ended without observable, materialized clip items after settling "
+          "(observable=%2 liveItems=%3 created=%4 destroyed=%5).")
+          .arg(axis_name)
+          .arg(settled_clip_items.observable)
+          .arg(settled_clip_items.live_items)
+          .arg(settled_clip_items.created_items)
+          .arg(settled_clip_items.destroyed_items);
+      clip_item_telemetry_error = result.error;
+      result.json = build_axis_receipt(QStringLiteral("failed"), result.error);
+      return result;
+    }
+    clip_items_at_end = settled_clip_items;
+    materialized_clip_items_min = std::min(materialized_clip_items_min,
+                                            settled_clip_items.live_items);
+    materialized_clip_items_max = std::max(materialized_clip_items_max,
+                                            settled_clip_items.live_items);
+    materialized_clip_items_samples.push_back(
+        static_cast<double>(settled_clip_items.live_items));
+
+    result.json = build_axis_receipt(QStringLiteral("complete"), {});
+    result.ok = true;
+    return result;
+  };
+
+  const auto vertical = run_axis(false);
+  const auto emit_failure_receipt = [&](const AxisResult* vertical_result,
+                                        const AxisResult* horizontal_result,
+                                        const QString& error) {
+    const auto window_state_at_failure =
+        timeline_scroll_native_window_state(window);
+    log_timeline_scroll_window_state(
+        QStringLiteral("benchmark-failure"), window_state_at_failure);
+    const auto source_after = sha256_file(config.project_path);
+    const auto working_copy_after = sha256_file(config.load_path);
+    const auto autosave_candidate_after = config.owned_checkpoint
+        ? sha256_file(config.candidate_path) : QString{};
+    QString autosave_semantic_error_after;
+    const bool autosave_candidate_semantic_after = !config.owned_checkpoint ||
+        timeline_scroll_autosave_matches_pinned_input(
+            config.load_path, config.candidate_path, &autosave_semantic_error_after);
+    const auto document_hash_after = document.deterministicDocumentHash();
+    auto report = QJsonObject{
+        {QStringLiteral("schema"), QStringLiteral("actual-timeline-scroll-benchmark:v1")},
+        {QStringLiteral("ok"), false},
+        {QStringLiteral("readOnly"), true},
+        {QStringLiteral("saveCalled"), false},
+        {QStringLiteral("failure"), error},
+        {QStringLiteral("clipItemMaterializationVerified"), false},
+        {QStringLiteral("windowStateAtScrollStart"), window_state_at_scroll_start},
+        {QStringLiteral("windowStateAtFailureOrEnd"), window_state_at_failure},
+        {QStringLiteral("projectPath"), QFileInfo(config.project_path).canonicalFilePath()},
+        {QStringLiteral("loadedProjectPath"),
+         config.owned_checkpoint ? config.candidate_path : config.load_path},
+        {QStringLiteral("immutableInputCopyPath"), config.load_path},
+        {QStringLiteral("loadMode"), load_mode},
+        {QStringLiteral("sourceSha256Before"), source_sha256_before},
+        {QStringLiteral("sourceSha256After"), source_after},
+        {QStringLiteral("workingCopySha256"), config.working_copy_sha256},
+        {QStringLiteral("inputCopySha256"), config.working_copy_sha256},
+        {QStringLiteral("workingCopySha256BeforeScroll"),
+         working_copy_sha256_before},
+        {QStringLiteral("workingCopySha256After"), working_copy_after},
+        {QStringLiteral("sourceUnchanged"), source_after == source_sha256_before},
+        {QStringLiteral("workingCopyUnchanged"),
+         !working_copy_after.isEmpty() &&
+             working_copy_after == working_copy_sha256_before &&
+             working_copy_after == config.working_copy_sha256},
+        {QStringLiteral("inputCopyUnchanged"),
+         !working_copy_after.isEmpty() &&
+             working_copy_after == working_copy_sha256_before &&
+             working_copy_after == config.working_copy_sha256},
+        {QStringLiteral("autosaveCandidatePath"),
+         config.owned_checkpoint ? config.candidate_path : QString{}},
+        {QStringLiteral("autosaveCandidateRawSha256BeforeScroll"),
+         autosave_candidate_sha256_before},
+        {QStringLiteral("autosaveCandidateRawSha256After"),
+         autosave_candidate_after},
+        {QStringLiteral("autosaveCandidateRawChanged"),
+         config.owned_checkpoint &&
+             autosave_candidate_after != autosave_candidate_sha256_before},
+        {QStringLiteral("autosaveCandidateRawChangedOnlyUpdatedAt"),
+         config.owned_checkpoint &&
+             autosave_candidate_after != autosave_candidate_sha256_before &&
+             autosave_candidate_semantic_after},
+        {QStringLiteral("autosaveCandidateSemanticMatchesPinnedInput"),
+         config.owned_checkpoint ? QJsonValue(autosave_candidate_semantic_after)
+                                 : QJsonValue(QJsonValue::Null)},
+        {QStringLiteral("autosaveCandidateSemanticError"),
+         autosave_semantic_error_after},
+        {QStringLiteral("expectedDocumentHash"), config.expected_document_hash},
+        {QStringLiteral("readinessWaitMs"), config.readiness_wait_ms},
+        {QStringLiteral("readinessStableWindowMs"), config.readiness_stability_ms},
+        {QStringLiteral("documentHashBefore"), document_hash_before},
+        {QStringLiteral("documentHashAfter"), document_hash_after},
+        {QStringLiteral("dirtyBefore"), dirty_before},
+        {QStringLiteral("dirtyAfter"), document.dirty()},
+        {QStringLiteral("vertical"), vertical_result == nullptr
+             ? QJsonValue(QJsonValue::Null) : QJsonValue(vertical_result->json)},
+        {QStringLiteral("horizontal"), horizontal_result == nullptr
+             ? QJsonValue(QJsonValue::Null) : QJsonValue(horizontal_result->json)}};
+    insert_timeline_scroll_measurement_scope(&report, config.offscreen_diagnostic);
+    const auto bytes = QJsonDocument(report).toJson(QJsonDocument::Compact);
+    if (!config.report_path.isEmpty()) {
+      QSaveFile output(config.report_path);
+      if (QFileInfo::exists(config.report_path) || !output.open(QIODevice::WriteOnly) ||
+          output.write(bytes) != bytes.size() || !output.commit()) {
+        std::cerr << "Could not write partial Timeline scroll receipt to "
+                  << config.report_path.toStdString() << '\n';
+      }
+    }
+    std::cout << bytes.constData() << '\n';
+  };
+  if (!vertical.ok) {
+    emit_failure_receipt(&vertical, nullptr, vertical.error);
+    return fail(vertical.error);
+  }
+  const auto horizontal = run_axis(true);
+  if (!horizontal.ok) {
+    emit_failure_receipt(&vertical, &horizontal, horizontal.error);
+    return fail(horizontal.error);
+  }
+
+  const auto source_sha256_after = sha256_file(config.project_path);
+  const auto working_copy_sha256_after = sha256_file(config.load_path);
+  const auto autosave_candidate_sha256_after = config.owned_checkpoint
+      ? sha256_file(config.candidate_path) : QString{};
+  QString autosave_candidate_semantic_error;
+  const bool autosave_candidate_semantic_unchanged = !config.owned_checkpoint ||
+      timeline_scroll_autosave_matches_pinned_input(
+          config.load_path, config.candidate_path,
+          &autosave_candidate_semantic_error);
+  const auto final_document_hash = document.deterministicDocumentHash();
+  const auto final_track_count = document.timelineTracks().size();
+  const auto final_clip_count = document.clipCount();
+  const auto final_duration = document.totalDurationSecondsValue();
+  const bool source_unchanged = !source_sha256_after.isEmpty() &&
+      source_sha256_after == source_sha256_before &&
+      source_sha256_after.compare(config.expected_file_sha256, Qt::CaseInsensitive) == 0;
+  const bool working_copy_unchanged =
+      !working_copy_sha256_after.isEmpty() &&
+      working_copy_sha256_after == config.working_copy_sha256 &&
+      working_copy_sha256_after == working_copy_sha256_before;
+  const bool autosave_candidate_intact = !config.owned_checkpoint ||
+      (!autosave_candidate_sha256_after.isEmpty() &&
+       autosave_candidate_semantic_unchanged);
+  const bool document_unchanged = final_document_hash == document_hash_before &&
+      final_track_count == config.expected_tracks && final_clip_count == config.expected_clips &&
+      std::abs(final_duration - duration_before) <= 1.0e-6;
+  if (!source_unchanged || !working_copy_unchanged || !document_unchanged ||
+      !autosave_candidate_intact) {
+    const auto error = QStringLiteral("Timeline scroll benchmark changed or invalidated the read-only project (sourceUnchanged=%1, workingCopyUnchanged=%2, autosaveCandidateIntact=%3, autosaveCandidateSemanticError=%4, documentUnchanged=%5, dirty=%6).")
+        .arg(source_unchanged).arg(working_copy_unchanged)
+        .arg(autosave_candidate_intact).arg(autosave_candidate_semantic_error)
+        .arg(document_unchanged).arg(document.dirty());
+    emit_failure_receipt(&vertical, &horizontal, error);
+    return fail(error);
+  }
+
+  const auto window_state_at_benchmark_end =
+      timeline_scroll_native_window_state(window);
+  log_timeline_scroll_window_state(
+      QStringLiteral("benchmark-end"), window_state_at_benchmark_end);
+
+  if (!config.report_path.isEmpty()) {
+    const QFileInfo report_info(config.report_path);
+    if (report_info.exists() ||
+        (!report_info.canonicalFilePath().isEmpty() &&
+         report_info.canonicalFilePath() == QFileInfo(config.project_path).canonicalFilePath())) {
+      return fail(QStringLiteral("Timeline scroll report path must be new and distinct from the read-only project."));
+    }
+  }
+
+  auto report = QJsonObject{
+      {QStringLiteral("schema"), QStringLiteral("actual-timeline-scroll-benchmark:v1")},
+      {QStringLiteral("ok"), true},
+      {QStringLiteral("readOnly"), true},
+      {QStringLiteral("saveCalled"), false},
+      {QStringLiteral("clipItemMaterializationVerified"), true},
+      {QStringLiteral("windowStateAtScrollStart"), window_state_at_scroll_start},
+      {QStringLiteral("windowStateAtFailureOrEnd"), window_state_at_benchmark_end},
+      {QStringLiteral("projectPath"), QFileInfo(config.project_path).canonicalFilePath()},
+        {QStringLiteral("loadedProjectPath"),
+         config.owned_checkpoint ? config.candidate_path : config.load_path},
+        {QStringLiteral("immutableInputCopyPath"), config.load_path},
+      {QStringLiteral("loadMode"), load_mode},
+      {QStringLiteral("projectFileBytes"), QFileInfo(config.project_path).size()},
+      {QStringLiteral("sourceSha256Before"), source_sha256_before},
+      {QStringLiteral("sourceSha256After"), source_sha256_after},
+      {QStringLiteral("workingCopySha256"), config.working_copy_sha256},
+      {QStringLiteral("inputCopySha256"), config.working_copy_sha256},
+      {QStringLiteral("workingCopySha256After"), working_copy_sha256_after},
+      {QStringLiteral("inputCopyUnchanged"), working_copy_unchanged},
+      {QStringLiteral("autosaveCandidatePath"),
+       config.owned_checkpoint ? config.candidate_path : QString{}},
+      {QStringLiteral("autosaveCandidateRawSha256BeforeScroll"),
+       autosave_candidate_sha256_before},
+      {QStringLiteral("autosaveCandidateRawSha256After"),
+       autosave_candidate_sha256_after},
+      {QStringLiteral("autosaveCandidateRawChanged"),
+       config.owned_checkpoint &&
+           autosave_candidate_sha256_after != autosave_candidate_sha256_before},
+      {QStringLiteral("autosaveCandidateRawChangedOnlyUpdatedAt"),
+       config.owned_checkpoint &&
+           autosave_candidate_sha256_after != autosave_candidate_sha256_before &&
+           autosave_candidate_semantic_unchanged},
+      {QStringLiteral("autosaveCandidateIntact"), autosave_candidate_intact},
+      {QStringLiteral("autosaveCandidateSemanticMatchesPinnedInput"),
+       config.owned_checkpoint
+           ? QJsonValue(autosave_candidate_semantic_unchanged)
+           : QJsonValue(QJsonValue::Null)},
+      {QStringLiteral("autosaveCandidateSemanticError"),
+       autosave_candidate_semantic_error},
+      {QStringLiteral("expectedSourceSha256"), config.expected_file_sha256},
+      {QStringLiteral("sourceUnchanged"), source_unchanged},
+      {QStringLiteral("workingCopyUnchanged"), working_copy_unchanged},
+      {QStringLiteral("expectedDocumentHash"), config.expected_document_hash},
+      {QStringLiteral("readinessWaitMs"), config.readiness_wait_ms},
+      {QStringLiteral("readinessStableWindowMs"), config.readiness_stability_ms},
+      {QStringLiteral("documentHashBefore"), document_hash_before},
+      {QStringLiteral("documentHashAfter"), final_document_hash},
+      {QStringLiteral("expectedTracks"), config.expected_tracks},
+      {QStringLiteral("trackCountBefore"), track_count_before},
+      {QStringLiteral("trackCountAfter"), final_track_count},
+      {QStringLiteral("expectedClips"), config.expected_clips},
+      {QStringLiteral("clipCountBefore"), clip_count_before},
+      {QStringLiteral("clipCountAfter"), final_clip_count},
+      {QStringLiteral("expectedDurationSeconds"), config.expected_duration_seconds},
+      {QStringLiteral("durationSecondsBefore"), duration_before},
+      {QStringLiteral("durationSecondsAfter"), final_duration},
+      {QStringLiteral("dirtyBefore"), dirty_before},
+      {QStringLiteral("dirtyAfter"), document.dirty()},
+      {QStringLiteral("windowSize"), QJsonObject{{QStringLiteral("width"), window->width()},
+                                                   {QStringLiteral("height"), window->height()}}},
+      {QStringLiteral("vertical"), vertical.json},
+      {QStringLiteral("horizontal"), horizontal.json}};
+  insert_timeline_scroll_measurement_scope(&report, config.offscreen_diagnostic);
+  const auto bytes = QJsonDocument(report).toJson(QJsonDocument::Compact);
+  if (!config.report_path.isEmpty()) {
+    QSaveFile output(config.report_path);
+    if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit()) {
+      return fail(QStringLiteral("Unable to atomically write Timeline scroll benchmark report: %1")
+                      .arg(config.report_path));
+    }
+  }
+  std::cout << bytes.constData() << '\n';
+  return EXIT_SUCCESS;
 }
 
 QObject* active_workspace(QObject* root) {
@@ -1183,7 +2448,18 @@ QJsonObject measure_timeline_continuous_scrub_preview(
   return scrub_preview_probe;
 }
 
+#include "timeline_inspector_animation_ui_proof.inc"
 #include "timeline_animation_ui_proof.inc"
+#include "timeline_workspace_ux_proof.inc"
+#include "timeline_interaction_feedback_proof.inc"
+#include "timeline_stress_runtime_proof.inc"
+#include "catalog_search_full_catalog_snapshot_proof.inc"
+#include "timeline_depth_ui_proof.inc"
+#include "timeline_channels_trim_ui_proof.inc"
+#include "timeline_discoverable_workspace_proof.inc"
+#include "timeline_scroll_selection_proof.inc"
+#include "timeline_workspace_lifecycle_proof.inc"
+#include "timeline_scrub_responsiveness_proof.inc"
 
 int run_timeline_ui_proof(
     QQuickWindow* root_window,
@@ -1242,10 +2518,10 @@ int run_timeline_ui_proof(
   const QList<QPair<int, int>> empty_sizes = {{1180, 768}, {1440, 900}, {1920, 1080}};
   const QStringList header_control_objects = {
       QStringLiteral("timelineCompactTitleControl"),
-      QStringLiteral("timelineProjectSummaryButton"),
+      QStringLiteral("timelinePanelStrip"),
       QStringLiteral("timelineHistoryControlGroup"),
       QStringLiteral("timelinePrimaryAddMediaButton"),
-      QStringLiteral("timelineViewMenuButton"),
+      QStringLiteral("timelineRedoButton"),
       QStringLiteral("timelineSaveButton"),
       QStringLiteral("timelineSaveStateChip"),
       QStringLiteral("timelineHeaderMoreMenuButton"),
@@ -2130,7 +3406,7 @@ int run_timeline_ui_proof(
               QStringLiteral("timelineViewerGuideOverlay"),
               QStringLiteral("timelineViewerGuideCanvas"),
               QStringLiteral("timelineViewerGuideLabel"),
-              QStringLiteral("timelineViewMenuButton"),
+              QStringLiteral("timelineRedoButton"),
           },
           &manifest,
           QJsonObject{
@@ -2155,7 +3431,7 @@ int run_timeline_ui_proof(
           {
               QStringLiteral("timelineProgramMonitor"),
               QStringLiteral("timelineViewerMotionPath"),
-              QStringLiteral("timelineViewMenuButton"),
+              QStringLiteral("timelineRedoButton"),
           },
           &manifest,
           QJsonObject{
@@ -2515,7 +3791,7 @@ int run_timeline_ui_proof(
       QStringLiteral("timelineSnappingButton"),
       QStringLiteral("timelineZoomSlider"),
       QStringLiteral("timelineZoomMenuButton"),
-      QStringLiteral("timelineCreateMenuButton"),
+      QStringLiteral("timelineActionsMenuButton"),
       QStringLiteral("timelineSearchButton"),
       QStringLiteral("timelineRuler"),
   };
@@ -3456,7 +4732,7 @@ int run_timeline_ui_proof(
               QStringLiteral("timelineClipTitleLabel"),
               QStringLiteral("timelineClipMetadataLabel"),
               QStringLiteral("timelineClipStatusStrip"),
-              QStringLiteral("timelineClipStatusBadge-effects"),
+              QStringLiteral("timelineClipEffectsButton"),
               QStringLiteral("timelineClipStatusBadge-speed"),
               QStringLiteral("timelineClipStatusBadge-group"),
               QStringLiteral("timelineClipStatusBadge-caption"),
@@ -4032,10 +5308,10 @@ int run_timeline_ui_proof(
   const QStringList accessibility_scale_objects = core_objects + QStringList{
       QStringLiteral("timelineHeaderBar"),
       QStringLiteral("timelineCompactTitleControl"),
-      QStringLiteral("timelineProjectSummaryButton"),
+      QStringLiteral("timelinePanelStrip"),
       QStringLiteral("timelineHistoryControlGroup"),
       QStringLiteral("timelinePrimaryAddMediaButton"),
-      QStringLiteral("timelineViewMenuButton"),
+      QStringLiteral("timelineRedoButton"),
       QStringLiteral("timelineSaveButton"),
       QStringLiteral("timelineSaveStateChip"),
       QStringLiteral("timelineHeaderMoreMenuButton"),
@@ -4637,21 +5913,71 @@ int run_timeline_ui_proof(
 
 #include "photo_recipe_clipboard_proof.h"
 
-int main(int argc, char** argv) {
+int run_actual_app_workflow(int argc, char** argv) {
   Q_INIT_RESOURCE(looksy_agent_sprite);
   Q_INIT_RESOURCE(looksy_brand_assets);
   Q_INIT_RESOURCE(shell_visual_test_shaders);
+  QStringList raw_arguments;
+  raw_arguments.reserve(argc);
+  for (int index = 0; index < argc; ++index)
+    raw_arguments.push_back(QString::fromLocal8Bit(argv[index]));
+  const bool offscreen_scroll_diagnostic =
+      raw_arguments.contains(QStringLiteral("--timeline-scroll-offscreen-diagnostic"));
+  const bool scroll_selection_proof =
+      raw_arguments.contains(QStringLiteral("--timeline-scroll-selection-proof"));
+  if (offscreen_scroll_diagnostic &&
+      !raw_arguments.contains(QStringLiteral("--timeline-scroll-benchmark"))) {
+    return fail(QStringLiteral(
+        "--timeline-scroll-offscreen-diagnostic requires --timeline-scroll-benchmark."));
+  }
+  if (scroll_selection_proof &&
+      !raw_arguments.contains(QStringLiteral("--timeline-scroll-benchmark"))) {
+    return fail(QStringLiteral(
+        "--timeline-scroll-selection-proof requires --timeline-scroll-benchmark."));
+  }
+  const bool scroll_scrub_proof =
+      raw_arguments.contains(QStringLiteral("--timeline-scroll-scrub-proof"));
+  if (scroll_scrub_proof &&
+      !raw_arguments.contains(QStringLiteral("--timeline-scroll-benchmark"))) {
+    return fail(QStringLiteral(
+        "--timeline-scroll-scrub-proof requires --timeline-scroll-benchmark."));
+  }
+  if (offscreen_scroll_diagnostic &&
+      qgetenv("QT_QPA_PLATFORM") != QByteArrayLiteral("offscreen")) {
+    return fail(QStringLiteral(
+        "--timeline-scroll-offscreen-diagnostic requires QT_QPA_PLATFORM=offscreen."));
+  }
   if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
   }
 
   QApplication app(argc, argv);
+  const auto run_workflow = [&]() -> int {
   QQuickStyle::setStyle(QStringLiteral("Basic"));
   QApplication::setFont(QFont(QStringLiteral("Helvetica Neue")));
   QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorBenchmarks"));
   QCoreApplication::setApplicationName(QStringLiteral("ActualAppWorkflowBenchmark"));
 
   const auto arguments = app.arguments();
+  const bool timeline_scroll_offscreen_diagnostic =
+      arguments.contains(QStringLiteral("--timeline-scroll-offscreen-diagnostic"));
+  if (timeline_scroll_offscreen_diagnostic &&
+      QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+    return fail(QStringLiteral(
+        "The offscreen Timeline scroll diagnostic requires the Qt offscreen platform."));
+  }
+  log_timeline_scroll_offscreen_scope(timeline_scroll_offscreen_diagnostic);
+  TimelineScrollBenchmarkConfig timeline_scroll_config;
+  QString timeline_scroll_config_error;
+  const auto timeline_scroll_benchmark =
+      arguments.contains(QStringLiteral("--timeline-scroll-benchmark"));
+  if (timeline_scroll_benchmark &&
+      !parse_timeline_scroll_benchmark_config(
+          arguments, &timeline_scroll_config, &timeline_scroll_config_error)) {
+    return fail(timeline_scroll_config_error.isEmpty()
+                    ? QStringLiteral("Invalid Timeline scroll benchmark configuration.")
+                    : timeline_scroll_config_error);
+  }
   const auto optical_proof_dir = option_value(arguments, QStringLiteral("--optical-ui-proof-dir"));
   const bool optical_real_export = !optical_proof_dir.isEmpty() && arguments.contains("--optical-real-export");
   const bool optical_real_subject_selection =
@@ -4667,7 +5993,8 @@ int main(int argc, char** argv) {
       std::max(1000, option_int(arguments, QStringLiteral("--timeout-ms"), 15000));
   const bool brush_only = arguments.contains(QStringLiteral("--brush-only"));
   const bool brush_auto_mask = arguments.contains(QStringLiteral("--brush-auto-mask"));
-  const bool route_only = arguments.contains(QStringLiteral("--route-only"));
+  const bool timeline_route_only = arguments.contains(QStringLiteral("--timeline-route-only"));
+  const bool route_only = timeline_route_only || arguments.contains(QStringLiteral("--route-only"));
   const bool route_only_no_render =
       arguments.contains(QStringLiteral("--route-only-no-render"));
   const bool route_only_async = arguments.contains(QStringLiteral("--route-only-async"));
@@ -4682,6 +6009,20 @@ int main(int argc, char** argv) {
   const bool gaussian_proof = !viewer_film_proof_dir.isEmpty() || !capture_setup_proof_dir.isEmpty();
   const auto timeline_ui_proof_dir =
       option_value(arguments, QStringLiteral("--timeline-ui-proof-dir"));
+  const bool timeline_discoverable_workspace_proof_only =
+      arguments.contains(QStringLiteral("--timeline-discoverable-workspace-proof-only"));
+  const bool timeline_crop_ui_proof_only =
+      arguments.contains(QStringLiteral("--timeline-crop-ui-proof-only"));
+  const bool timeline_masked_blur_proof_only =
+      arguments.contains(QStringLiteral("--timeline-masked-blur-proof-only"));
+  const bool timeline_inspector_animation_proof_only =
+      arguments.contains(QStringLiteral("--timeline-inspector-animation-proof-only"));
+  if ((timeline_crop_ui_proof_only || timeline_masked_blur_proof_only ||
+       timeline_discoverable_workspace_proof_only ||
+       timeline_inspector_animation_proof_only) &&
+      timeline_ui_proof_dir.isEmpty()) {
+    return fail(QStringLiteral("Focused Timeline proof options require --timeline-ui-proof-dir."));
+  }
   if (!timeline_ui_proof_dir.isEmpty()) {
     QCoreApplication::setApplicationName(QStringLiteral("TimelineUIRuntimeProof"));
   }
@@ -4697,7 +6038,9 @@ int main(int argc, char** argv) {
     return fail(QStringLiteral("Unable to create actual-app workflow temporary directories."));
   }
   const bool native_readback_proof = arguments.contains("--native-readback-proof");
-  const bool library_proof = arguments.contains("--library-grid-proof") ||
+  const auto full_catalog_search_snapshot = option_value(arguments, "--search-full-catalog-proof");
+  const bool library_proof = arguments.contains("--timeline-shared-edit-color-proof") ||
+      arguments.contains("--library-grid-proof") ||
       arguments.contains("--asset-selection-proof") ||
       arguments.contains("--cutout-adjustment-proof") ||
       arguments.contains("--layer-drop-indicator-proof") ||
@@ -4706,11 +6049,13 @@ int main(int argc, char** argv) {
       arguments.contains("--brush-fidelity-proof") ||
       arguments.contains("--library-duration-proof") ||
       arguments.contains("--library-membership-proof") ||
-      arguments.contains("--library-startup-proof");
+      arguments.contains("--library-startup-proof") ||
+      arguments.contains("--idle-resource-proof");
   if (!option_value(arguments, "--workspace-switch-proof-dir").isEmpty() ||
       gaussian_proof || color_interaction_proof || brush_only ||
       !recipe_clipboard_proof_dir.isEmpty() || !optical_proof_dir.isEmpty() ||
-      !timeline_ui_proof_dir.isEmpty() || library_proof || native_readback_proof) {
+      !timeline_ui_proof_dir.isEmpty() || !similarity_proof_dir.isEmpty() || library_proof || native_readback_proof ||
+      !full_catalog_search_snapshot.isEmpty() || timeline_scroll_benchmark) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, runtime_root.path());
     QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, runtime_root.path());
@@ -4753,6 +6098,13 @@ int main(int argc, char** argv) {
   if (library_proof || native_readback_proof || !qEnvironmentVariableIsSet("PHOTO_EDITOR_CACHE_DIR")) {
     qputenv("PHOTO_EDITOR_CACHE_DIR", cache_root.path().toUtf8());
   }
+  if (timeline_scroll_benchmark) {
+    // Keep document IDs, recovery state, and settings isolated while reusing
+    // only the explicitly selected native media cache for this measurement.
+    qputenv("PHOTO_EDITOR_APP_DATA_ROOT", runtime_root.path().toUtf8());
+    qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+    qputenv("PHOTO_EDITOR_CACHE_DIR", timeline_scroll_config.cache_dir.toUtf8());
+  }
   if (optical_real_export) {
     qputenv("PHOTO_EDITOR_APP_DATA_ROOT", runtime_root.path().toUtf8());
     qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
@@ -4761,8 +6113,10 @@ int main(int argc, char** argv) {
   } else {
     const auto timeline_proof_database = !timeline_ui_proof_dir.isEmpty()
         ? qEnvironmentVariable("PHOTO_EDITOR_TIMELINE_PROOF_DATABASE_URL") : QString{};
-    const auto membership_database = arguments.contains("--library-membership-proof")
-        ? option_value(arguments, "--membership-database-url") : timeline_proof_database;
+    const auto membership_database = !full_catalog_search_snapshot.isEmpty()
+        ? qEnvironmentVariable("PHOTO_EDITOR_DATABASE_URL")
+        : arguments.contains("--library-membership-proof")
+            ? option_value(arguments, "--membership-database-url") : timeline_proof_database;
     qputenv("PHOTO_EDITOR_DATABASE_URL", membership_database.isEmpty()
         ? QByteArray("postgresql://127.0.0.1:1/photo_editor_offline_test") : membership_database.toUtf8());
   }
@@ -4790,7 +6144,8 @@ int main(int argc, char** argv) {
       QStringLiteral("benchmark.actual_app_workflow.started"),
       {
           {QStringLiteral("workflow"), QStringLiteral("actual_app_qml")},
-          {QStringLiteral("scenario"), route_only ? QStringLiteral("route_only")
+          {QStringLiteral("scenario"), timeline_scroll_benchmark ? QStringLiteral("timeline_scroll")
+              : route_only ? QStringLiteral("route_only")
               : brush_only ? QStringLiteral("brush_only") : QStringLiteral("full_workflow")},
           {QStringLiteral("brush_auto_mask"), brush_auto_mask},
           {QStringLiteral("elapsed_ms"), 0},
@@ -4839,10 +6194,60 @@ int main(int argc, char** argv) {
   }
 
   photo_editor::desktop::AppShellController app_shell;
-  if (library_proof || brush_only || native_readback_proof)
+  if (library_proof || brush_only || native_readback_proof || !similarity_proof_dir.isEmpty() ||
+      timeline_scroll_benchmark)
     app_shell.completeFirstRunExperience();
   photo_editor::desktop::CatalogAssetModel catalog_assets;
+  if (!full_catalog_search_snapshot.isEmpty()) {
+    const auto executable = option_value(arguments, "--search-runtime-executable");
+    int full_catalog_photo_count = 171;
+    if (!executable.isEmpty()) {
+      photo_editor::desktop::CatalogSimilaritySearch full_search(&catalog_assets, "isolated-live-catalog");
+      auto* search = full_search.controller();
+      if (!search->configureExecutable(executable, option_value(arguments, "--search-model-root"),
+          QStringLiteral("cpu"), runtime_root.filePath("live-catalog-embeddings.sqlite3")))
+        return fail("Full-catalog proof requires a configured local runtime");
+      catalog_assets.refresh();
+      if (!wait_for_condition([&] { return !catalog_assets.loading(); }, 120000, "live-search-metadata") ||
+          !catalog_assets.errorMessage().isEmpty())
+        return fail("Live search requires a successful metadata load");
+      const bool recipes_pending_at_start = !catalog_assets.allAssetRecipesReady();
+      const auto initial_scope = catalog_assets.similaritySearchAssets();
+      const auto photo_count = std::count_if(initial_scope.cbegin(), initial_scope.cend(), [](const QVariant& value) {
+        return value.toMap().value(QStringLiteral("mediaType")).toString() == QStringLiteral("photo");
+      });
+      if (initial_scope.size() < 171 || photo_count < 1 || photo_count > 171)
+        return fail("Live search requires the complete 171-item catalog and a nonempty photo scope");
+      full_catalog_photo_count = static_cast<int>(photo_count);
+      full_search.search(QStringLiteral("green hat"));
+      if (!wait_for_condition([&] { return !search->running(); }, 1200000, "live-search-production-barrier") ||
+          !search->status().contains(QStringLiteral("Not verified matches")))
+        return fail(QStringLiteral("Live catalog search failed: %1").arg(search->status()));
+      const auto inference_receipt = QJsonDocument(QJsonObject{{"schema", "looksy-production-full-catalog-search-v1"},
+          {"query", "green hat"}, {"actualInference", true}, {"productionCatalogBinding", true},
+          {"recipesPendingAtSearchStart", recipes_pending_at_start}, {"snapshotAssetCount", initial_scope.size()},
+          {"photoCount", full_catalog_photo_count},
+          {"indexedPreviewCount", search->inspected()}, {"encoded", search->encoded()},
+          {"reused", search->reused()}, {"resultCount", search->results().size()},
+          {"status", search->status()}, {"coverageWarning", search->indexWarning()},
+          {"qmlFindPhotosExercised", false}}).toJson(QJsonDocument::Compact);
+      std::cout << inference_receipt.constData() << '\n';
+      QFile receipt_file(full_catalog_search_snapshot + QStringLiteral(".inference.json"));
+      if (!receipt_file.open(QIODevice::WriteOnly) || receipt_file.write(inference_receipt) != inference_receipt.size())
+        return fail("Cannot save production search receipt");
+      full_search.clearFilter();
+      search->stop();
+      if (!wait_for_condition([&] { return !search->running(); }, 15000, "live-search-drain"))
+        return fail("Live search worker did not stop");
+    }
+    return export_full_catalog_similarity_snapshot(catalog_assets, full_catalog_search_snapshot, full_catalog_photo_count,
+        [&] { return catalog_assets.allAssetRecipesReady(); },
+        [&] { return catalog_assets.recipeLoadErrorCount(); }, 1200000, executable.isEmpty());
+  }
   photo_editor::desktop::CatalogSimilaritySearch similarity_search(&catalog_assets, "isolated-actual-ui-proof");
+  photo_editor::desktop::SearchModelSetupController search_setup(similarity_search.controller(),
+      option_value(arguments, "--search-model-root"), option_value(arguments, "--search-device"),
+      runtime_root.filePath("similarity.sqlite3"));
   if (!similarity_proof_dir.isEmpty()) {
     const auto bundle_root = option_value(arguments, "--search-runtime-bundle");
     bool configured = false;
@@ -4850,8 +6255,8 @@ int main(int argc, char** argv) {
       const auto checked = photo_editor::desktop::verify_search_runtime_bundle(
           bundle_root, option_value(arguments, "--search-runtime-receipt"));
       if (!checked.ok) return fail(checked.error);
-      configured = similarity_search.controller()->configureExecutable(checked.executable,
-          option_value(arguments, "--search-model-root"), option_value(arguments, "--search-device"), runtime_root.filePath("similarity.sqlite3"));
+      search_setup.setRuntime(checked.executable);
+      configured = wait_for_condition([&] { return !search_setup.running(); }, 30000) && search_setup.ready();
     } else {
       configured = similarity_search.controller()->configure(option_value(arguments, "--search-python"),
           QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath("scripts/search_model_worker.py"),
@@ -4868,10 +6273,202 @@ int main(int argc, char** argv) {
   photo_editor::desktop::PreviewBackendController preview_backend;
   photo_editor::desktop::QmlPerformanceMonitor qml_performance;
   photo_editor::desktop::TimelineDocumentController timeline_document;
+  std::unique_ptr<photo_editor::desktop::TimelineColorEditController> timeline_color_editor;
+  if (arguments.contains("--timeline-shared-edit-color-proof"))
+    timeline_color_editor = std::make_unique<photo_editor::desktop::TimelineColorEditController>(
+        &timeline_document, &editor_preview);
   photo_editor::desktop::TimelinePlaybackController timeline_playback(&timeline_document);
+  QString timeline_scroll_source_sha256_before;
+  if (timeline_scroll_benchmark) {
+    const QFileInfo project_info(timeline_scroll_config.project_path);
+    if (!project_info.exists() || !project_info.isFile() || project_info.isSymLink() ||
+        project_info.canonicalFilePath().isEmpty()) {
+      return fail(QStringLiteral("Timeline scroll benchmark project must be an existing regular non-symlink file."));
+    }
+    timeline_scroll_config.project_path = project_info.canonicalFilePath();
+    QString hash_error;
+    timeline_scroll_source_sha256_before =
+        sha256_file(timeline_scroll_config.project_path, &hash_error);
+    if (timeline_scroll_source_sha256_before.isEmpty()) {
+      return fail(QStringLiteral("Unable to hash Timeline scroll benchmark project: %1")
+                      .arg(hash_error));
+    }
+    if (timeline_scroll_source_sha256_before.compare(
+            timeline_scroll_config.expected_file_sha256, Qt::CaseInsensitive) != 0) {
+      return fail(QStringLiteral("Timeline scroll benchmark source SHA-256 did not match its configured expectation."));
+    }
+    if (timeline_scroll_config.owned_checkpoint) {
+      const auto documents_root =
+          photo_editor::desktop::timelineDocumentsRootPath();
+      if (!QDir().mkpath(documents_root)) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode could not create its isolated Timeline document root."));
+      }
+      const QFileInfo documents_root_info(documents_root);
+      const auto canonical_documents_root =
+          documents_root_info.canonicalFilePath();
+      if (canonical_documents_root.isEmpty() ||
+          !documents_root_info.isDir() || documents_root_info.isSymLink()) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode requires a canonical isolated Timeline document root."));
+      }
+      const auto canonical_file = QDir(canonical_documents_root).filePath(
+          QStringLiteral("%1.json").arg(timeline_scroll_config.timeline_id));
+      const QFileInfo canonical_file_info(canonical_file);
+      if (canonical_file_info.exists() || canonical_file_info.isSymLink()) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode refuses a pre-existing canonical project or symlink."));
+      }
+      timeline_scroll_config.candidate_path = QDir(canonical_documents_root).filePath(
+          QStringLiteral("%1.json.autosave")
+              .arg(timeline_scroll_config.timeline_id));
+      const QFileInfo candidate_info(timeline_scroll_config.candidate_path);
+      if (candidate_info.exists() || candidate_info.isSymLink()) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode refuses a pre-existing autosave candidate or symlink."));
+      }
+    }
+    timeline_scroll_config.load_path = runtime_root.filePath(
+        QStringLiteral("timeline-scroll-readonly.json"));
+    if (QFileInfo::exists(timeline_scroll_config.load_path) ||
+        !QFile::copy(timeline_scroll_config.project_path, timeline_scroll_config.load_path)) {
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark could not create its isolated byte-identical working copy."));
+    }
+    QString copy_hash_error;
+    const auto working_copy_sha256 =
+        sha256_file(timeline_scroll_config.load_path, &copy_hash_error);
+    if (working_copy_sha256.isEmpty() ||
+        working_copy_sha256.compare(
+            timeline_scroll_config.expected_file_sha256, Qt::CaseInsensitive) != 0 ||
+        working_copy_sha256 != timeline_scroll_source_sha256_before) {
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark working copy failed its exact source hash check "
+          "(copyHash=%1, readError=%2).")
+          .arg(working_copy_sha256, copy_hash_error));
+    }
+    timeline_scroll_config.working_copy_sha256 = working_copy_sha256;
+    if (timeline_scroll_config.owned_checkpoint) {
+      if (!QFile::copy(timeline_scroll_config.load_path,
+                       timeline_scroll_config.candidate_path)) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode could not stage the immutable input as the autosave candidate."));
+      }
+      QString candidate_hash_error;
+      const auto candidate_sha256 =
+          sha256_file(timeline_scroll_config.candidate_path, &candidate_hash_error);
+      QString candidate_semantic_error;
+      if (candidate_sha256.isEmpty() ||
+          candidate_sha256 != timeline_scroll_config.working_copy_sha256 ||
+          !timeline_scroll_autosave_matches_pinned_input(
+              timeline_scroll_config.load_path,
+              timeline_scroll_config.candidate_path,
+              &candidate_semantic_error)) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint autosave candidate failed its initial byte/semantic pin "
+            "(sha256=%1 readError=%2 semanticError=%3).")
+            .arg(candidate_sha256, candidate_hash_error,
+                 candidate_semantic_error));
+      }
+    }
+    if (!timeline_scroll_config.owned_checkpoint) {
+      if (!timeline_document.loadTimeline(timeline_scroll_config.load_path)) {
+        return fail(QStringLiteral("Timeline scroll benchmark could not load the exact project file."));
+      }
+    } else {
+      if (!timeline_document.openAutosaveRecoveryForAutomation(
+              timeline_scroll_config.timeline_id,
+              timeline_scroll_config.expected_document_hash)) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode could not start exact autosave recovery: %1")
+            .arg(timeline_document.status()));
+      }
+      if (!wait_for_condition(
+              [&timeline_document]() {
+                return !timeline_document.recoveryOpenInProgress();
+              },
+              timeline_scroll_config.hydration_timeout_ms,
+              "timeline-scroll-owned-autosave-recovery")) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint autosave recovery did not settle within its bounded timeout "
+            "(status=%1 hash=%2).")
+            .arg(timeline_document.status(),
+                 timeline_document.deterministicDocumentHash()));
+      }
+      const auto expected_resource =
+          QStringLiteral("timeline:%1").arg(timeline_scroll_config.timeline_id);
+      if (!timeline_document.hasActiveTimeline() ||
+          timeline_document.agentTaskDocumentId() != expected_resource ||
+          timeline_document.deterministicDocumentHash() !=
+              timeline_scroll_config.expected_document_hash) {
+        const auto semantic_diff = timeline_scroll_checkpoint_semantic_diff(
+            timeline_scroll_config.load_path,
+            timeline_scroll_config.expected_document_hash,
+            timeline_document);
+        return fail(QStringLiteral(
+            "Owned-checkpoint recovery did not open the exact requested document "
+            "(resource=%1 expectedResource=%2 hash=%3 expectedHash=%4 status=%5 "
+            "semanticDiff=%6).")
+            .arg(timeline_document.agentTaskDocumentId(), expected_resource,
+                 timeline_document.deterministicDocumentHash(),
+                 timeline_scroll_config.expected_document_hash,
+                 timeline_document.status(),
+                 QString::fromUtf8(QJsonDocument(semantic_diff)
+                     .toJson(QJsonDocument::Compact))));
+      }
+      if (!wait_for_condition(
+              [&timeline_document, &timeline_scroll_config]() {
+                return timeline_document.agentTaskDocumentReady() &&
+                    timeline_document.deterministicDocumentHash() ==
+                        timeline_scroll_config.expected_document_hash;
+              },
+              timeline_scroll_config.hydration_timeout_ms,
+              "timeline-scroll-owned-checkpoint-ready")) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint preparation did not settle without changing the pinned "
+            "document hash (hash=%1 diagnostics=%2).")
+            .arg(timeline_document.deterministicDocumentHash(),
+                 QString::fromUtf8(QJsonDocument(
+                     timeline_scroll_background_diagnostics(timeline_document))
+                     .toJson(QJsonDocument::Compact))));
+      }
+      const auto preparation =
+          timeline_document.prepareAgentTaskDocumentForAutomation();
+      if (!preparation.value(QStringLiteral("ok")).toBool() ||
+          !preparation.value(QStringLiteral("ready")).toBool() ||
+          timeline_document.deterministicDocumentHash() !=
+              timeline_scroll_config.expected_document_hash) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode could not prepare the exact Timeline without "
+            "derived edits (phase=%1 ready=%2 hash=%3 expectedHash=%4).")
+            .arg(preparation.value(QStringLiteral("phase")).toString())
+            .arg(preparation.value(QStringLiteral("ready")).toBool())
+            .arg(timeline_document.deterministicDocumentHash(),
+                 timeline_scroll_config.expected_document_hash));
+      }
+      const auto accepted =
+          timeline_document.acceptAgentTaskDocumentPreparationForAutomation();
+      if (!accepted.value(QStringLiteral("ok")).toBool() ||
+          !accepted.value(QStringLiteral("admitted")).toBool() ||
+          accepted.value(QStringLiteral("resourceId")).toString() !=
+              expected_resource ||
+          !timeline_document.agentTaskDocumentReady() ||
+          timeline_document.deterministicDocumentHash() !=
+              timeline_scroll_config.expected_document_hash) {
+        return fail(QStringLiteral(
+            "Owned-checkpoint mode could not accept the exact prepared Timeline "
+            "(resource=%1 expectedResource=%2 ready=%3 hash=%4 expectedHash=%5).")
+            .arg(accepted.value(QStringLiteral("resourceId")).toString(),
+                 expected_resource)
+            .arg(timeline_document.agentTaskDocumentReady())
+            .arg(timeline_document.deterministicDocumentHash(),
+                 timeline_scroll_config.expected_document_hash));
+      }
+    }
+  }
 
   const bool workspace_switch_proof = !option_value(arguments, "--workspace-switch-proof-dir").isEmpty();
-  if (!timeline_ui_proof_dir.isEmpty() || color_interaction_proof || !visual_search_proof_dir.isEmpty() || !similarity_proof_dir.isEmpty() || workspace_switch_proof || gaussian_proof || !optical_proof_dir.isEmpty()) {
+  if (!timeline_ui_proof_dir.isEmpty() || color_interaction_proof || !visual_search_proof_dir.isEmpty() || !similarity_proof_dir.isEmpty() || workspace_switch_proof || gaussian_proof || !optical_proof_dir.isEmpty() || timeline_scroll_benchmark) {
     app_shell.completeFirstRunExperience();
   }
 
@@ -4879,6 +6476,10 @@ int main(int argc, char** argv) {
   editor_preview.setPreviewTargetEdge(960);
 
   qmlRegisterType<photo_editor::desktop::PhotoTextDocumentStyle>("PhotoEditor", 1, 0, "PhotoTextDocumentStyle");
+  qmlRegisterType<photo_editor::desktop::SceneLibraryController>("PhotoEditor", 1, 0, "SceneLibraryController");
+  qmlRegisterType<photo_editor::desktop::SceneVideoRecorder>("PhotoEditor", 1, 0, "SceneVideoRecorder");
+  qmlRegisterType<photo_editor::desktop::DepthMotionController>("PhotoEditor", 1, 0, "DepthMotionController");
+  qmlRegisterType<photo_editor::desktop::DepthPointCloudViewport>("PhotoEditor", 1, 0, "DepthPointCloudViewport");
   qmlRegisterType<photo_editor::desktop::BrushLivePreviewItem>(
       "PhotoEditor",
       1,
@@ -4899,6 +6500,8 @@ int main(int argc, char** argv) {
       1,
       0,
       "TimelineAudioOutput");
+  qmlRegisterType<photo_editor::desktop::TimelineVoiceoverRecorder>(
+      "PhotoEditor", 1, 0, "TimelineVoiceoverRecorder");
 
 #if defined(__APPLE__) && defined(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
   photo_editor::desktop::GaussianSceneController gaussian_scene;
@@ -4963,12 +6566,17 @@ int main(int argc, char** argv) {
   auto* editor_preview_image_provider = new CountingPreviewImageProvider;
   editor_preview.setImageProvider(editor_preview_image_provider);
   engine.addImageProvider(QStringLiteral("editor-preview"), editor_preview_image_provider);
+  const auto preview_provider_lifetime = qScopeGuard([&editor_preview] {
+    editor_preview.setImageProvider(nullptr);
+  });
+  photo_editor::desktop::register_creative_example_thumbnail_provider(&engine);
   engine.addImageProvider(
       QStringLiteral("timeline-playback"), timeline_playback.createImageProvider());
   engine.rootContext()->setContextProperty("appShell", &app_shell);
   engine.rootContext()->setContextProperty("catalogAssets", &catalog_assets);
   engine.rootContext()->setContextProperty("visualSearch", &visual_search);
   engine.rootContext()->setContextProperty("similaritySearch", &similarity_search);
+  engine.rootContext()->setContextProperty("searchModelSetup", &search_setup);
   engine.rootContext()->setContextProperty("carouselDocument", &carousel_document);
   engine.rootContext()->setContextProperty("editorPreview", &editor_preview);
   engine.rootContext()->setContextProperty("exportJobs", &export_jobs);
@@ -4977,6 +6585,8 @@ int main(int argc, char** argv) {
   engine.rootContext()->setContextProperty("previewBackend", &preview_backend);
   engine.rootContext()->setContextProperty("qmlPerformance", &qml_performance);
   engine.rootContext()->setContextProperty("timelineDocument", &timeline_document);
+  if (timeline_color_editor)
+    engine.rootContext()->setContextProperty("timelineColorEditor", timeline_color_editor.get());
   engine.rootContext()->setContextProperty("timelinePlayback", &timeline_playback);
 
   QElapsedTimer shell_timer;
@@ -4995,6 +6605,12 @@ int main(int argc, char** argv) {
        {QStringLiteral("requested_rhi_backend"), qEnvironmentVariable("QSG_RHI_BACKEND")},
        {QStringLiteral("settings_backend"), native_settings_fixture ? QStringLiteral("native-isolated") : QStringLiteral("default")}});
   engine.load(QUrl::fromLocalFile(main_qml_path));
+  if (option_value(arguments, QStringLiteral("--idle-resource-proof")) == QStringLiteral("prewarm") &&
+      !engine.rootObjects().isEmpty()) {
+    if (auto* idle_window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst()))
+      idle_window->setWindowState(Qt::WindowMinimized);
+  }
+
   QCoreApplication::processEvents();
   photo_editor::desktop::observability::logInfo(
       photoEditorPerfLog(),
@@ -5011,8 +6627,21 @@ int main(int argc, char** argv) {
     return fail(QStringLiteral("Actual-app workflow requires Main.qml to expose a root window."));
   }
   new photo_editor::desktop::RecentUserInputFilter(root_window);
-  root->setProperty("width", optical_proof_dir.isEmpty() ? 1600 : std::max(900, option_int(arguments, "--optical-width", 1600)));
-  root->setProperty("height", optical_proof_dir.isEmpty() ? 1000 : std::max(650, option_int(arguments, "--optical-height", 1000)));
+  if (arguments.contains("--timeline-shared-edit-color-proof")) {
+#include "timeline_shared_edit_color_ui_proof.inc"
+  }
+  root->setProperty(
+      "width",
+      timeline_scroll_benchmark
+          ? timeline_scroll_config.window_width
+          : optical_proof_dir.isEmpty() ? 1600
+                                        : std::max(900, option_int(arguments, "--optical-width", 1600)));
+  root->setProperty(
+      "height",
+      timeline_scroll_benchmark
+          ? timeline_scroll_config.window_height
+          : optical_proof_dir.isEmpty() ? 1000
+                                        : std::max(650, option_int(arguments, "--optical-height", 1000)));
   process_layout_events(8);
   if (!wait_for_condition(
           [&]() {
@@ -5030,6 +6659,350 @@ int main(int argc, char** argv) {
       0,
       {{QStringLiteral("root_width"), root->property("width").toInt()},
        {QStringLiteral("root_height"), root->property("height").toInt()}});
+  if (arguments.contains(QStringLiteral("--idle-resource-proof"))) {
+    catalog_assets.replaceAssetsForTesting(
+        {make_asset(QStringLiteral("idle-resource-fixture"), source_path)});
+    catalog_assets.selectIndex(0);
+#include "idle_resource_proof.inc"
+  }
+
+  if (timeline_scroll_benchmark) {
+    // This is the idle preparation interval. Pinning recentUserInput true
+    // would indefinitely defer the hydration whose completion we await.
+    // The real wheel events below use RecentUserInputFilter normally.
+    root->setProperty("recentUserInput", false);
+    const auto timeline_workspace_index = root->property("timelineWorkspaceIndex").toInt();
+    if (timeline_workspace_index < 0) {
+      return fail(QStringLiteral("Timeline scroll benchmark could not resolve Timeline workspace index."));
+    }
+    auto* timeline_loader =
+        find_named_object(root, QStringLiteral("timelineWorkspaceLoader"));
+    if (timeline_loader == nullptr) {
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark could not find the native Timeline Loader."));
+    }
+    const bool timeline_was_preloaded =
+        root->property("timelineWorkspaceLoaded").toBool();
+    QVariant prewarm_result;
+    const bool prewarm_invoked = QMetaObject::invokeMethod(
+        root, "prewarmTimelineWorkspace", Q_RETURN_ARG(QVariant, prewarm_result));
+    if (!prewarm_invoked ||
+        (!prewarm_result.toBool() && !timeline_was_preloaded)) {
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark could not prewarm the hidden workspace safely."));
+    }
+    const auto loader_status = [timeline_loader]() {
+      return timeline_loader->property("status").toInt();
+    };
+    const auto loader_item = [timeline_loader]() -> QObject* {
+      return qvariant_cast<QObject*>(timeline_loader->property("item"));
+    };
+    constexpr int kLoaderReady = 1;
+    constexpr int kLoaderError = 3;
+    const auto prewarm_timeout_ms = std::min(timeout_ms, 60000);
+    const bool loader_settled = wait_for_condition(
+        [&]() {
+          return loader_status() == kLoaderReady ||
+                 loader_status() == kLoaderError;
+        },
+        prewarm_timeout_ms,
+        "timeline-scroll-loader-prewarm");
+    auto* prewarmed_timeline = loader_item();
+    if (!loader_settled || loader_status() != kLoaderReady ||
+        prewarmed_timeline == nullptr ||
+        prewarmed_timeline->objectName() != QStringLiteral("timelineWorkspace")) {
+      const auto status = loader_status();
+      const auto status_name = status == kLoaderError
+          ? QStringLiteral("Error")
+          : status == 2 ? QStringLiteral("Loading")
+                        : status == kLoaderReady ? QStringLiteral("Ready")
+                                                 : QStringLiteral("Null/Unknown");
+      const auto loader_error = status == kLoaderError
+          ? QStringLiteral("Loader entered Error; inspect QML engine warnings.")
+          : QStringLiteral("Loader did not become Ready before the bounded prewarm timeout.");
+      return fail(QStringLiteral(
+          "Timeline Loader prewarm failed safely (status=%1 statusCode=%2 progress=%3 "
+          "itemPresent=%4 itemObjectName=%5 asynchronous=%6 error=%7).")
+          .arg(status_name)
+          .arg(status)
+          .arg(timeline_loader->property("progress").toDouble(), 0, 'f', 3)
+          .arg(prewarmed_timeline != nullptr)
+          .arg(prewarmed_timeline == nullptr
+                   ? QStringLiteral("<none>")
+                   : prewarmed_timeline->objectName())
+          .arg(timeline_loader->property("asynchronous").toBool())
+          .arg(loader_error));
+    }
+    QVariant routed_to_timeline;
+    if (!QMetaObject::invokeMethod(
+            root,
+            "switchToWorkspaceIndex",
+            Q_RETURN_ARG(QVariant, routed_to_timeline),
+            Q_ARG(QVariant, QVariant(timeline_workspace_index))) ||
+        !routed_to_timeline.toBool()) {
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark could not navigate through the native workspace route."));
+    }
+    if (!wait_for_condition(
+            [&] {
+              auto* workspace = active_workspace(root);
+              return workspace != nullptr &&
+                     workspace->objectName() == QStringLiteral("timelineWorkspace") &&
+                     root->property("currentWorkspace").toInt() ==
+                         timeline_workspace_index &&
+                     !root->property("workspaceTransitionActive").toBool() &&
+                     named_item_visible(workspace, QStringLiteral("timelineViewport"));
+            },
+            timeout_ms,
+            "timeline-scroll-workspace")) {
+      auto* active_workspace_item = active_workspace(root);
+      auto* outer_loader_item =
+          qvariant_cast<QObject*>(timeline_loader->property("item"));
+      auto* nested_editor_loader = find_named_object(
+          prewarmed_timeline, QStringLiteral("timelineEditorSurfaceLoader"));
+      auto* nested_editor_item = nested_editor_loader == nullptr
+          ? nullptr
+          : qvariant_cast<QObject*>(nested_editor_loader->property("item"));
+      auto* failed_viewport =
+          find_named_item(prewarmed_timeline, QStringLiteral("timelineViewport"));
+      const auto nested_status = nested_editor_loader == nullptr
+          ? -1 : nested_editor_loader->property("status").toInt();
+      const auto nested_status_name = nested_status == 0
+          ? QStringLiteral("Null")
+          : nested_status == 1 ? QStringLiteral("Ready")
+          : nested_status == 2 ? QStringLiteral("Loading")
+          : nested_status == 3 ? QStringLiteral("Error")
+                               : QStringLiteral("Unknown");
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark did not load the Timeline workspace within the route "
+          "timeout (currentWorkspace=%1 activeWorkspace=%2 activeVisible=%3 "
+          "outerLoaderStatus=%4 outerLoaderProgress=%5 outerItem=%6 outerItemVisible=%7 "
+          "nestedEditorStatus=%8 nestedEditorStatusCode=%9 nestedEditorProgress=%10 "
+          "nestedEditorItem=%11 nestedEditorAsynchronous=%12 nestedEditorError=%13 "
+          "workspaceWidth=%14 workspaceHeight=%15 workspaceVisible=%16 "
+          "workspaceResourcesHibernated=%17 timelineViewportExists=%18 "
+          "timelineViewportVisible=%19).")
+          .arg(root->property("currentWorkspace").toInt())
+          .arg(active_workspace_item == nullptr
+                   ? QStringLiteral("<none>")
+                   : active_workspace_item->objectName())
+          .arg(active_workspace_item != nullptr &&
+               active_workspace_item->property("visible").toBool())
+          .arg(timeline_loader->property("status").toInt())
+          .arg(timeline_loader->property("progress").toDouble(), 0, 'f', 3)
+          .arg(outer_loader_item == nullptr
+                   ? QStringLiteral("<none>")
+                   : outer_loader_item->objectName())
+          .arg(outer_loader_item != nullptr &&
+               outer_loader_item->property("visible").toBool())
+          .arg(nested_status_name)
+          .arg(nested_status)
+          .arg(nested_editor_loader == nullptr
+                   ? 0.0
+                   : nested_editor_loader->property("progress").toDouble(),
+               0, 'f', 3)
+          .arg(nested_editor_item == nullptr
+                   ? QStringLiteral("<none>")
+                   : nested_editor_item->objectName())
+          .arg(nested_editor_loader != nullptr &&
+               nested_editor_loader->property("asynchronous").toBool())
+          .arg(nested_status == 3
+                   ? QStringLiteral("Loader entered Error; inspect QML engine warnings.")
+                   : QStringLiteral("none"))
+          .arg(prewarmed_timeline->property("width").toDouble(), 0, 'f', 1)
+          .arg(prewarmed_timeline->property("height").toDouble(), 0, 'f', 1)
+          .arg(prewarmed_timeline->property("visible").toBool())
+          .arg(prewarmed_timeline->property("workspaceResourcesHibernated").toBool())
+          .arg(failed_viewport != nullptr)
+          .arg(item_visible(failed_viewport)));
+    }
+    auto* workspace = active_workspace(root);
+    if (workspace == nullptr) {
+      return fail(QStringLiteral("Timeline workspace disappeared before scroll measurement."));
+    }
+    process_layout_events(8);
+    QElapsedTimer readiness_timer;
+    QElapsedTimer stable_readiness_timer;
+    readiness_timer.start();
+    bool readiness_stable = false;
+    while (readiness_timer.elapsed() < timeline_scroll_config.hydration_timeout_ms) {
+      const auto workers_settled = timeline_document.agentTaskDocumentReady() &&
+          !timeline_document.incrementalLoadBusy() &&
+          timeline_document.mediaAnalysisPendingCount() == 0 &&
+          !timeline_document.timelineSaveInProgress();
+      if (workers_settled) {
+        if (!readiness_stable) {
+          stable_readiness_timer.start();
+          readiness_stable = true;
+        }
+        if (stable_readiness_timer.elapsed() >=
+            timeline_scroll_config.readiness_stability_ms) {
+          break;
+        }
+      } else {
+        readiness_stable = false;
+      }
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+      QThread::msleep(25);
+    }
+    timeline_scroll_config.readiness_wait_ms = readiness_timer.elapsed();
+    const auto readiness_complete = readiness_stable &&
+        stable_readiness_timer.elapsed() >= timeline_scroll_config.readiness_stability_ms &&
+        timeline_document.agentTaskDocumentReady() &&
+        !timeline_document.incrementalLoadBusy() &&
+        timeline_document.mediaAnalysisPendingCount() == 0 &&
+        !timeline_document.timelineSaveInProgress();
+    if (!readiness_complete) {
+      const auto diagnostics =
+          timeline_scroll_background_diagnostics(timeline_document);
+      const auto source_after_timeout =
+          sha256_file(timeline_scroll_config.project_path);
+      const auto working_copy_after_timeout =
+          sha256_file(timeline_scroll_config.load_path);
+      const auto load_mode = timeline_scroll_config.owned_checkpoint
+          ? QStringLiteral("owned-autosave-checkpoint")
+          : QStringLiteral("normal-readonly-copy");
+      auto timeout_receipt = QJsonObject{
+          {QStringLiteral("schema"),
+           QStringLiteral("actual-timeline-scroll-readiness:v1")},
+          {QStringLiteral("ok"), false},
+          {QStringLiteral("readOnly"), true},
+          {QStringLiteral("saveCalled"), false},
+          {QStringLiteral("stage"), QStringLiteral("readiness")},
+          {QStringLiteral("loadMode"), load_mode},
+          {QStringLiteral("projectPath"), timeline_scroll_config.project_path},
+          {QStringLiteral("loadedProjectPath"),
+           timeline_scroll_config.owned_checkpoint
+               ? timeline_scroll_config.candidate_path
+               : timeline_scroll_config.load_path},
+          {QStringLiteral("immutableInputCopyPath"),
+           timeline_scroll_config.load_path},
+          {QStringLiteral("sourceSha256Before"),
+           timeline_scroll_source_sha256_before},
+          {QStringLiteral("sourceSha256After"), source_after_timeout},
+          {QStringLiteral("sourceUnchanged"),
+           !source_after_timeout.isEmpty() &&
+               source_after_timeout == timeline_scroll_source_sha256_before},
+          {QStringLiteral("workingCopySha256"),
+           timeline_scroll_config.working_copy_sha256},
+          {QStringLiteral("inputCopySha256"),
+           timeline_scroll_config.working_copy_sha256},
+          {QStringLiteral("workingCopySha256After"),
+           working_copy_after_timeout},
+          {QStringLiteral("workingCopyUnchanged"),
+           !working_copy_after_timeout.isEmpty() &&
+               working_copy_after_timeout ==
+                   timeline_scroll_config.working_copy_sha256},
+          {QStringLiteral("inputCopyUnchanged"),
+           !working_copy_after_timeout.isEmpty() &&
+               working_copy_after_timeout ==
+                   timeline_scroll_config.working_copy_sha256},
+          {QStringLiteral("autosaveCandidatePath"),
+           timeline_scroll_config.owned_checkpoint
+               ? timeline_scroll_config.candidate_path : QString{}},
+          {QStringLiteral("autosaveCandidateRawSha256AtStage"),
+           timeline_scroll_config.owned_checkpoint
+               ? timeline_scroll_config.working_copy_sha256 : QString{}},
+          {QStringLiteral("autosaveCandidateRawSha256After"),
+           timeline_scroll_config.owned_checkpoint
+               ? sha256_file(timeline_scroll_config.candidate_path) : QString{}},
+          {QStringLiteral("autosaveCandidateSemanticMatchesPinnedInput"),
+           timeline_scroll_config.owned_checkpoint
+               ? QJsonValue(timeline_scroll_autosave_matches_pinned_input(
+                     timeline_scroll_config.load_path,
+                     timeline_scroll_config.candidate_path, nullptr))
+               : QJsonValue(QJsonValue::Null)},
+          {QStringLiteral("expectedDocumentHash"),
+           timeline_scroll_config.expected_document_hash},
+          {QStringLiteral("documentHash"),
+           timeline_document.deterministicDocumentHash()},
+          {QStringLiteral("dirty"), timeline_document.dirty()},
+          {QStringLiteral("readinessWaitMs"),
+           timeline_scroll_config.readiness_wait_ms},
+          {QStringLiteral("readinessStableWindowMs"),
+           timeline_scroll_config.readiness_stability_ms},
+          {QStringLiteral("backgroundDiagnostics"), diagnostics},
+      };
+      insert_timeline_scroll_measurement_scope(
+          &timeout_receipt, timeline_scroll_config.offscreen_diagnostic);
+      const auto timeout_receipt_bytes =
+          QJsonDocument(timeout_receipt).toJson(QJsonDocument::Compact);
+      if (!timeline_scroll_config.report_path.isEmpty()) {
+        if (QFileInfo::exists(timeline_scroll_config.report_path)) {
+          std::cerr << "Timeline readiness receipt path already exists; not overwriting: "
+                    << timeline_scroll_config.report_path.toStdString() << '\n';
+        } else {
+          QSaveFile report(timeline_scroll_config.report_path);
+          if (report.open(QIODevice::WriteOnly) &&
+              report.write(timeout_receipt_bytes) ==
+                  timeout_receipt_bytes.size() &&
+              report.commit()) {
+            std::cerr << "Timeline readiness diagnostic receipt: "
+                      << timeline_scroll_config.report_path.toStdString() << '\n';
+          } else {
+            std::cerr << "Could not write Timeline readiness diagnostic receipt: "
+                      << timeline_scroll_config.report_path.toStdString() << '\n';
+          }
+        }
+      }
+      std::cerr << "Timeline scroll readiness diagnostics: "
+                << timeout_receipt_bytes.constData() << '\n';
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark timed out waiting for a stable, idle source hydration and "
+          "background-worker window; loadMode=%1 (documentHash=%2, dirty=%3, "
+          "incrementalLoadBusy=%4, mediaAnalysisPending=%5, saveInProgress=%6, waitedMs=%7). "
+          "See the structured diagnostics emitted above.")
+          .arg(load_mode)
+          .arg(timeline_document.deterministicDocumentHash())
+          .arg(timeline_document.dirty())
+          .arg(timeline_document.incrementalLoadBusy())
+          .arg(timeline_document.mediaAnalysisPendingCount())
+          .arg(timeline_document.timelineSaveInProgress())
+          .arg(timeline_scroll_config.readiness_wait_ms));
+    }
+    const auto settled_source_sha256 =
+        sha256_file(timeline_scroll_config.project_path);
+    if (settled_source_sha256.isEmpty() ||
+        settled_source_sha256 != timeline_scroll_source_sha256_before ||
+        settled_source_sha256.compare(
+            timeline_scroll_config.expected_file_sha256, Qt::CaseInsensitive) != 0) {
+      return fail(QStringLiteral(
+          "Timeline scroll benchmark source file changed while background hydration settled."));
+    }
+    if (timeline_scroll_config.scrub_proof) {
+      QString scrub_proof_error;
+      if (!run_timeline_scrub_responsiveness_proof(
+              root,
+              root_window,
+              workspace,
+              timeline_document,
+              timeline_playback,
+              timeline_scroll_config,
+              timeline_scroll_source_sha256_before,
+              &scrub_proof_error)) {
+        return fail(scrub_proof_error.isEmpty()
+                        ? QStringLiteral(
+                              "Timeline scrub responsiveness proof failed its input or identity gate.")
+                        : scrub_proof_error);
+      }
+    }
+    if (timeline_scroll_config.selection_proof) {
+      const auto selection_proof_result = run_timeline_scroll_selection_proof(
+          root,
+          root_window,
+          workspace,
+          &timeline_document,
+          timeline_scroll_config,
+          timeline_scroll_source_sha256_before);
+      if (selection_proof_result != EXIT_SUCCESS) return selection_proof_result;
+    }
+    return run_timeline_scroll_benchmark(
+        workspace,
+        root_window,
+        timeline_document,
+        timeline_scroll_config,
+        timeline_scroll_source_sha256_before);
+  }
 
   if (route_only) {
     // Isolate first-use workspace construction from photo decode, preview
@@ -5194,7 +7167,7 @@ int main(int argc, char** argv) {
           return fail(QStringLiteral("Route-only workflow could not return to Library."));
         }
       }
-      if (!measure_route(
+      if ((!timeline_route_only && !measure_route(
               carousel_workspace_index,
               QStringLiteral("carouselWorkspace"),
               QStringLiteral("carouselSetupSurface"),
@@ -5202,7 +7175,7 @@ int main(int argc, char** argv) {
               QStringLiteral("carousel_input_event_dispatch_delay"),
               &carousel_route_samples,
               &carousel_input_dispatch_samples,
-              iteration) ||
+              iteration)) ||
           !measure_route(
               timeline_workspace_index,
               QStringLiteral("timelineWorkspace"),
@@ -5593,10 +7566,10 @@ int main(int argc, char** argv) {
         return fail("Isolated export history did not load.");
       const auto export_destination = fixture_dir.filePath("actual-export");
       if (!QDir().mkpath(export_destination)) return fail("Could not create isolated export destination.");
-      auto* destination_field = find_named_object(root, "exportDestinationField");
+      auto* export_view = find_named_object(root, "exportStudioWorkspaceContent");
       auto* start_export = qobject_cast<QQuickItem*>(find_named_object(root, "exportCurrentSplitButton"));
-      if (!destination_field || !start_export) return fail("Native export controls are missing.");
-      destination_field->setProperty("text", export_destination);
+      if (!export_view || !start_export) return fail("Native export controls are missing.");
+      export_view->setProperty("deliveryDestinationPath", export_destination);
       process_layout_events(12);
       if (!start_export->property("primaryEnabled").toBool()) return fail("Native export preflight blocked the generated image.");
       QStringList observed_export_states;
@@ -5900,8 +7873,8 @@ int main(int argc, char** argv) {
   if (arguments.contains("--library-startup-proof")) {
     QJsonArray captures;
     auto* workspace = active_workspace(root);
-    auto* popup = find_named_object(root, QStringLiteral("startupLoadingPopup"));
-    if (!workspace || !popup) return fail("Library startup surfaces are unavailable.");
+    if (!workspace) return fail("Library startup workspace is unavailable.");
+    catalog_assets.replaceAssetsForTesting({});
     root->setProperty("recentUserInput", true);
     // Exercise the real asynchronous snapshot completion without using the
     // user's catalog or preferences. The helper returns one offline record.
@@ -5927,11 +7900,15 @@ int main(int argc, char** argv) {
           if (!catalog_assets.loading()) ready_after_publication = catalog_assets.assetCount() == 1;
         });
     catalog_assets.refresh();
-    if (!wait_for_condition([&]() { return popup->property("opened").toBool(); }, timeout_ms))
-      return fail("Startup popup did not appear while the catalog was loading.");
+    if (!wait_for_condition([&]() {
+          auto* scene = find_visible_named_item(workspace, "studioLibraryLoadingScene");
+          return scene && scene->property("active").toBool() &&
+              workspace->property("libraryLoadingSceneVisible").toBool();
+        }, timeout_ms))
+      return fail("Library loading scene did not appear while the catalog was loading.");
     save_capture_if_requested(root_window, capture_dir, "library-startup-loading", &captures);
     if (!wait_for_condition([&]() { return !catalog_assets.loading() &&
-        !popup->property("visible").toBool(); }, timeout_ms) || !ready_after_publication)
+        !workspace->property("libraryLoadingSceneVisible").toBool(); }, timeout_ms) || !ready_after_publication)
       return fail("Startup loading closed before the catalog was published.");
     QObject::disconnect(loading_connection);
     catalog_assets.replaceAssetsForTesting({});
@@ -6305,6 +8282,44 @@ int main(int argc, char** argv) {
       if (!QMetaObject::invokeMethod(root, "currentExportPayload", Q_RETURN_ARG(QVariant, export_payload)) ||
           export_payload.toMap().value("assetId").toString() != "library-proof-1")
         return fail("Export must still target the open image after selecting another thumbnail.");
+      if (arguments.contains("--recipe-selection-only")) {
+        const auto target_recipe = catalog_assets.assetById("library-proof-2")
+            .value("adjustmentPatchJson").toString();
+        editor_preview.setExposure(0.35);
+        editor_preview.addMask("linear");
+        editor_preview.setActiveMaskExposure(0.12);
+        const auto source_recipe = editor_preview.currentAssetBoundAdjustmentPatchJson();
+        catalog_assets.applyAdjustmentPatchJsonToAssetIds({"library-proof-1"}, source_recipe);
+        const auto source_catalog_recipe = catalog_assets.assetById("library-proof-1")
+            .value("adjustmentPatchJson").toString();
+        const auto source_mask_count = editor_preview.maskCount();
+        const auto source_opens = opened;
+        catalog_assets.setRecipesPendingForTesting({"library-proof-2"});
+        if (!catalog_assets.applyRecipeForTesting("library-proof-2", target_recipe))
+          return fail("The selected photo's deferred recipe must finish loading");
+        process_layout_events(6, "recipe-ready-selection-only");
+        if (editor_preview.assetId() != "library-proof-1" || opened != source_opens ||
+            editor_preview.currentAssetBoundAdjustmentPatchJson() != source_recipe ||
+            editor_preview.maskCount() != source_mask_count ||
+            catalog_assets.assetById("library-proof-1").value("adjustmentPatchJson").toString() != source_catalog_recipe)
+          return fail("Finishing a selected photo's recipe must preserve the open batch-sync source and its refined mask");
+        catalog_assets.setRecipesPendingForTesting({"library-proof-2"});
+        process_layout_events(3, "recipe-pending-activation");
+        next_card = find_next_card(qobject_cast<QQuickItem*>(workspace));
+        if (!click(next_card, true) || editor_preview.assetId() != "library-proof-1" ||
+            root->property("pendingRecipeEditAssetId").toString() != "library-proof-2")
+          return fail("Explicit filmstrip activation must wait for the target's saved recipe");
+        if (!catalog_assets.applyRecipeForTesting("library-proof-2", target_recipe) ||
+            !wait_for_condition([&] { return editor_preview.assetId() == "library-proof-2" &&
+                root->property("pendingRecipeEditAssetId").toString().isEmpty(); }, timeout_ms))
+          return fail("A hydrated recipe must complete the pending explicit activation");
+        save_capture_if_requested(root_window, capture_dir, "recipe-readiness-activation", &captures);
+        std::cout << QJsonDocument(QJsonObject{{"schema", "recipe-readiness-activation:v1"},
+            {"ok", true}, {"selectionPreservesEditor", true}, {"refinedMaskPreserved", true},
+            {"activationWaitsForRecipe", true}, {"pendingActivationCompletes", true},
+            {"captures", captures}}).toJson().constData();
+        return EXIT_SUCCESS;
+      }
       save_capture_if_requested(root_window, capture_dir, "filmstrip-selection", &captures);
       if (!click(next_card, true) || !wait_for_condition([&] {
             return editor_preview.assetId() == "library-proof-2";
@@ -6754,7 +8769,12 @@ int main(int argc, char** argv) {
     QFile manifest_file(option_value(arguments, "--search-fixtures"));
     if (!manifest_file.open(QIODevice::ReadOnly) || manifest_file.size() > 1024 * 1024)
       return fail("Similarity proof requires the explicit photo fixture manifest.");
-    const auto images = QJsonDocument::fromJson(manifest_file.readAll()).object().value("images").toArray();
+    const auto similarity_manifest = QJsonDocument::fromJson(manifest_file.readAll()).object();
+    const auto images = similarity_manifest.value("images").toArray();
+    const auto first_query = similarity_manifest.value("queries").toArray().first().toObject();
+    const auto proof_query = first_query.value("text").toString("a white dog outdoors");
+    const auto expected_ids = first_query.value("expectedIds").toArray().isEmpty()
+        ? QJsonArray{"dog"} : first_query.value("expectedIds").toArray();
     if (images.size() < 2 || images.size() > 64) return fail("Invalid similarity proof scope.");
     QVector<photo_editor::desktop::CatalogAssetItem> items;
     for (const auto& value : images) {
@@ -6772,65 +8792,79 @@ int main(int argc, char** argv) {
     }
     process_layout_events(8);
     auto* workspace = active_workspace(root);
-    auto* entry = workspace->findChild<QObject*>("libraryVisualSearchButton");
-    if (!entry || !QMetaObject::invokeMethod(entry, "clicked")) return fail("AI Search entry point unavailable.");
-    process_layout_events(4);
-    auto* panel = workspace->findChild<QQuickItem*>("libraryVisualSearchPanel");
-    auto* mode = workspace->findChild<QObject*>("visualSearchSimilarityToggle");
-    auto* input = workspace->findChild<QObject*>("visualSearchQueryInput");
-    auto* start = workspace->findChild<QObject*>("visualSearchStartButton");
-    if (!panel || !panel->isVisible() || !mode || !mode->property("visible").toBool() || !input || !start)
-      return fail("Similarity controls are not visible in the actual app.");
-    mode->setProperty("checked", true);
-    if (!QMetaObject::invokeMethod(mode, "toggled")) return fail("Similarity mode control not invokable.");
-    process_layout_events(4);
-    if (!workspace->property("useSimilaritySearch").toBool()) return fail("Similarity mode was not selected.");
+    const auto click_search_control = [&](QObject* object) {
+      auto* item = qobject_cast<QQuickItem*>(object);
+      if (!item || !item->isVisible() || !item->isEnabled()) return false;
+      QTest::qWait(250);
+      const auto point = item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
+      QSignalSpy clicked(object, SIGNAL(clicked()));
+      QTest::mouseClick(root_window, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+      QTest::qWait(50);
+      process_layout_events(4);
+      if (clicked.isEmpty()) std::cerr << "Search click missed " << object->objectName().toStdString()
+          << " at " << point.x() << ',' << point.y() << '\n';
+      return !clicked.isEmpty();
+    };
+    auto* input = workspace->findChild<QQuickItem*>("studioLibrarySearchInputInput");
+    auto* clear = workspace->findChild<QObject*>("studioLibrarySearchClearButton");
+    if (!input || !input->isVisible() || !clear || workspace->findChild<QObject*>("libraryVisualSearchButton") ||
+        workspace->findChild<QObject*>("libraryVisualSearchPanel"))
+      return fail("Photo content search must live in the main bar without a second search UI.");
     auto* search = similarity_search.controller();
     QJsonArray captures, timings;
-    auto run_query = [&] {
-      input->setProperty("text", "a white dog outdoors");
-      process_layout_events(2);
+    auto run_query = [&](const QString& query, const QJsonArray& expected) {
+      input->forceActiveFocus();
+      QKeyEvent text(QEvent::KeyPress, 0, Qt::NoModifier, query);
+      QApplication::sendEvent(root_window, &text);
+      QTest::keyClick(root_window, Qt::Key_Return);
       QElapsedTimer timer; timer.start();
-      if (!start->property("enabled").toBool() || !QMetaObject::invokeMethod(start, "clicked") ||
-          search->query() != "a white dog outdoors") return false;
-      if (!wait_for_condition([&] { return !search->running(); }, 180000) ||
-          search->resultIds().value(0) != "dog" || !catalog_assets.visualSearchActive() ||
+      if (!wait_for_condition([&] { return search->running() && search->query() == query; }, 5000) ||
+          !wait_for_condition([&] { return !search->running(); }, 180000) ||
+          !expected.contains(search->resultIds().value(0)) || !catalog_assets.visualSearchActive() ||
+          !catalog_assets.searchFilter().isEmpty() || workspace->property("librarySearchDraftText").toString() != query ||
           catalog_assets.assetCount() != search->resultIds().size()) {
         std::cerr << search->status().toStdString() << '\n';
         return false;
       }
-      timings.append(QJsonObject{{"milliseconds", timer.elapsed()}, {"encoded", search->encoded()}, {"reused", search->reused()}});
+      timings.append(QJsonObject{{"query", query}, {"milliseconds", timer.elapsed()},
+          {"encoded", search->encoded()}, {"reused", search->reused()}, {"expectedFirst", true}});
       return true;
     };
-    save_capture_if_requested(root_window, similarity_proof_dir, "similarity-ready", &captures);
-    if (!run_query()) return fail("Actual Find photos did not retrieve/project the expected dog.");
-    save_capture_if_requested(root_window, similarity_proof_dir, "similarity-results", &captures);
-    auto* clear = workspace->findChild<QObject*>("visualSearchClearButton");
-    if (!clear || !QMetaObject::invokeMethod(clear, "clicked") || catalog_assets.visualSearchActive())
-      return fail("Similarity Show all in view did not clear projection.");
-    if (!run_query() || search->encoded() != 0 || search->reused() != items.size())
-      return fail("Actual repeated search did not reuse current image vectors.");
-    // A changed ordinary filter synchronously invalidates candidates and clears
-    // only the result projection after the model's change notification drains.
-    catalog_assets.setSearchFilter("no-such-photo-for-similarity-proof");
-    if (!search->results().isEmpty() ||
-        !wait_for_condition([&] { return !catalog_assets.visualSearchActive(); }, 5000) || catalog_assets.assetCount() != 0)
-      return fail("Filter change retained stale candidates or broadened the current view.");
-    catalog_assets.setSearchFilter(QString());
-    if (!run_query()) return fail("Search did not recover after changing filters.");
+    if (!QMetaObject::invokeMethod(root, "openPreferencesDialog", Q_ARG(QVariant, 7)))
+      return fail("Model settings route unavailable");
+    QObject* settings = nullptr;
+    if (!wait_for_condition([&] {
+          settings = find_named_object(root, "preferencesDialog");
+          return settings && settings->property("visible").toBool();
+        }, 5000) || settings->property("currentPage").toInt() != 7 || !search_setup.ready())
+      return fail("Models must be configurable in Settings");
+    process_layout_events(8);
+    save_capture_if_requested(root_window, similarity_proof_dir, "models-settings", &captures);
+    QMetaObject::invokeMethod(settings, "close");
+    process_layout_events(8);
+    for (const auto& query_value : similarity_manifest.value("queries").toArray()) {
+      const auto query = query_value.toObject();
+      if (!run_query(query.value("text").toString(), query.value("expectedIds").toArray()))
+        return fail("Typing a description in the main bar did not retrieve/project the expected photograph");
+      save_capture_if_requested(root_window, similarity_proof_dir,
+          QStringLiteral("main-search-%1").arg(timings.size()), &captures);
+      if (!click_search_control(clear) || catalog_assets.visualSearchActive() ||
+          !input->property("text").toString().isEmpty()) return fail("Main-bar Clear retained search state");
+    }
+    if (!run_query(proof_query, expected_ids) || search->encoded() != 0 || search->reused() != items.size())
+      return fail("Repeated main-bar query did not reuse the vectors");
     root_window->setWidth(1100);
     process_layout_events(8);
-    save_capture_if_requested(root_window, similarity_proof_dir, "similarity-compact", &captures);
+    save_capture_if_requested(root_window, similarity_proof_dir, "main-search-compact", &captures);
     similarity_search.cancel();
     search->stop();
     if (!wait_for_condition([&] { return !search->running(); }, 5000) || catalog_assets.visualSearchActive())
-      return fail("Similarity proof left an owned worker or stale projection.");
-    if (captures.size() != 3) return fail("Similarity visual captures incomplete.");
-    const QJsonObject receipt{{"actualFindPhotos", true}, {"actualLocalModel", true}, {"expectedTop", "dog"},
-        {"selfContainedWorker", !option_value(arguments, "--search-runtime-bundle").isEmpty()},
-        {"changedFilterInvalidated", true}, {"ownedWorkerStopped", true}, {"timings", timings}, {"captures", captures}};
+      return fail("Main-bar proof left an owned worker or stale projection");
+    const QJsonObject receipt{{"actualMainSearchBar", true}, {"separateSearchUiAbsent", true},
+        {"modelsInSettings", true}, {"actualLocalModel", true}, {"ownedWorkerStopped", true},
+        {"timings", timings}, {"captures", captures}};
     QFile receipt_file(QDir(similarity_proof_dir).filePath("receipt.json"));
-    if (!receipt_file.open(QIODevice::WriteOnly)) return fail("Similarity receipt could not be written.");
+    if (!receipt_file.open(QIODevice::WriteOnly)) return fail("Search receipt could not be written");
     receipt_file.write(QJsonDocument(receipt).toJson());
     std::cout << QJsonDocument(receipt).toJson().constData();
     return EXIT_SUCCESS;
@@ -7007,6 +9041,33 @@ int main(int argc, char** argv) {
 #include "editor_responsiveness_proof.inc"
 
   if (!timeline_ui_proof_dir.isEmpty()) {
+    if (arguments.contains(QStringLiteral("--timeline-stress-runtime-proof-only")))
+      return run_timeline_stress_runtime_proof(root_window, root, &timeline_document,
+          &timeline_playback, timeline_ui_proof_dir);
+    if (arguments.contains(QStringLiteral("--timeline-interaction-feedback-proof-only")))
+      return run_timeline_interaction_feedback_proof(root_window, root, &timeline_document,
+          source_path, timeline_ui_proof_dir);
+    if (arguments.contains(QStringLiteral("--timeline-workspace-lifecycle-proof-only")))
+      return run_timeline_workspace_lifecycle_proof(root_window, root, &timeline_document,
+          &timeline_playback, &catalog_assets, source_path, timeline_ui_proof_dir);
+    if (timeline_discoverable_workspace_proof_only)
+      return run_timeline_discoverable_workspace_proof(
+          root_window, root, &app_shell, &timeline_document, &timeline_playback,
+          &catalog_assets, source_path, timeline_ui_proof_dir);
+    if (arguments.contains(QStringLiteral("--timeline-channels-trim-proof-only")))
+      return run_timeline_channels_trim_ui_proof(root_window, root, &timeline_document,
+          &timeline_playback, &catalog_assets, source_path, timeline_ui_proof_dir);
+    if (arguments.contains(QStringLiteral("--timeline-depth-proof-only")))
+      return run_timeline_depth_ui_proof(root_window, root, &timeline_document,
+          &timeline_playback, &catalog_assets, source_path, timeline_ui_proof_dir,
+          arguments.contains(QStringLiteral("--timeline-depth-inactive-diagnostic")));
+    if (arguments.contains(QStringLiteral("--timeline-workspace-ux-proof-only")))
+      return run_timeline_workspace_ux_proof(root_window, root, &timeline_document,
+          &timeline_playback, &catalog_assets, source_path, timeline_ui_proof_dir);
+    if (timeline_inspector_animation_proof_only)
+      return run_timeline_inspector_animation_ui_proof(
+          root_window, root, &timeline_document, source_path, QString(),
+          timeline_ui_proof_dir);
     auto timeline_media_asset = make_asset(
         QStringLiteral("timeline-proof-library-video"),
         source_path);
@@ -7015,8 +9076,13 @@ int main(int argc, char** argv) {
     timeline_media_asset.duration_text = QStringLiteral("0:10");
     timeline_media_asset.duration_seconds = 10.0;
     catalog_assets.replaceAssetsForTesting({timeline_media_asset});
+    if (timeline_masked_blur_proof_only)
+      return run_timeline_masked_blur_ui_proof_only(
+          root_window, root, &timeline_document, timeline_ui_proof_dir);
+    if (timeline_crop_ui_proof_only)
+      return run_timeline_crop_ui_proof_only(root_window, root, &timeline_document, &timeline_playback, timeline_ui_proof_dir);
     if (arguments.contains(QStringLiteral("--timeline-animation-proof-only")))
-      return run_timeline_animation_ui_proof(root_window, root, &timeline_document, source_path, timeline_ui_proof_dir);
+      return run_timeline_animation_ui_proof(root_window, root, &app_shell, &timeline_document, &timeline_playback, source_path, timeline_ui_proof_dir);
     return run_timeline_ui_proof(
         root_window,
         root,
@@ -7116,6 +9182,32 @@ int main(int argc, char** argv) {
 
   if (color_interaction_proof) {
     using Access = photo_editor::desktop::EditorPreviewControllerTestAccess;
+#ifdef Q_OS_MACOS
+    activate_native_test_window(root_window);
+    QVariantMap native_window_activation_sample;
+    const auto foreground_before_warmup = wait_for_condition([&]() {
+      native_window_activation_sample = native_window_foreground_sample(root_window);
+      return root_window->isVisible() && root_window->isExposed() && root_window->isActive() &&
+          native_window_activation_sample.value(QStringLiteral("qualified")).toBool();
+    }, 5000);
+    if (arguments.contains(QStringLiteral("--require-native-foreground-samples")) &&
+        !foreground_before_warmup) {
+      return fail(QStringLiteral(
+          "Color interaction proof could not qualify the foreground native window before warmup."));
+    }
+#else
+    const QVariantMap native_window_activation_sample{
+        {QStringLiteral("sample_available"), false},
+        {QStringLiteral("qualified"), false}};
+    const auto foreground_before_warmup = false;
+    if (arguments.contains(QStringLiteral("--require-native-foreground-samples"))) {
+      return fail(QStringLiteral(
+          "Native foreground sampling is available only on the Cocoa platform."));
+    }
+#endif
+    log_stage(QStringLiteral("color_native_window_foreground_ready"), 0, 0,
+        {{QStringLiteral("foreground_before_warmup"), foreground_before_warmup},
+         {QStringLiteral("sample"), native_window_activation_sample}});
     catalog_assets.selectIndex(0);
     root->setProperty("currentWorkspace", root->property("editWorkspaceIndex"));
     root->setProperty("editWorkspaceMode", QStringLiteral("adjust"));
@@ -7128,15 +9220,39 @@ int main(int argc, char** argv) {
         }, timeout_ms)) {
       return fail(QStringLiteral("Color interaction proof requires a visible native preview."));
     }
+#ifdef Q_OS_MACOS
+    activate_native_test_window(root_window);
+    native_window_activation_sample = native_window_foreground_sample(root_window);
+    const auto foreground_before_interaction_warmup =
+        root_window->isVisible() && root_window->isExposed() && root_window->isActive() &&
+        native_window_activation_sample.value(QStringLiteral("qualified")).toBool();
+    if (arguments.contains(QStringLiteral("--require-native-foreground-samples")) &&
+        !foreground_before_interaction_warmup) {
+      return fail(QStringLiteral(
+          "Color interaction proof lost foreground qualification before interaction warmup."));
+    }
+#else
+    const auto foreground_before_interaction_warmup = false;
+#endif
     QElapsedTimer gui_clock;
     gui_clock.start();
     qint64 last_gui_tick = 0;
     qint64 max_gui_gap_ms = 0;
+    auto held_input_gui_tracking_active = false;
+    qint64 held_input_gui_last_tick_ms = 0;
+    qint64 held_input_gui_max_gap_ms = 0;
+    auto held_input_gui_gap_samples = 0;
     QTimer gui_heartbeat;
     QObject::connect(&gui_heartbeat, &QTimer::timeout, root_window, [&]() {
       const auto now = gui_clock.elapsed();
       max_gui_gap_ms = std::max(max_gui_gap_ms, now - last_gui_tick);
       last_gui_tick = now;
+      if (held_input_gui_tracking_active) {
+        held_input_gui_max_gap_ms = std::max(
+            held_input_gui_max_gap_ms, now - held_input_gui_last_tick_ms);
+        held_input_gui_last_tick_ms = now;
+        ++held_input_gui_gap_samples;
+      }
     });
     gui_heartbeat.start(8);
     const auto color_control = option_value(arguments, QStringLiteral("--color-control"));
@@ -7236,22 +9352,100 @@ int main(int argc, char** argv) {
     auto last_presented_native_revision = burst_revision_floor;
     QString last_presented_overlay;
     auto last_burst_overlay = editor_preview.displayPreviewOverlaySource();
+    qint64 burst_first_native_publication_ms = -1;
+    qint64 burst_first_native_frame_ms = -1;
+    qint64 held_input_started_ms = -1;
+    QVariantList held_native_frame_timestamps_ms;
+    auto burst_input_active = false;
+    QVariantList native_window_foreground_samples;
+    QVariantMap first_native_frame_foreground_sample;
+    auto last_foreground_sample_ms = qint64{-1};
+    auto maximum_foreground_sample_gap_ms = qint64{0};
+    auto unqualified_foreground_sample_count = 0;
+    auto held_input_foreground_sample_count = 0;
+    const auto record_foreground_sample = [&](const QString& phase) {
+#ifdef Q_OS_MACOS
+      auto sample = native_window_foreground_sample(root_window);
+#else
+      auto sample = QVariantMap{
+          {QStringLiteral("sample_available"), false},
+          {QStringLiteral("qualified"), false}};
+#endif
+      const auto elapsed_ms = burst_timer.elapsed();
+      sample.insert(QStringLiteral("phase"), phase);
+      sample.insert(QStringLiteral("elapsed_ms"), elapsed_ms);
+      sample.insert(QStringLiteral("window_active"), root_window->isActive());
+      sample.insert(QStringLiteral("window_exposed"), root_window->isExposed());
+      sample.insert(QStringLiteral("held_input_active"), burst_input_active);
+      if (last_foreground_sample_ms >= 0) {
+        const auto gap_ms = elapsed_ms - last_foreground_sample_ms;
+        maximum_foreground_sample_gap_ms =
+            std::max(maximum_foreground_sample_gap_ms, gap_ms);
+      }
+      last_foreground_sample_ms = elapsed_ms;
+      const auto qualified = sample.value(QStringLiteral("qualified")).toBool();
+      if (!qualified) ++unqualified_foreground_sample_count;
+      if (burst_input_active && phase == QStringLiteral("held_input_timer"))
+        ++held_input_foreground_sample_count;
+      native_window_foreground_samples.append(sample);
+      return sample;
+    };
+    auto before_held_input_sample = QVariantMap{};
     const auto burst_overlay_connection = QObject::connect(&editor_preview,
         &photo_editor::desktop::EditorPreviewController::previewChanged, root_window, [&]() {
-          const auto source = editor_preview.displayPreviewOverlaySource();
-          if (!source.isEmpty() && source != last_burst_overlay) ++burst_overlay_publications;
-          last_burst_overlay = source;
+          if (burst_input_active && burst_first_native_publication_ms < 0 &&
+              editor_preview.displayPreviewNativeRevision() > burst_revision_floor) {
+            burst_first_native_publication_ms = burst_timer.elapsed();
+            static_cast<void>(record_foreground_sample(QStringLiteral("first_native_publication")));
+            root_window->update();
+          }
+          if (burst_input_active) {
+            const auto source = editor_preview.displayPreviewOverlaySource();
+            if (!source.isEmpty() && source != last_burst_overlay) ++burst_overlay_publications;
+            last_burst_overlay = source;
+          }
         });
     const auto burst_frame_connection = QObject::connect(root_window, &QQuickWindow::frameSwapped,
         root_window, [&]() {
           const auto revision = editor_preview.displayPreviewNativeRevision();
-          if (revision > last_presented_native_revision) ++burst_native_frames;
+          if (burst_input_active && revision > last_presented_native_revision) {
+            ++burst_native_frames;
+            if (held_input_started_ms >= 0) {
+              held_native_frame_timestamps_ms.append(
+                  burst_timer.elapsed() - held_input_started_ms);
+            }
+          }
           last_presented_native_revision = revision;
-          const auto source = editor_preview.displayPreviewOverlaySource();
-          if (!source.isEmpty() && source != last_presented_overlay) ++burst_overlay_frames;
-          last_presented_overlay = source;
+          if (burst_input_active && burst_first_native_frame_ms < 0 &&
+              burst_first_native_publication_ms >= 0 &&
+              revision > burst_revision_floor) {
+            burst_first_native_frame_ms = burst_timer.elapsed();
+            first_native_frame_foreground_sample =
+                record_foreground_sample(QStringLiteral("first_native_frame"));
+          }
+          if (burst_input_active) {
+            const auto source = editor_preview.displayPreviewOverlaySource();
+            if (!source.isEmpty() && source != last_presented_overlay) ++burst_overlay_frames;
+            last_presented_overlay = source;
+          }
         });
     qint64 maximum_setter_ms = 0;
+    before_held_input_sample = record_foreground_sample(QStringLiteral("before_held_input"));
+    if (arguments.contains(QStringLiteral("--require-native-foreground-samples")) &&
+        !before_held_input_sample.value(QStringLiteral("qualified")).toBool()) {
+      return fail(QStringLiteral(
+          "Color interaction proof lost foreground qualification before held input."));
+    }
+    held_input_started_ms = burst_timer.elapsed();
+    held_input_gui_last_tick_ms = gui_clock.elapsed();
+    burst_input_active = true;
+    held_input_gui_tracking_active = true;
+    QTimer native_window_foreground_sampler;
+    native_window_foreground_sampler.setInterval(50);
+    QObject::connect(&native_window_foreground_sampler, &QTimer::timeout, root_window, [&]() {
+      static_cast<void>(record_foreground_sample(QStringLiteral("held_input_timer")));
+    });
+    native_window_foreground_sampler.start();
     editor_preview.beginCoalescedEdit();
     for (int sample = 0; sample < 30; ++sample) {
       const auto sample_started_ms = burst_timer.elapsed();
@@ -7266,11 +9460,29 @@ int main(int argc, char** argv) {
           sample_started_ms + 16 - burst_timer.elapsed())), &input_tick, &QEventLoop::quit);
       input_tick.exec();
     }
+    held_input_gui_tracking_active = false;
+    burst_input_active = false;
     const auto burst_input_ms = burst_timer.elapsed();
+    const auto after_held_input_sample =
+        record_foreground_sample(QStringLiteral("after_held_input"));
     const auto burst_input_frames = frame_swap_count - burst_frame_floor;
     const auto burst_input_revisions = editor_preview.displayPreviewNativeRevision() - burst_revision_floor;
-    QObject::disconnect(burst_overlay_connection);
-    QObject::disconnect(burst_frame_connection);
+    QVariantList held_native_frame_intervals_ms;
+    qint64 maximum_held_native_frame_interval_ms = 0;
+    qint64 total_held_native_frame_interval_ms = 0;
+    for (qsizetype index = 1; index < held_native_frame_timestamps_ms.size(); ++index) {
+      const auto interval_ms = held_native_frame_timestamps_ms.at(index).toLongLong() -
+          held_native_frame_timestamps_ms.at(index - 1).toLongLong();
+      held_native_frame_intervals_ms.append(interval_ms);
+      maximum_held_native_frame_interval_ms =
+          std::max(maximum_held_native_frame_interval_ms, interval_ms);
+      total_held_native_frame_interval_ms += interval_ms;
+    }
+    const auto average_held_native_frame_interval_ms =
+        held_native_frame_intervals_ms.isEmpty()
+            ? 0.0
+            : static_cast<double>(total_held_native_frame_interval_ms) /
+                  static_cast<double>(held_native_frame_intervals_ms.size());
     editor_preview.endCoalescedEdit();
     if (!wait_precisely([&]() {
           return Access::all_idle(editor_preview) && Access::native_preview_reaches_viewport(editor_preview);
@@ -7280,16 +9492,59 @@ int main(int argc, char** argv) {
     root_window->update();
     if (!wait_precisely([&]() { return frame_swap_count > final_frame_floor; }))
       return fail(QStringLiteral("Color interaction burst final frame failed."));
+    const auto after_first_frame_sample =
+        record_foreground_sample(QStringLiteral("after_first_frame_and_settle"));
+    native_window_foreground_sampler.stop();
+    QObject::disconnect(burst_overlay_connection);
+    QObject::disconnect(burst_frame_connection);
     log_stage(QStringLiteral("color_edit_burst_settled"), burst_timer.elapsed(), 0,
         {{QStringLiteral("control"), color_control.isEmpty() ? QStringLiteral("exposure") : color_control},
          {QStringLiteral("updates"), 30}, {QStringLiteral("frame_swaps"), frame_swap_count - burst_frame_floor},
          {QStringLiteral("input_duration_ms"), burst_input_ms},
          {QStringLiteral("input_frame_swaps"), burst_input_frames},
          {QStringLiteral("input_native_publications"), burst_input_revisions},
+         {QStringLiteral("first_native_publication_ms"), burst_first_native_publication_ms},
+         {QStringLiteral("first_native_frame_ms"), burst_first_native_frame_ms},
+         {QStringLiteral("native_frame_presented_during_input"),
+          burst_first_native_frame_ms >= 0 && burst_first_native_frame_ms <= burst_input_ms},
          {QStringLiteral("maximum_setter_ms"), maximum_setter_ms},
+         {QStringLiteral("held_input_gui_heartbeat_max_gap_ms"),
+          held_input_gui_max_gap_ms},
+         {QStringLiteral("held_input_gui_heartbeat_gap_samples"),
+          held_input_gui_gap_samples},
          {QStringLiteral("input_overlay_publications"), burst_overlay_publications},
          {QStringLiteral("input_overlay_frames"), burst_overlay_frames},
          {QStringLiteral("input_native_frames"), burst_native_frames},
+         {QStringLiteral("held_native_frame_timestamps_ms"),
+          held_native_frame_timestamps_ms},
+         {QStringLiteral("held_native_frame_intervals_ms"),
+          held_native_frame_intervals_ms},
+         {QStringLiteral("maximum_held_native_frame_interval_ms"),
+          maximum_held_native_frame_interval_ms},
+         {QStringLiteral("average_held_native_frame_interval_ms"),
+          average_held_native_frame_interval_ms},
+         {QStringLiteral("foreground_before_warmup"), foreground_before_warmup},
+         {QStringLiteral("foreground_before_interaction_warmup"),
+          foreground_before_interaction_warmup},
+         {QStringLiteral("foreground_before_held_input"),
+          before_held_input_sample.value(QStringLiteral("qualified"))},
+         {QStringLiteral("foreground_after_held_input"),
+          after_held_input_sample.value(QStringLiteral("qualified"))},
+         {QStringLiteral("foreground_first_native_frame"),
+          first_native_frame_foreground_sample.value(QStringLiteral("qualified"))},
+         {QStringLiteral("foreground_after_first_frame_and_settle"),
+          after_first_frame_sample.value(QStringLiteral("qualified"))},
+         {QStringLiteral("foreground_sample_count"), native_window_foreground_samples.size()},
+         {QStringLiteral("foreground_qualified_sample_count"),
+          native_window_foreground_samples.size() - unqualified_foreground_sample_count},
+         {QStringLiteral("foreground_unqualified_sample_count"),
+          unqualified_foreground_sample_count},
+         {QStringLiteral("held_input_foreground_sample_count"),
+          held_input_foreground_sample_count},
+         {QStringLiteral("maximum_foreground_sample_gap_ms"),
+          maximum_foreground_sample_gap_ms},
+         {QStringLiteral("native_window_foreground_samples"),
+          native_window_foreground_samples},
          {QStringLiteral("native_width"), editor_preview.displayPreviewNativeSize().width()},
          {QStringLiteral("native_height"), editor_preview.displayPreviewNativeSize().height()},
          {QStringLiteral("final_exposure"), editor_preview.exposure()}});
@@ -7303,6 +9558,23 @@ int main(int argc, char** argv) {
     if (arguments.contains(QStringLiteral("--require-live-feedback")) &&
         burst_native_frames + burst_overlay_frames <= 0)
       return fail(QStringLiteral("Continuous edits produced no visible preview publications during input."));
+    if (arguments.contains(QStringLiteral("--require-live-native-feedback")) &&
+        (burst_first_native_publication_ms < 0 ||
+         burst_first_native_publication_ms > burst_input_ms ||
+         burst_first_native_frame_ms < 0 ||
+         burst_first_native_frame_ms > burst_input_ms))
+      return fail(QStringLiteral(
+          "The held slider edit did not present a native photo frame before input ended."));
+    if (arguments.contains(QStringLiteral("--require-native-foreground-samples")) &&
+        (!foreground_before_warmup || !foreground_before_interaction_warmup ||
+         !before_held_input_sample.value(QStringLiteral("qualified")).toBool() ||
+         !after_held_input_sample.value(QStringLiteral("qualified")).toBool() ||
+         !first_native_frame_foreground_sample.value(QStringLiteral("qualified")).toBool() ||
+         !after_first_frame_sample.value(QStringLiteral("qualified")).toBool() ||
+         held_input_foreground_sample_count < 2 ||
+         unqualified_foreground_sample_count != 0))
+      return fail(QStringLiteral(
+          "The held slider timing sample was not continuously foreground-qualified."));
     if (arguments.contains(QStringLiteral("--capture-scopes"))) {
       auto* workspace = root->findChild<QObject*>(QStringLiteral("editStudioWorkspace"));
       if (!workspace || !QMetaObject::invokeMethod(workspace, "openScopesDock",
@@ -7372,7 +9644,10 @@ int main(int argc, char** argv) {
 
     QElapsedTimer open_timer;
     open_timer.start();
-    catalog_assets.selectIndex(iteration);
+    // Edits can reorder the visible Library projection between iterations.
+    // Select the requested fixture identity instead of assuming stable rows.
+    if (!catalog_assets.selectAssetById(asset_id))
+      return fail(QStringLiteral("Cannot select benchmark photo %1").arg(asset_id));
     root->setProperty("currentWorkspace", root->property("editWorkspaceIndex"));
     root->setProperty("editWorkspaceMode", QStringLiteral("adjust"));
     if (!wait_for_condition(
@@ -7427,8 +9702,10 @@ int main(int argc, char** argv) {
               auto* workspace = active_workspace(root);
               return workspace != nullptr &&
                      workspace->objectName() == QStringLiteral("editStudioWorkspace") &&
-                     named_item_visible(workspace, QStringLiteral("maskToolRail")) &&
-                     named_item_visible(workspace, QStringLiteral("maskBrushShapeMenuButton"));
+                     ((named_item_visible(workspace, QStringLiteral("selectionToolbox")) &&
+                       named_item_visible(workspace, QStringLiteral("selectionSource_brush-add"))) ||
+                      (named_item_visible(workspace, QStringLiteral("maskToolRail")) &&
+                       named_item_visible(workspace, QStringLiteral("maskBrushShapeMenuButton"))));
             },
             timeout_ms)) {
       return fail(QStringLiteral("Timed out opening the Masks page tool rail."));
@@ -7444,7 +9721,10 @@ int main(int argc, char** argv) {
     qint64 brush_click_invoke_ms = -1;
     qint64 brush_click_layout_ms = -1;
     auto* brush_button =
-        find_named_object(edit_workspace, QStringLiteral("maskBrushShapeMenuButton"));
+        find_named_object(edit_workspace, QStringLiteral("selectionSource_brush-add"));
+    if (brush_button == nullptr) {
+      brush_button = find_named_object(edit_workspace, QStringLiteral("maskBrushShapeMenuButton"));
+    }
     auto brush_button_clicked = false;
     if (brush_button != nullptr && QMetaObject::invokeMethod(brush_button, "click")) {
       brush_button_clicked = true;
@@ -7526,6 +9806,34 @@ int main(int argc, char** argv) {
             {QStringLiteral("brush_context_ready_ms"), brush_context_ms},
             {QStringLiteral("mask_overlay_ready_ms"), brush_overlay_ms},
         });
+    const auto require_brush_native_foreground =
+        brush_only && arguments.contains(QStringLiteral("--require-native-foreground-samples"));
+    QVariantMap brush_foreground_warmup_sample;
+    auto brush_foreground_ready = !require_brush_native_foreground;
+    if (require_brush_native_foreground) {
+#ifdef Q_OS_MACOS
+      activate_native_test_window(root_window);
+      brush_foreground_ready = wait_for_condition([&]() {
+        brush_foreground_warmup_sample = native_window_foreground_sample(root_window);
+        return root_window->isVisible() && root_window->isExposed() && root_window->isActive() &&
+            brush_foreground_warmup_sample.value(QStringLiteral("qualified")).toBool();
+      }, 5000);
+#else
+      brush_foreground_warmup_sample = QVariantMap{
+          {QStringLiteral("sample_available"), false},
+          {QStringLiteral("qualified"), false}};
+      brush_foreground_ready = false;
+#endif
+      if (!brush_foreground_ready) {
+        return fail(QStringLiteral(
+            "Brush-only proof could not qualify the foreground native window before the stroke."));
+      }
+    }
+    if (require_brush_native_foreground) {
+      log_stage(QStringLiteral("brush_native_window_foreground_ready"), 0, iteration,
+          {{QStringLiteral("foreground_ready"), brush_foreground_ready},
+           {QStringLiteral("sample"), brush_foreground_warmup_sample}});
+    }
     if (iteration == 0) {
       save_capture_if_requested(
           root_window,
@@ -7535,7 +9843,7 @@ int main(int argc, char** argv) {
     }
 
     editor_preview.setActiveMaskBrushAutoMask(brush_auto_mask);
-    auto* vector_canvas = find_named_object(active_workspace(root), QStringLiteral("editImageViewportLiveBrushVectorCanvas"));
+    auto* vector_canvas = find_named_item(active_workspace(root), QStringLiteral("editImageViewportLiveBrushVectorCanvas"));
     if (vector_canvas == nullptr) return fail(QStringLiteral("Live brush Canvas receipt unavailable."));
     vector_canvas->setProperty("frameReceiptEnabled", true);
     const bool brush_phase_profile = qEnvironmentVariableIsSet("PHOTO_EDITOR_BRUSH_PHASE_PROFILE");
@@ -7546,22 +9854,72 @@ int main(int argc, char** argv) {
     vector_canvas->setProperty("framePhasePaintStartOffsetMs", -1.0);
     vector_canvas->setProperty("framePhasePaintEndOffsetMs", -1.0);
     vector_canvas->setProperty("framePhasePaintedOffsetMs", -1.0);
-    auto* immediate_coverage = find_named_object(active_workspace(root), QStringLiteral("editImageViewportImmediateBrushCoverage"));
+    auto* immediate_coverage = find_named_item(active_workspace(root), QStringLiteral("editImageViewportImmediateBrushCoverage"));
     auto* raster_image = find_named_item(active_workspace(root), QStringLiteral("editImageViewportLiveBrushRasterImage"));
     const auto immediate_revision_before = immediate_coverage ? immediate_coverage->property("completedPaintRevision").toInt() : 0;
     const auto canvas_revision_before = vector_canvas->property("completedPaintRevision").toInt();
+    QElapsedTimer brush_gesture_timer;
+    QVariantList brush_native_foreground_samples;
+    auto brush_stroke_input_active = false;
+    auto brush_native_foreground_unqualified_samples = 0;
+    auto brush_native_foreground_held_samples = 0;
+    qint64 previous_brush_native_foreground_held_sample_ms = -1;
+    qint64 maximum_brush_native_foreground_held_sample_gap_ms = 0;
+    const auto record_brush_native_foreground_sample = [&](const QString& phase) {
+      if (!require_brush_native_foreground) return QVariantMap{};
+#ifdef Q_OS_MACOS
+      auto sample = native_window_foreground_sample(root_window);
+#else
+      auto sample = QVariantMap{
+          {QStringLiteral("sample_available"), false},
+          {QStringLiteral("qualified"), false}};
+#endif
+      const auto elapsed_ms = brush_gesture_timer.elapsed();
+      sample.insert(QStringLiteral("phase"), phase);
+      sample.insert(QStringLiteral("elapsed_ms"), elapsed_ms);
+      sample.insert(QStringLiteral("held_input_active"), brush_stroke_input_active);
+      sample.insert(QStringLiteral("window_active"), root_window->isActive());
+      sample.insert(QStringLiteral("window_exposed"), root_window->isExposed());
+      if (!sample.value(QStringLiteral("qualified")).toBool())
+        ++brush_native_foreground_unqualified_samples;
+      if (brush_stroke_input_active) {
+        if (previous_brush_native_foreground_held_sample_ms >= 0) {
+          maximum_brush_native_foreground_held_sample_gap_ms = std::max(
+              maximum_brush_native_foreground_held_sample_gap_ms,
+              elapsed_ms - previous_brush_native_foreground_held_sample_ms);
+        }
+        previous_brush_native_foreground_held_sample_ms = elapsed_ms;
+        ++brush_native_foreground_held_samples;
+      }
+      brush_native_foreground_samples.append(sample);
+      return sample;
+    };
+    QTimer brush_native_foreground_sampler;
+    brush_native_foreground_sampler.setInterval(50);
+    QObject::connect(&brush_native_foreground_sampler, &QTimer::timeout, root_window, [&]() {
+      if (brush_stroke_input_active)
+        static_cast<void>(record_brush_native_foreground_sample(
+            QStringLiteral("held_input_timer")));
+    });
     QElapsedTimer stroke_timer;
     stroke_timer.start();
+    brush_gesture_timer.start();
+    static_cast<void>(record_brush_native_foreground_sample(
+        QStringLiteral("before_brush_stroke")));
+    brush_stroke_input_active = true;
+    if (require_brush_native_foreground) brush_native_foreground_sampler.start();
     editor_preview.beginActiveBrushStroke();
     const auto stroke_setup_ms = stroke_timer.elapsed();
     const auto brush_points_before = editor_preview.activeMaskLiveBrushPoints().size();
     const auto brush_preview_revision_before = editor_preview.activeMaskLiveBrushPreviewRevision();
+    const auto brush_preview_source_before = editor_preview.activeMaskLiveBrushPreviewSource();
     QElapsedTimer feedback_timer;
     feedback_timer.start();
     struct BrushFrameReceipt {
       std::atomic<qint64> canvas_synced_ms{-1};
       std::atomic<qint64> presented_ms{-1};
       std::atomic<qint64> stroke_presented_ms{-1};
+      std::atomic<int> source_mask{0};
     };
     const auto receipt = std::make_shared<BrushFrameReceipt>();
     const auto phase_reference_epoch_ms = brush_phase_profile
@@ -7579,17 +9937,28 @@ int main(int argc, char** argv) {
     // to have synchronized before accepting the following swap.
     const auto sync_connection = QObject::connect(root_window, &QQuickWindow::afterSynchronizing,
         root_window, [receipt, vector_canvas, immediate_coverage, raster_image, immediate_revision_before,
-                      canvas_revision_before, brush_points_before, feedback_timer, &editor_preview] {
-          const bool immediate_painted = immediate_coverage &&
+                      canvas_revision_before, brush_points_before, brush_preview_revision_before,
+                      brush_preview_source_before, feedback_timer, &editor_preview] {
+          const bool immediate_painted = brush_feedback_surface_visible(immediate_coverage) &&
               immediate_coverage->property("completedPaintRevision").toInt() > immediate_revision_before &&
               immediate_coverage->property("paintedPointCount").toInt() > brush_points_before;
-          const bool raster_painted = raster_image && raster_image->isVisible() &&
+          const auto raster_source = editor_preview.activeMaskLiveBrushPreviewSource();
+          const bool raster_source_matches = raster_image && !raster_source.isEmpty() &&
+              raster_source != brush_preview_source_before &&
+              QUrl(raster_image->property("source").toUrl()) == QUrl(raster_source);
+          const bool raster_painted = brush_feedback_surface_visible(raster_image) &&
               raster_image->property("status").toInt() == 1 &&
+              editor_preview.activeMaskLiveBrushPreviewRevision() > brush_preview_revision_before &&
+              raster_source_matches &&
               editor_preview.activeMaskLiveBrushPreviewPointCount() > brush_points_before;
-          const bool trail_painted = vector_canvas->property("completedPaintRevision").toInt() > canvas_revision_before &&
+          const bool trail_painted = brush_feedback_surface_visible(vector_canvas) &&
+              vector_canvas->property("completedPaintRevision").toInt() > canvas_revision_before &&
               vector_canvas->property("paintedPointCount").toInt() > brush_points_before;
-          if (receipt->canvas_synced_ms.load() < 0 && (immediate_painted || raster_painted || trail_painted))
+          if (receipt->canvas_synced_ms.load() < 0 && (immediate_painted || raster_painted || trail_painted)) {
+            receipt->source_mask.store((immediate_painted ? 1 : 0) |
+                (raster_painted ? 2 : 0) | (trail_painted ? 4 : 0));
             receipt->canvas_synced_ms.store(feedback_timer.elapsed());
+          }
         }, Qt::DirectConnection);
     const auto swap_connection = QObject::connect(root_window, &QQuickWindow::frameSwapped,
         root_window, [receipt, feedback_timer, stroke_timer] {
@@ -7604,6 +9973,8 @@ int main(int argc, char** argv) {
       QObject::disconnect(swap_connection);
     });
     editor_preview.addBrushPoint(0.31, 0.36);
+    static_cast<void>(record_brush_native_foreground_sample(
+        QStringLiteral("brush_point_1")));
     const auto point_dispatch_ms = feedback_timer.elapsed();
     const auto feedback_is_visible = [&]() { return receipt->presented_ms.load() >= 0; };
     if (!feedback_is_visible()) {
@@ -7624,6 +9995,8 @@ int main(int argc, char** argv) {
     if (!feedback_is_visible()) {
       return fail(QStringLiteral("Timed out waiting for the first rendered frame containing live brush feedback."));
     }
+    static_cast<void>(record_brush_native_foreground_sample(
+        QStringLiteral("first_brush_feedback_frame")));
     const auto brush_feedback_ms = static_cast<double>(receipt->presented_ms.load());
     QVariantMap brush_timing_fields{
         {QStringLiteral("feedback_contract"), QStringLiteral("controller_point_to_painted_canvas_sync_and_swap:v2")},
@@ -7631,6 +10004,7 @@ int main(int argc, char** argv) {
         {QStringLiteral("point_dispatch_ms"), point_dispatch_ms},
         {QStringLiteral("canvas_paint_and_sync_ms"), receipt->canvas_synced_ms.load()},
         {QStringLiteral("frame_swap_ms"), receipt->presented_ms.load()},
+        {QStringLiteral("receipt_source_mask"), receipt->source_mask.load()},
         {QStringLiteral("auto_mask"), brush_auto_mask},
         {QStringLiteral("live_preview_backend"), editor_preview.activeMaskLiveBrushPreviewBackend()}};
     if (brush_phase_profile) {
@@ -7662,7 +10036,8 @@ int main(int argc, char** argv) {
     log_stage(
         QStringLiteral("brush_controller_point_to_qml_frame"),
         receipt->presented_ms.load(), iteration, brush_timing_fields);
-    if (iteration == 0) save_capture_if_requested(root_window, capture_dir,
+    if (iteration == 0 && !require_brush_native_foreground)
+      save_capture_if_requested(root_window, capture_dir,
         QStringLiteral("05-brush-feedback"), &captures);
     if (!wait_for_condition(
             [&]() {
@@ -7684,12 +10059,64 @@ int main(int argc, char** argv) {
     QObject::disconnect(sync_connection);
     QObject::disconnect(swap_connection);
     editor_preview.addBrushPoint(0.40, 0.44);
+    static_cast<void>(record_brush_native_foreground_sample(
+        QStringLiteral("brush_point_2")));
     editor_preview.addBrushPoint(0.49, 0.52);
+    static_cast<void>(record_brush_native_foreground_sample(
+        QStringLiteral("brush_point_3")));
     editor_preview.addBrushPoint(0.58, 0.60);
+    static_cast<void>(record_brush_native_foreground_sample(
+        QStringLiteral("brush_point_4")));
+    qint64 brush_input_duration_ms = -1;
+    if (require_brush_native_foreground) {
+      brush_stroke_input_active = false;
+      brush_native_foreground_sampler.stop();
+      brush_input_duration_ms = brush_gesture_timer.elapsed();
+      static_cast<void>(record_brush_native_foreground_sample(
+          QStringLiteral("after_brush_input")));
+      if (iteration == 0) {
+        save_capture_if_requested(root_window, capture_dir,
+            QStringLiteral("05-brush-feedback"), &captures);
+      }
+    }
 
     QElapsedTimer commit_timer;
     commit_timer.start();
     editor_preview.endActiveBrushStroke();
+    brush_stroke_input_active = false;
+    brush_native_foreground_sampler.stop();
+    if (brush_input_duration_ms < 0)
+      brush_input_duration_ms = brush_gesture_timer.elapsed();
+    const auto brush_foreground_after_stroke = record_brush_native_foreground_sample(
+        QStringLiteral("after_brush_stroke"));
+    const auto brush_foreground_samples_all_qualified = std::all_of(
+        brush_native_foreground_samples.cbegin(), brush_native_foreground_samples.cend(),
+        [](const QVariant& sample) {
+          return sample.toMap().value(QStringLiteral("qualified")).toBool();
+        });
+    if (require_brush_native_foreground &&
+        (!brush_foreground_warmup_sample.value(QStringLiteral("qualified")).toBool() ||
+         brush_native_foreground_held_samples < 2 ||
+         brush_native_foreground_unqualified_samples != 0 ||
+         !brush_foreground_after_stroke.value(QStringLiteral("qualified")).toBool() ||
+         !brush_foreground_samples_all_qualified)) {
+      return fail(QStringLiteral(
+          "Brush-only held input lost continuous native foreground qualification."));
+    }
+    if (require_brush_native_foreground) {
+      log_stage(QStringLiteral("brush_native_window_foreground_held"),
+          brush_input_duration_ms, iteration,
+          {{QStringLiteral("foreground_warmup_qualified"),
+            brush_foreground_warmup_sample.value(QStringLiteral("qualified"))},
+           {QStringLiteral("foreground_after_stroke_qualified"),
+            brush_foreground_after_stroke.value(QStringLiteral("qualified"))},
+           {QStringLiteral("held_sample_count"), brush_native_foreground_held_samples},
+           {QStringLiteral("unqualified_sample_count"),
+            brush_native_foreground_unqualified_samples},
+           {QStringLiteral("maximum_held_sample_gap_ms"),
+            maximum_brush_native_foreground_held_sample_gap_ms},
+           {QStringLiteral("samples"), brush_native_foreground_samples}});
+    }
     brush_commit_visible_samples.push_back(static_cast<double>(commit_timer.elapsed()));
     const auto mask_telemetry =
         photo_editor::desktop::EditorPreviewControllerTestAccess::last_mask_work_telemetry(
@@ -7715,6 +10142,15 @@ int main(int argc, char** argv) {
         iteration,
         {{QStringLiteral("tool"), QStringLiteral("exposure")}});
 
+    // The visible Brush tool authors a selection transaction. Apply it before
+    // navigating, just as the user does; navigation correctly rejects a dirty
+    // selection rather than silently discarding this stroke.
+    if (editor_preview.selectionEditSessionActive()) {
+      static_cast<void>(editor_preview.finishSelectionEditSession());
+      if (!wait_for_condition([&]() { return !editor_preview.selectionEditSessionActive(); },
+              timeout_ms, "brush-selection-apply"))
+        return fail(QStringLiteral("Timed out applying the benchmark brush selection."));
+    }
     if (brush_only) continue;
 
     QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
@@ -7986,4 +10422,28 @@ int main(int argc, char** argv) {
     std::cout << "actual_app_workflow_capture_dir=" << capture_dir.toStdString() << '\n';
   }
   return EXIT_SUCCESS;
+  };
+  // Cocoa activation and native input need the same outer application loop as
+  // production. Manual processEvents() alone only performs one-shot startup.
+  int result = EXIT_FAILURE;
+  QTimer::singleShot(0, &app, [&]() {
+    result = run_workflow();
+    app.exit(result);
+  });
+  app.exec();
+  return result;
+}
+
+int main(int argc, char** argv) {
+  const auto result = run_actual_app_workflow(argc, argv);
+  // `open -W` waits for a native test app but cannot report its exit code.
+  // Preserve that code in an optional, explicitly requested test receipt.
+  const auto receipt_path = qEnvironmentVariable("PHOTO_EDITOR_TEST_EXIT_STATUS_FILE");
+  if (!receipt_path.isEmpty()) {
+    QFile receipt(receipt_path);
+    if (!receipt.open(QIODevice::WriteOnly) ||
+        receipt.write(QByteArray::number(result)) < 0)
+      return EXIT_FAILURE;
+  }
+  return result;
 }

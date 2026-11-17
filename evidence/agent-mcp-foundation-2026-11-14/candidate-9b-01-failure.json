@@ -1,0 +1,54 @@
+{
+  "requestSent": true,
+  "responseDecision": "cannot_complete_safely",
+  "responsePreview": "{\"decision\":\"cannot_complete_safely\",\"reason\":\"The current rendered image is a solid dark gray background with a single cream-colored square in the top right corner. It lacks photographic content (subject, texture, lighting gradients) required to apply the requested 'cinematic evening look' or 'natural color' adjustments. The style rulebook requires skin tone protection and highlight rolloff, which are impossible on this abstract composition. No valid edit intent can be generated without a sourc",
+  "transport": {
+    "durationMs": 15447,
+    "endpoint": "http://127.0.0.1:11434",
+    "ok": true,
+    "path": "/api/chat",
+    "responseBytes": 1261,
+    "retryable": false,
+    "statusCode": 200,
+    "timeoutMs": -1
+  },
+  "promptComponents": {
+    "additionalProofImageCount": 0,
+    "additionalProofImageTransmittedBytes": 0,
+    "aggregateTextUtf8Bytes": 15253,
+    "attachedImageCount": 1,
+    "availableToolCatalogUtf8Bytes": 2,
+    "contextEstimateMethod": "ceil(ascii_utf8_bytes / 4) + non_ascii_utf8_bytes + 512 + output_tokens + sum(imageContextReservations); Qwen3.5/Qwen3.6 valid transmitted dimensions <=1600px per edge use max(2048, ceil512(ceil(w/32)*ceil(h/32)+512)); other recognized Qwen vision images <=768px per edge reserve 2048; all other images reserve 4096; conservative processor/dimension proxy, not exact Ollama tokenization; non-ASCII is charged by UTF-8 byte fallback; format grammar audited separately",
+    "contextTokenLimit": 8192,
+    "contextTokensRequested": 8192,
+    "contract": "ollama-planning-prompt-components-v1",
+    "estimatedAggregateTextTokens": 3814,
+    "estimatedAsciiUtf8Bytes": 15253,
+    "estimatedContextTokensBeforeCap": 7910,
+    "estimatedNonAsciiCodePointCount": 0,
+    "estimatedNonAsciiUtf8Bytes": 0,
+    "generationSchemaUtf8Bytes": 1597,
+    "imageContextReservations": [
+      {
+        "ceilingGridTokens": 432,
+        "dimensionsValid": true,
+        "gridAlignmentPixels": 32,
+        "imageIndex": 0,
+        "modelFamily": "qwen3.5",
+        "reservationRule": "qwen35_36_32px_grid_512_overhead_2048_floor",
+        "reserveTokens": 2048,
+        "transmittedHeight": 576,
+        "transmittedWidth": 768
+      }
+    ],
+    "primaryImageTransmittedBytes": 8593,
+    "priorToolHistoryUtf8Bytes": 2,
+    "systemPromptUtf8Bytes": 2570,
+    "userGuidanceMode": "full_planning_guidance_v1",
+    "userPromptUtf8Bytes": 12683,
+    "workmanshipGuidanceMode": "photo_intent"
+  },
+  "stage": "synthetic-planning-smoke",
+  "model": "qwen3.5:9b",
+  "sourceLogSha256": "b39ea3db367b03c6c8a7b0449321b30518885f1935e12410cffcee4c4fd85233"
+}

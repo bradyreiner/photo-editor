@@ -77,6 +77,7 @@ ColumnLayout {
         objectName: "carouselExportSummary"
         Layout.fillWidth: true
         text: content.carouselExportSheet.summary.boardCount + " board" + (content.carouselExportSheet.summary.boardCount === 1 ? "" : "s")
+              + " · " + Number(content.carouselExportSheet.summary.deliveryCount || content.carouselExportSheet.summary.boardCount) + " outputs"
               + " · " + content.carouselExportSheet.summary.ratio
               + " · " + content.carouselExportSheet.summary.pixelSize + " px"
               + (String(content.carouselExportSheet.summary.fileTypes || "").indexOf("PNG") >= 0 ||
@@ -233,12 +234,14 @@ ColumnLayout {
                     activeFocusOnTab: true
                     model: content.carouselExportSheet.boardReview
                     property int reviewedBoardIndex: -1
+                    property string reviewedDeliveryFormat: "original"
                     Accessible.role: Accessible.List
                     Accessible.name: "Ordered boards and output filenames"
                     function restoreReviewedBoard() {
                         if (!count || reviewedBoardIndex < 0) return;
                         for (let row = 0; row < model.length; ++row) {
-                            if (Number(model[row].boardIndex) === reviewedBoardIndex) {
+                            if (Number(model[row].boardIndex) === reviewedBoardIndex &&
+                                String(model[row].deliveryFormat || "original") === reviewedDeliveryFormat) {
                                 currentIndex = row;
                                 break;
                             }
@@ -251,6 +254,7 @@ ColumnLayout {
                         if (!count) return;
                         currentIndex = Math.max(0, Math.min(index, count - 1));
                         reviewedBoardIndex = Number(model[currentIndex].boardIndex);
+                        reviewedDeliveryFormat = String(model[currentIndex].deliveryFormat || "original");
                         positionViewAtIndex(currentIndex, ListView.Contain);
                         forceActiveFocus(Qt.TabFocusReason);
                         Qt.callLater(restoreReviewedBoard);
@@ -297,13 +301,20 @@ ColumnLayout {
                                 radius: content.theme.radiusControl
                                 color: String(boardReviewRow.modelData.backgroundColor || "#fbf7f1")
                                 clip: true
-                                Image {
-                                    objectName: "carouselExportBoardPreview_" + boardReviewRow.index
-                                    anchors.fill: parent
-                                    source: String(boardReviewRow.modelData.previewSource || "")
-                                    fillMode: Image.PreserveAspectFit
-                                    asynchronous: true
-                                    cache: false
+                                Item {
+                                    readonly property real outputAspect: Number(boardReviewRow.modelData.width || 1) / Math.max(1, Number(boardReviewRow.modelData.height || 1))
+                                    anchors.centerIn: parent
+                                    width: Math.min(parent.width, parent.height * outputAspect)
+                                    height: width / outputAspect
+                                    clip: true
+                                    Image {
+                                        objectName: "carouselExportBoardPreview_" + boardReviewRow.index
+                                        anchors.fill: parent
+                                        source: String(boardReviewRow.modelData.previewSource || "")
+                                        fillMode: boardReviewRow.modelData.fitMode === "fill" ? Image.PreserveAspectCrop : Image.PreserveAspectFit
+                                        asynchronous: true
+                                        cache: false
+                                    }
                                 }
                             }
                             ColumnLayout {
@@ -324,7 +335,8 @@ ColumnLayout {
                                     Layout.fillWidth: true
                                     text: String(boardReviewRow.modelData.resolvedName || "")
                                     color: boardReviewRow.modelData.collision ? content.theme.warning : content.theme.textMuted
-                                    font.family: content.theme.fontMono
+                                    font.family: content.theme.fontNumeric
+                                    font.features: content.theme.numericFontFeatures
                                     font.pixelSize: content.theme.typeCaption
                                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 }
@@ -332,6 +344,12 @@ ColumnLayout {
                         }
                     }
                 }
+            }
+
+            CampaignDeliveryControls {
+                Layout.fillWidth: true
+                visible: content.carouselExportSheet.activePage === 0
+                controller: content.carouselDocument
             }
 
             ColumnLayout {
@@ -378,7 +396,8 @@ ColumnLayout {
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         text: "Composer preview · " + content.carouselDocument.exportSizeSettings.previewResolution + " px"
                         color: content.theme.textMuted
-                        font.family: content.theme.fontMono
+                        font.family: content.theme.fontNumeric
+                        font.features: content.theme.numericFontFeatures
                         font.pixelSize: content.theme.typeCaption
                     }
 
@@ -387,7 +406,8 @@ ColumnLayout {
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         text: "Rendered export · " + content.carouselDocument.exportSizeSettings.exportResolution + " px"
                         color: content.theme.textStrong
-                        font.family: content.theme.fontMono
+                        font.family: content.theme.fontNumeric
+                        font.features: content.theme.numericFontFeatures
                         font.pixelSize: content.theme.typeCaption
                     }
                 }
@@ -398,6 +418,7 @@ ColumnLayout {
                     visible: content.carouselDocument.exportSizeSettings.mode === "custom"
 
                     ToneTextField {
+                        numericEntry: true
                         id: exportCustomWidthField
                         objectName: "carouselExportCustomWidthField"
                         accessibleLabel: "Export width in pixels"
@@ -413,11 +434,13 @@ ColumnLayout {
                     Label {
                         text: "×"
                         color: content.theme.textMuted
-                        font.family: content.theme.fontMono
+                        font.family: content.theme.fontNumeric
+                        font.features: content.theme.numericFontFeatures
                         font.pixelSize: content.theme.typeCaption
                     }
 
                     ToneTextField {
+                        numericEntry: true
                         id: exportCustomHeightField
                         objectName: "carouselExportCustomHeightField"
                         accessibleLabel: "Export height in pixels"
@@ -624,7 +647,8 @@ ColumnLayout {
                     Layout.fillWidth: true
                     selectByMouse: true
                     color: content.theme.textStrong
-                    font.family: content.theme.fontMono
+                    font.family: content.theme.fontNumeric
+                    font.features: content.theme.numericFontFeatures
 
                     onEditingFinished: content.carouselDocument.setExportFilenamePattern(text)
                 }
@@ -681,7 +705,8 @@ ColumnLayout {
                     Label {
                         text: "v" + content.carouselDocument.exportVersion
                         color: content.theme.textStrong
-                        font.family: content.theme.fontMono
+                        font.family: content.theme.fontNumeric
+                        font.features: content.theme.numericFontFeatures
                         font.pixelSize: content.theme.typeCaption
                     }
 
@@ -806,8 +831,11 @@ ColumnLayout {
                             Label {
                                 objectName: "carouselExportResolvedFilename_" + outputFileRow.index
                                 text: String(outputFileRow.modelData.resolvedName || "")
+                                      + (Number(outputFileRow.modelData.width || 0) > 0
+                                         ? " · " + outputFileRow.modelData.width + " × " + outputFileRow.modelData.height + " px" : "")
                                 color: outputFileRow.modelData.collision ? content.theme.warning : content.theme.textMain
-                                font.family: content.theme.fontMono
+                                font.family: content.theme.fontNumeric
+                                font.features: content.theme.numericFontFeatures
                                 font.pixelSize: content.theme.typeCaption
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
@@ -1114,7 +1142,8 @@ ColumnLayout {
                                       " · review due " +
                                       String(content.carouselExportSheet.inspectedPreset.guidanceReviewDue || "not scheduled")
                                 color: content.theme.textFaint
-                                font.family: content.theme.fontMono
+                                font.family: content.theme.fontNumeric
+                                font.features: content.theme.numericFontFeatures
                                 font.pixelSize: content.theme.typeCaption
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
@@ -1170,7 +1199,8 @@ ColumnLayout {
                                 Layout.fillWidth: true
                                 text: String(resolvedRow.modelData.value || "")
                                 color: content.theme.textStrong
-                                font.family: content.theme.fontMono
+                                font.family: content.theme.fontNumeric
+                                font.features: content.theme.numericFontFeatures
                                 font.pixelSize: content.theme.typeCaption
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
@@ -1210,7 +1240,8 @@ ColumnLayout {
                 accessibleLabel: "Export destination folder"
                 text: content.carouselDocument.exportDirectory
                 placeholderText: "Choose a folder"
-                font.family: content.theme.fontMono
+                font.family: content.theme.fontNumeric
+                font.features: content.theme.numericFontFeatures
             }
             ActionButton {
                 objectName: "carouselChooseExportDirectoryButton"
@@ -1231,7 +1262,7 @@ ColumnLayout {
             Layout.fillWidth: true
             text: (content.jobState === "completed" ? "Export complete" : content.jobState === "failed" ? "Export failed"
                    : content.jobState === "cancelled" ? "Export cancelled" : content.jobState === "cancelling" ? "Stopping export" : "Exporting")
-                  + " · " + content.carouselExportSheet.progress.completedCount + " / " + content.carouselExportSheet.progress.totalCount + " boards"
+                  + " · " + content.carouselExportSheet.progress.completedCount + " / " + content.carouselExportSheet.progress.totalCount + " outputs"
                   + (content.jobState === "failed" && String(content.carouselExportSheet.progress.failureReason || "").length > 0
                      ? " · " + content.carouselExportSheet.progress.failureReason : "")
                   + (Number(content.carouselExportSheet.progress.partialFileCount || 0) > 0

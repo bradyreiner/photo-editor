@@ -47,8 +47,8 @@ Rectangle {
                           : modelData.state === "Error" ? modelData.label + " error"
                           : modelData.label
                     color: healthStrip.studioTheme.textMain
-                    font.family: healthStrip.studioTheme.fontMono
-                    font.pixelSize: 9
+                    font.family: healthStrip.studioTheme.fontUi
+                    font.pixelSize: healthStrip.studioTheme.typeCaption
                     font.weight: Font.DemiBold
                 }
 

@@ -54,7 +54,8 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.title
                 color: theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2

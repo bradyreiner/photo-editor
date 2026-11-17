@@ -1,8 +1,11 @@
 #pragma once
 
 #include "local_similarity_search.h"
+#include <QHash>
 #include <QPointer>
 #include <QSet>
+#include <QStringList>
+#include <QPair>
 
 namespace photo_editor::desktop {
 class CatalogAssetModel;
@@ -20,12 +23,26 @@ class CatalogSimilaritySearch final : public QObject {
   Q_INVOKABLE void clearFilter();
   Q_INVOKABLE void cancel();
  private:
-  void invalidate(bool projection_event);
+  void invalidate(bool projection_event, const QString& reason);
+  void scheduleScopeRevalidation();
+  void revalidateScope();
+  [[nodiscard]] QHash<QString, QPair<QString, QString>> visibleScopeIdentities() const;
+  void updatePreparation();
+  void startPreparedSearch(quint64 generation);
+  void releaseSearchPreviewRequest();
   QPointer<CatalogAssetModel> catalog_;
   QString namespace_;
   QSet<QString> scope_ids_;
+  QHash<QString, QPair<QString, QString>> scope_identity_;
+  QStringList preparation_asset_ids_;
+  QStringList preparation_photo_ids_;
+  QSet<QString> preparation_pending_ids_;
+  QString preparation_query_;
+  int preparation_limit_ = 32;
   LocalSimilaritySearch search_;
   bool projecting_ = false, filter_owned_ = false, completed_ = false;
-  quint64 revision_ = 0;
+  bool preparing_ = false, preview_request_held_ = false, launching_search_ = false;
+  bool scope_revalidation_scheduled_ = false;
+  quint64 revision_ = 0, preparation_generation_ = 0, scope_revalidation_ticket_ = 0;
 };
 }  // namespace photo_editor::desktop

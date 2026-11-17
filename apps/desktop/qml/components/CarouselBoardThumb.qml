@@ -153,7 +153,8 @@ Rectangle {
                 visible: root.previewSource.length === 0
                 text: root.slideNumber
                 color: theme.alpha(theme.textFaint, 0.8)
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 12
             }
 
@@ -173,7 +174,8 @@ Rectangle {
                     Label {
                         text: root.slideNumber
                         color: theme.textStrong
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 9
                     }
 
@@ -182,7 +184,8 @@ Rectangle {
                     Label {
                         text: root.boardRoleLabel
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 8
                         fontSizeMode: Text.HorizontalFit
                         minimumPixelSize: 6
@@ -226,7 +229,8 @@ Rectangle {
             anchors.centerIn: parent
             text: "EDITING"
             color: theme.ink950
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 7
             font.weight: Font.Bold
         }

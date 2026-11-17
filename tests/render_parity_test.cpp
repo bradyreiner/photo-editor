@@ -427,6 +427,10 @@ int main(int argc, char** argv) {
       .transfer_identity = "linear",
       .width = 2,
       .height = 1,
+      .source_area_x = 0.1,
+      .source_area_y = 0.2,
+      .source_area_width = 0.7,
+      .source_area_height = 0.6,
   };
   const auto retained_pixels = std::vector<photo_editor::pipeline::ColorPixel>{
       {.red = 0.25F, .green = 0.5F, .blue = 1.5F, .alpha = 1.0F},
@@ -441,6 +445,48 @@ int main(int argc, char** argv) {
       .identity = "surface:retained-fixture",
   });
   const auto retained_backing = retained_working.retainedBacking();
+  auto suffix_request = photo_editor::pipeline::RenderExecutionRequest{
+      .working_color_space_identity = retained_descriptor.color_space_identity,
+      .output_width = retained_descriptor.width,
+      .output_height = retained_descriptor.height};
+  const auto wrong_area = photo_editor::pipeline::render_stage_output_descriptor(
+      suffix_request, photo_editor::pipeline::RenderStageKind::Geometry);
+  if (photo_editor::desktop::canonical_geometry_surface(retained_working, wrong_area, "wrong-area").has_value())
+    return fail("a retained crop must reject a full-image publication descriptor");
+  photo_editor::desktop::inherit_retained_geometry_source_area(retained_working, &suffix_request);
+  const auto correct_area = photo_editor::pipeline::render_stage_output_descriptor(
+      suffix_request, photo_editor::pipeline::RenderStageKind::Geometry);
+  if (correct_area != retained_descriptor || retained_copy_count.load() != 0)
+    return fail("publication must inherit the exact cropped source area without readback");
+  const auto crop_handoff = photo_editor::desktop::canonical_geometry_surface(
+      retained_working, correct_area, "cropped-area");
+  if (!crop_handoff || !crop_handoff->valid() || retained_copy_count.load() != 0)
+    return fail("cropped geometry must enter publication without a CPU copy");
+  if (app.arguments().contains(QStringLiteral("--retained-crop-contract-only"))) {
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
+    auto& metal = photo_editor::pipeline::metal::shared_metal_pipeline_backend();
+    if (metal.available()) {
+      const auto backing = metal.upload_working_surface(retained_pixels, retained_descriptor, nullptr, {});
+      if (!backing) return fail("real Metal crop fixture must upload");
+      photo_editor::desktop::WorkingImage working;
+      working.adoptRetainedSurface({.descriptor = retained_descriptor, .backing = backing, .identity = "metal-crop"});
+      auto publication_request = suffix_request;
+      publication_request.source_area_x = 0; publication_request.source_area_y = 0;
+      publication_request.source_area_width = 1; publication_request.source_area_height = 1;
+      photo_editor::desktop::inherit_retained_geometry_source_area(working, &publication_request);
+      const auto descriptor = photo_editor::pipeline::render_stage_output_descriptor(
+          publication_request, photo_editor::pipeline::RenderStageKind::Geometry);
+      const auto surface = photo_editor::desktop::canonical_geometry_surface(working, descriptor, "metal-crop-handoff");
+      if (!surface || !surface->valid() || surface->backing != backing || !surface->pixels.empty())
+        return fail("real Metal cropped source-area handoff must remain native and valid");
+      std::cout << "Real Metal crop descriptor handoff passed.\n";
+    } else {
+      std::cout << "Metal unavailable; portable retained-backing crop contract passed.\n";
+    }
+#endif
+    std::cout << "Retained crop source-area contract passed without readback.\n";
+    return 0;
+  }
   const auto canonical_geometry =
       photo_editor::desktop::canonical_geometry_surface(
           retained_working,
@@ -865,6 +911,12 @@ int main(int argc, char** argv) {
   photo_brush_point.insert(QStringLiteral("flow"), 1.0);
   photo_brush_point.insert(QStringLiteral("opacity"), 1.0);
   photo_brush_mask.insert(QStringLiteral("brushPoints"), QVariantList{photo_brush_point});
+  // This fixture models a newly drawn soft brush. Unversioned histories retain
+  // their original normalized ellipse/feather behavior when reopened.
+  photo_brush_mask.insert(QStringLiteral("brushStrokes"),QVariantList{
+      QVariantMap{{QStringLiteral("samples"),QVariantList{photo_brush_point}},
+          {QStringLiteral("settings"),QVariantMap{{QStringLiteral("rasterVersion"),2},
+              {QStringLiteral("hardness"),0.20},{QStringLiteral("feather"),0.0}}}}});
   photo_brush_state.mask_stack.append(photo_brush_mask);
   const auto photo_brush_neutral = photo_editor::desktop::render_output_image_with_backend(
       photo_brush_source,

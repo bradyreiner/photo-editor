@@ -64,12 +64,7 @@ ColumnLayout {
         maximumLength: 128
         color: theme.textStrong
         placeholderTextColor: theme.textMuted
-        background: Rectangle {
-            color: theme.fieldFill
-            radius: theme.radiusControl
-            border.width: 1
-            border.color: licenseKey.activeFocus ? theme.focusRing : theme.lineSoft
-        }
+        background: InputFieldSurface { inputControl: parent }
         onAccepted: activateButton.clicked()
     }
     RowLayout {
@@ -151,7 +146,7 @@ ColumnLayout {
             ActionButton {
                 text: "Revoke"
                 visible: !modelData.revoked && modelData.id !== root.controller.currentInstallationId
-                enabled: !root.controller.busy
+                enabled: root.serviceAvailable && !root.controller.busy
                 onClicked: {
                     root.pendingDeviceId = modelData.id
                     revokeDialog.open()
@@ -163,7 +158,7 @@ ColumnLayout {
         text: "Deactivate this device"
         objectName: "deactivateCurrentDeviceAction"
         visible: root.serviceAvailable && root.controller.currentInstallationId.length > 0
-        enabled: !root.controller.busy
+        enabled: root.serviceAvailable && !root.controller.busy
         onClicked: deactivateDialog.open()
     }
     Label {

@@ -1,0 +1,19 @@
+{
+  "masters": [
+    "campaign02/videos/hero.mp4",
+    "campaign02/videos/hook-b.mp4",
+    "campaign02/videos/hook-c.mp4",
+    "campaign03/videos/hero.mp4",
+    "campaign03/videos/hook-b.mp4",
+    "campaign03/videos/hook-c.mp4",
+    "campaign05/videos/hero.mp4",
+    "campaign05/videos/hook-b.mp4",
+    "campaign05/videos/hook-c.mp4"
+  ],
+  "source": "original sample-free WAV score; no source-camera or archive film audio",
+  "sample_rate": 48000,
+  "video": "bitstream copied, no frame/graphic changes",
+  "target_lufs": -18,
+  "target_true_peak_db": -1.5,
+  "note": "AAC endpoint checked separately; no claim of exact target equality."
+}

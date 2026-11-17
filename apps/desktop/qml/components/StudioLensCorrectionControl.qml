@@ -103,7 +103,8 @@ Rectangle {
                       lensControl.signedPercent(lensControl.vignette) + " / " +
                       Math.round(lensControl.chromatic)
                 color: "#C8D2DC"
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 font.weight: Font.Bold
             }

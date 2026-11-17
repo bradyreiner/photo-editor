@@ -71,6 +71,9 @@ ALLOWED_ENGINEERING_STATEMENTS = {
         'if (root_info.fileName() == QStringLiteral("PhotoEditor")) {',
         'const auto nested = QDir(app_data_root).filePath(QStringLiteral("PhotoEditor"));',
         'if (QFileInfo(root_info.absolutePath()).fileName() == QStringLiteral("PhotoEditor"))',
+        'if (info.fileName() == QStringLiteral("PhotoEditor")) {',
+        'roots.append(QDir(root).filePath(QStringLiteral("PhotoEditor")));',
+        'if (QFileInfo(info.absolutePath()).fileName() == QStringLiteral("PhotoEditor"))',
     ),
 }
 REQUIRED_FILES = (

@@ -9,7 +9,31 @@ GlassSurface {
     required property var theme
     required property var timelineDocument
     required property var currentClip
+    property string surfaceMode: "combined"
+    property bool embeddedDockHeader: false
+    property bool findShortcutEnabled: true
+    signal effectLibraryRequested()
+    property bool sharedPhotoToolsAvailable: false
+    property var sharedEditController: null
+    property var catalogModel: null
+    signal comparisonRequested(string mode)
+    signal editColorToolsRequested(string tab)
+    signal sharedEffectRequested(string type, string name)
+
+    function focusSearch() {
+        const loader = activeTab === "animate" ? animationSearchLoader : effectSearchLoader
+        if (!loader.visible || !loader.item || typeof loader.item.focusSearch !== "function")
+            return false
+        return loader.item.focusSearch()
+    }
     property var animatedClipValueProvider: null
+    // Optional title/type supplied by TimelineView when inspection is routed
+    // from a selected track or layer instead of a clip.
+    property string selectionContextTitle: ""
+    property string selectionContextType: ""
+    property string sourceCropAspectConstraint: "free"
+    property string sharedSelectedAnimatedParameter: ""
+    property bool sharedSelectedAnimatedParameterPinned: false
     required property bool collapsed
     required property string activeTab
     required property var effectLibraryModel
@@ -22,8 +46,9 @@ GlassSurface {
     property string activeColorGradeLayerId: ""
     property string timelineCurveChannel: "RGB"
     property string discoveryCategory: "All"
-    property bool compatibleOnly: true
+    property bool compatibleOnly: false
     property string effectPreviewSource: ""
+    property var effectExampleController: sharedEditController ? sharedEditController.editor : null
     property var selectedEffectPresetPreview: ({})
     property var presetEffectSelection: ({})
     property string effectPresetNameDraft: ""
@@ -31,46 +56,111 @@ GlassSurface {
     property real contentScrollPosition: 0
     property bool inspectorContentLoadReady: true
     property bool inspectorSelectionContextAvailable: false
+    property bool controlsInspectorLoaded: false
     property bool effectsInspectorLoaded: false
+    property bool animateInspectorLoaded: false
+    property bool colorInspectorLoading: false
     property bool colorInspectorLoaded: false
+    property bool colorInspectorLoadRequested: false
     property bool transitionsInspectorLoaded: false
     property bool titleInspectorLoaded: false
     property bool motionInspectorLoaded: false
     property bool audioInspectorLoaded: false
     property bool clipInspectorLoaded: false
     property var effectDisclosureState: ({})
+    property var inspectorKeyframeSnapshot: ({clipId: "", keyframes: []})
+    property var inspectorControlRows: []
+    property var inspectorControlParameters: []
+    property var inspectorControlRowsByParameter: ({})
+    property string inspectorControlRowsSignature: ""
+    property var inspectorControlRowsKeyframeSnapshot: null
+    property var effectDiscoveryExpandedCategories: ({})
     signal toggleCollapseRequested()
     signal tabChangeRequested(string tab)
     signal toggleKeyframeLanesRequested()
     signal openCurveEditorRequested(string parameter)
     signal openAutoReframeRequested()
     signal focusTimelineRequested()
+    signal returnToEditingRequested()
     signal sequenceSettingsRequested()
     signal projectSettingsRequested()
     signal contentScrollPositionChangeRequested(real position)
     signal effectDisclosureChangeRequested(string effectName, bool expanded)
     signal toggleEffectFavoriteRequested(string effectName)
     signal effectUsed(string effectName)
+    signal appliedEffectControlsRequested()
     signal effectMaskEditingRequested(string effectName)
     signal discoveryCategoryChangeRequested(string category)
     signal compatibleOnlyChangeRequested(bool enabled)
+    signal animatedParameterSelected(string parameter)
+    signal inspectorSeekRequested(real sequenceSeconds)
+    signal inspectorSeekGestureStarted()
+    signal inspectorSeekGestureFinished()
 
     property string effectSearchText: ""
     property string transitionSearchText: ""
     property string selectedKeyframeParameter: "frameScale"
+    property string animateSearchText: ""
+    property string animateSelectedGroup: "All"
+    property bool animateAnimatedOnly: false
     property bool keyframeLanesVisible: false
     readonly property var documentController: timelineDocument !== undefined && timelineDocument !== null ? timelineDocument : null
     readonly property var clipState: currentClip !== undefined && currentClip !== null ? currentClip : ({})
     readonly property var effectLibraryItems: effectLibraryModel !== undefined && effectLibraryModel !== null ? effectLibraryModel : []
     readonly property var filteredEffectLibraryItems: buildEffectDiscoveryItems()
+    readonly property var effectDiscoveryRows: buildEffectDiscoveryRows()
     readonly property var transitionLibraryItems: transitionLibraryModel !== undefined && transitionLibraryModel !== null ? transitionLibraryModel : []
     readonly property int selectedClipIndex: documentController !== null ? Number(documentController.currentIndex) : -1
-    readonly property bool hasSelection: selectedClipIndex >= 0
+    readonly property bool hasSelection: selectedClipIndex >= 0 && selectionCount > 0
     readonly property int selectionCount: documentController !== null
                                                   ? Number(documentController.selectedClipCount || 0) : 0
     readonly property bool hasMultiSelection: hasSelection && selectionCount > 1
-    readonly property bool hasSingleSelection: hasSelection && !hasMultiSelection
+    readonly property bool hasSingleSelection: hasSelection && selectionCount === 1
     readonly property bool isVideoClip: root.hasClip && clipState.mediaType === "video"
+    readonly property string selectionHeaderTitle: {
+        if (root.surfaceMode === "library")
+            return "Effects"
+        const routedTitle = String(root.selectionContextTitle || "").trim()
+        if (routedTitle.length > 0)
+            return routedTitle
+        if (!root.hasClip)
+            return "Controls"
+        const timelineTitle = String(clipState.timelineLabel || "").trim()
+        if (timelineTitle.length > 0)
+            return timelineTitle
+        const displayTitle = String(clipState.displayLabel || clipState.titleText || "").trim()
+        return displayTitle.length > 0 ? displayTitle : "Clip"
+    }
+    readonly property string selectionHeaderType: {
+        const routedType = String(root.selectionContextType || "").trim()
+        if (routedType.length > 0)
+            return routedType
+        if (!root.hasClip)
+            return ""
+        switch (String(clipState.mediaType || "").toLowerCase()) {
+        case "video": return "Video clip"
+        case "photo": return "Photo clip"
+        case "audio": return "Audio clip"
+        case "adjustment": return "Adjustment layer"
+        case "title": return "Title layer"
+        case "caption": return "Caption"
+        default: return String(clipState.mediaType || "Timeline clip")
+        }
+    }
+    readonly property bool hasEligibleColorSelection: root.hasClip
+            && (clipState.mediaType === "photo" || clipState.mediaType === "video"
+                || clipState.mediaType === "adjustment")
+    readonly property int sharedAppliedEffectCount: {
+        if (!root.sharedEditController || !root.sharedEditController.ready
+                || String(root.sharedEditController.clipId) !== String(root.clipState.clipId || ""))
+            return 0
+        const editor = root.sharedEditController.editor
+        const layers = editor.photoLayers
+        let count = 0
+        for (let i = 0; i < layers.length; ++i)
+            count += editor.photoLayerEffects(i).length
+        return count
+    }
     readonly property bool hasCurrentFrameColorSignalMetadata:
         videoColorSignalMetadata.clipId !== undefined
         && String(videoColorSignalMetadata.clipId) === String(clipState.clipId || "")
@@ -80,16 +170,22 @@ GlassSurface {
     readonly property bool isGraphicShape: root.isTitleClip
                                            && clipState.mediaType === "title"
                                            && String(clipState.titleShapeType || "").length > 0
-    readonly property string timelineEffectsPanelStyleContract: "timeline-effects-panel-style:v9|surface:borderless|tabs:primary-three-more-menu|effects:seven-real-search-favorites-recents-categories-compatibility-live-thumbnails-versioned-presets-stack-amount-enable-bypass-reset-remove-clear-per-effect-spatial-mask-feather-invert|motion:collapsed-stabilization-analysis|color:per-clip-camera-input-before-grade-stream-tags-range-matrix|controls:shared|type:shared|spacing:shared|states:no-selection-focused-empty-disabled-modified|layout:video-inspector-preserved"
+    readonly property string timelineEffectsPanelStyleContract: "timeline-effects-panel-style:v15|surface:borderless|tabs:controls-applied-effects-transform-animate-primary-more|controls:split-controls-keyframe-lanes-55-45-local-ruler-aligned-properties|controls:effect-transform-values-keyframe-previous-add-next|controls:clip-local-seek-gesture|effects:separate-controls-and-discovery-search-favorites-recents-categories-compatibility-live-thumbnails-versioned-presets-stack-amount-enable-bypass-reset-remove-clear-per-effect-spatial-mask-feather-invert|animation:first-class-grouped-channel-view-search-animated-only-shared-inspector-program-curve-pin-follow|animation:search-row-disclosed-filter-two-channel-minimum-one-line-footer|animation:fixed-header-filter-and-footer-with-independent-channel-scroll|animation:extreme-height-full-content-scroll-fallback|effects:compact-viewport-filling-discovery-rows|curve:dockable-resizable-persisted|controls:shared|type:shared|spacing:shared|states:no-selection-focused-empty-disabled-modified|selection:bounded-title-layer-type|layout:left-controls-media-right-effects"
     readonly property string timelineTitleMotionTruthSignature: "timeline-title-motion:v4|target:title-clips|presets:fade-pop-rise-slide-left-right|lifecycle:entrance-and-exit|animation:editable-clip-keyframes|text-position:anchor-and-transform-keyframes|clear:static-removes-motion-and-transform-keys|preview-export:shared-anchor-transform-path|state:undo-save-reopen"
     readonly property string keyframeToolbarLayoutContract: "timeline-keyframe-toolbar:v1|hierarchy:heading-count-menu|controls:dedicated-row|responsive:no-overlap|accessibility:combined-count"
     readonly property int inspectorRowSpacing: theme.densityCompact ? theme.space2 : theme.space4
+    readonly property int inspectorLaneRowHeight: theme.scaled(32)
+    readonly property int inspectorLaneRulerHeight: theme.controlHeightDense
 
     radius: 0
     accent: theme.accentWarm400
     accentRail: false
     elevated: false
     edgeOpacity: 0
+
+    TimelineKeyframeIndex {
+        id: inspectorKeyframeIndex
+    }
 
     // The controller keeps an empty clip-shaped value while selection is being
     // cleared.  Gate the inspector on the authoritative selection index so
@@ -104,7 +200,11 @@ GlassSurface {
 
         switch (String(root.activeTab || "")) {
         case "effects": root.effectsInspectorLoaded = true; break
-        case "color": root.colorInspectorLoaded = true; break
+        case "controls": root.controlsInspectorLoaded = true; break
+        case "color":
+            if (root.hasEligibleColorSelection)
+                root.colorInspectorLoadRequested = true
+            break
         case "transitions": root.transitionsInspectorLoaded = true; break
         case "title": root.titleInspectorLoaded = true; break
         case "motion": root.motionInspectorLoaded = true; break
@@ -114,6 +214,11 @@ GlassSurface {
     }
 
     function updateInspectorSelectionContext() {
+        if (!root.hasEligibleColorSelection) {
+            root.colorInspectorLoadRequested = false
+            root.colorInspectorLoaded = false
+            root.colorInspectorLoading = false
+        }
         if (!root.collapsed && root.hasClip) {
             inspectorSelectionRetirementTimer.stop()
             root.inspectorSelectionContextAvailable = true
@@ -126,7 +231,12 @@ GlassSurface {
     onActiveTabChanged: root.retainActiveInspector()
     onCollapsedChanged: root.updateInspectorSelectionContext()
     onHasClipChanged: root.updateInspectorSelectionContext()
-    Component.onCompleted: root.updateInspectorSelectionContext()
+    onHasEligibleColorSelectionChanged: root.updateInspectorSelectionContext()
+    Component.onCompleted: {
+        root.refreshInspectorKeyframeSnapshot()
+        root.refreshInspectorControlRows()
+        root.updateInspectorSelectionContext()
+    }
     Timer {
         id: inspectorSelectionRetirementTimer
         interval: 500
@@ -144,6 +254,74 @@ GlassSurface {
         for (let index = 0; index < names.length; ++index)
             legacy.push({"name": names[index], "enabled": true, "amount": 1, "signedAmount": false})
         return legacy
+    }
+
+    function refreshInspectorKeyframeSnapshot() {
+        const clipId = String(root.clipState.clipId || "")
+        const keyframes = root.clipState.keyframes || []
+        if (String(inspectorKeyframeSnapshot.clipId || "") === clipId
+                && inspectorKeyframeSnapshot.keyframes === keyframes)
+            return
+        inspectorKeyframeSnapshot = {clipId: clipId, keyframes: keyframes}
+    }
+
+    function sourceCropAspectRatio() {
+        switch (String(root.sourceCropAspectConstraint || "free")) {
+        case "source":
+            return Number(root.clipState.sourceWidth || 0)
+                    / Math.max(1, Number(root.clipState.sourceHeight || 0))
+        case "16:9": return 16 / 9
+        case "9:16": return 9 / 16
+        case "1:1": return 1
+        case "4:3": return 4 / 3
+        default: return 0
+        }
+    }
+
+    function setSourceCropEdge(edge, proposedValue) {
+        if (!root.documentController || !Number.isFinite(proposedValue))
+            return false
+        let left = Number(root.clipState.sourceCropLeft || 0)
+        let top = Number(root.clipState.sourceCropTop || 0)
+        let right = Number(root.clipState.sourceCropRight !== undefined
+                           ? root.clipState.sourceCropRight : 1)
+        let bottom = Number(root.clipState.sourceCropBottom !== undefined
+                            ? root.clipState.sourceCropBottom : 1)
+        const value = Math.max(0, Math.min(1, proposedValue))
+        if (edge === "left") left = Math.min(value, right - 0.01)
+        else if (edge === "right") right = Math.max(value, left + 0.01)
+        else if (edge === "top") top = Math.min(value, bottom - 0.01)
+        else if (edge === "bottom") bottom = Math.max(value, top + 0.01)
+        const aspect = root.sourceCropAspectRatio()
+        const sourceWidth = Math.max(1, Number(root.clipState.sourceWidth || 1))
+        const sourceHeight = Math.max(1, Number(root.clipState.sourceHeight || 1))
+        if (aspect > 0 && Number.isFinite(aspect)) {
+            const normalizedWidthPerHeight = aspect * sourceHeight / sourceWidth
+            if (edge === "left" || edge === "right") {
+                let width = right - left
+                let height = width / normalizedWidthPerHeight
+                if (height > 1) {
+                    height = 1
+                    width = normalizedWidthPerHeight
+                }
+                if (edge === "left") left = right - width
+                else right = left + width
+                top = Math.max(0, Math.min(1 - height, (top + bottom - height) * 0.5))
+                bottom = top + height
+            } else {
+                let height = bottom - top
+                let width = height * normalizedWidthPerHeight
+                if (width > 1) {
+                    width = 1
+                    height = 1 / normalizedWidthPerHeight
+                }
+                if (edge === "top") top = bottom - height
+                else bottom = top + height
+                left = Math.max(0, Math.min(1 - width, (left + right - width) * 0.5))
+                right = left + width
+            }
+        }
+        return root.documentController.setSelectedSourceCrop(left, top, right, bottom)
     }
 
     function updateEffectMask(effectName, currentMask, changes) {
@@ -170,6 +348,22 @@ GlassSurface {
             if (String(stack[index].name || "") === effectName)
                 return true
         }
+        if (root.sharedAppliedEffectCount > 0) {
+            let sharedType = ""
+            for (let i = 0; i < root.effectLibraryItems.length; ++i) {
+                const item = root.effectLibraryItems[i]
+                if (String(item.name) === effectName) sharedType = String(item.sharedPhotoType || "")
+            }
+            if (sharedType.length > 0) {
+                const editor = root.sharedEditController.editor
+                const layers = editor.photoLayers
+                for (let i = 0; i < layers.length; ++i) {
+                    const effects = editor.photoLayerEffects(i)
+                    for (let j = 0; j < effects.length; ++j)
+                        if (String(effects[j].type) === sharedType) return true
+                }
+            }
+        }
         return false
     }
 
@@ -182,6 +376,8 @@ GlassSurface {
     }
 
     function isEffectCompatible(effect) {
+        if (effect && effect.sharedPhotoType && (!sharedPhotoToolsAvailable || hasMultiSelection))
+            return false
         if (!hasClip)
             return true
         const mediaType = String(clipState.mediaType || "").toLowerCase()
@@ -232,8 +428,61 @@ GlassSurface {
         return result
     }
 
+    function effectDiscoveryCategoryExpanded(category) {
+        const value = effectDiscoveryExpandedCategories[String(category || "")]
+        return value === undefined ? true : value === true
+    }
+
+    function toggleEffectDiscoveryCategory(category) {
+        const key = String(category || "")
+        const updated = Object.assign({}, effectDiscoveryExpandedCategories || ({}))
+        updated[key] = !effectDiscoveryCategoryExpanded(key)
+        effectDiscoveryExpandedCategories = updated
+    }
+
+    function buildEffectDiscoveryRows() {
+        const items = filteredEffectLibraryItems || []
+        const groups = ({})
+        let categoryNames = []
+        for (let index = 0; index < items.length; ++index) {
+            const effect = items[index]
+            const category = String(effect.category || qsTr("Uncategorized"))
+            if (groups[category] === undefined) {
+                groups[category] = []
+                categoryNames.push(category)
+            }
+            groups[category].push(effect)
+        }
+        categoryNames.sort()
+
+        let rows = []
+        const searching = String(effectSearchText || "").trim().length > 0
+        for (let categoryIndex = 0; categoryIndex < categoryNames.length; ++categoryIndex) {
+            const category = categoryNames[categoryIndex]
+            const effects = groups[category]
+            rows.push({"rowType": "category", "key": category,
+                       "label": category, "count": effects.length})
+            if (searching || effectDiscoveryCategoryExpanded(category)) {
+                for (let effectIndex = 0; effectIndex < effects.length; ++effectIndex)
+                    rows.push({"rowType": "effect", "key": String(effects[effectIndex].name || ""),
+                               "effect": effects[effectIndex]})
+            }
+        }
+        return rows
+    }
+
     function effectCategoryMenuItems() {
-        const categories = ["All", "Favorites", "Recent", "Color", "Style", "Utility"]
+        const categories = ["All", "Favorites", "Recent"]
+        const source = effectLibraryItems || []
+        for (let index = 0; index < source.length; ++index) {
+            const category = String(source[index].category || "")
+            if (category.length > 0 && categories.indexOf(category) < 0)
+                categories.push(category)
+        }
+        const catalogCategories = categories.slice(3).sort()
+        categories.length = 3
+        for (let index = 0; index < catalogCategories.length; ++index)
+            categories.push(catalogCategories[index])
         let items = []
         for (let index = 0; index < categories.length; ++index) {
             const category = categories[index]
@@ -339,8 +588,17 @@ GlassSurface {
     function addQuickEffect(effectName) {
         if (!hasSelection || documentController === null)
             return
+        for (let index = 0; index < effectLibraryItems.length; ++index) {
+            const effect = effectLibraryItems[index]
+            if (String(effect.name || "") === String(effectName) && effect.sharedPhotoType) {
+                if (hasSingleSelection && isEffectCompatible(effect))
+                    sharedEffectRequested(String(effect.sharedPhotoType), String(effect.name))
+                return
+            }
+        }
         documentController.addSelectedClipEffect(effectName)
         effectUsed(effectName)
+        appliedEffectControlsRequested()
     }
 
     function assignTransition(edge, transitionName, durationSeconds) {
@@ -379,14 +637,25 @@ GlassSurface {
     }
 
     function keyframesForParameter(parameter) {
-        const source = root.hasClip && clipState.keyframes ? clipState.keyframes : []
-        let values = []
-        for (let index = 0; index < source.length; ++index) {
-            if (String(source[index].parameter || "") === parameter)
-                values.push(source[index])
-        }
-        values.sort(function(left, right) { return Number(left.seconds || 0) - Number(right.seconds || 0) })
-        return values
+        return root.hasClip
+                ? inspectorKeyframeIndex.clipParameter(
+                      inspectorKeyframeSnapshot, String(parameter || ""))
+                : []
+    }
+
+    function selectAnimatedParameter(parameter) {
+        const value = String(parameter || "")
+        if (value.length === 0)
+            return
+        selectedKeyframeParameter = value
+        if (sharedSelectedAnimatedParameter.length > 0)
+            animatedParameterSelected(value)
+    }
+
+    onSharedSelectedAnimatedParameterChanged: {
+        if (sharedSelectedAnimatedParameter.length > 0
+                && selectedKeyframeParameter !== sharedSelectedAnimatedParameter)
+            selectedKeyframeParameter = sharedSelectedAnimatedParameter
     }
 
     function keyframeParameterOptions() {
@@ -397,29 +666,381 @@ GlassSurface {
         }))
     }
 
+    function keyframeParameterGroup(parameter) {
+        const value = String(parameter || "")
+        if (value.indexOf("effect:") === 0) return "Effects"
+        if (value.indexOf("grade:") === 0) return "Color"
+        if (value === "audioGainDb" || value.indexOf("audio") === 0) return "Audio"
+        if (value.indexOf("title") === 0 || value.indexOf("caption") === 0) return "Text"
+        if (value.indexOf("frame") === 0 || value === "sourceTime") return "Motion"
+        return "Clip"
+    }
+
+    function selectedAnimateChannelSummary() {
+        const label = root.colorGradeKeyframeLabel(root.selectedKeyframeParameter)
+        const count = root.keyframesForParameter(root.selectedKeyframeParameter).length
+        const playhead = root.currentKeyframeLocalSeconds() < 0
+                ? qsTr("outside clip")
+                : root.keyframeAtPlayhead(root.selectedKeyframeParameter)
+                  ? qsTr("keyed here") : qsTr("no key at playhead")
+        return qsTr("%1 · %2 keys · %3").arg(label).arg(count).arg(playhead)
+    }
+
+    readonly property var animateGroups: ["All", "Motion", "Effects", "Color", "Audio", "Text", "Clip"]
+    function animateFilterMenuItems() {
+        const items = [{"key": "animated-only", "label": qsTr("Animated only"),
+                        "checked": animateAnimatedOnly,
+                        "description": qsTr("Show only channels that already contain keyframes.")}]
+        for (let index = 0; index < animateGroups.length; ++index) {
+            const group = String(animateGroups[index] || "All")
+            items.push({"key": "group:" + group,
+                        "label": group === "All" ? qsTr("All groups") : group,
+                        "checked": animateSelectedGroup === group,
+                        "separatorBefore": index === 0,
+                        "description": qsTr("Show %1 animation channels.").arg(
+                                          group === "All" ? qsTr("all") : group)})
+        }
+        return items
+    }
+
+    readonly property var filteredAnimateChannels: {
+        const words = animateSearchText.trim().toLowerCase().split(/\s+/).filter(word => word.length > 0)
+        return keyframeParameterOptions().filter(option => {
+            const group = keyframeParameterGroup(option.parameter)
+            return words.every(word => (String(option.label || "") + " "
+                                        + String(option.parameter || "") + " " + group)
+                                       .toLowerCase().includes(word))
+                    && (!animateAnimatedOnly || Number(option.keyframeCount || 0) > 0)
+                    && (animateSelectedGroup === "All" || group === animateSelectedGroup)
+        })
+    }
+
+    readonly property int animateChannelCount: keyframeParameterOptions().length
+    readonly property int animatedChannelCount: keyframeParameterOptions().filter(
+        option => Number(option.keyframeCount || 0) > 0).length
+
+    readonly property var animateChannelRows: filteredAnimateChannels.map(function(option, index) {
+        const channel = option || ({})
+        const group = keyframeParameterGroup(channel.parameter)
+        const previous = index > 0 ? filteredAnimateChannels[index - 1] : null
+        const row = Object.assign({}, channel)
+        row.optionGroup = group
+        row.groupHeadingVisible = !previous
+                || keyframeParameterGroup(previous.parameter) !== group
+        return row
+    })
+
+    function animationChannelText(parameter) {
+        const name = String(parameter || "")
+        let fallback = clipState[name]
+        if (name.indexOf("grade:") === 0)
+            fallback = (clipState.colorGradeParameters || ({}))[name.substring(6)]
+        if (fallback === undefined && keyframesForParameter(name).length === 0) return "—"
+        const value = animatedClipValue(clipState, name, fallback === undefined ? 0 : Number(fallback))
+        if (name === "frameScale" || name === "opacity") return (value * 100).toFixed(1) + "%"
+        if (name === "frameOffsetX" || name === "frameOffsetY") return (value * 25).toFixed(1) + "%"
+        if (name.indexOf("Rotation") >= 0) return value.toFixed(1) + "°"
+        if (name === "audioGainDb") return value.toFixed(1) + " dB"
+        return value.toFixed(2)
+    }
+
+    function inspectorControlDefault(parameter) {
+        const name = String(parameter || "")
+        if (name === "frameScale") return 1
+        if (name === "opacity") return 1
+        if (name === "titleFontSize") return 64
+        if (name === "titlePositionX") return 0.5
+        if (name === "titlePositionY") return root.defaultTitlePositionY()
+        if (name === "effect:Exposure" || name === "effect:Contrast"
+                || name === "effect:Saturation") return 0.25
+        if (name === "effect:Blur") return 0.30
+        if (name === "effect:Fade" || name === "effect:Punch") return 0.50
+        if (name.indexOf("effect:") === 0) return 1
+        return 0
+    }
+
+    function inspectorControlBounds(parameter, signedAmount) {
+        const name = String(parameter || "")
+        if (name === "frameScale") return {minimum: 0.000001, maximum: 4}
+        if (name === "frameOffsetX" || name === "frameOffsetY")
+            return {minimum: -4, maximum: 4}
+        if (name === "frameRotationDegrees") return {minimum: -180, maximum: 180}
+        if (name === "framePerspectiveX" || name === "framePerspectiveY")
+            return {minimum: -0.35, maximum: 0.35}
+        if (name === "opacity") return {minimum: 0, maximum: 1}
+        if (name === "audioGainDb") return {minimum: -36, maximum: 0}
+        if (name === "titleFontSize") return {minimum: 1, maximum: 360}
+        if (name === "titlePositionX" || name === "titlePositionY")
+            return {minimum: 0, maximum: 1}
+        if (name.indexOf("effect:") === 0)
+            return {minimum: signedAmount ? -1 : 0, maximum: 1}
+        return {minimum: 0, maximum: 1}
+    }
+
+    function inspectorControlBaseValue(parameter) {
+        const name = String(parameter || "")
+        if (name.indexOf("effect:") === 0) {
+            const effectName = name.substring(7)
+            const stack = root.currentEffectStack()
+            for (let index = 0; index < stack.length; ++index) {
+                if (String(stack[index].name || "") === effectName)
+                    return Number(stack[index].baseAmount !== undefined
+                                  ? stack[index].baseAmount : stack[index].amount || 0)
+            }
+            return root.inspectorControlDefault(name)
+        }
+        if (name === "titlePositionX" || name === "titlePositionY") {
+            return root.titlePositionValue(name === "titlePositionX" ? "x" : "y")
+        }
+        if (name === "titleFontSize")
+            return Number(clipState.titleFontSize !== undefined
+                          ? clipState.titleFontSize : root.inspectorControlDefault(name))
+        return Number(clipState[name] !== undefined
+                      ? clipState[name] : root.inspectorControlDefault(name))
+    }
+
+    function buildInspectorControlRows() {
+        if (!root.hasClip)
+            return []
+        const available = clipState.availableKeyframeParameters || []
+        const ordered = [
+            "frameScale", "frameOffsetX", "frameOffsetY", "frameRotationDegrees",
+            "framePerspectiveX", "framePerspectiveY", "opacity",
+            "titlePositionX", "titlePositionY", "titleFontSize", "audioGainDb"
+        ]
+        for (let index = 0; index < available.length; ++index) {
+            const parameter = String(available[index] || "")
+            if (parameter.indexOf("effect:") === 0 && ordered.indexOf(parameter) < 0)
+                ordered.push(parameter)
+        }
+        let rows = []
+        for (let index = 0; index < ordered.length; ++index) {
+            const parameter = ordered[index]
+            if (available.indexOf(parameter) < 0)
+                continue
+            const effect = parameter.indexOf("effect:") === 0
+            let signedAmount = false
+            if (effect) {
+                const effectName = parameter.substring(7)
+                const stack = root.currentEffectStack()
+                for (let effectIndex = 0; effectIndex < stack.length; ++effectIndex) {
+                    if (String(stack[effectIndex].name || "") === effectName) {
+                        signedAmount = stack[effectIndex].signedAmount === true
+                        break
+                    }
+                }
+            }
+            const bounds = root.inspectorControlBounds(parameter, signedAmount)
+            rows.push({
+                "parameter": parameter,
+                "label": root.colorGradeKeyframeLabel(parameter),
+                "group": effect ? qsTr("Effects")
+                         : parameter.indexOf("title") === 0 ? qsTr("Text")
+                         : parameter === "audioGainDb" ? qsTr("Audio") : qsTr("Motion"),
+                "effectName": effect ? parameter.substring(7) : "",
+                "effect": effect,
+                "signedAmount": signedAmount,
+                "minimum": bounds.minimum,
+                "maximum": bounds.maximum,
+                "defaultValue": root.inspectorControlDefault(parameter),
+                "keys": root.keyframesForParameter(parameter)
+            })
+        }
+        return rows
+    }
+
+    function inspectorControlStructureSignature() {
+        if (!root.hasClip)
+            return ""
+        const parameters = (clipState.availableKeyframeParameters || [])
+                .map(parameter => String(parameter || "")).join("\n")
+        const stack = root.currentEffectStack().map(effect =>
+            String(effect.name || "") + ":" + String(effect.signedAmount === true)).join("\n")
+        return String(clipState.clipId || "") + "|" + parameters + "|" + stack
+    }
+
+    function refreshInspectorControlRows() {
+        const signature = root.inspectorControlStructureSignature()
+        const structureChanged = signature !== inspectorControlRowsSignature
+        if (!structureChanged
+                && inspectorControlRowsKeyframeSnapshot === inspectorKeyframeSnapshot)
+            return
+
+        const rows = root.buildInspectorControlRows()
+        const rowsByParameter = Object.create(null)
+        for (let index = 0; index < rows.length; ++index)
+            rowsByParameter[rows[index].parameter] = rows[index]
+
+        inspectorControlRowsKeyframeSnapshot = inspectorKeyframeSnapshot
+        inspectorControlRows = rows
+        inspectorControlRowsByParameter = rowsByParameter
+        if (structureChanged) {
+            inspectorControlRowsSignature = signature
+            inspectorControlParameters = rows.map(row => String(row.parameter || ""))
+        }
+    }
+
+    function inspectorAnimatedValue(parameter, fallback) {
+        if (parameter === "titlePositionX")
+            return root.titlePositionValue("x")
+        if (parameter === "titlePositionY")
+            return root.titlePositionValue("y")
+        return root.animatedClipValue(clipState, String(parameter || ""), Number(fallback || 0))
+    }
+
+    function inspectorControlValueText(parameter, value) {
+        const name = String(parameter || "")
+        const numeric = Number(value || 0)
+        if (name.indexOf("effect:") === 0) {
+            const signed = root.effectStackIndex(name.substring(7)) >= 0
+                    && root.currentEffectStack()[root.effectStackIndex(name.substring(7))].signedAmount === true
+            return (numeric > 0 && signed ? "+" : "") + Math.round(numeric * 100) + "%"
+        }
+        if (name === "frameScale") return numeric.toFixed(2) + "x"
+        if (name === "frameOffsetX" || name === "frameOffsetY") return (numeric * 25).toFixed(1) + "%"
+        if (name === "frameRotationDegrees") return numeric.toFixed(1) + "°"
+        if (name === "framePerspectiveX" || name === "framePerspectiveY") return Math.round(numeric * 100) + "%"
+        if (name === "opacity") return Math.round(numeric * 100) + "%"
+        if (name === "titlePositionX" || name === "titlePositionY") return Math.round(numeric * 100) + "%"
+        if (name === "titleFontSize") return Math.round(numeric) + " px"
+        if (name === "audioGainDb") return numeric.toFixed(1) + " dB"
+        return numeric.toFixed(2)
+    }
+
+    function parseInspectorControlValue(parameter, text, signedAmount) {
+        const match = String(text || "").trim().match(
+            /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(%|px|db|deg|°|x|×)?$/i)
+        if (!match)
+            return {valid: false, value: 0}
+
+        const name = String(parameter || "")
+        const suffix = String(match[2] || "").toLowerCase()
+        let value = Number(match[1])
+        if (!Number.isFinite(value))
+            return {valid: false, value: 0}
+
+        if (name === "frameScale") {
+            if (suffix === "%") value /= 100
+            else if (suffix !== "" && suffix !== "x" && suffix !== "×")
+                return {valid: false, value: 0}
+        } else if (name === "frameOffsetX" || name === "frameOffsetY") {
+            if (suffix === "%") value /= 25
+            else if (suffix !== "") return {valid: false, value: 0}
+        } else if (name === "framePerspectiveX" || name === "framePerspectiveY"
+                   || name === "opacity" || name === "titlePositionX" || name === "titlePositionY"
+                   || name.indexOf("effect:") === 0) {
+            if (suffix === "%") value /= 100
+            else if (suffix !== "") return {valid: false, value: 0}
+        } else if (name === "frameRotationDegrees") {
+            if (suffix !== "" && suffix !== "deg" && suffix !== "°")
+                return {valid: false, value: 0}
+        } else if (name === "titleFontSize") {
+            if (suffix !== "" && suffix !== "px") return {valid: false, value: 0}
+        } else if (name === "audioGainDb") {
+            if (suffix !== "" && suffix !== "db") return {valid: false, value: 0}
+        } else if (suffix !== "") {
+            return {valid: false, value: 0}
+        }
+
+        const bounds = root.inspectorControlBounds(name, signedAmount === true)
+        value = Math.max(Number(bounds.minimum), Math.min(Number(bounds.maximum), value))
+        return {valid: true, value: value}
+    }
+
+    function setInspectorControlValue(parameter, value) {
+        if (!root.documentController || !root.hasSelection)
+            return
+        const name = String(parameter || "")
+        const numeric = Number(value)
+        if (!Number.isFinite(numeric))
+            return
+        if (name.indexOf("effect:") === 0) {
+            root.documentController.setSelectedClipEffectAmount(name.substring(7), numeric)
+        } else if (name === "frameScale") {
+            root.documentController.setSelectedFrameScale(numeric)
+        } else if (name === "frameOffsetX") {
+            root.documentController.setSelectedFrameOffsetX(numeric)
+        } else if (name === "frameOffsetY") {
+            root.documentController.setSelectedFrameOffsetY(numeric)
+        } else if (name === "frameRotationDegrees") {
+            root.documentController.setSelectedFrameRotationDegrees(numeric)
+        } else if (name === "framePerspectiveX") {
+            root.documentController.setSelectedFramePerspectiveX(numeric)
+        } else if (name === "framePerspectiveY") {
+            root.documentController.setSelectedFramePerspectiveY(numeric)
+        } else if (name === "opacity") {
+            root.documentController.setSelectedClipOpacity(numeric)
+        } else if (name === "titlePositionX") {
+            root.setTitlePosition("x", numeric)
+        } else if (name === "titlePositionY") {
+            root.setTitlePosition("y", numeric)
+        } else if (name === "titleFontSize") {
+            root.documentController.setSelectedTitleFontSize(numeric)
+        } else if (name === "audioGainDb") {
+            root.documentController.setSelectedClipAudioGain(numeric)
+        }
+    }
+
+    function resetInspectorControl(parameter) {
+        const name = String(parameter || "")
+        if (!root.documentController || !root.hasSelection)
+            return
+        if (name.indexOf("effect:") === 0) {
+            root.documentController.resetSelectedClipEffect(name.substring(7))
+            return
+        }
+        root.setInspectorControlValue(name, root.inspectorControlDefault(name))
+    }
+
+    function setInspectorEffectEnabled(effectName, enabled) {
+        if (root.documentController && root.hasSelection)
+            root.documentController.setSelectedClipEffectEnabled(String(effectName || ""), Boolean(enabled))
+    }
+
+    function openAnimateChannel(parameter) {
+        const value = String(parameter || "")
+        if (!root.hasClip || value.length === 0)
+            return
+        root.selectAnimatedParameter(value)
+        root.openCurveEditorRequested(value)
+    }
+
     onClipStateChanged: {
+        root.refreshInspectorKeyframeSnapshot()
+        root.refreshInspectorControlRows()
+        if (sharedSelectedAnimatedParameterPinned && sharedSelectedAnimatedParameter.length > 0)
+            return
         const parameters = clipState.availableKeyframeParameters || []
         if (parameters.length && parameters.indexOf(selectedKeyframeParameter) < 0)
-            selectedKeyframeParameter = String(parameters[0])
+            selectAnimatedParameter(String(parameters[0]))
     }
 
     function currentKeyframeLocalSeconds() {
         if (!root.hasClip || !root.documentController)
-            return 0
-        return Math.max(0, Math.min(Number(clipState.trimmedDurationSeconds || 0),
-                                   Number(root.documentController.sequencePlayheadSeconds || 0)
-                                   - Number(clipState.startSeconds || 0)))
+            return -1
+        const localSeconds = Number(root.documentController.sequencePlayheadSeconds || 0)
+                - Number(clipState.startSeconds || 0)
+        const duration = Math.max(0, Number(clipState.trimmedDurationSeconds || 0))
+        return localSeconds >= 0 && localSeconds < duration ? localSeconds : -1
     }
 
     function keyframeAtPlayhead(parameter) {
         const values = keyframesForParameter(parameter)
         const local = currentKeyframeLocalSeconds()
+        if (local < 0)
+            return null
         const tolerance = 0.5 / Math.max(1, Number(root.documentController
                                                    ? root.documentController.framesPerSecond : 30))
-        for (let index = 0; index < values.length; ++index) {
-            if (Math.abs(Number(values[index].seconds || 0) - local) <= tolerance)
-                return values[index]
-        }
+        if (values.length === 0)
+            return null
+        if (values.length === 1)
+            return Math.abs(Number(values[0].seconds || 0) - local) <= tolerance
+                    ? values[0] : null
+        const right = inspectorKeyframeIndex.rightEndpoint(values, local)
+        if (Math.abs(Number(values[right].seconds || 0) - local) <= tolerance)
+            return values[right]
+        if (right > 0 && Math.abs(Number(values[right - 1].seconds || 0) - local) <= tolerance)
+            return values[right - 1]
         return null
     }
 
@@ -442,18 +1063,26 @@ GlassSurface {
 
     component ParameterKeyframeButton: ActionButton {
         required property string parameterName
+        property bool parameterAvailable: true
+        property string parameterUnavailableReason: ""
         readonly property var playheadKeyframe: root.keyframeAtPlayhead(parameterName)
         readonly property string parameterLabel: root.colorGradeKeyframeLabel(parameterName)
         showText: false
         compact: true
         iconName: playheadKeyframe ? "keyframe-filled" : "keyframe"
         active: playheadKeyframe !== null
-        enabled: root.hasSelection
+        enabled: root.hasSelection && parameterAvailable
+                 && root.currentKeyframeLocalSeconds() >= 0
+        disabledReason: root.currentKeyframeLocalSeconds() < 0
+                       ? "Move the playhead inside the selected clip to add or remove a keyframe."
+                       : parameterUnavailableReason
         tooltipText: playheadKeyframe
                      ? "Remove the " + parameterLabel + " keyframe at the playhead."
                      : "Add a " + parameterLabel + " keyframe at the playhead."
         onClicked: {
-            root.selectedKeyframeParameter = parameterName
+            if (root.currentKeyframeLocalSeconds() < 0)
+                return
+            root.selectAnimatedParameter(parameterName)
             if (root.documentController)
                 root.documentController.toggleSelectedClipKeyframe(parameterName)
         }
@@ -567,11 +1196,15 @@ GlassSurface {
             {"key": "transitions", "label": "Transitions", "iconName": "transition", "checked": activeTab === "transitions"},
             {"key": "color", "label": "Color", "iconName": "swatch", "checked": activeTab === "color",
              "enabled": root.hasClip
-                        && (clipState.mediaType === "video" || clipState.mediaType === "adjustment"),
-             "disabledReason": "Select a video or adjustment clip to edit its shared photo grade."},
+                        && (clipState.mediaType === "photo" || clipState.mediaType === "video"
+                            || clipState.mediaType === "adjustment"),
+             "disabledReason": "Select a photo, video, or adjustment clip to edit its shared photo grade."},
             {"key": "clip", "label": "Clip details", "iconName": "info", "checked": activeTab === "clip"},
             {"key": "title", "label": "Title and captions", "iconName": "text", "checked": activeTab === "title", "enabled": root.isTitleClip,
-             "disabledReason": "Select a title or caption clip to edit text."}
+             "disabledReason": "Select a title or caption clip to edit text."},
+            {"key": "audio", "label": "Audio", "iconName": "audio", "checked": activeTab === "audio",
+             "enabled": root.clipState.mediaType === "audio" || root.clipState.mediaType === "video",
+             "disabledReason": "Select a video or audio clip to edit audio."}
         ]
     }
 
@@ -762,10 +1395,11 @@ GlassSurface {
         const layer = activeColorGradeLayer()
         if (layer) {
             const parameter = colorGradeKeyframeParameter(name)
-            if (keyframesForParameter(parameter).length > 0) {
+            const localSeconds = currentKeyframeLocalSeconds()
+            if (keyframesForParameter(parameter).length > 0 && localSeconds >= 0) {
                 documentController.editClipKeyframeForAutomation(
                             String(clipState.clipId || ""), "set", parameter,
-                            currentKeyframeLocalSeconds(), Number(value), "")
+                            localSeconds, Number(value), "")
                 return
             }
             if (String(name || "") === "opacity") {
@@ -778,10 +1412,11 @@ GlassSurface {
             return
         }
         const parameter = "grade:" + String(name || "")
-        if (keyframesForParameter(parameter).length > 0) {
+        const localSeconds = currentKeyframeLocalSeconds()
+        if (keyframesForParameter(parameter).length > 0 && localSeconds >= 0) {
             documentController.editClipKeyframeForAutomation(
                         String(clipState.clipId || ""), "set", parameter,
-                        currentKeyframeLocalSeconds(), Number(value), "")
+                        localSeconds, Number(value), "")
             return
         }
         documentController.setClipColorGradeParameterForAutomation(
@@ -816,8 +1451,11 @@ GlassSurface {
              "iconName": "keyframe", "checked": root.keyframeLanesVisible},
             {"key": "copy-track", "label": "Copy parameter keyframes", "iconName": "copy", "enabled": count > 0,
              "disabledReason": "Add keyframes to this parameter first."},
-            {"key": "paste-track", "label": "Paste at playhead", "iconName": "copy", "enabled": clipboardCount > 0,
-             "disabledReason": "Copy keyframes first."},
+            {"key": "paste-track", "label": "Paste at playhead", "iconName": "copy",
+             "enabled": clipboardCount > 0 && root.currentKeyframeLocalSeconds() >= 0,
+             "disabledReason": clipboardCount > 0
+                              ? "Move the playhead inside the selected clip first."
+                              : "Copy keyframes first."},
             {"key": "timing-half", "label": "Compress timing to 0.5x", "iconName": "step-back", "enabled": count > 1,
              "disabledReason": "At least two keyframes are required."},
             {"key": "timing-double", "label": "Expand timing to 2x", "iconName": "step-forward", "enabled": count > 1,
@@ -841,6 +1479,8 @@ GlassSurface {
         } else if (key === "copy-track") {
             root.documentController.copySelectedClipKeyframes(root.selectedKeyframeParameter)
         } else if (key === "paste-track") {
+            if (root.currentKeyframeLocalSeconds() < 0)
+                return
             root.documentController.pasteSelectedClipKeyframes(
                         root.currentKeyframeLocalSeconds(), root.selectedKeyframeParameter)
         } else if (key === "timing-half") {
@@ -848,7 +1488,8 @@ GlassSurface {
         } else if (key === "timing-double") {
             root.documentController.scaleSelectedClipKeyframeTimes(root.selectedKeyframeParameter, 2.0)
         } else if (String(key).indexOf("preset-") === 0) {
-            root.documentController.applySelectedClipMotionPreset(String(key).slice(7))
+            if (root.currentKeyframeLocalSeconds() >= 0)
+                root.documentController.applySelectedClipMotionPreset(String(key).slice(7))
         }
     }
 
@@ -858,25 +1499,41 @@ GlassSurface {
         spacing: theme.gapDense
 
         RowLayout {
+            visible: !root.embeddedDockHeader || root.surfaceMode !== "library"
             Layout.fillWidth: true
             spacing: theme.gapDense
 
             Label {
+                objectName: "timelineInspectorSelectionTitle"
+                Layout.fillWidth: true
                 visible: !collapsed
-                text: root.hasMultiSelection
+                text: root.hasMultiSelection && root.surfaceMode !== "library"
                       ? root.selectionCount + " clips"
-                      : root.hasClip ? String(clipState.displayLabel || "Clip") : "Inspector"
+                      : root.selectionHeaderTitle
                 color: theme.textStrong
                 font.family: theme.fontUi
                 font.pixelSize: theme.typeControl
                 font.weight: Font.DemiBold
                 elide: Text.ElideRight
+                Accessible.name: text
             }
 
-            Item { Layout.fillWidth: true }
+            Label {
+                objectName: "timelineInspectorSelectionType"
+                visible: !collapsed && root.selectionHeaderType.length > 0
+                         && root.surfaceMode !== "library"
+                text: root.selectionHeaderType
+                color: theme.textMuted
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
+                font.pixelSize: theme.typeCaption
+                elide: Text.ElideRight
+                Accessible.name: text
+            }
 
             ActionButton {
                 objectName: "timelineInspectorCollapseButton"
+                visible: !root.embeddedDockHeader
                 iconName: collapsed ? "chevron-left" : "chevron-right"
                 showText: false
                 compact: true
@@ -892,16 +1549,41 @@ GlassSurface {
             spacing: theme.gapDense
 
             ActionButton {
+                objectName: "timelineInspectorControlsRailButton"
+                Layout.fillWidth: true
+                iconName: "motion"
+                showText: false
+                compact: true
+                tooltipText: "Controls · effects, transform, and keyframe lanes"
+                enabled: root.hasClip
+                active: activeTab === "controls"
+                onClicked: tabChangeRequested("controls")
+            }
+
+            ActionButton {
                 objectName: "timelineInspectorEffectsRailButton"
                 Layout.fillWidth: true
                 iconName: "effects"
                 showText: false
                 compact: true
-                tooltipText: "Effects"
+                tooltipText: "Applied Effects"
                 enabled: root.hasClip
                 disabledReason: root.hasMultiSelection ? "Batch effects are not available." : "Select one clip."
                 active: activeTab === "effects"
                 onClicked: tabChangeRequested("effects")
+            }
+
+            ActionButton {
+                objectName: "timelineInspectorAnimateRailButton"
+                Layout.fillWidth: true
+                iconName: "keyframe"
+                showText: false
+                compact: true
+                tooltipText: "Animate"
+                enabled: root.hasClip
+                disabledReason: root.hasMultiSelection ? "Batch animation is not available." : "Select one clip."
+                active: activeTab === "animate"
+                onClicked: tabChangeRequested("animate")
             }
 
             ActionButton {
@@ -923,7 +1605,7 @@ GlassSurface {
                 iconName: "motion"
                 showText: false
                 compact: true
-                tooltipText: "Motion"
+                tooltipText: "Transform"
                 enabled: root.hasClip
                 disabledReason: root.hasMultiSelection ? "Batch motion is not available." : "Select one clip."
                 active: activeTab === "motion"
@@ -933,6 +1615,7 @@ GlassSurface {
             ActionButton {
                 objectName: "timelineInspectorAudioRailButton"
                 Layout.fillWidth: true
+                visible: root.clipState.mediaType === "audio" || root.clipState.mediaType === "video"
                 iconName: "audio"
                 showText: false
                 compact: true
@@ -967,7 +1650,7 @@ GlassSurface {
 
             Item {
                 objectName: "timelineInspectorNoSelectionState"
-                visible: !root.hasSelection
+                visible: root.surfaceMode !== "library" && !root.hasSelection && root.activeTab !== "color"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
@@ -1042,7 +1725,7 @@ GlassSurface {
 
             Item {
                 objectName: "timelineInspectorMultiSelectionState"
-                visible: root.hasMultiSelection
+                visible: root.hasMultiSelection && root.activeTab !== "color"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
@@ -1113,45 +1796,161 @@ GlassSurface {
                 }
             }
 
-            RowLayout {
-                visible: root.hasClip
+            Item {
+                objectName: "timelineColorWorkspaceSelectionPrompt"
+                visible: root.activeTab === "color" && !root.hasEligibleColorSelection
                 Layout.fillWidth: true
-                spacing: theme.gapDense
+                Layout.fillHeight: true
 
-                FilterChip {
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - theme.space24, theme.scaled(300))
+                    spacing: theme.space10
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Color workspace")
+                        color: theme.textFaint
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
+                        font.pixelSize: theme.typeLabel
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.hasMultiSelection
+                              ? qsTr("Select one photo, video, or adjustment clip")
+                              : qsTr("Select a photo, video, or adjustment clip")
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeBody
+                        font.weight: Font.DemiBold
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Color tools appear here for eligible clips. Your playhead and edit stay in place.")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeLabel
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+
+                    ActionButton {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTr("Return to Editing")
+                        iconName: "timeline"
+                        compact: true
+                        tooltipText: qsTr("Return to the Editing workspace.")
+                        onClicked: root.returnToEditingRequested()
+                    }
+                }
+            }
+
+            Flow {
+                visible: root.surfaceMode !== "library" && (root.hasClip || root.activeTab === "color")
+                Layout.fillWidth: true
+                spacing: theme.space2
+
+                NavigationTab {
+                    objectName: "timelineInspectorControlsTab"
+                    leftPadding: theme.space6
+                    rightPadding: theme.space6
+                    visible: root.hasClip
+                    text: "Controls"
+                    accessibleName: "Selected clip controls and keyframes"
+                    tooltipText: "Transform, applied effects, and aligned clip-local keyframe lanes."
+                    underlineSelection: true
+                    selected: activeTab === "controls"
+                    onClicked: tabChangeRequested("controls")
+                }
+
+                NavigationTab {
                     objectName: "timelineInspectorEffectsTab"
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 54
+                    leftPadding: theme.space6
+                    rightPadding: theme.space6
+                    visible: root.hasClip
                     text: "Effects"
-                    active: activeTab === "effects"
+                    accessibleName: "Applied Effects"
+                    tooltipText: "Effects applied to the selected clip"
+                    underlineSelection: true
+                    selected: activeTab === "effects"
                     onClicked: tabChangeRequested("effects")
                 }
 
-                FilterChip {
+                NavigationTab {
+                    objectName: "timelineInspectorTitleTab"
+                    leftPadding: theme.space6
+                    rightPadding: theme.space6
+                    visible: root.isTitleClip
+                    text: root.isGraphicShape ? "Shape" : "Text"
+                    underlineSelection: true
+                    selected: activeTab === "title"
+                    onClicked: tabChangeRequested("title")
+                }
+
+                NavigationTab {
+                    objectName: "timelineInspectorAnimateTab"
+                    leftPadding: theme.space6
+                    rightPadding: theme.space6
+                    visible: root.hasClip
+                    text: "Animate"
+                    underlineSelection: true
+                    selected: activeTab === "animate"
+                    onClicked: tabChangeRequested("animate")
+                }
+
+                NavigationTab {
                     objectName: "timelineInspectorMotionTab"
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 54
-                    text: "Motion"
-                    active: activeTab === "motion"
+                    leftPadding: theme.space6
+                    rightPadding: theme.space6
+                    visible: root.hasClip
+                    text: "Transform"
+                    underlineSelection: true
+                    selected: activeTab === "motion"
                     onClicked: tabChangeRequested("motion")
                 }
 
-                FilterChip {
+                NavigationTab {
                     objectName: "timelineInspectorAudioTab"
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 54
+                    leftPadding: theme.space6
+                    rightPadding: theme.space6
+                    visible: root.hasClip && (root.clipState.mediaType === "audio"
+                                               || root.clipState.mediaType === "video")
                     text: "Audio"
-                    active: activeTab === "audio"
+                    underlineSelection: true
+                    selected: activeTab === "audio"
                     onClicked: tabChangeRequested("audio")
+                }
+
+                NavigationTab {
+                    objectName: "timelineInspectorColorTab"
+                    leftPadding: theme.space6
+                    rightPadding: theme.space6
+                    visible: activeTab === "color"
+                    text: "Color"
+                    underlineSelection: true
+                    selected: activeTab === "color"
+                    enabled: root.hasEligibleColorSelection
+                    onClicked: tabChangeRequested("color")
                 }
 
                 MenuButton {
                     objectName: "timelineInspectorMoreMenu"
-                    Layout.minimumWidth: 66
+                    visible: activeTab !== "color"
+                    iconName: "chevron-down"
+                    tone: "quiet"
+                    showText: root.width >= theme.scaled(480)
+                    showMenuIndicator: false
                     text: "More"
+                    accessibleName: qsTr("More clip controls")
                     compact: true
-                    active: activeTab === "transitions" || activeTab === "color"
-                            || activeTab === "clip" || activeTab === "title"
+                    active: activeTab === "transitions" || activeTab === "clip"
+                            || activeTab === "title"
                     primaryOpensMenu: true
                     tooltipText: "Color input, transitions, clip details, and title controls."
                     menuItems: root.inspectorMoreMenuItems()
@@ -1161,13 +1960,719 @@ GlassSurface {
             }
 
             Loader {
+                id: controlsInspectorLoader
+                objectName: "timelineControlsInspectorLoader"
+                active: root.inspectorContentLoadReady
+                        && root.inspectorSelectionContextAvailable
+                        && root.activeTab === "controls"
+                visible: root.hasClip && root.activeTab === "controls"
+                Layout.fillWidth: true
+                Layout.fillHeight: visible
+                onLoaded: root.controlsInspectorLoaded = true
+
+                sourceComponent: Component {
+                    Flickable {
+                        id: controlsInspectorFlick
+                        objectName: "timelineControlsInspector"
+                        contentWidth: width
+                        contentHeight: Math.max(height, controlsInspectorContent.implicitHeight)
+                        boundsBehavior: Flickable.StopAtBounds
+                        clip: true
+                        interactive: contentHeight > height + 1
+
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                        RowLayout {
+                            id: controlsInspectorContent
+                            objectName: "timelineControlsInspectorContent"
+                            x: 0
+                            y: 0
+                            width: controlsInspectorFlick.width
+                            height: Math.max(controlsInspectorFlick.height, implicitHeight)
+                            spacing: 0
+                            readonly property real laneContentHeight:
+                                root.inspectorLaneRulerHeight
+                                + root.inspectorControlRows.length * root.inspectorLaneRowHeight
+
+                            ColumnLayout {
+                                id: inspectorControlColumn
+                                objectName: "timelineInspectorControlColumn"
+                                Layout.preferredWidth: Math.max(
+                                    theme.scaled(164), Math.floor(controlsInspectorContent.width * 0.55))
+                                Layout.minimumWidth: theme.scaled(148)
+                                Layout.maximumWidth: controlsInspectorContent.width - theme.scaled(112)
+                                Layout.preferredHeight: controlsInspectorContent.laneContentHeight
+                                spacing: 0
+
+                                RowLayout {
+                                    objectName: "timelineInspectorKeyframeToolbar"
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: root.inspectorLaneRulerHeight
+                                    Layout.minimumHeight: root.inspectorLaneRulerHeight
+                                    spacing: theme.space2
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: qsTr("%1 keys").arg(
+                                                  root.keyframesForParameter(root.selectedKeyframeParameter).length)
+                                        color: theme.textMuted
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
+                                        font.pixelSize: theme.typeCaption
+                                        elide: Text.ElideRight
+                                        Accessible.name: qsTr("Selected channel keyframes: %1")
+                                                         .arg(root.keyframesForParameter(
+                                                                  root.selectedKeyframeParameter).length)
+                                    }
+
+                                    ActionButton {
+                                        objectName: "timelineInspectorPreviousKeyframe"
+                                        iconName: "step-back"
+                                        showText: false
+                                        compact: true
+                                        tone: "quiet"
+                                        enabled: root.keyframesForParameter(
+                                                    root.selectedKeyframeParameter).length > 0
+                                        tooltipText: qsTr("Previous %1 keyframe")
+                                                     .arg(root.colorGradeKeyframeLabel(
+                                                              root.selectedKeyframeParameter))
+                                        onClicked: if (root.documentController)
+                                                       root.documentController.seekSelectedClipKeyframe(
+                                                           root.selectedKeyframeParameter, -1)
+                                    }
+
+                                    ParameterKeyframeButton {
+                                        objectName: "timelineInspectorAddKeyframe"
+                                        parameterName: root.selectedKeyframeParameter
+                                    }
+
+                                    ActionButton {
+                                        objectName: "timelineInspectorNextKeyframe"
+                                        iconName: "step-forward"
+                                        showText: false
+                                        compact: true
+                                        tone: "quiet"
+                                        enabled: root.keyframesForParameter(
+                                                    root.selectedKeyframeParameter).length > 0
+                                        tooltipText: qsTr("Next %1 keyframe")
+                                                     .arg(root.colorGradeKeyframeLabel(
+                                                              root.selectedKeyframeParameter))
+                                        onClicked: if (root.documentController)
+                                                       root.documentController.seekSelectedClipKeyframe(
+                                                           root.selectedKeyframeParameter, 1)
+                                    }
+
+                                    ActionButton {
+                                        objectName: "timelineInspectorOpenSelectedCurve"
+                                        iconName: "curve"
+                                        showText: false
+                                        compact: true
+                                        tone: "quiet"
+                                        enabled: root.hasClip
+                                        tooltipText: qsTr("Open the selected channel curve")
+                                        onClicked: root.openCurveEditorRequested(
+                                                       root.selectedKeyframeParameter)
+                                    }
+                                }
+
+                                Repeater {
+                                    id: inspectorControlRowsRepeater
+                                    objectName: "timelineInspectorControlRows"
+                                    model: root.inspectorControlParameters
+
+                                    delegate: Rectangle {
+                                        id: inspectorControlRow
+                                        required property int index
+                                        required property var modelData
+                                        readonly property string parameter: String(modelData || "")
+                                        readonly property var rowData:
+                                            root.inspectorControlRowsByParameter[parameter] || ({})
+                                        readonly property string parameterLabel: String(
+                                            rowData.label || root.colorGradeKeyframeLabel(parameter) || parameter)
+                                        readonly property real currentValue:
+                                            root.inspectorAnimatedValue(
+                                                parameter, root.inspectorControlBaseValue(parameter))
+                                        readonly property bool selected:
+                                            root.selectedKeyframeParameter === parameter
+                                        objectName: "timelineInspectorControlRow-" + parameter
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: root.inspectorLaneRowHeight
+                                        color: selected
+                                               ? theme.alpha(theme.selectionAccent, 0.08)
+                                               : (index % 2 === 0
+                                                  ? theme.alpha(theme.glassLift, 0.07)
+                                                  : "transparent")
+                                        border.width: 0
+                                        border.color: theme.alpha(theme.selectionAccent, 0.4)
+
+                                        Rectangle {
+                                            width: theme.scaled(2)
+                                            height: parent.height
+                                            visible: inspectorControlRow.selected
+                                            color: theme.accentCool400
+                                        }
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: theme.space4
+                                            anchors.rightMargin: theme.space2
+                                            spacing: theme.space2
+
+                                            Label {
+                                                id: inspectorControlName
+                                                Layout.preferredWidth: Math.max(theme.scaled(54), Math.min(theme.scaled(86), inspectorControlRow.width * 0.3))
+                                                Layout.minimumWidth: theme.scaled(42)
+                                                Layout.maximumWidth: theme.scaled(72)
+                                                text: inspectorControlRow.parameter === "frameOffsetX" ? qsTr("Pos. X")
+                                                      : inspectorControlRow.parameter === "frameOffsetY" ? qsTr("Pos. Y")
+                                                      : inspectorControlRow.parameter === "framePerspectiveX" ? qsTr("Persp. X")
+                                                      : inspectorControlRow.parameter === "framePerspectiveY" ? qsTr("Persp. Y")
+                                                      : inspectorControlRow.parameter === "titlePositionX" ? qsTr("Text X")
+                                                      : inspectorControlRow.parameter === "titlePositionY" ? qsTr("Text Y")
+                                                      : inspectorControlRow.parameterLabel
+                                                color: inspectorControlRow.selected
+                                                       ? theme.textStrong : theme.textMain
+                                                font.family: theme.fontUi
+                                                font.pixelSize: theme.typeCaption
+                                                font.weight: inspectorControlRow.selected
+                                                              ? Font.DemiBold : Font.Normal
+                                                elide: Text.ElideRight
+                                                Accessible.name: inspectorControlRow.parameterLabel
+                                                HoverHandler { id: inspectorControlNameHover }
+                                                AppToolTip {
+                                                    targetItem: inspectorControlName
+                                                    visible: root.visible && inspectorControlNameHover.hovered
+                                                    text: inspectorControlRow.parameterLabel
+                                                }
+                                                TapHandler {
+                                                    acceptedButtons: Qt.LeftButton
+                                                    onTapped: root.selectAnimatedParameter(
+                                                                  inspectorControlRow.parameter)
+                                                }
+                                            }
+
+                                            Slider {
+                                                id: inspectorControlSlider
+                                                objectName: "timelineInspectorControlSlider-"
+                                                            + inspectorControlRow.parameter
+                                                Layout.fillWidth: true
+                                                Layout.minimumWidth: theme.scaled(20)
+                                                Layout.preferredHeight: theme.scaled(20)
+                                                implicitHeight: theme.scaled(20)
+                                                from: Number(inspectorControlRow.rowData.minimum || 0)
+                                                to: Number(inspectorControlRow.rowData.maximum || 1)
+                                                value: inspectorControlRow.currentValue
+                                                stepSize: 0
+                                                focusPolicy: Qt.StrongFocus
+                                                Accessible.name: inspectorControlRow.parameterLabel
+                                                Accessible.description: root.inspectorControlValueText(
+                                                    inspectorControlRow.parameter,
+                                                    inspectorControlRow.currentValue)
+                                                Accessible.role: Accessible.Slider
+                                                property bool continuousEditActive: false
+                                                onPressedChanged: {
+                                                    if (pressed && !continuousEditActive) {
+                                                        continuousEditActive = true
+                                                        root.beginInspectorEdit()
+                                                    } else if (!pressed && continuousEditActive) {
+                                                        continuousEditActive = false
+                                                        root.endInspectorEdit()
+                                                    }
+                                                }
+                                                onMoved: {
+                                                    root.selectAnimatedParameter(
+                                                        inspectorControlRow.parameter)
+                                                    root.setInspectorControlValue(
+                                                        inspectorControlRow.parameter, value)
+                                                }
+                                                background: Rectangle {
+                                                    x: inspectorControlSlider.leftPadding
+                                                    y: inspectorControlSlider.topPadding
+                                                       + inspectorControlSlider.availableHeight / 2 - height / 2
+                                                    width: inspectorControlSlider.availableWidth
+                                                    height: theme.scaled(3)
+                                                    radius: height / 2
+                                                    color: theme.alpha(theme.lineStrong, 0.36)
+                                                    Rectangle {
+                                                        width: inspectorControlSlider.visualPosition * parent.width
+                                                        height: parent.height
+                                                        radius: parent.radius
+                                                        color: theme.alpha(theme.selectionAccent, 0.64)
+                                                    }
+                                                }
+                                                handle: Rectangle {
+                                                    x: inspectorControlSlider.leftPadding
+                                                       + inspectorControlSlider.visualPosition
+                                                         * (inspectorControlSlider.availableWidth - width)
+                                                    y: inspectorControlSlider.topPadding
+                                                       + inspectorControlSlider.availableHeight / 2 - height / 2
+                                                    width: theme.scaled(inspectorControlSlider.pressed ? 11 : 9)
+                                                    height: width
+                                                    radius: width / 2
+                                                    color: inspectorControlSlider.pressed
+                                                           ? theme.textStrong : theme.focusAccent
+                                                    border.width: 1
+                                                    border.color: theme.alpha(theme.ink950, 0.8)
+                                                }
+                                            }
+
+                                            ToneTextField {
+                                                objectName: "timelineInspectorControlValue-"
+                                                            + inspectorControlRow.parameter
+                                                id: inspectorControlValueField
+                                                property bool editingValue: false
+                                                property string draftValueText: ""
+                                                Layout.preferredWidth: theme.scaled(58)
+                                                Layout.minimumWidth: theme.scaled(44)
+                                                Layout.maximumWidth: theme.scaled(64)
+                                                implicitHeight: theme.controlHeightDense
+                                                accessibleLabel: inspectorControlRow.parameterLabel
+                                                Accessible.description: qsTr(
+                                                    "Enter a value with the displayed unit. Press Enter or leave the field to apply; press Escape to cancel.")
+                                                numericEntry: true
+                                                inlineField: true
+                                                leftPadding: theme.space2
+                                                rightPadding: theme.space2
+                                                horizontalAlignment: Text.AlignRight
+                                                selectByMouse: true
+                                                text: editingValue ? draftValueText
+                                                    : root.inspectorControlValueText(
+                                                          inspectorControlRow.parameter,
+                                                          inspectorControlRow.currentValue)
+                                                function finishValueEdit() {
+                                                    if (!editingValue)
+                                                        return
+                                                    const parsed = root.parseInspectorControlValue(
+                                                        inspectorControlRow.parameter, text,
+                                                        inspectorControlRow.rowData.signedAmount)
+                                                    if (parsed.valid) {
+                                                        root.beginInspectorEdit()
+                                                        root.setInspectorControlValue(
+                                                            inspectorControlRow.parameter,
+                                                            parsed.value)
+                                                        root.endInspectorEdit()
+                                                    }
+                                                    editingValue = false
+                                                }
+                                                function cancelValueEdit() {
+                                                    editingValue = false
+                                                    draftValueText = ""
+                                                }
+                                                onActiveFocusChanged: {
+                                                    if (activeFocus && !editingValue) {
+                                                        draftValueText = root.inspectorControlValueText(
+                                                            inspectorControlRow.parameter,
+                                                            inspectorControlRow.currentValue)
+                                                        editingValue = true
+                                                    } else if (!activeFocus && editingValue) {
+                                                        finishValueEdit()
+                                                    }
+                                                }
+                                                onTextEdited: {
+                                                    if (!editingValue)
+                                                        editingValue = true
+                                                    draftValueText = text
+                                                }
+                                                onAccepted: finishValueEdit()
+                                                Keys.onEscapePressed: function(event) {
+                                                    cancelValueEdit()
+                                                    event.accepted = true
+                                                }
+                                                Keys.onReturnPressed: function(event) {
+                                                    finishValueEdit()
+                                                    event.accepted = true
+                                                }
+                                            }
+
+                                            ParameterKeyframeButton {
+                                                objectName: "timelineInspectorControlKeyframe-"
+                                                            + inspectorControlRow.parameter
+                                                parameterName: inspectorControlRow.parameter
+                                                tone: "quiet"
+                                            }
+
+                                            ActionButton {
+                                                objectName: "timelineInspectorEffectBypass-"
+                                                            + inspectorControlRow.rowData.effectName
+                                                visible: inspectorControlRow.rowData.effect === true
+                                                iconName: root.effectStackIndex(
+                                                              String(inspectorControlRow.rowData.effectName || "")) >= 0
+                                                          && root.currentEffectStack()[root.effectStackIndex(
+                                                              String(inspectorControlRow.rowData.effectName || ""))].enabled !== false
+                                                          ? "visible" : "hidden"
+                                                showText: false
+                                                compact: true
+                                                active: iconName === "visible"
+                                                tooltipText: active
+                                                             ? qsTr("Bypass this effect")
+                                                             : qsTr("Enable this effect")
+                                                onClicked: root.setInspectorEffectEnabled(
+                                                               String(inspectorControlRow.rowData.effectName || ""),
+                                                               !active)
+                                            }
+
+                                            ActionButton {
+                                                objectName: "timelineInspectorControlReset-"
+                                                            + inspectorControlRow.parameter
+                                                visible: Math.abs(inspectorControlRow.currentValue
+                                                                  - Number(inspectorControlRow.rowData.defaultValue || 0)) > 0.0001
+                                                iconName: "reset"
+                                                showText: false
+                                                compact: true
+                                                tone: "quiet"
+                                                tooltipText: qsTr("Reset %1")
+                                                             .arg(inspectorControlRow.parameterLabel)
+                                                onClicked: root.resetInspectorControl(
+                                                               inspectorControlRow.parameter)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Item {
+                                    visible: root.inspectorControlRows.length === 0
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: theme.scaled(80)
+                                    Label {
+                                        anchors.centerIn: parent
+                                        width: parent.width - theme.space8
+                                        text: qsTr("No transform or effect controls for this clip.")
+                                        color: theme.textMuted
+                                        wrapMode: Text.Wrap
+                                        horizontalAlignment: Text.AlignHCenter
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeCaption
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillHeight: true
+                                Layout.preferredWidth: 1
+                                Layout.preferredHeight: controlsInspectorContent.laneContentHeight
+                                color: theme.alpha(theme.lineSoft, 0.65)
+                            }
+
+                            TimelineInspectorMiniLanes {
+                                id: inspectorMiniLanes
+                                objectName: "timelineInspectorMiniLanes"
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: theme.scaled(112)
+                                Layout.preferredWidth: Math.max(
+                                    theme.scaled(112), controlsInspectorContent.width * 0.45)
+                                Layout.preferredHeight: controlsInspectorContent.laneContentHeight
+                                theme: root.theme
+                                channels: root.inspectorControlRows
+                                duration: Math.max(0.001,
+                                                   Number(root.clipState.trimmedDurationSeconds || 0))
+                                playhead: root.documentController
+                                          ? Number(root.documentController.sequencePlayheadSeconds || 0)
+                                            - Number(root.clipState.startSeconds || 0)
+                                          : -1
+                                framesPerSecond: root.documentController
+                                                 ? Number(root.documentController.framesPerSecond || 30) : 30
+                                rowHeight: root.inspectorLaneRowHeight
+                                rulerHeight: root.inspectorLaneRulerHeight
+                                selectedParameter: root.selectedKeyframeParameter
+                                editable: root.hasSelection
+                                onChannelActivated: function(parameter) {
+                                    root.selectAnimatedParameter(parameter)
+                                }
+                                onSeekRequested: function(localSeconds) {
+                                    root.inspectorSeekRequested(
+                                                Number(root.clipState.startSeconds || 0)
+                                                + Number(localSeconds))
+                                }
+                                onSeekGestureStarted: root.inspectorSeekGestureStarted()
+                                onSeekGestureFinished: root.inspectorSeekGestureFinished()
+                                onKeyframeMoveRequested: function(parameter, fromLocalSeconds,
+                                                                  toLocalSeconds) {
+                                    if (!root.documentController)
+                                        return
+                                    root.beginInspectorEdit()
+                                    try {
+                                        root.documentController.moveSelectedClipKeyframe(
+                                                    parameter, fromLocalSeconds, toLocalSeconds)
+                                    } finally {
+                                        root.endInspectorEdit()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Loader {
+                id: animationSearchLoader
+                objectName: "timelineAnimationChannelsInspectorLoader"
+                property bool keepActiveThroughIncubation: false
+                active: root.inspectorContentLoadReady
+                        && (keepActiveThroughIncubation
+                            || ((root.surfaceMode === "library" || root.inspectorSelectionContextAvailable)
+                                && (root.activeTab === "animate" || root.animateInspectorLoaded)))
+                visible: root.hasClip && root.activeTab === "animate"
+                Layout.fillWidth: true
+                Layout.fillHeight: visible
+                onStatusChanged: {
+                    const loading = status === Loader.Loading
+                    Qt.callLater(function() { keepActiveThroughIncubation = loading })
+                }
+                onLoaded: root.animateInspectorLoaded = true
+
+                sourceComponent: Component {
+                    Flickable {
+                        id: animateInspectorFlick
+                        objectName: "timelineAnimationChannelsInspector"
+                        anchors.fill: parent
+                        contentWidth: width
+                        contentHeight: compactScrollFallback
+                                        ? Math.max(height, animateInspectorContent.implicitHeight
+                                                   + theme.panelPaddingCompact * 2)
+                                        : height
+                        boundsBehavior: Flickable.StopAtBounds
+                        clip: true
+                        readonly property bool compactScrollFallback: height < theme.scaled(180)
+                        interactive: compactScrollFallback
+
+                        ScrollBar.vertical: ScrollBar {
+                            policy: animateInspectorFlick.compactScrollFallback
+                                    ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                        }
+
+                        function focusSearch() {
+                            contentY = 0
+                            animateSearchField.forceActiveFocus()
+                            animateSearchField.selectAll()
+                            return true
+                        }
+
+                        Shortcut {
+                            sequences: [StandardKey.Find]
+                            enabled: root.findShortcutEnabled && root.visible && !root.collapsed && root.activeTab === "animate"
+                            onActivated: root.focusSearch()
+                        }
+
+                        ColumnLayout {
+                            id: animateInspectorContent
+                            x: theme.panelPaddingCompact
+                            y: theme.panelPaddingCompact
+                            width: parent.width - theme.panelPaddingCompact * 2
+                            height: Math.max(implicitHeight,
+                                             parent.height - theme.panelPaddingCompact * 2)
+                            spacing: theme.gapDense
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space4
+
+                                ToneTextField {
+                                    id: animateSearchField
+                                    objectName: "timelineAnimateSearchField"
+                                    Layout.fillWidth: true
+                                    placeholderText: qsTr("Search %1 channels").arg(root.animateChannelCount)
+                                    accessibleLabel: qsTr("Search animation channels")
+                                    Accessible.description: qsTr("%1 animated of %2 properties; %3 match the current filters.")
+                                                               .arg(root.animatedChannelCount)
+                                                               .arg(root.animateChannelCount)
+                                                               .arg(root.filteredAnimateChannels.length)
+                                    text: root.animateSearchText
+                                    onTextEdited: root.animateSearchText = text
+                                    Keys.onDownPressed: function(event) {
+                                        if (animateChannelList.count > 0) {
+                                            animateChannelList.currentIndex = 0
+                                            animateChannelList.currentItem.forceActiveFocus()
+                                            event.accepted = true
+                                        }
+                                    }
+                                }
+
+                                MenuButton {
+                                    objectName: "timelineAnimateFilterMenu"
+                                    text: qsTr("Filter")
+                                    iconName: "filter"
+                                    compact: true
+                                    primaryOpensMenu: true
+                                    showMenuIndicator: false
+                                    accessibleName: qsTr("Animation filters")
+                                    active: root.animateAnimatedOnly || root.animateSelectedGroup !== "All"
+                                    menuWidth: theme.scaled(230)
+                                    menuItems: root.animateFilterMenuItems()
+                                    tooltipText: qsTr("%1 animated · %2 properties · %3 matching channels.")
+                                                  .arg(root.animatedChannelCount)
+                                                  .arg(root.animateChannelCount)
+                                                  .arg(root.filteredAnimateChannels.length)
+                                    onMenuItemTriggered: function(key) {
+                                        if (key === "animated-only")
+                                            root.animateAnimatedOnly = !root.animateAnimatedOnly
+                                        else if (String(key).indexOf("group:") === 0)
+                                            root.animateSelectedGroup = String(key).slice(6)
+                                    }
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: root.filteredAnimateChannels.length === 0
+                                         && (root.animateSearchText.trim().length > 0
+                                             || root.animateAnimatedOnly
+                                             || root.animateSelectedGroup !== "All")
+                                text: qsTr("No channels match this filter")
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                            }
+
+                            ListView {
+                                id: animateChannelList
+                                objectName: "timelineAnimateChannelList"
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.minimumHeight: animateInspectorFlick.compactScrollFallback
+                                                     ? theme.scaled(92) : 0
+                                Layout.preferredHeight: animateInspectorFlick.compactScrollFallback
+                                                        ? theme.scaled(92) : 0
+                                clip: true
+                                model: root.animateChannelRows
+                                keyNavigationEnabled: true
+                                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                                delegate: ItemDelegate {
+                                    id: animateChannelRow
+                                    required property int index
+                                    required property var modelData
+                                    readonly property var optionData: modelData || ({})
+                                    readonly property string channelGroup:
+                                        String(optionData.optionGroup
+                                               || root.keyframeParameterGroup(optionData.parameter))
+                                    readonly property bool groupHeadingVisible:
+                                        optionData.groupHeadingVisible === true
+                                    objectName: "timelineAnimateChannel-" + index
+                                    width: animateChannelList.width
+                                    height: theme.controlHeightDense + theme.space2
+                                            + (groupHeadingVisible ? theme.scaled(14) : 0)
+                                    highlighted: root.selectedKeyframeParameter === optionData.parameter
+                                    Accessible.name: channelGroup + ", "
+                                            + String(optionData.label || qsTr("Animation channel")) + ", "
+                                            + Number(optionData.keyframeCount || 0) + " keyframes"
+                                    contentItem: ColumnLayout {
+                                        spacing: 0
+                                        Label {
+                                            Layout.fillWidth: true
+                                            visible: animateChannelRow.groupHeadingVisible
+                                            text: animateChannelRow.channelGroup.toUpperCase()
+                                            color: theme.textFaint
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
+                                            font.pixelSize: theme.typeCaption
+                                            font.weight: Font.DemiBold
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: theme.space6
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(animateChannelRow.optionData.label
+                                                              || qsTr("Animation channel"))
+                                                elide: Text.ElideRight
+                                                color: theme.textMain
+                                                font.family: theme.fontUi
+                                                font.pixelSize: theme.typeControl
+                                            }
+                                            Label {
+                                                text: root.animationChannelText(String(animateChannelRow.optionData.parameter || ""))
+                                                Layout.preferredWidth: theme.scaled(62)
+                                                horizontalAlignment: Text.AlignRight
+                                                color: theme.textMuted
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
+                                                font.pixelSize: theme.typeCaption
+                                            }
+                                            ParameterKeyframeButton {
+                                                objectName: "timelineAnimateChannelKeyframe_" + animateChannelRow.index
+                                                parameterName: String(animateChannelRow.optionData.parameter || "")
+                                                tone: "quiet"
+                                            }
+                                            ActionButton {
+                                                objectName: "timelineAnimateChannelGraph_" + animateChannelRow.index
+                                                text: "Edit graph"
+                                                iconName: "curve"
+                                                showText: false
+                                                compact: true
+                                                tone: "quiet"
+                                                tooltipText: "Edit " + String(animateChannelRow.optionData.label || "property") + " keyframes"
+                                                onClicked: root.openAnimateChannel(String(animateChannelRow.optionData.parameter || ""))
+                                            }
+                                        }
+                                    }
+                                    background: Rectangle {
+                                        color: animateChannelRow.highlighted
+                                               ? theme.alpha(theme.accentWarm400, 0.12) : "transparent"
+                                    }
+                                    onClicked: root.openAnimateChannel(
+                                                   String(animateChannelRow.optionData.parameter || ""))
+                                }
+                            }
+
+                            RowLayout {
+                                objectName: "timelineAnimateSelectionBar"
+                                Layout.fillWidth: true
+                                spacing: theme.space6
+
+                                Label {
+                                    id: animateSelectionSummary
+                                    Layout.fillWidth: true
+                                    text: root.selectedAnimateChannelSummary()
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeCaption
+                                    elide: Text.ElideRight
+                                    Accessible.name: root.selectedAnimateChannelSummary()
+                                    Accessible.description: qsTr("Selected animation channel and keyframe count.")
+
+                                    HoverHandler { id: animateSelectionSummaryHover }
+                                    AppToolTip {
+                                        targetItem: animateSelectionSummary
+                                        visible: root.visible && animateSelectionSummaryHover.hovered
+                                        delay: 350
+                                        timeout: 3200
+                                        text: root.selectedAnimateChannelSummary()
+                                    }
+                                }
+
+                                RowLayout {
+                                    ParameterKeyframeButton {
+                                        objectName: "timelineAnimateKeyframeToggle"
+                                        parameterName: root.selectedKeyframeParameter
+                                    }
+
+                                    ActionButton {
+                                        objectName: "timelineAnimateOpenCurveButton"
+                                        text: qsTr("Open graph")
+                                        showText: false
+                                        iconName: "curve"
+                                        tone: "quiet"
+                                        compact: true
+                                        enabled: root.hasClip
+                                        tooltipText: qsTr("Open the selected channel in the docked curve editor.")
+                                        onClicked: root.openCurveEditorRequested(root.selectedKeyframeParameter)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Loader {
+                id: effectSearchLoader
                 objectName: "timelineEffectsInspectorLoader"
                 property bool keepActiveThroughIncubation: false
                 active: root.inspectorContentLoadReady
                         && (keepActiveThroughIncubation
-                            || (root.inspectorSelectionContextAvailable
+                            || ((root.surfaceMode === "library" || root.inspectorSelectionContextAvailable)
                                 && (root.activeTab === "effects" || root.effectsInspectorLoaded)))
-                visible: root.hasClip && root.activeTab === "effects"
+                visible: (root.hasClip || root.surfaceMode === "library") && root.activeTab === "effects"
                 Layout.fillWidth: true
                 Layout.fillHeight: visible
                 onStatusChanged: {
@@ -1188,16 +2693,22 @@ GlassSurface {
 
                         ScrollBar.vertical: ScrollBar { }
 
+                        function focusSearch() {
+                            if (!effectDiscoverySurfaceLoader.item)
+                                return false
+                            const field = effectDiscoverySurfaceLoader.item.searchField
+                            contentY = Math.max(0, Math.min(field.mapToItem(effectsInspectorContent, 0, 0).y,
+                                                           contentHeight - height))
+                            field.forceActiveFocus()
+                            field.selectAll()
+                            return true
+                        }
+
                         Shortcut {
                             sequences: [StandardKey.Find]
-                            enabled: root.visible && !root.collapsed && root.activeTab === "effects"
-                            onActivated: {
-                                effectsInspectorFlick.contentY = Math.max(0, Math.min(
-                                    effectSearchField.mapToItem(effectsInspectorContent, 0, 0).y,
-                                    effectsInspectorFlick.contentHeight - effectsInspectorFlick.height))
-                                effectSearchField.forceActiveFocus()
-                                effectSearchField.selectAll()
-                            }
+                            enabled: root.findShortcutEnabled && root.visible && !root.collapsed && root.activeTab === "effects"
+                            && root.surfaceMode !== "controls" && effectDiscoverySurfaceLoader.item !== null
+                            onActivated: root.focusSearch()
                         }
 
                         ColumnLayout {
@@ -1205,597 +2716,878 @@ GlassSurface {
                             x: theme.panelPaddingCompact
                             y: theme.panelPaddingCompact
                             width: parent.width - theme.panelPaddingCompact * 2
-                            height: Math.max(implicitHeight, parent.height - theme.panelPaddingCompact * 2)
+                            height: Math.max(implicitHeight,
+                                             root.surfaceMode === "library"
+                                             ? effectsInspectorFlick.height
+                                               - theme.panelPaddingCompact * 2
+                                             : implicitHeight)
                             spacing: theme.gapDense
 
-                            RowLayout {
+                            TimelinePhotoFilters {
+                                visible: root.hasEligibleColorSelection && !root.sharedPhotoToolsAvailable
                                 Layout.fillWidth: true
-                                spacing: theme.gapDense
-
-                                Label {
-                                    text: "APPLIED EFFECTS"
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: theme.typeLabel
-                                    font.weight: Font.DemiBold
-                                    Layout.minimumWidth: implicitWidth
-                                    Layout.preferredWidth: implicitWidth
-                                    Accessible.name: text
-                                }
-
-                                Label {
-                                    text: String(root.currentEffectStack().length)
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: theme.typeCaption
-                                    Accessible.name: text + " effects in the stack"
-                                }
-
-                                Item { Layout.fillWidth: true }
-
-                                ActionButton {
-                                    objectName: "timelineQuickEffectPickerButton"
-                                    text: qsTr("Add Effect")
-                                    showText: true
-                                    iconName: "plus"
-                                    compact: true
-                                    visible: root.effectLibraryItems.length > 0
-                                    enabled: root.effectLibraryItems.length > 0
-                                    Accessible.name: qsTr("Add effect")
-                                    tooltipText: "Search and add an effect without leaving the applied stack."
-                                    onClicked: quickEffectPicker.open()
-                                }
+                                Layout.fillHeight: false
+                                Layout.alignment: Qt.AlignTop
+                                theme: root.theme
+                                documentController: root.documentController
+                                currentClip: root.clipState
                             }
 
-                            RowLayout {
+                            ActionButton {
+                                objectName: "timelineSharedPhotoEffectsButton"
+                                visible: root.surfaceMode === "combined"
+                                         && root.hasEligibleColorSelection && root.sharedPhotoToolsAvailable
                                 Layout.fillWidth: true
-                                spacing: theme.gapDense
-
-                                Item { Layout.fillWidth: true }
-
-                                ActionButton {
-                                    objectName: "timelineEffectStackPresetsButton"
-                                    text: qsTr("Looks")
-                                    iconName: "layers"
-                                    showText: true
-                                    compact: true
-                                    enabled: root.isVideoClip
-                                    disabledReason: "Effect stack looks apply to video clips."
-                                    tooltipText: "Save, preview, version, or selectively apply an effect stack."
-                                    onClicked: root.openEffectPresetManager()
-                                }
-
-                                ConfirmActionButton {
-                                    visible: root.currentEffectStack().length > 0
-                                    iconName: "delete"
-                                    showText: false
-                                    compact: true
-                                    fillButtonWidth: false
-                                    text: "Clear Stack"
-                                    confirmText: "Clear all effects"
-                                    helperText: "Press again to remove every effect from this clip"
-                                    tooltipText: "Clear all effects from this clip."
-                                    onConfirmed: if (root.documentController)
-                                                     root.documentController.clearSelectedClipEffects()
-                                }
-
-                                ActionButton {
-                                    visible: root.currentEffectStack().length > 0
-                                    text: root.hasClip && clipState.effectsEnabled === false ? "Bypassed" : "Enabled"
-                                    compact: true
-                                    active: root.hasClip && clipState.effectsEnabled !== false
-                                    tooltipText: root.hasClip && clipState.effectsEnabled === false
-                                                 ? "Enable the complete effect stack."
-                                                 : "Temporarily bypass the complete effect stack."
-                                    onClicked: if (root.documentController)
-                                                   root.documentController.setSelectedClipEffectsEnabled(
-                                                       root.hasClip && clipState.effectsEnabled === false)
-                                }
+                                text: qsTr("Edit color and effects")
+                                iconName: "swatch"
+                                onClicked: root.editColorToolsRequested("filters")
                             }
 
-                            ColumnLayout {
-                                id: stackColumn
-                                objectName: "timelineAppliedEffectsStack"
+                            Loader {
+                                id: appliedEffectControlsLoader
                                 Layout.fillWidth: true
-                                spacing: theme.gapDense
-
-                                Repeater {
-                                    model: root.currentEffectStack()
-
-                                    delegate: Rectangle {
-                                        required property var modelData
-                                        readonly property string effectName: String(modelData.name || "")
-                                        readonly property bool effectEnabled: modelData.enabled !== false
-                                        readonly property bool expandedState: root.effectExpanded(effectName)
-                                        readonly property int stackIndex: root.effectStackIndex(effectName)
-                                        readonly property int effectKeyframeCount:
-                                            root.keyframesForParameter("effect:" + effectName).length
-                                        objectName: "timelineAppliedEffect-" + effectName
+                                Layout.alignment: Qt.AlignTop
+                                active: root.surfaceMode !== "library"
+                                visible: active
+                                sourceComponent: Component {
+                                    ColumnLayout {
                                         Layout.fillWidth: true
-                                        implicitHeight: effectControls.implicitHeight + theme.sectionPaddingCompact * 2
-                                        radius: 0
-                                        color: theme.alpha(theme.ink850, effectEnabled ? 0.28 : 0.14)
-                                        border.width: 0
+                                        spacing: theme.gapDense
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: theme.space4
+                                            Label {
+                                                objectName: "timelineAppliedEffectsHeading"
+                                                text: qsTr("EFFECTS")
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: theme.typeCaption
+                                                font.weight: Font.DemiBold
+                                            }
+                                            Label {
+                                                text: String(root.currentEffectStack().length + root.sharedAppliedEffectCount)
+                                                color: theme.textFaint
+                                                font.family: theme.fontNumeric
+                                                font.pixelSize: theme.typeCaption
+                                                Accessible.name: text + " effects in the stack"
+                                            }
+                                            Item { Layout.fillWidth: true }
+                                            ActionButton {
+                                                objectName: "timelineQuickEffectPickerButton"
+                                                text: qsTr("Add")
+                                                iconName: "plus"
+                                                showLeadingIcon: true
+                                                compact: true
+                                                enabled: root.hasSelection && root.effectLibraryItems.length > 0
+                                                Accessible.name: qsTr("Add effect")
+                                                tooltipText: qsTr("Browse effects for the selected clip.")
+                                                onClicked: {
+                                                    if (root.surfaceMode === "controls") root.effectLibraryRequested()
+                                                    else quickEffectPicker.open()
+                                                }
+                                            }
+                                            MenuButton {
+                                                objectName: "timelineEffectStackPresetsButton"
+                                                text: qsTr("Effect actions")
+                                                accessibleName: text
+                                                iconName: "menu"
+                                                showText: false
+                                                compact: true
+                                                primaryOpensMenu: true
+                                                menuItems: [
+                                                    {key: "looks", label: qsTr("Effect looks…"), icon: "layers",
+                                                     enabled: root.isVideoClip, disabledReason: qsTr("Select a video clip to use effect looks.")},
+                                                    {key: "bypass", label: root.clipState.effectsEnabled === false
+                                                        ? qsTr("Enable clip effects") : qsTr("Bypass clip effects"), icon: "effects",
+                                                     enabled: root.currentEffectStack().length > 0},
+                                                    {key: "clear", label: qsTr("Clear clip effect stack"), icon: "delete",
+                                                     enabled: root.currentEffectStack().length > 0,
+                                                     disabledReason: qsTr("Layer effects can be removed from their own action menus.")}
+                                                ]
+                                                onMenuItemTriggered: function(key) {
+                                                    if (key === "looks") root.openEffectPresetManager()
+                                                    else if (key === "bypass") root.documentController.setSelectedClipEffectsEnabled(
+                                                        root.clipState.effectsEnabled === false)
+                                                    else if (key === "clear") root.documentController.clearSelectedClipEffects()
+                                                }
+                                            }
+                                        }
 
                                         ColumnLayout {
-                                            id: effectControls
-                                            anchors.fill: parent
-                                            anchors.margins: theme.sectionPaddingCompact
+                                            id: stackColumn
+                                            objectName: "timelineAppliedEffectsStack"
+                                            Layout.fillWidth: true
                                             spacing: theme.gapDense
 
-                                            RowLayout {
-                                                Layout.fillWidth: true
-                                                spacing: theme.gapDense
+                                            Repeater {
+                                                model: root.currentEffectStack()
 
-                                                Label {
+                                                delegate: Rectangle {
+                                                    required property var modelData
+                                                    readonly property string effectName: String(modelData.name || "")
+                                                    readonly property bool effectEnabled: modelData.enabled !== false
+                                                    readonly property bool expandedState: root.effectExpanded(effectName)
+                                                    readonly property int stackIndex: root.effectStackIndex(effectName)
+                                                    readonly property int effectKeyframeCount:
+                                                        root.keyframesForParameter("effect:" + effectName).length
+                                                    objectName: "timelineAppliedEffect-" + effectName
                                                     Layout.fillWidth: true
-                                                    text: effectName
-                                                    color: effectEnabled ? theme.textStrong : theme.textMuted
-                                                    font.family: theme.fontUi
-                                                    font.pixelSize: theme.typeBody
-                                                    font.weight: Font.DemiBold
-                                                    elide: Text.ElideRight
-                                                }
+                                                    implicitHeight: effectControls.implicitHeight + theme.sectionPaddingCompact * 2
+                                                    radius: 0
+                                                    color: theme.alpha(theme.ink850, effectEnabled ? 0.28 : 0.14)
+                                                    border.width: 0
 
-                                                Label {
-                                                    visible: modelData.modified === true
-                                                    text: "Modified"
-                                                    color: theme.accentCool300
-                                                    font.family: theme.fontMono
-                                                    font.pixelSize: theme.typeCaption
-                                                }
+                                                    ColumnLayout {
+                                                        id: effectControls
+                                                        anchors.fill: parent
+                                                        anchors.margins: theme.sectionPaddingCompact
+                                                        spacing: theme.gapDense
 
-                                                Label {
-                                                    objectName: "timelineEffectAmountSummary-" + effectName
-                                                    visible: !expandedState
-                                                    text: root.effectAmountAtPlayheadText(modelData)
-                                                    color: theme.textMain
-                                                    font.family: theme.fontMono
-                                                    font.pixelSize: theme.typeCaption
-                                                    Accessible.name: effectName + " amount at playhead " + text
-                                                }
+                                                        RowLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: theme.gapDense
 
-                                                ActionButton {
-                                                    objectName: "timelineEffectCurveButton-" + effectName
-                                                    visible: effectKeyframeCount > 0
-                                                    text: String(effectKeyframeCount)
-                                                    iconName: "curve"
-                                                    compact: true
-                                                    enabled: effectEnabled && root.hasSelection
-                                                    disabledReason: "Enable this effect to edit its animation curve."
-                                                    Accessible.name: qsTr("Edit %1 amount curve, %2 keyframes")
-                                                                       .arg(effectName).arg(effectKeyframeCount)
-                                                    tooltipText: qsTr("Open the %1 amount curve with %2 keyframes.")
-                                                                  .arg(effectName).arg(effectKeyframeCount)
-                                                    onClicked: root.openCurveEditorRequested("effect:" + effectName)
-                                                }
+                                                            Label {
+                                                                objectName: "timelineEffectTitle-" + effectName
+                                                                Layout.fillWidth: true
+                                                                Layout.minimumWidth: Math.min(theme.scaled(120), implicitWidth)
+                                                                text: effectName
+                                                                color: effectEnabled ? theme.textStrong : theme.textMuted
+                                                                font.family: theme.fontUi
+                                                                font.pixelSize: theme.typeBody
+                                                                font.weight: Font.DemiBold
+                                                                elide: Text.ElideNone
+                                                            }
 
-                                                ActionButton {
-                                                    objectName: "timelineEffectBypass-" + effectName
-                                                    text: effectEnabled ? "On" : "Off"
-                                                    compact: true
-                                                    active: effectEnabled
-                                                    tooltipText: effectEnabled ? "Bypass this effect." : "Enable this effect."
-                                                    onClicked: if (root.documentController)
-                                                                   root.documentController.setSelectedClipEffectEnabled(
-                                                                       effectName, !effectEnabled)
-                                                }
+                                                            Label {
+                                                                visible: modelData.modified === true
+                                                                text: "Modified"
+                                                                color: theme.accentCool300
+                                                                font.family: theme.fontNumeric
+                                                                font.features: theme.numericFontFeatures
+                                                                font.pixelSize: theme.typeCaption
+                                                            }
 
-                                                ActionButton {
-                                                    objectName: "timelineEffectDisclosure-" + effectName
-                                                    showText: false
-                                                    iconName: expandedState ? "chevron-up" : "chevron-down"
-                                                    compact: true
-                                                    tooltipText: expandedState ? "Collapse effect controls"
-                                                                               : "Expand effect controls"
-                                                    onClicked: root.effectDisclosureChangeRequested(
-                                                                   effectName, !expandedState)
+                                                            ActionButton {
+                                                                objectName: "timelineEffectDisclosure-" + effectName
+                                                                showText: false
+                                                                iconName: expandedState ? "chevron-up" : "chevron-down"
+                                                                compact: true
+                                                                tooltipText: expandedState ? "Collapse effect controls"
+                                                                                           : "Expand effect controls"
+                                                                onClicked: root.effectDisclosureChangeRequested(
+                                                                               effectName, !expandedState)
+                                                            }
+                                                        }
+
+                                                        RowLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: theme.gapDense
+
+                                                            Label {
+                                                                objectName: "timelineEffectAmountSummary-" + effectName
+                                                                visible: !expandedState
+                                                                text: root.effectAmountAtPlayheadText(modelData)
+                                                                color: theme.textMain
+                                                                font.family: theme.fontNumeric
+                                                                font.features: theme.numericFontFeatures
+                                                                font.pixelSize: theme.typeCaption
+                                                                Accessible.name: effectName + " amount at playhead " + text
+                                                            }
+
+                                                            Item { Layout.fillWidth: true }
+
+                                                            ActionButton {
+                                                                objectName: "timelineEffectCurveButton-" + effectName
+                                                                text: String(effectKeyframeCount)
+                                                                iconName: "curve"
+                                                                compact: true
+                                                                enabled: root.hasSelection
+                                                                Accessible.name: qsTr("Edit %1 amount curve, %2 keyframes")
+                                                                                   .arg(effectName).arg(effectKeyframeCount)
+                                                                tooltipText: qsTr("Open the %1 amount curve with %2 keyframes.")
+                                                                              .arg(effectName).arg(effectKeyframeCount)
+                                                                onClicked: root.openCurveEditorRequested("effect:" + effectName)
+                                                            }
+
+                                                            ParameterKeyframeButton {
+                                                                objectName: "timelineEffectKeyframe-" + effectName
+                                                                parameterName: "effect:" + effectName
+                                                            }
+
+                                                            ActionButton {
+                                                                objectName: "timelineEffectBypass-" + effectName
+                                                                text: effectEnabled ? "On" : "Off"
+                                                                compact: true
+                                                                active: effectEnabled
+                                                                tooltipText: effectEnabled ? "Bypass this effect." : "Enable this effect."
+                                                                onClicked: if (root.documentController)
+                                                                               root.documentController.setSelectedClipEffectEnabled(
+                                                                                   effectName, !effectEnabled)
+                                                            }
+
+                                                            ActionButton {
+                                                                objectName: "timelineEffectReset-" + effectName
+                                                                showText: false
+                                                                iconName: "reset"
+                                                                compact: true
+                                                                enabled: root.hasSelection
+                                                                tooltipText: "Reset " + effectName + " to its default amount."
+                                                                onClicked: if (root.documentController)
+                                                                               root.documentController.resetSelectedClipEffect(effectName)
+                                                            }
+
+                                                            ConfirmActionButton {
+                                                                objectName: "timelineEffectRemove-" + effectName
+                                                                text: "Remove"
+                                                                confirmText: "Remove?"
+                                                                helperText: "Remove this effect from the selected clip"
+                                                                iconName: "delete"
+                                                                showText: false
+                                                                compact: true
+                                                                fillButtonWidth: false
+                                                                enabled: root.hasSelection
+                                                                tooltipText: "Remove " + effectName + " from this clip."
+                                                                onConfirmed: if (root.documentController)
+                                                                                 root.documentController.removeSelectedClipEffect(effectName)
+                                                            }
+                                                        }
+
+                                                        RowLayout {
+                                                            visible: expandedState
+                                                            Layout.fillWidth: true
+                                                            spacing: theme.space4
+
+                                                            InspectorSlider {
+                                                                Layout.fillWidth: true
+                                                                label: "Amount"
+                                                                valueText: root.effectAmountText(modelData)
+                                                                from: modelData.signedAmount === true ? -1 : 0
+                                                                to: 1
+                                                                value: Number(modelData.amount || 0)
+                                                                defaultValue: effectName === "Exposure"
+                                                                              || effectName === "Contrast"
+                                                                              || effectName === "Saturation" ? 0.25
+                                                                              : effectName === "Blur" ? 0.30
+                                                                              : effectName === "Fade" || effectName === "Punch" ? 0.50 : 1
+                                                                valueInputMode: "percentNormalized"
+                                                                enabled: root.hasSelection
+                                                                onInteractionStarted: root.beginInspectorEdit()
+                                                                onInteractionFinished: root.endInspectorEdit()
+                                                                onValueDragged: function(value) {
+                                                                    if (root.documentController)
+                                                                        root.documentController.setSelectedClipEffectAmount(effectName, value)
+                                                                }
+                                                                onResetRequested: if (root.documentController)
+                                                                                      root.documentController.resetSelectedClipEffect(effectName)
+                                                            }
+
+                                                        }
+
+                                                        ColumnLayout {
+                                                            visible: expandedState
+                                                                     && (String(root.clipState.mediaType || "") === "video"
+                                                                         || String(root.clipState.mediaType || "") === "photo")
+                                                            Layout.fillWidth: true
+                                                            spacing: theme.space4
+                                                            readonly property var maskState: modelData.mask || ({})
+                                                            readonly property bool maskEnabled: maskState.enabled === true
+
+                                                            RowLayout {
+                                                                Layout.fillWidth: true
+                                                                spacing: theme.gapDense
+
+                                                                ActionButton {
+                                                                    objectName: effectName === "Blur"
+                                                                                ? "timelineBlurMaskToggle"
+                                                                                : "timelineEffectMaskToggle-" + effectName
+                                                                    text: parent.parent.maskEnabled ? "Clear Mask" : "Add Mask"
+                                                                    compact: true
+                                                                    active: parent.parent.maskEnabled
+                                                                    tooltipText: parent.parent.maskEnabled
+                                                                                 ? "Remove this effect's spatial mask."
+                                                                                 : "Limit " + effectName + " to a movable shape mask."
+                                                                    onClicked: {
+                                                                        if (!root.documentController)
+                                                                            return
+                                                                        if (parent.parent.maskEnabled)
+                                                                            root.documentController.clearSelectedClipEffectMask(effectName)
+                                                                        else
+                                                                            root.updateEffectMask(effectName, parent.parent.maskState, ({}))
+                                                                        root.effectMaskEditingRequested(effectName)
+                                                                    }
+                                                                }
+
+                                                                ActionButton {
+                                                                    objectName: effectName === "Blur"
+                                                                                ? "timelineBlurMaskShape"
+                                                                                : "timelineEffectMaskShape-" + effectName
+                                                                    text: String(parent.parent.maskState.shape || "ellipse") === "rectangle"
+                                                                          ? "Rectangle" : "Ellipse"
+                                                                    compact: true
+                                                                    enabled: parent.parent.maskEnabled && root.hasSelection
+                                                                    tooltipText: "Switch the " + effectName + " mask between ellipse and rectangle."
+                                                                    onClicked: root.updateEffectMask(effectName, parent.parent.maskState,
+                                                                        {"shape": String(parent.parent.maskState.shape || "ellipse") === "rectangle"
+                                                                            ? "ellipse" : "rectangle"})
+                                                                }
+
+                                                                ActionButton {
+                                                                    objectName: effectName === "Blur"
+                                                                                ? "timelineBlurMaskInvert"
+                                                                                : "timelineEffectMaskInvert-" + effectName
+                                                                    text: parent.parent.maskState.inverted === true ? "Inverted" : "Invert"
+                                                                    compact: true
+                                                                    active: parent.parent.maskState.inverted === true
+                                                                    enabled: parent.parent.maskEnabled && root.hasSelection
+                                                                    tooltipText: "Apply " + effectName + " outside the shape."
+                                                                    onClicked: root.updateEffectMask(effectName, parent.parent.maskState,
+                                                                        {"inverted": parent.parent.maskState.inverted !== true})
+                                                                }
+                                                            }
+
+                                                            RowLayout {
+                                                                visible: parent.maskEnabled
+                                                                Layout.fillWidth: true
+                                                                spacing: theme.gapDense
+
+                                                                InspectorSlider {
+                                                                    Layout.fillWidth: true
+                                                                    label: "Center X"
+                                                                    valueText: Math.round(Number(parent.parent.maskState.centerX || 0) * 100) + "%"
+                                                                    from: 0
+                                                                    to: 1
+                                                                    value: Number(parent.parent.maskState.centerX !== undefined
+                                                                                  ? parent.parent.maskState.centerX : 0.5)
+                                                                    valueInputMode: "percentNormalized"
+                                                                    enabled: root.hasSelection
+                                                                    onInteractionStarted: root.beginInspectorEdit()
+                                                                    onInteractionFinished: root.endInspectorEdit()
+                                                                    onValueDragged: function(value) {
+                                                                        root.updateEffectMask(effectName, parent.parent.maskState, {"centerX": value})
+                                                                    }
+                                                                }
+
+                                                                InspectorSlider {
+                                                                    Layout.fillWidth: true
+                                                                    label: "Center Y"
+                                                                    valueText: Math.round(Number(parent.parent.maskState.centerY || 0) * 100) + "%"
+                                                                    from: 0
+                                                                    to: 1
+                                                                    value: Number(parent.parent.maskState.centerY !== undefined
+                                                                                  ? parent.parent.maskState.centerY : 0.5)
+                                                                    valueInputMode: "percentNormalized"
+                                                                    enabled: root.hasSelection
+                                                                    onInteractionStarted: root.beginInspectorEdit()
+                                                                    onInteractionFinished: root.endInspectorEdit()
+                                                                    onValueDragged: function(value) {
+                                                                        root.updateEffectMask(effectName, parent.parent.maskState, {"centerY": value})
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            RowLayout {
+                                                                visible: parent.maskEnabled
+                                                                Layout.fillWidth: true
+                                                                spacing: theme.gapDense
+
+                                                                InspectorSlider {
+                                                                    Layout.fillWidth: true
+                                                                    label: "Width"
+                                                                    valueText: Math.round(Number(parent.parent.maskState.width || 0.65) * 100) + "%"
+                                                                    from: 0.05
+                                                                    to: 1
+                                                                    value: Number(parent.parent.maskState.width || 0.65)
+                                                                    valueInputMode: "percentNormalized"
+                                                                    enabled: root.hasSelection
+                                                                    onInteractionStarted: root.beginInspectorEdit()
+                                                                    onInteractionFinished: root.endInspectorEdit()
+                                                                    onValueDragged: function(value) {
+                                                                        root.updateEffectMask(effectName, parent.parent.maskState, {"width": value})
+                                                                    }
+                                                                }
+
+                                                                InspectorSlider {
+                                                                    Layout.fillWidth: true
+                                                                    label: "Height"
+                                                                    valueText: Math.round(Number(parent.parent.maskState.height || 0.65) * 100) + "%"
+                                                                    from: 0.05
+                                                                    to: 1
+                                                                    value: Number(parent.parent.maskState.height || 0.65)
+                                                                    valueInputMode: "percentNormalized"
+                                                                    enabled: root.hasSelection
+                                                                    onInteractionStarted: root.beginInspectorEdit()
+                                                                    onInteractionFinished: root.endInspectorEdit()
+                                                                    onValueDragged: function(value) {
+                                                                        root.updateEffectMask(effectName, parent.parent.maskState, {"height": value})
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            RowLayout {
+                                                                visible: parent.maskEnabled
+                                                                Layout.fillWidth: true
+
+                                                                InspectorSlider {
+                                                                    Layout.fillWidth: true
+                                                                    label: "Feather"
+                                                                    valueText: Math.round(Number(parent.parent.maskState.feather || 0) * 100) + "%"
+                                                                    from: 0
+                                                                    to: 0.5
+                                                                    value: Number(parent.parent.maskState.feather || 0)
+                                                                    valueInputMode: "percentNormalized"
+                                                                    enabled: root.hasSelection
+                                                                    onInteractionStarted: root.beginInspectorEdit()
+                                                                    onInteractionFinished: root.endInspectorEdit()
+                                                                    onValueDragged: function(value) {
+                                                                        root.updateEffectMask(effectName, parent.parent.maskState, {"feather": value})
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        RowLayout {
+                                                            visible: expandedState
+                                                            Layout.fillWidth: true
+                                                            spacing: theme.gapDense
+
+                                                            ActionButton {
+                                                                objectName: "timelineEffectMoveUp-" + effectName
+                                                                showText: false
+                                                                iconName: "chevron-up"
+                                                                compact: true
+                                                                enabled: stackIndex > 0
+                                                                disabledReason: "This effect is already first."
+                                                                tooltipText: "Move effect earlier"
+                                                                onClicked: if (root.documentController)
+                                                                               root.documentController.moveSelectedClipEffect(
+                                                                                   effectName, -1)
+                                                            }
+
+                                                            ActionButton {
+                                                                objectName: "timelineEffectMoveDown-" + effectName
+                                                                showText: false
+                                                                iconName: "chevron-down"
+                                                                compact: true
+                                                                enabled: stackIndex >= 0
+                                                                         && stackIndex < root.currentEffectStack().length - 1
+                                                                disabledReason: "This effect is already last."
+                                                                tooltipText: "Move effect later"
+                                                                onClicked: if (root.documentController)
+                                                                               root.documentController.moveSelectedClipEffect(
+                                                                                   effectName, 1)
+                                                            }
+
+                                                            Item { Layout.fillWidth: true }
+
+                                                        }
+                                                    }
                                                 }
                                             }
 
-                                            RowLayout {
-                                                visible: expandedState
-                                                Layout.fillWidth: true
-                                                spacing: theme.space4
-
-                                                InspectorSlider {
-                                                    Layout.fillWidth: true
-                                                    label: "Amount"
-                                                    valueText: root.effectAmountText(modelData)
-                                                    from: modelData.signedAmount === true ? -1 : 0
-                                                    to: 1
-                                                    value: Number(modelData.amount || 0)
-                                                    defaultValue: effectName === "Exposure"
-                                                                  || effectName === "Contrast"
-                                                                  || effectName === "Saturation" ? 0.25
-                                                                  : effectName === "Blur" ? 0.30
-                                                                  : effectName === "Fade" || effectName === "Punch" ? 0.50 : 1
-                                                    valueInputMode: "percentNormalized"
-                                                    enabled: effectEnabled && root.hasSelection
-                                                    onInteractionStarted: root.beginInspectorEdit()
-                                                    onInteractionFinished: root.endInspectorEdit()
-                                                    onValueDragged: function(value) {
-                                                        if (root.documentController)
-                                                            root.documentController.setSelectedClipEffectAmount(effectName, value)
-                                                    }
-                                                    onResetRequested: if (root.documentController)
-                                                                          root.documentController.resetSelectedClipEffect(effectName)
-                                                }
-
-                                                ParameterKeyframeButton {
-                                                    parameterName: "effect:" + effectName
-                                                    enabled: effectEnabled && root.hasSelection
-                                                }
-                                            }
-
-                                            ColumnLayout {
-                                                visible: expandedState
-                                                         && (String(root.clipState.mediaType || "") === "video"
-                                                             || String(root.clipState.mediaType || "") === "photo")
-                                                Layout.fillWidth: true
-                                                spacing: theme.space4
-                                                readonly property var maskState: modelData.mask || ({})
-                                                readonly property bool maskEnabled: maskState.enabled === true
-
-                                                RowLayout {
-                                                    Layout.fillWidth: true
-                                                    spacing: theme.gapDense
-
-                                                    ActionButton {
-                                                        objectName: effectName === "Blur"
-                                                                    ? "timelineBlurMaskToggle"
-                                                                    : "timelineEffectMaskToggle-" + effectName
-                                                        text: parent.parent.maskEnabled ? "Clear Mask" : "Add Mask"
-                                                        compact: true
-                                                        active: parent.parent.maskEnabled
-                                                        tooltipText: parent.parent.maskEnabled
-                                                                     ? "Remove this effect's spatial mask."
-                                                                     : "Limit " + effectName + " to a movable shape mask."
-                                                        onClicked: {
-                                                            if (!root.documentController)
-                                                                return
-                                                            if (parent.parent.maskEnabled)
-                                                                root.documentController.clearSelectedClipEffectMask(effectName)
-                                                            else
-                                                                root.updateEffectMask(effectName, parent.parent.maskState, ({}))
-                                                            root.effectMaskEditingRequested(effectName)
-                                                        }
-                                                    }
-
-                                                    ActionButton {
-                                                        objectName: effectName === "Blur"
-                                                                    ? "timelineBlurMaskShape"
-                                                                    : "timelineEffectMaskShape-" + effectName
-                                                        text: String(parent.parent.maskState.shape || "ellipse") === "rectangle"
-                                                              ? "Rectangle" : "Ellipse"
-                                                        compact: true
-                                                        enabled: parent.parent.maskEnabled && root.hasSelection
-                                                        tooltipText: "Switch the " + effectName + " mask between ellipse and rectangle."
-                                                        onClicked: root.updateEffectMask(effectName, parent.parent.maskState,
-                                                            {"shape": String(parent.parent.maskState.shape || "ellipse") === "rectangle"
-                                                                ? "ellipse" : "rectangle"})
-                                                    }
-
-                                                    ActionButton {
-                                                        objectName: effectName === "Blur"
-                                                                    ? "timelineBlurMaskInvert"
-                                                                    : "timelineEffectMaskInvert-" + effectName
-                                                        text: parent.parent.maskState.inverted === true ? "Inverted" : "Invert"
-                                                        compact: true
-                                                        active: parent.parent.maskState.inverted === true
-                                                        enabled: parent.parent.maskEnabled && root.hasSelection
-                                                        tooltipText: "Apply " + effectName + " outside the shape."
-                                                        onClicked: root.updateEffectMask(effectName, parent.parent.maskState,
-                                                            {"inverted": parent.parent.maskState.inverted !== true})
-                                                    }
-                                                }
-
-                                                RowLayout {
-                                                    visible: parent.maskEnabled
-                                                    Layout.fillWidth: true
-                                                    spacing: theme.gapDense
-
-                                                    InspectorSlider {
-                                                        Layout.fillWidth: true
-                                                        label: "Center X"
-                                                        valueText: Math.round(Number(parent.parent.maskState.centerX || 0) * 100) + "%"
-                                                        from: 0
-                                                        to: 1
-                                                        value: Number(parent.parent.maskState.centerX !== undefined
-                                                                      ? parent.parent.maskState.centerX : 0.5)
-                                                        valueInputMode: "percentNormalized"
-                                                        enabled: root.hasSelection
-                                                        onInteractionStarted: root.beginInspectorEdit()
-                                                        onInteractionFinished: root.endInspectorEdit()
-                                                        onValueDragged: function(value) {
-                                                            root.updateEffectMask(effectName, parent.parent.maskState, {"centerX": value})
-                                                        }
-                                                    }
-
-                                                    InspectorSlider {
-                                                        Layout.fillWidth: true
-                                                        label: "Center Y"
-                                                        valueText: Math.round(Number(parent.parent.maskState.centerY || 0) * 100) + "%"
-                                                        from: 0
-                                                        to: 1
-                                                        value: Number(parent.parent.maskState.centerY !== undefined
-                                                                      ? parent.parent.maskState.centerY : 0.5)
-                                                        valueInputMode: "percentNormalized"
-                                                        enabled: root.hasSelection
-                                                        onInteractionStarted: root.beginInspectorEdit()
-                                                        onInteractionFinished: root.endInspectorEdit()
-                                                        onValueDragged: function(value) {
-                                                            root.updateEffectMask(effectName, parent.parent.maskState, {"centerY": value})
-                                                        }
-                                                    }
-                                                }
-
-                                                RowLayout {
-                                                    visible: parent.maskEnabled
-                                                    Layout.fillWidth: true
-                                                    spacing: theme.gapDense
-
-                                                    InspectorSlider {
-                                                        Layout.fillWidth: true
-                                                        label: "Width"
-                                                        valueText: Math.round(Number(parent.parent.maskState.width || 0.65) * 100) + "%"
-                                                        from: 0.05
-                                                        to: 1
-                                                        value: Number(parent.parent.maskState.width || 0.65)
-                                                        valueInputMode: "percentNormalized"
-                                                        enabled: root.hasSelection
-                                                        onInteractionStarted: root.beginInspectorEdit()
-                                                        onInteractionFinished: root.endInspectorEdit()
-                                                        onValueDragged: function(value) {
-                                                            root.updateEffectMask(effectName, parent.parent.maskState, {"width": value})
-                                                        }
-                                                    }
-
-                                                    InspectorSlider {
-                                                        Layout.fillWidth: true
-                                                        label: "Height"
-                                                        valueText: Math.round(Number(parent.parent.maskState.height || 0.65) * 100) + "%"
-                                                        from: 0.05
-                                                        to: 1
-                                                        value: Number(parent.parent.maskState.height || 0.65)
-                                                        valueInputMode: "percentNormalized"
-                                                        enabled: root.hasSelection
-                                                        onInteractionStarted: root.beginInspectorEdit()
-                                                        onInteractionFinished: root.endInspectorEdit()
-                                                        onValueDragged: function(value) {
-                                                            root.updateEffectMask(effectName, parent.parent.maskState, {"height": value})
-                                                        }
-                                                    }
-                                                }
-
-                                                RowLayout {
-                                                    visible: parent.maskEnabled
-                                                    Layout.fillWidth: true
-
-                                                    InspectorSlider {
-                                                        Layout.fillWidth: true
-                                                        label: "Feather"
-                                                        valueText: Math.round(Number(parent.parent.maskState.feather || 0) * 100) + "%"
-                                                        from: 0
-                                                        to: 0.5
-                                                        value: Number(parent.parent.maskState.feather || 0)
-                                                        valueInputMode: "percentNormalized"
-                                                        enabled: root.hasSelection
-                                                        onInteractionStarted: root.beginInspectorEdit()
-                                                        onInteractionFinished: root.endInspectorEdit()
-                                                        onValueDragged: function(value) {
-                                                            root.updateEffectMask(effectName, parent.parent.maskState, {"feather": value})
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            RowLayout {
-                                                visible: expandedState
-                                                Layout.fillWidth: true
-                                                spacing: theme.gapDense
-
-                                                ActionButton {
-                                                    objectName: "timelineEffectMoveUp-" + effectName
-                                                    showText: false
-                                                    iconName: "chevron-up"
-                                                    compact: true
-                                                    enabled: stackIndex > 0
-                                                    disabledReason: "This effect is already first."
-                                                    tooltipText: "Move effect earlier"
-                                                    onClicked: if (root.documentController)
-                                                                   root.documentController.moveSelectedClipEffect(
-                                                                       effectName, -1)
-                                                }
-
-                                                ActionButton {
-                                                    objectName: "timelineEffectMoveDown-" + effectName
-                                                    showText: false
-                                                    iconName: "chevron-down"
-                                                    compact: true
-                                                    enabled: stackIndex >= 0
-                                                             && stackIndex < root.currentEffectStack().length - 1
-                                                    disabledReason: "This effect is already last."
-                                                    tooltipText: "Move effect later"
-                                                    onClicked: if (root.documentController)
-                                                                   root.documentController.moveSelectedClipEffect(
-                                                                       effectName, 1)
-                                                }
-
-                                                Item { Layout.fillWidth: true }
-
-                                                ActionButton {
-                                                    text: "Reset"
-                                                    iconName: "reset"
-                                                    compact: true
-                                                    tooltipText: "Restore this effect's default amount."
-                                                    onClicked: if (root.documentController)
-                                                                   root.documentController.resetSelectedClipEffect(effectName)
-                                                }
-
-                                                ConfirmActionButton {
-                                                    text: "Remove"
-                                                    compact: true
-                                                    fillButtonWidth: false
-                                                    enabled: root.hasSelection
-                                                    helperText: "Remove this effect from the selected clip"
-                                                    onConfirmed: if (root.documentController)
-                                                                     root.documentController.removeSelectedClipEffect(effectName)
-                                                }
+                                            Label {
+                                                visible: root.currentEffectStack().length === 0
+                                                         && root.sharedAppliedEffectCount === 0
+                                                         && root.clipState.colorGradeRecipeEnabled !== true
+                                                text: qsTr("No effects applied")
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: theme.typeBody
+                                                font.weight: Font.Medium
                                             }
                                         }
                                     }
                                 }
+                            }
 
+                            RowLayout {
+                                visible: root.surfaceMode === "controls" && root.hasClip
+                                         && root.currentKeyframeLocalSeconds() < 0
+                                Layout.fillWidth: true
+                                spacing: theme.space4
                                 Label {
-                                    visible: root.currentEffectStack().length === 0
-                                    text: "No effects applied"
+                                    Layout.fillWidth: true
+                                    text: qsTr("This clip is outside the current frame.")
+                                    wrapMode: Text.Wrap
                                     color: theme.textMuted
                                     font.family: theme.fontUi
-                                    font.pixelSize: theme.typeBody
-                                    font.weight: Font.Medium
+                                    font.pixelSize: theme.typeCaption
+                                }
+                                ActionButton {
+                                    objectName: "timelineEffectPreviewSelectedClip"
+                                    text: qsTr("Show clip")
+                                    compact: true
+                                    onClicked: root.inspectorSeekRequested(
+                                        Number(root.clipState.startSeconds || 0)
+                                        + Math.max(0, Number(root.clipState.trimmedDurationSeconds || 0)) / 2)
                                 }
                             }
 
-                            RowLayout {
-                                visible: root.effectLibraryItems.length > 0
+                            Loader {
+                                objectName: "timelineAppliedSharedEffectsLoader"
                                 Layout.fillWidth: true
-                                spacing: theme.gapDense
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "AVAILABLE EFFECTS"
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: theme.typeLabel
-                                    font.weight: Font.DemiBold
-                                }
-
-                                Label {
-                                    text: String(root.filteredEffectLibraryItems.length)
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: theme.typeCaption
-                                    Accessible.name: text + " matching effects"
-                                }
-
-                                MenuButton {
-                                    objectName: "timelineEffectCategoryMenu"
-                                    text: root.discoveryCategory
-                                    iconName: root.discoveryCategory === "Favorites" ? "star"
-                                              : root.discoveryCategory === "Recent" ? "clock" : "filter"
-                                    compact: true
-                                    primaryOpensMenu: true
-                                    menuItems: root.effectCategoryMenuItems()
-                                    tooltipText: "Browse effects by category, favorites, or recent use."
-                                    onMenuItemTriggered: function(key) {
-                                        root.discoveryCategoryChangeRequested(key)
+                                Layout.preferredHeight: item ? item.implicitHeight : theme.controlHeightDense
+                                asynchronous: true
+                                active: root.surfaceMode === "controls" && root.activeTab === "effects"
+                                        && root.sharedEditController !== null && root.hasEligibleColorSelection
+                                        && (root.clipState.colorGradeRecipeEnabled === true
+                                            || root.sharedEditController.active)
+                                visible: active
+                                sourceComponent: Component {
+                                    TimelineSharedEffectControls {
+                                        objectName: "timelineAppliedSharedEffectsControls"
+                                        bridge: root.sharedEditController
+                                        onLayerToolsRequested: root.editColorToolsRequested("layers")
                                     }
                                 }
                             }
 
-                            RowLayout {
-                                visible: root.effectLibraryItems.length > 0
+                            Loader {
+                                id: effectDiscoverySurfaceLoader
                                 Layout.fillWidth: true
-                                spacing: theme.gapDense
+                                Layout.fillHeight: true
+                                active: root.surfaceMode !== "controls"
+                                visible: active
+                                sourceComponent: Component {
+                                    ColumnLayout {
+                                        property alias searchField: effectSearchField
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        spacing: theme.gapDense
 
-                                ToneTextField {
-                                    id: effectSearchField
-                                    objectName: "timelineEffectKeyboardSearch"
-                                    Layout.fillWidth: true
-                                    text: root.effectSearchText
-                                    placeholderText: "Search effects"
-                                    selectByMouse: true
-                                    Accessible.description: "Search effect names, categories, descriptions, and keywords."
-                                    onTextChanged: root.effectSearchText = text
-                                    Keys.onDownPressed: function(event) {
-                                        if (effectLibraryList.count > 0) {
-                                            effectLibraryList.currentIndex = 0
-                                            effectLibraryList.currentItem.forceActiveFocus()
-                                            event.accepted = true
+                                        function focusFirstEffectRow() {
+                                            let firstEffectIndex = -1
+                                            for (let index = 0; index < root.effectDiscoveryRows.length; ++index) {
+                                                if (root.effectDiscoveryRows[index].rowType === "effect") {
+                                                    firstEffectIndex = index
+                                                    break
+                                                }
+                                            }
+                                            if (firstEffectIndex < 0)
+                                                return false
+                                            effectLibraryList.currentIndex = firstEffectIndex
+                                            effectLibraryList.positionViewAtIndex(firstEffectIndex, ListView.Contain)
+                                            Qt.callLater(function() {
+                                                const row = effectLibraryList.currentItem
+                                                if (row && row.effectRowItem)
+                                                    row.effectRowItem.forceActiveFocus()
+                                            })
+                                            return true
+                                        }
+
+                                        Rectangle {
+                                            objectName: "timelineEffectControlsDiscoveryDivider"
+                                            visible: root.surfaceMode === "combined" && root.effectLibraryItems.length > 0
+                                            Layout.fillWidth: true
+                                            Layout.topMargin: theme.space4
+                                            Layout.bottomMargin: theme.space4
+                                            implicitHeight: theme.hairlineWidth
+                                            color: theme.alpha(theme.lineSoft, 0.72)
+                                        }
+
+                                        RowLayout {
+                                            visible: root.effectLibraryItems.length > 0
+                                            Layout.fillWidth: true
+                                            spacing: theme.gapDense
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: root.surfaceMode === "library"
+                                                      ? qsTr("EFFECT LIBRARY") : qsTr("EFFECT DISCOVERY")
+                                                color: theme.textMuted
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
+                                                font.pixelSize: theme.typeLabel
+                                                font.weight: Font.DemiBold
+                                            }
+
+                                            Label {
+                                                text: root.filteredEffectLibraryItems.length + "/" + root.effectLibraryItems.length
+                                                color: theme.textFaint
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
+                                                font.pixelSize: theme.typeCaption
+                                                Accessible.name: qsTr("%1 of %2 effects").arg(root.filteredEffectLibraryItems.length).arg(root.effectLibraryItems.length)
+                                            }
+
+                                            MenuButton {
+                                                objectName: "timelineEffectCategoryMenu"
+                                                text: root.discoveryCategory
+                                                iconName: root.discoveryCategory === "Favorites" ? "star"
+                                                          : root.discoveryCategory === "Recent" ? "clock" : "filter"
+                                                compact: true
+                                                primaryOpensMenu: true
+                                                menuItems: root.effectCategoryMenuItems()
+                                                tooltipText: "Browse effects by category, favorites, or recent use."
+                                                onMenuItemTriggered: function(key) {
+                                                    root.discoveryCategoryChangeRequested(key)
+                                                }
+                                            }
+                                        }
+
+                                        RowLayout {
+                                            visible: root.effectLibraryItems.length > 0
+                                            Layout.fillWidth: true
+                                            spacing: theme.gapDense
+
+                                            ToneTextField {
+                                                id: effectSearchField
+                                                objectName: "timelineEffectKeyboardSearch"
+                                                Layout.fillWidth: true
+                                                text: root.effectSearchText
+                                                placeholderText: "Search effects"
+                                                selectByMouse: true
+                                                Accessible.description: "Search effect names, categories, descriptions, and keywords."
+                                                onTextChanged: root.effectSearchText = text
+                                                onAccepted: effectDiscoverySurfaceLoader.item
+                                                             ? effectDiscoverySurfaceLoader.item.focusFirstEffectRow() : false
+                                                Keys.onDownPressed: function(event) {
+                                                    const focused = effectDiscoverySurfaceLoader.item
+                                                            && effectDiscoverySurfaceLoader.item.focusFirstEffectRow()
+                                                    if (focused) event.accepted = true
+                                                }
+                                            }
+
+                                            FilterChip {
+                                                objectName: "timelineEffectCompatibilityFilter"
+                                                text: "Compatible"
+                                                active: root.compatibleOnly
+                                                Accessible.description: "Show only effects supported by the selected media type."
+                                                onClicked: root.compatibleOnlyChangeRequested(!root.compatibleOnly)
+                                            }
+                                        }
+
+                                        Label {
+                                            visible: root.effectLibraryItems.length > 0
+                                                     && root.filteredEffectLibraryItems.length === 0
+                                            Layout.fillWidth: true
+                                            text: root.discoveryCategory === "Favorites"
+                                                  ? "No favorite effects yet. Use the star on any effect to keep it here."
+                                                  : root.discoveryCategory === "Recent"
+                                                    ? "Recently added effects appear here."
+                                                    : "No effects match the current search and compatibility filters."
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeCaption
+                                            wrapMode: Text.Wrap
+                                        }
+
+                                        Label {
+                                            objectName: "timelinePhotoEffectCompatibilityHint"
+                                            Layout.fillWidth: true
+                                            visible: root.hasClip && root.clipState.mediaType === "photo"
+                                            text: qsTr("For shared effects, place an adjustment clip above your photo. Basic clip effects are available below.")
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeCaption
+                                            wrapMode: Text.Wrap
+                                        }
+
+                                        ListView {
+                                            id: effectLibraryList
+                                            objectName: "timelineEffectLibraryList"
+                                            visible: root.effectLibraryItems.length > 0
+                                            Layout.fillWidth: true
+                                            Layout.fillHeight: true
+                                            Layout.minimumHeight: Math.max(theme.scaled(120),
+                                                Math.min(theme.scaled(180), effectsInspectorFlick.height
+                                                         - theme.panelPaddingCompact * 2))
+                                            clip: true
+                                            reuseItems: true
+                                            cacheBuffer: Math.max(height, theme.scaled(320))
+                                            spacing: 0
+                                            model: root.effectDiscoveryRows
+                                            keyNavigationEnabled: true
+                                            Accessible.role: Accessible.List
+                                            Accessible.name: qsTr("Browse timeline effects")
+                                            ScrollBar.vertical: ScrollBar {
+                                                objectName: "timelineEffectLibraryScrollBar"
+                                                policy: ScrollBar.AsNeeded
+                                            }
+                                            Keys.onReturnPressed: function(event) {
+                                                if (currentItem && typeof currentItem.activateRow === "function") {
+                                                    currentItem.activateRow()
+                                                    event.accepted = true
+                                                }
+                                            }
+                                            Keys.onEnterPressed: function(event) {
+                                                if (currentItem && typeof currentItem.activateRow === "function") {
+                                                    currentItem.activateRow()
+                                                    event.accepted = true
+                                                }
+                                            }
+                                            Keys.onSpacePressed: function(event) {
+                                                if (currentItem && typeof currentItem.activateRow === "function") {
+                                                    currentItem.activateRow()
+                                                    event.accepted = true
+                                                }
+                                            }
+                                            TimelineInspectorScrollState {
+                                                view: effectLibraryList
+                                                position: root.contentScrollPosition
+                                                onPositionSettled: function(position) {
+                                                    root.contentScrollPositionChangeRequested(position)
+                                                }
+                                            }
+
+                                            delegate: Item {
+                                                id: effectDiscoveryRow
+                                                required property var modelData
+                                                property bool isCategory: modelData.rowType === "category"
+                                                property alias effectRowItem: effectRow
+                                                width: ListView.view ? ListView.view.width : 280
+                                                height: isCategory ? theme.scaled(28) : theme.scaled(30)
+                                                activeFocusOnTab: isCategory
+                                                function activateRow() {
+                                                    if (isCategory) {
+                                                        root.toggleEffectDiscoveryCategory(modelData.key)
+                                                        return true
+                                                    }
+                                                    if (effectRow.actionEnabled && effectRow.effectAvailable) {
+                                                        root.addQuickEffect(effectRow.effectName)
+                                                        return true
+                                                    }
+                                                    effectRow.forceActiveFocus()
+                                                    return false
+                                                }
+                                                Accessible.role: isCategory ? Accessible.Button : Accessible.ListItem
+                                                Accessible.name: isCategory
+                                                                 ? modelData.label + ", " + modelData.count + " effects"
+                                                                 : modelData.effect.name
+                                                Keys.onReturnPressed: function(event) {
+                                                    effectDiscoveryRow.activateRow()
+                                                    event.accepted = true
+                                                }
+                                                Keys.onSpacePressed: function(event) {
+                                                    effectDiscoveryRow.activateRow()
+                                                    event.accepted = true
+                                                }
+
+                                                Rectangle {
+                                                    anchors.fill: parent
+                                                    visible: effectDiscoveryRow.isCategory
+                                                    radius: theme.scaled(2)
+                                                    color: categoryHover.hovered || effectDiscoveryRow.activeFocus
+                                                           ? theme.alpha(theme.ink800, 0.9)
+                                                           : theme.alpha(theme.ink900, 0.36)
+                                                    border.width: effectDiscoveryRow.activeFocus
+                                                                  ? theme.focusBorderWidth : theme.hairlineWidth
+                                                    border.color: effectDiscoveryRow.activeFocus
+                                                                  ? theme.alpha(theme.focusRing, 0.85)
+                                                                  : theme.alpha(theme.lineSoft, 0.55)
+
+                                                    RowLayout {
+                                                        anchors.fill: parent
+                                                        anchors.leftMargin: theme.space4
+                                                        anchors.rightMargin: theme.space4
+                                                        spacing: theme.space3
+
+                                                        AppIcon {
+                                                            name: root.effectDiscoveryCategoryExpanded(effectDiscoveryRow.modelData.key)
+                                                                  || String(root.effectSearchText || "").trim().length > 0
+                                                                  ? "chevron-down" : "chevron-right"
+                                                            color: theme.textMuted
+                                                            implicitWidth: theme.space12
+                                                            implicitHeight: theme.space12
+                                                        }
+
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: effectDiscoveryRow.isCategory
+                                                                  ? String(effectDiscoveryRow.modelData.label || "") : ""
+                                                            color: theme.textMuted
+                                                            font.family: theme.fontNumeric
+                                                            font.features: theme.numericFontFeatures
+                                                            font.pixelSize: theme.typeLabel
+                                                            font.weight: Font.DemiBold
+                                                            elide: Text.ElideRight
+                                                        }
+
+                                                        Label {
+                                                            text: String(effectDiscoveryRow.modelData.count)
+                                                            color: theme.textFaint
+                                                            font.family: theme.fontNumeric
+                                                            font.features: theme.numericFontFeatures
+                                                            font.pixelSize: theme.typeCaption
+                                                            Accessible.name: text + " effects in " + effectDiscoveryRow.modelData.label
+                                                        }
+                                                    }
+
+                                                    HoverHandler { id: categoryHover }
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        hoverEnabled: true
+                                                        onClicked: {
+                                                            effectDiscoveryRow.forceActiveFocus()
+                                                            root.toggleEffectDiscoveryCategory(
+                                                                effectDiscoveryRow.modelData.key)
+                                                        }
+                                                    }
+                                                }
+
+                                                TimelineEffectLibraryRow {
+                                                    id: effectRow
+                                                    anchors.fill: parent
+                                                    visible: !effectDiscoveryRow.isCategory
+                                                    modelData: effectDiscoveryRow.modelData.effect || ({})
+                                                    previewSource: root.effectPreviewSource
+                                                    exampleController: root.effectExampleController
+                                                    favorite: root.isEffectFavorite(effectName)
+                                                    compatible: root.isEffectCompatible(modelData)
+                                                    recent: root.effectNameInList(effectName, root.recentEffectNames)
+                                                    actionEnabled: root.hasSelection && compatible
+                                                                   && !root.isEffectApplied(effectName)
+                                                    actionLabel: root.isEffectApplied(effectName) ? qsTr("Added") : qsTr("Add")
+                                                    onAddRequested: function(effectName) { root.addQuickEffect(effectName) }
+                                                    onFavoriteToggleRequested: function(effectName) {
+                                                        root.toggleEffectFavoriteRequested(effectName)
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
-
-                                FilterChip {
-                                    objectName: "timelineEffectCompatibilityFilter"
-                                    text: "Compatible"
-                                    active: root.compatibleOnly
-                                    Accessible.description: "Show only effects supported by the selected media type."
-                                    onClicked: root.compatibleOnlyChangeRequested(!root.compatibleOnly)
-                                }
                             }
 
-                            Label {
-                                visible: root.effectLibraryItems.length > 0
-                                         && root.filteredEffectLibraryItems.length === 0
-                                Layout.fillWidth: true
-                                text: root.discoveryCategory === "Favorites"
-                                      ? "No favorite effects yet. Use the star on any effect to keep it here."
-                                      : root.discoveryCategory === "Recent"
-                                        ? "Recently added effects appear here."
-                                        : "No effects match the current search and compatibility filters."
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: theme.typeCaption
-                                wrapMode: Text.Wrap
-                            }
-
-                            ListView {
-                                id: effectLibraryList
-                                objectName: "timelineEffectLibraryList"
-                                visible: root.effectLibraryItems.length > 0
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                Layout.minimumHeight: Math.max(theme.scaled(96),
-                                    Math.min(theme.scaled(180), effectsInspectorFlick.height
-                                             - theme.panelPaddingCompact * 2))
-                                clip: true
-                                reuseItems: true
-                                cacheBuffer: Math.max(height, theme.scaled(320))
-                                spacing: theme.gapDense
-                                model: root.filteredEffectLibraryItems
-                                contentY: Math.max(0, Math.min(root.contentScrollPosition,
-                                                              Math.max(0, contentHeight - height)))
-                                onContentYChanged: {
-                                    if (visible && moving && Math.abs(root.contentScrollPosition - contentY) > 0.5)
-                                        root.contentScrollPositionChangeRequested(contentY)
-                                }
-
-                                delegate: TimelineEffectLibraryRow {
-                                    previewSource: root.effectPreviewSource
-                                    favorite: root.isEffectFavorite(effectName)
-                                    compatible: root.isEffectCompatible(modelData)
-                                    recent: root.effectNameInList(effectName, root.recentEffectNames)
-                                    actionEnabled: root.hasSelection && compatible
-                                                   && !root.isEffectApplied(effectName)
-                                    actionLabel: root.isEffectApplied(effectName) ? "Added" : "Add"
-                                    onAddRequested: function(effectName) { root.addQuickEffect(effectName) }
-                                    onFavoriteToggleRequested: function(effectName) {
-                                        root.toggleEffectFavoriteRequested(effectName)
-                                    }
-                                }
-                            }
-                        }
+}
                     }
                 }
             }
 
             Loader {
                 objectName: "timelineVideoColorInspectorLoader"
-                property bool keepActiveThroughIncubation: false
                 active: root.inspectorContentLoadReady
-                        && (keepActiveThroughIncubation
-                            || (root.inspectorSelectionContextAvailable
-                                && (root.activeTab === "color" || root.colorInspectorLoaded)))
-                visible: root.hasClip && (root.clipState.mediaType === "video" || root.clipState.mediaType === "adjustment") && root.activeTab === "color"
+                        && root.inspectorSelectionContextAvailable
+                        && root.hasEligibleColorSelection
+                        && (root.colorInspectorLoadRequested || root.colorInspectorLoaded
+                            || root.colorInspectorLoading)
+                visible: root.hasClip && (root.clipState.mediaType === "photo"
+                                          || root.clipState.mediaType === "video"
+                                          || root.clipState.mediaType === "adjustment")
+                         && root.activeTab === "color"
+                asynchronous: root.activeTab !== "color"
                 Layout.fillWidth: true
                 Layout.fillHeight: visible
                 onStatusChanged: {
-                    const loading = status === Loader.Loading
-                    Qt.callLater(function() { keepActiveThroughIncubation = loading })
+                    root.colorInspectorLoading = status === Loader.Loading
+                    if (status === Loader.Ready) {
+                        root.colorInspectorLoaded = true
+                        root.colorInspectorLoadRequested = false
+                        root.colorInspectorLoading = false
+                    } else if (status === Loader.Error) {
+                        root.colorInspectorLoaded = false
+                        root.colorInspectorLoadRequested = false
+                        root.colorInspectorLoading = false
+                    } else if (status === Loader.Null) {
+                        root.colorInspectorLoaded = false
+                        root.colorInspectorLoading = false
+                    }
                 }
-                onLoaded: root.colorInspectorLoaded = true
+                onLoaded: {
+                    root.colorInspectorLoaded = true
+                    root.colorInspectorLoadRequested = false
+                    root.colorInspectorLoading = false
+                }
 
                 sourceComponent: Component {
                     Item {
@@ -1958,7 +3750,8 @@ GlassSurface {
                                                 + " · " + String(root.videoColorSignalMetadata.pixelFormat || "Unknown format")
                                               : "Decoder-reported stream tags appear while this clip is the current Program frame."
                                         color: theme.textFaint
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeCaption
                                         wrapMode: Text.Wrap
                                     }
@@ -2004,21 +3797,21 @@ GlassSurface {
 
                             StatusChip {
                                 Layout.alignment: Qt.AlignLeft
-                                text: clipState.colorGradeSequenceExportPending
-                                      ? "Checking grade delivery…"
-                                      : clipState.colorGradeRecipeEnabled
-                                      ? (clipState.colorGradeSequenceExportSupported
-                                         ? (clipState.colorGradeSequenceExportUsesFrameStream
-                                            ? "Photo engine · frame-stream delivery"
-                                            : "Photo engine · preview + CUBE delivery")
-                                         : "Photo engine · full-graph preview")
-                                      : "Photo engine · Rec.709"
-                                tone: clipState.colorGradeSequenceExportPending
-                                      ? "neutral"
-                                      : clipState.colorGradeRecipeEnabled
-                                      ? (clipState.colorGradeSequenceExportSupported ? "info" : "warning")
-                                      : "neutral"
+                                visible: clipState.colorGradeSequenceExportPending === true
+                                text: qsTr("Checking grade delivery…")
+                                tone: "neutral"
                                 compact: true
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: Boolean(clipState.colorGradeRecipeEnabled
+                                                 && clipState.colorGradeSequenceExportUsesSourceBake)
+                                text: qsTr("Static spatial grades bake in source space before crop and placement. Scale, offset, and opacity animation are supported; animated zoom cannot be combined with rotation yet. Delivery requires normal source timing, constant frame rate from 1–120 fps, no more than 180,000 source frames, and available bounded temporary storage.")
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeLabel
+                                wrapMode: Text.Wrap
                             }
 
                             Label {
@@ -2026,7 +3819,7 @@ GlassSurface {
                                 visible: Boolean(clipState.colorGradeRecipeEnabled
                                                  && !clipState.colorGradeSequenceExportSupported)
                                 text: String(clipState.colorGradeSequenceExportError ||
-                                             "This recipe uses spatial work. Preview uses the full photo pipeline; sequence export needs a spatial grade placement supported by the shared full-frame route.")
+                                             "This spatial recipe is not supported by the current sequence export route. Preview still uses the full photo pipeline.")
                                 color: clipState.colorGradeSequenceExportPending ? theme.textMuted : theme.warning
                                 font.family: theme.fontUi
                                 font.pixelSize: theme.typeLabel
@@ -2218,9 +4011,10 @@ GlassSurface {
 
                                 ParameterKeyframeButton {
                                     parameterName: root.colorGradeKeyframeParameter("opacity")
-                                    enabled: root.hasClip
-                                             && root.activeColorGradeLayer() !== null
-                                             && String(root.clipState.colorGradeRecipeError || "").length === 0
+                                    parameterAvailable: root.hasClip
+                                                        && root.activeColorGradeLayer() !== null
+                                                        && String(root.clipState.colorGradeRecipeError || "").length === 0
+                                    parameterUnavailableReason: "Add a shared photo grade or select one of its adjustment layers."
                                 }
                             }
 
@@ -2302,10 +4096,10 @@ GlassSurface {
 
                                     ParameterKeyframeButton {
                                         parameterName: root.colorGradeKeyframeParameter(modelData.key)
-                                        enabled: root.hasClip
-                                                 && root.clipState.colorGradeRecipeEnabled === true
-                                                 && String(root.clipState.colorGradeRecipeError || "").length === 0
-                                        disabledReason: "Add a shared photo grade or select one of its adjustment layers."
+                                        parameterAvailable: root.hasClip
+                                                            && root.clipState.colorGradeRecipeEnabled === true
+                                                            && String(root.clipState.colorGradeRecipeError || "").length === 0
+                                        parameterUnavailableReason: "Add a shared photo grade or select one of its adjustment layers."
                                     }
                                 }
                             }
@@ -2360,23 +4154,23 @@ GlassSurface {
                                             ParameterKeyframeButton {
                                                 Layout.fillWidth: true
                                                 parameterName: root.colorGradeKeyframeParameter(modelData.key + "Hue")
-                                                enabled: root.hasClip
-                                                         && root.clipState.colorGradeRecipeEnabled === true
-                                                         && String(root.clipState.colorGradeRecipeError || "").length === 0
+                                                parameterAvailable: root.hasClip
+                                                                    && root.clipState.colorGradeRecipeEnabled === true
+                                                                    && String(root.clipState.colorGradeRecipeError || "").length === 0
                                             }
                                             ParameterKeyframeButton {
                                                 Layout.fillWidth: true
                                                 parameterName: root.colorGradeKeyframeParameter(modelData.key + "Saturation")
-                                                enabled: root.hasClip
-                                                         && root.clipState.colorGradeRecipeEnabled === true
-                                                         && String(root.clipState.colorGradeRecipeError || "").length === 0
+                                                parameterAvailable: root.hasClip
+                                                                    && root.clipState.colorGradeRecipeEnabled === true
+                                                                    && String(root.clipState.colorGradeRecipeError || "").length === 0
                                             }
                                             ParameterKeyframeButton {
                                                 Layout.fillWidth: true
                                                 parameterName: root.colorGradeKeyframeParameter(modelData.key + "Luminance")
-                                                enabled: root.hasClip
-                                                         && root.clipState.colorGradeRecipeEnabled === true
-                                                         && String(root.clipState.colorGradeRecipeError || "").length === 0
+                                                parameterAvailable: root.hasClip
+                                                                    && root.clipState.colorGradeRecipeEnabled === true
+                                                                    && String(root.clipState.colorGradeRecipeError || "").length === 0
                                             }
                                         }
                                     }
@@ -2384,6 +4178,41 @@ GlassSurface {
                             }
                             }
                         }
+                    }
+                }
+            }
+
+            GlassSurface {
+                objectName: "timelineColorInspectorLoadingState"
+                visible: root.hasClip && root.activeTab === "color" && root.colorInspectorLoading
+                Layout.fillWidth: true
+                Layout.preferredHeight: theme.scaled(136)
+                radius: theme.radiusSurface
+                accent: theme.accentCool400
+                elevated: false
+                edgeOpacity: 0
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - theme.space24, theme.scaled(300))
+                    spacing: theme.space6
+
+                    StatusChip {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTr("Preparing Color tools")
+                        tone: "info"
+                        busy: true
+                        compact: true
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Building the selected clip’s input, grade, and signal controls…")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
                     }
                 }
             }
@@ -2425,7 +4254,8 @@ GlassSurface {
                                 Label {
                                     text: "In  •  " + (root.hasClip && clipState.transitionInName ? clipState.transitionInName : "none")
                                     color: theme.textMuted
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: theme.typeLabel
                                 }
 
@@ -2447,7 +4277,8 @@ GlassSurface {
                                 Label {
                                     text: "Out  •  " + (root.hasClip && clipState.transitionOutName ? clipState.transitionOutName : "none")
                                     color: theme.textMuted
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: theme.typeLabel
                                 }
 
@@ -2482,11 +4313,12 @@ GlassSurface {
                                 cacheBuffer: Math.max(height, theme.scaled(320))
                                 spacing: theme.gapDense
                                 model: root.transitionLibraryItems
-                                contentY: Math.max(0, Math.min(root.contentScrollPosition,
-                                                              Math.max(0, contentHeight - height)))
-                                onContentYChanged: {
-                                    if (visible && moving && Math.abs(root.contentScrollPosition - contentY) > 0.5)
-                                        root.contentScrollPositionChangeRequested(contentY)
+                                TimelineInspectorScrollState {
+                                    view: transitionLibraryList
+                                    position: root.contentScrollPosition
+                                    onPositionSettled: function(position) {
+                                        root.contentScrollPositionChangeRequested(position)
+                                    }
                                 }
 
                                 delegate: TimelineTransitionLibraryRow {
@@ -2541,11 +4373,12 @@ GlassSurface {
                             contentHeight: titleEditor.implicitHeight
                             boundsBehavior: Flickable.StopAtBounds
                             clip: true
-                            contentY: Math.max(0, Math.min(root.contentScrollPosition,
-                                                          Math.max(0, contentHeight - height)))
-                            onContentYChanged: {
-                                if (visible && moving && Math.abs(root.contentScrollPosition - contentY) > 0.5)
-                                    root.contentScrollPositionChangeRequested(contentY)
+                            TimelineInspectorScrollState {
+                                view: titleFlick
+                                position: root.contentScrollPosition
+                                onPositionSettled: function(position) {
+                                    root.contentScrollPositionChangeRequested(position)
+                                }
                             }
 
                             ColumnLayout {
@@ -2825,7 +4658,7 @@ GlassSurface {
                                     Layout.fillWidth: true
                                     title: "Word Timing"
                                     subtitle: String(clipState.captionWords ? clipState.captionWords.length : 0) +
-                                              " editable words · seconds within this caption"
+                                              " editable words · source-local seconds · trim-safe"
                                     expanded: true
                                     showAccentMarker: false
 
@@ -2844,7 +4677,7 @@ GlassSurface {
 
                                                 Layout.fillWidth: true
                                                 implicitHeight: captionWordFields.implicitHeight + theme.space8
-                                                radius: theme.radius4
+                                                radius: theme.scaled(4)
                                                 color: theme.alpha(theme.glassLift, 0.24)
                                                 border.width: 0
 
@@ -2867,7 +4700,8 @@ GlassSurface {
                                                         Layout.preferredWidth: 20
                                                         text: String(index + 1)
                                                         color: theme.textFaint
-                                                        font.family: theme.fontMono
+                                                        font.family: theme.fontNumeric
+                                                        font.features: theme.numericFontFeatures
                                                         font.pixelSize: theme.typeCaption
                                                         horizontalAlignment: Text.AlignHCenter
                                                     }
@@ -2885,7 +4719,8 @@ GlassSurface {
                                                         Layout.preferredWidth: 54
                                                         text: Number(modelData.startSeconds || 0).toFixed(2)
                                                         placeholderText: "In"
-                                                        font.family: theme.fontMono
+                                                        font.family: theme.fontNumeric
+                                                        font.features: theme.numericFontFeatures
                                                         onEditingFinished: captionWordRow.commitWord()
                                                     }
 
@@ -2894,7 +4729,8 @@ GlassSurface {
                                                         Layout.preferredWidth: 54
                                                         text: Number(modelData.endSeconds || 0).toFixed(2)
                                                         placeholderText: "Out"
-                                                        font.family: theme.fontMono
+                                                        font.family: theme.fontNumeric
+                                                        font.features: theme.numericFontFeatures
                                                         onEditingFinished: captionWordRow.commitWord()
                                                     }
                                                 }
@@ -2926,8 +4762,8 @@ GlassSurface {
                                                                     "titleFontSize",
                                                                     clipState.titleFontSize || 64)
                                                               : 64) + " px"
-                                        from: 12
-                                        to: 240
+                                        from: 1
+                                        to: 360
                                         value: root.isTitleClip
                                                ? root.animatedClipValue(
                                                      root.currentClip,
@@ -2964,7 +4800,8 @@ GlassSurface {
                                                        ? clipState.titleShapeStrokeColor || "#ffffffff"
                                                        : clipState.titleColor || "#ffffffff") : ""
                                         placeholderText: root.isGraphicShape ? "Stroke color" : "Text color"
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         enabled: root.isTitleClip
                                         visible: !root.isGraphicShape || Number(clipState.titleShapeStrokeWidth || 0) > 0
                                         onEditingFinished: root.updateTitle(root.isGraphicShape
@@ -2976,7 +4813,8 @@ GlassSurface {
                                         Layout.fillWidth: true
                                         text: root.isTitleClip ? String(clipState.titleBackgroundColor || "#99000000") : ""
                                         placeholderText: root.isGraphicShape ? "Fill color" : "Background"
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         enabled: root.isTitleClip
                                         onEditingFinished: root.updateTitle({"backgroundColor": text})
                                     }
@@ -3069,7 +4907,8 @@ GlassSurface {
                                                 Layout.fillWidth: true
                                                 text: String(clipState.captionStrokeColor || "#ff000000")
                                                 placeholderText: "Outline color"
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 onEditingFinished: root.updateTitle({"strokeColor": text})
                                             }
 
@@ -3078,7 +4917,8 @@ GlassSurface {
                                                 Layout.fillWidth: true
                                                 text: String(clipState.captionShadowColor || "#99000000")
                                                 placeholderText: "Shadow color"
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 onEditingFinished: root.updateTitle({"shadowColor": text})
                                             }
                                         }
@@ -3106,9 +4946,11 @@ GlassSurface {
                                             onToggled: root.updateTitle({"shadowEnabled": checked})
                                         }
 
-                                        RowLayout {
+                                        GridLayout {
                                             Layout.fillWidth: true
-                                            spacing: theme.space6
+                                            columns: width >= theme.scaled(380) ? 2 : 1
+                                            columnSpacing: theme.space6
+                                            rowSpacing: theme.space8
 
                                             InspectorSlider {
                                                 Layout.fillWidth: true
@@ -3139,17 +4981,21 @@ GlassSurface {
                                             }
                                         }
 
-                                        RowLayout {
+                                        GridLayout {
                                             Layout.fillWidth: true
-                                            spacing: theme.space6
+                                            columns: width >= theme.scaled(380) ? 2 : 1
+                                            columnSpacing: theme.space6
+                                            rowSpacing: theme.space8
 
                                             InspectorSlider {
+                                                objectName: "timelineCaptionBackgroundPaddingSlider"
                                                 Layout.fillWidth: true
                                                 label: "Box padding"
                                                 valueText: Number(clipState.captionBackgroundPadding || 0).toFixed(0) + " px"
                                                 from: 0
                                                 to: 64
-                                                value: Number(clipState.captionBackgroundPadding || 14)
+                                                value: Number(clipState.captionBackgroundPadding !== undefined
+                                                              ? clipState.captionBackgroundPadding : 14)
                                                 defaultValue: 14
                                                 onInteractionStarted: root.beginInspectorEdit()
                                                 onInteractionFinished: root.endInspectorEdit()
@@ -3158,12 +5004,14 @@ GlassSurface {
                                             }
 
                                             InspectorSlider {
+                                                objectName: "timelineCaptionBackgroundRadiusSlider"
                                                 Layout.fillWidth: true
                                                 label: "Box radius"
                                                 valueText: Number(clipState.captionBackgroundRadius || 0).toFixed(0) + " px"
                                                 from: 0
                                                 to: 64
-                                                value: Number(clipState.captionBackgroundRadius || 8)
+                                                value: Number(clipState.captionBackgroundRadius !== undefined
+                                                              ? clipState.captionBackgroundRadius : 8)
                                                 defaultValue: 8
                                                 onInteractionStarted: root.beginInspectorEdit()
                                                 onInteractionFinished: root.endInspectorEdit()
@@ -3214,11 +5062,12 @@ GlassSurface {
                             contentHeight: motionContent.implicitHeight + theme.panelPaddingCompact * 2
                             boundsBehavior: Flickable.StopAtBounds
                             clip: true
-                            contentY: Math.max(0, Math.min(root.contentScrollPosition,
-                                                          Math.max(0, contentHeight - height)))
-                            onContentYChanged: {
-                                if (visible && moving && Math.abs(root.contentScrollPosition - contentY) > 0.5)
-                                    root.contentScrollPositionChangeRequested(contentY)
+                            TimelineInspectorScrollState {
+                                view: motionFlick
+                                position: root.contentScrollPosition
+                                onPositionSettled: function(position) {
+                                    root.contentScrollPositionChangeRequested(position)
+                                }
                             }
 
                             ColumnLayout {
@@ -3270,7 +5119,8 @@ GlassSurface {
                                             objectName: "timelineKeyframeToolbarLabel"
                                             text: qsTr("KEYFRAMES")
                                             color: theme.textMuted
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: theme.typeCaption
                                             font.weight: Font.DemiBold
                                             Accessible.name: qsTr("Keyframes")
@@ -3281,7 +5131,8 @@ GlassSurface {
                                             objectName: "timelineKeyframeToolbarCount"
                                             text: String(root.keyframesForParameter(root.selectedKeyframeParameter).length)
                                             color: theme.textStrong
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: theme.typeCaption
                                             Accessible.name: qsTr("%1 keyframes").arg(text)
                                         }
@@ -3308,7 +5159,7 @@ GlassSurface {
                                         currentParameter: root.selectedKeyframeParameter
                                         enabled: root.hasSelection
                                         onParameterSelected: function(parameter) {
-                                            root.selectedKeyframeParameter = parameter
+                                            root.selectAnimatedParameter(parameter)
                                         }
                                     }
 
@@ -3330,6 +5181,7 @@ GlassSurface {
                                         }
 
                                         ParameterKeyframeButton {
+                                            objectName: "timelineInspectorKeyframeToggleButton"
                                             parameterName: root.selectedKeyframeParameter
                                         }
 
@@ -3346,6 +5198,7 @@ GlassSurface {
                                         }
 
                                         ActionButton {
+                                            objectName: "timelineInspectorCurveEditorButton"
                                             showText: false
                                             compact: true
                                             iconName: "curve"
@@ -3385,7 +5238,7 @@ GlassSurface {
                                     spacing: theme.space8
 
                                     Label {
-                                        text: "Crop mode"
+                                        text: "Fit mode"
                                         color: theme.textMuted
                                         font.family: theme.fontUi
                                         font.pixelSize: theme.typeLabel
@@ -3401,6 +5254,122 @@ GlassSurface {
                                     }
                                 }
 
+                                RowLayout {
+                                    objectName: "timelineSourceCropControls"
+                                    Layout.fillWidth: true
+                                    spacing: theme.space6
+
+                                    Label {
+                                        text: "Source crop"
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeLabel
+                                    }
+
+                                    ToneComboBox {
+                                        objectName: "timelineSourceCropAspectControl"
+                                        Layout.fillWidth: true
+                                        model: ["Free", "Source", "16:9", "9:16", "1:1", "4:3"]
+                                        currentIndex: Math.max(0, Number(
+                                            ["free", "source", "16:9", "9:16", "1:1", "4:3"]
+                                                .indexOf(root.sourceCropAspectConstraint)))
+                                        enabled: root.hasSelection
+                                                 && (clipState.mediaType === "video"
+                                                     || clipState.mediaType === "photo")
+                                        onActivated: root.sourceCropAspectConstraint =
+                                                         ["free", "source", "16:9", "9:16", "1:1", "4:3"][index]
+                                    }
+
+                                    ActionButton {
+                                        objectName: "timelineSourceCropResetButton"
+                                        text: "Reset"
+                                        compact: true
+                                        enabled: root.hasSelection
+                                                 && (clipState.mediaType === "video"
+                                                     || clipState.mediaType === "photo")
+                                                 && (Number(clipState.sourceCropLeft || 0) > 0
+                                                     || Number(clipState.sourceCropTop || 0) > 0
+                                                     || Number(clipState.sourceCropRight !== undefined
+                                                               ? clipState.sourceCropRight : 1) < 1
+                                                     || Number(clipState.sourceCropBottom !== undefined
+                                                               ? clipState.sourceCropBottom : 1) < 1)
+                                        tooltipText: "Restore the full source frame"
+                                        onClicked: if (root.documentController)
+                                                       root.documentController.resetSelectedSourceCrop()
+                                    }
+                                }
+
+                                GridLayout {
+                                    objectName: "timelineSourceCropEdgeValues"
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: theme.space8
+                                    rowSpacing: theme.space4
+
+                                    Repeater {
+                                        model: [
+                                            { edge: "left", label: "Left", value: Number(clipState.sourceCropLeft || 0) },
+                                            { edge: "top", label: "Top", value: Number(clipState.sourceCropTop || 0) },
+                                            { edge: "right", label: "Right", value: Number(clipState.sourceCropRight !== undefined ? clipState.sourceCropRight : 1) },
+                                            { edge: "bottom", label: "Bottom", value: Number(clipState.sourceCropBottom !== undefined ? clipState.sourceCropBottom : 1) }
+                                        ]
+
+                                        delegate: RowLayout {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            spacing: theme.space4
+
+                                            Label {
+                                                Layout.preferredWidth: theme.scaled(40)
+                                                text: modelData.label
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: theme.typeCaption
+                                            }
+
+                                            ToneSpinBox {
+                                                objectName: "timelineSourceCrop" + modelData.edge.charAt(0).toUpperCase()
+                                                            + modelData.edge.slice(1) + "Value"
+                                                Layout.fillWidth: true
+                                                from: 0
+                                                to: 1000
+                                                stepSize: 1
+                                                value: Math.round(modelData.value * 1000)
+                                                editable: true
+                                                accessibleLabel: "Source crop " + modelData.edge + " edge"
+                                                accessibleDescription: "Position in the source frame as a percentage."
+                                                textFromValue: function(value, locale) {
+                                                    return (value / 10).toFixed(1) + "%"
+                                                }
+                                                valueFromText: function(text, locale) {
+                                                    const parsed = Number(String(text).replace("%", ""))
+                                                    return Number.isFinite(parsed) ? Math.round(parsed * 10) : 0
+                                                }
+                                                validator: RegularExpressionValidator {
+                                                    regularExpression: /^(100|[0-9]{1,2})(\.[0-9])?%?$/
+                                                }
+                                                enabled: root.hasSelection
+                                                         && (clipState.mediaType === "video"
+                                                             || clipState.mediaType === "photo")
+                                                onValueModified: root.setSourceCropEdge(
+                                                                     modelData.edge, value / 1000)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Label {
+                                    objectName: "timelineSourceCropHelp"
+                                    Layout.fillWidth: true
+                                    text: String(clipState.frameMode || "fit") === "fill"
+                                          ? "In Fill mode, enter exact source edges here. Switch to Fit or Stretch for monitor handles."
+                                          : "When this clip is the active Program source, drag the amber edges in the monitor."
+                                    color: theme.textMuted
+                                    wrapMode: Text.WordWrap
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeCaption
+                                }
+
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: theme.space4
@@ -3409,7 +5378,7 @@ GlassSurface {
                                     Layout.fillWidth: true
                                     label: "Scale"
                                     valueText: Number(root.hasClip ? (clipState.frameScale || 1) : 1).toFixed(2) + "x"
-                                    from: 0.05
+                                    from: 0.000001
                                     to: 4
                                     value: root.hasClip && clipState.frameScale ? clipState.frameScale : 1
                                     defaultValue: 1
@@ -3868,11 +5837,12 @@ GlassSurface {
                             contentHeight: audioContent.implicitHeight + theme.panelPaddingCompact * 2
                             boundsBehavior: Flickable.StopAtBounds
                             clip: true
-                            contentY: Math.max(0, Math.min(root.contentScrollPosition,
-                                                          Math.max(0, contentHeight - height)))
-                            onContentYChanged: {
-                                if (visible && moving && Math.abs(root.contentScrollPosition - contentY) > 0.5)
-                                    root.contentScrollPositionChangeRequested(contentY)
+                            TimelineInspectorScrollState {
+                                view: audioFlick
+                                position: root.contentScrollPosition
+                                onPositionSettled: function(position) {
+                                    root.contentScrollPositionChangeRequested(position)
+                                }
                             }
 
                             ColumnLayout {
@@ -3981,7 +5951,7 @@ GlassSurface {
                                 objectName: "timelineAudioNormalizationControls"
                                 Layout.fillWidth: true
                                 implicitHeight: normalizationContent.implicitHeight + theme.space12 * 2
-                                radius: theme.radius4
+                                radius: theme.scaled(4)
                                 color: theme.alpha(theme.glassLift, 0.30)
                                 border.width: 0
 
@@ -3994,7 +5964,8 @@ GlassSurface {
                                     Label {
                                         text: "LOUDNESS NORMALIZATION"
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeCaption
                                         font.weight: Font.DemiBold
                                     }
@@ -4087,21 +6058,24 @@ GlassSurface {
                             Label {
                                 text: "Trim In  •  " + Number(root.hasClip ? (clipState.trimStartSeconds || 0) : 0).toFixed(2) + "s"
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeLabel
                             }
 
                             Label {
                                 text: "Trim Out  •  " + Number(root.hasClip ? (clipState.trimEndSeconds || 0) : 0).toFixed(2) + "s"
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeLabel
                             }
 
                             Label {
                                 text: "Duration  •  " + (root.hasClip && clipState.trimmedDurationText ? clipState.trimmedDurationText : "0:00")
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeLabel
                             }
 
@@ -4109,14 +6083,15 @@ GlassSurface {
                                 text: "Playback Rate  •  " + Number(root.hasClip ? (clipState.playbackRate || 1) : 1).toFixed(2) + "x"
                                 visible: !root.hasClip || clipState.retimeActive !== true
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeLabel
                             }
 
                             Rectangle {
                                 Layout.fillWidth: true
                                 implicitHeight: retimeRow.implicitHeight + theme.space12
-                                radius: theme.radius4
+                                radius: theme.scaled(4)
                                 color: theme.alpha(theme.glassLift, 0.30)
                                 border.width: 0
 
@@ -4133,7 +6108,8 @@ GlassSurface {
                                         Label {
                                             text: "RETIME"
                                             color: theme.textFaint
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: theme.typeCaption
                                             font.weight: Font.DemiBold
                                         }
@@ -4295,11 +6271,14 @@ GlassSurface {
                                         text: "Add Hold"
                                         iconName: "pause"
                                         compact: true
+                                        enabled: root.hasSelection
+                                                 && root.currentKeyframeLocalSeconds() >= 0
+                                        disabledReason: "Move the playhead inside the selected clip to add a hold."
                                         tooltipText: "Insert a one-second held frame at the playhead and ripple later clips."
                                         onClicked: if (root.documentController) {
-                                                       const local = Math.max(
-                                                           0, Number(root.documentController.sequencePlayheadSeconds || 0)
-                                                           - Number(clipState.startSeconds || 0))
+                                                       const local = root.currentKeyframeLocalSeconds()
+                                                       if (local < 0)
+                                                           return
                                                        root.documentController.addSelectedClipRetimeHold(local, 1.0)
                                                    }
                                     }
@@ -4330,7 +6309,8 @@ GlassSurface {
                                           ? "Preview cache · " + String(root.documentController.renderCacheStatus || "not built")
                                           : "Preview cache · not built"
                                     color: theme.textMuted
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: theme.typeCaption
                                     wrapMode: Text.WordWrap
                                 }
@@ -4482,7 +6462,8 @@ GlassSurface {
                 Label {
                     text: qsTr("%1 results").arg(root.filteredEffectLibraryItems.length)
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeCaption
                 }
             }
@@ -4515,6 +6496,7 @@ GlassSurface {
 
                 delegate: TimelineEffectLibraryRow {
                     previewSource: root.effectPreviewSource
+                    exampleController: root.effectExampleController
                     favorite: root.isEffectFavorite(effectName)
                     compatible: root.isEffectCompatible(modelData)
                     recent: root.effectNameInList(effectName, root.recentEffectNames)
@@ -4673,7 +6655,8 @@ GlassSurface {
                             visible: root.selectedEffectPresetPreview.found === true
                             text: String(root.selectedEffectPresetPreview.summary || "")
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: theme.typeCaption
                         }
                     }
@@ -4706,7 +6689,7 @@ GlassSurface {
                             readonly property string presetEffectName: String(modelData.name || "")
                             Layout.fillWidth: true
                             implicitHeight: presetEffectRow.implicitHeight + theme.space8
-                            radius: theme.radius4
+                            radius: theme.scaled(4)
                             color: theme.alpha(theme.glassLift, 0.30)
                             border.width: 0
 
@@ -4735,7 +6718,8 @@ GlassSurface {
                                           ? "Unavailable · retained in preset"
                                           : String(modelData.parameterSummary || "")
                                     color: modelData.available === false ? theme.warning : theme.textMain
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: theme.typeCaption
                                     wrapMode: Text.Wrap
                                 }

@@ -132,7 +132,8 @@ AppPopup {
                 Label {
                     text: ">"
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 14
                     font.weight: Font.DemiBold
                 }
@@ -147,7 +148,7 @@ AppPopup {
                     color: theme.textStrong
                     font.family: theme.fontUi
                     font.pixelSize: 14
-                    background: null
+                    background: InputFieldSurface { inputControl: parent; inlineField: true }
                     selectByMouse: true
 
                     onTextChanged: listModel.reload()
@@ -249,7 +250,8 @@ AppPopup {
                 Label {
                     text: "↑↓ Navigate  ↵ Run  Esc Close"
                     color: theme.textFaint
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 10
                 }
             }

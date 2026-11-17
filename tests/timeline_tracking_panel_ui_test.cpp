@@ -80,7 +80,12 @@ class FakeTimelineTrackingDocument final : public QObject {
   QVariantMap currentClip() const { return current_clip_; }
   QVariantList motionTrackSources() const { return motion_track_sources_; }
   QVariantList sceneTrackSources() const { return scene_track_sources_; }
-  QVariantList surfaceTrackSources() const { return surface_track_sources_; }
+  QVariantList surfaceTrackSources() const {
+    ++surface_track_sources_read_count_;
+    return surface_track_sources_;
+  }
+  int surfaceTrackSourceReadCount() const { return surface_track_sources_read_count_; }
+  void notifyClipsChangedForTest() { emit clipsChanged(); }
   QVariantMap seedRect() const { return seed_rect_; }
 
   void setSeedRect(const QVariantMap& seed) {
@@ -354,6 +359,7 @@ class FakeTimelineTrackingDocument final : public QObject {
   QVariantList motion_track_sources_;
   QVariantList scene_track_sources_;
   QVariantList surface_track_sources_;
+  mutable int surface_track_sources_read_count_ = 0;
   QVariantMap seed_rect_;
   QVariantMap last_motion_seed_;
   QVariantMap last_surface_seed_;
@@ -395,6 +401,7 @@ Window {
     height: 720
     visible: true
     color: "#12161b"
+    property bool trackingPanelOpen: false
 
     Theme { id: looksyTheme }
 
@@ -404,8 +411,9 @@ Window {
         theme: looksyTheme
         timelineDocument: trackingDocument
         currentClip: trackingDocument.currentClip
-        motionTrackSources: trackingDocument.motionTrackSources
-        sceneTrackSources: trackingDocument.sceneTrackSources
+        trackingPanelActive: trackingPanelOpen
+        motionTrackSources: trackingPanelOpen ? trackingDocument.motionTrackSources : []
+        sceneTrackSources: trackingPanelOpen ? trackingDocument.sceneTrackSources : []
         sceneSourceClipId: "scene-source"
         scenePointIds: ["p1", "p2", "p3"]
         seedSelectionActive: false
@@ -550,6 +558,26 @@ int main(int argc, char** argv) {
     return fail("Timeline tracking test fixture should create a native QQuickWindow.");
   window->show();
   settle();
+  if (tracking_document.surfaceTrackSourceReadCount() != 0)
+    return fail("A closed tracking panel should not evaluate the surface source list getter.");
+  window->setProperty("trackingPanelOpen", true);
+  settle();
+  if (tracking_document.surfaceTrackSourceReadCount() != 1)
+    return fail("Opening the tracking panel should snapshot surface sources once.");
+  tracking_document.notifyClipsChangedForTest();
+  settle();
+  if (tracking_document.surfaceTrackSourceReadCount() != 2)
+    return fail("One clipsChanged notification should refresh one shared surface source snapshot.");
+  window->setProperty("trackingPanelOpen", false);
+  settle();
+  tracking_document.notifyClipsChangedForTest();
+  settle();
+  if (tracking_document.surfaceTrackSourceReadCount() != 2)
+    return fail("A closed tracking panel should ignore clipsChanged without projecting surface sources.");
+  window->setProperty("trackingPanelOpen", true);
+  settle();
+  if (tracking_document.surfaceTrackSourceReadCount() != 3)
+    return fail("Reopening the tracking panel should take one fresh surface source snapshot.");
 
   auto* panel = find_item(window->contentItem(), QStringLiteral("timelineTrackingTestPanel"));
   auto* region_button = panel == nullptr ? nullptr

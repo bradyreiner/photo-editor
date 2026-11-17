@@ -15,6 +15,11 @@
 
 namespace photo_editor::desktop {
 struct TimelineHistoryTestAccess final {
+  static quint64 surfaceTrackMetadataIndexFallbacks(
+      const TimelineDocumentController& controller) {
+    return controller.surface_track_metadata_index_fallbacks_;
+  }
+
   static QVariantMap seedTrackAndCutout(TimelineDocumentController& c, const QString& directory) {
     auto* source = c.clipAt(c.clipRefAt(0));
     const auto signature = source->source_identity_signature;
@@ -213,6 +218,15 @@ int main(int argc, char** argv) {
   occlusion.addTitleClip();
   const auto occlusion_source = TimelineHistoryTestAccess::seedTrackAndCutout(occlusion, matte_dir).value(QStringLiteral("clipId")).toString();
   TimelineHistoryTestAccess::seedSurface(occlusion);
+  const auto surface_index_fallbacks_before =
+      TimelineHistoryTestAccess::surfaceTrackMetadataIndexFallbacks(occlusion);
+  const auto projected_surface_sources = occlusion.surfaceTrackSources();
+  if (!check(projected_surface_sources.size() == 1 &&
+                 TimelineHistoryTestAccess::surfaceTrackMetadataIndexFallbacks(occlusion) ==
+                     surface_index_fallbacks_before,
+             "Native surface source projection should reuse each owning track without sorted-ID fallback lookups")) {
+    return 1;
+  }
   TimelineHistoryTestAccess::useGraphicTarget(occlusion, graphic_path);
   occlusion.selectClip(0); occlusion.setSelectedClipForegroundCutout(false);
   occlusion.selectClip(1);

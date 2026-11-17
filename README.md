@@ -180,7 +180,7 @@ restricted, allow scripts for only the current terminal with
 Install the macOS host dependencies first:
 
 ```sh
-brew install cmake ninja rust qt
+brew install cmake ninja rust qt python
 ```
 
 Then run the app with:
@@ -192,6 +192,15 @@ Then run the app with:
 The launcher incrementally builds the Rust helpers and the `photo_editor_app`
 target, reusing the existing CMake configuration. Tests and benchmarks are built
 separately. It then prepares the existing PostgreSQL catalog and launches the app.
+
+Builds hold an OS lock for their build directory. A second build of the same
+preset exits with "A build is already running" before running Cargo or CMake.
+The release packaging scripts share this lock; Debug and Release use separate
+locks. The lock releases after the build, including on failure or process exit,
+and is not held while Looksy runs. `--no-build` skips it. Direct CMake or Ninja
+commands bypass this protection, so do not run them alongside these scripts in
+the same build directory. The `.looksy-build.lock` file can remain after exit;
+do not delete it to bypass a running build.
 
 ```sh
 ./scripts/run-native.sh --no-build           # Reopen the existing optimized app

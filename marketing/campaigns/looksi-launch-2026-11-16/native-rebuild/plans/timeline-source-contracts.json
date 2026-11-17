@@ -1,0 +1,2829 @@
+{
+  "schema": "looksy.native-timeline-source-contract-projection/v1",
+  "authority": "Current working-tree source inspection only. Fetch app.command_schema live before mutation.",
+  "projectionScope": "Exact generated-plan argument subset. Optional native fields outside this subset are intentionally omitted; this is not the complete live schema.",
+  "nativeSavedProjectVersion": 8,
+  "sourceFiles": [
+    {
+      "path": "docs/looksy-agent-interface.md",
+      "sha256": "269de9a8c581b75448bc259e661cba4b0039d42c252693435659484a22a58245"
+    },
+    {
+      "path": "apps/desktop/src/photo_mcp_server.cpp",
+      "sha256": "d7a4ad0ccc37b51ae863e1f4d29715e87866ed0e6eebc5f5469b3797e4688d7e"
+    },
+    {
+      "path": "apps/desktop/src/agent_timeline_commands.h",
+      "sha256": "68db3fc81edbc952e52d5e23af9270816120cd05ff53a1807e3c0c26350cc613"
+    },
+    {
+      "path": "apps/desktop/src/timeline_document_controller.cpp",
+      "sha256": "44b4da9b3040d99b8e39e7304eb8881a6c9ad5743df80d7d9ba3c977ee32daa2"
+    },
+    {
+      "path": "apps/desktop/src/timeline_draft_lifecycle.cpp",
+      "sha256": "af5fc5fa6d89494dfc154fd2de03871a4d0c4b0397f8d65aa307a48fdd94370b"
+    },
+    {
+      "path": "marketing/native-recreation-v4/author_native.py",
+      "sha256": "402422acc70df48e705dc1465d122324f32ad4ee3abe693ec290e98034f5cd71"
+    }
+  ],
+  "valueSchemas": {
+    "timeline.action.createTimelineTrack": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "video",
+            "graphics",
+            "audio"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 48
+        },
+        "audioRole": {
+          "type": "string",
+          "enum": [
+            "",
+            "dialogue",
+            "voiceover",
+            "music",
+            "ambience",
+            "effects",
+            "commentary"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "timeline.action.createTimelineTitle": {
+      "type": "object",
+      "properties": {
+        "trackId": {
+          "type": "string"
+        },
+        "templateKey": {
+          "type": "string",
+          "enum": [
+            "basic",
+            "headline",
+            "lower-third",
+            "callout",
+            "quote",
+            "brand-card"
+          ]
+        },
+        "startSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 21600
+        },
+        "durationSeconds": {
+          "type": "number",
+          "minimum": 1e-06,
+          "maximum": 3600
+        },
+        "values": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "fontFamily": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "fontSize": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 360
+            },
+            "fontWeight": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "italic": {
+              "type": "boolean"
+            },
+            "letterSpacing": {
+              "type": "number",
+              "minimum": -50,
+              "maximum": 100
+            },
+            "lineHeight": {
+              "type": "number",
+              "minimum": 0.5,
+              "maximum": 3
+            },
+            "color": {
+              "type": "string"
+            },
+            "backgroundColor": {
+              "type": "string"
+            },
+            "alignment": {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            },
+            "positionX": {
+              "type": "number",
+              "minimum": -4,
+              "maximum": 4
+            },
+            "positionY": {
+              "type": "number",
+              "minimum": -4,
+              "maximum": 4
+            },
+            "safeMarginX": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5
+            },
+            "safeMarginY": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5
+            },
+            "shapeWidth": {
+              "type": "number",
+              "minimum": 1e-06,
+              "maximum": 4
+            },
+            "shapeHeight": {
+              "type": "number",
+              "minimum": 1e-06,
+              "maximum": 4
+            },
+            "shapeCornerRadius": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5
+            },
+            "shapeStrokeColor": {
+              "type": "string"
+            },
+            "shapeStrokeWidth": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.05
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "trackId",
+        "templateKey",
+        "startSeconds",
+        "durationSeconds",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "timeline.action.createTimelineGraphic": {
+      "type": "object",
+      "properties": {
+        "trackId": {
+          "type": "string"
+        },
+        "shapeType": {
+          "type": "string",
+          "enum": [
+            "rectangle",
+            "rounded-rectangle",
+            "ellipse"
+          ]
+        },
+        "startSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 21600
+        },
+        "durationSeconds": {
+          "type": "number",
+          "minimum": 1e-06,
+          "maximum": 3600
+        },
+        "values": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "fontFamily": {
+              "type": "string",
+              "maxLength": 120
+            },
+            "fontSize": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 360
+            },
+            "fontWeight": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "italic": {
+              "type": "boolean"
+            },
+            "letterSpacing": {
+              "type": "number",
+              "minimum": -50,
+              "maximum": 100
+            },
+            "lineHeight": {
+              "type": "number",
+              "minimum": 0.5,
+              "maximum": 3
+            },
+            "color": {
+              "type": "string"
+            },
+            "backgroundColor": {
+              "type": "string"
+            },
+            "alignment": {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            },
+            "positionX": {
+              "type": "number",
+              "minimum": -4,
+              "maximum": 4
+            },
+            "positionY": {
+              "type": "number",
+              "minimum": -4,
+              "maximum": 4
+            },
+            "safeMarginX": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5
+            },
+            "safeMarginY": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5
+            },
+            "shapeWidth": {
+              "type": "number",
+              "minimum": 1e-06,
+              "maximum": 4
+            },
+            "shapeHeight": {
+              "type": "number",
+              "minimum": 1e-06,
+              "maximum": 4
+            },
+            "shapeCornerRadius": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5
+            },
+            "shapeStrokeColor": {
+              "type": "string"
+            },
+            "shapeStrokeWidth": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.05
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "trackId",
+        "shapeType",
+        "startSeconds",
+        "durationSeconds",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "timeline.action.createTimelineClip": {
+      "type": "object",
+      "properties": {
+        "trackId": {
+          "type": "string"
+        },
+        "assetId": {
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "displayLabel": {
+          "type": "string"
+        },
+        "durationSeconds": {
+          "type": "number",
+          "minimum": 1e-06,
+          "maximum": 3600
+        },
+        "trimStartSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 21600
+        },
+        "trimEndSeconds": {
+          "type": "number",
+          "minimum": 1e-06,
+          "maximum": 21600
+        },
+        "startSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 21600
+        },
+        "posterSource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "trackId",
+        "assetId",
+        "filePath",
+        "displayLabel",
+        "durationSeconds",
+        "trimStartSeconds",
+        "trimEndSeconds",
+        "startSeconds"
+      ],
+      "additionalProperties": false
+    },
+    "timeline.action.setTimelineClipFrame": {
+      "type": "object",
+      "properties": {
+        "clipId": {
+          "type": "string"
+        },
+        "offsetX": {
+          "type": "number",
+          "minimum": -4,
+          "maximum": 4
+        },
+        "offsetY": {
+          "type": "number",
+          "minimum": -4,
+          "maximum": 4
+        },
+        "scale": {
+          "type": "number",
+          "minimum": 1e-06,
+          "maximum": 4
+        },
+        "rotationDegrees": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "perspectiveX": {
+          "type": "number",
+          "minimum": -0.35,
+          "maximum": 0.35
+        },
+        "perspectiveY": {
+          "type": "number",
+          "minimum": -0.35,
+          "maximum": 0.35
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "objectFit": {
+          "type": "string",
+          "enum": [
+            "fit",
+            "fill",
+            "stretch"
+          ]
+        },
+        "width": {
+          "type": "number",
+          "minimum": 1e-06,
+          "maximum": 4
+        },
+        "height": {
+          "type": "number",
+          "minimum": 1e-06,
+          "maximum": 4
+        },
+        "cornerRadius": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.5
+        },
+        "cropLeft": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "cropTop": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "cropRight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "cropBottom": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "clipId",
+        "offsetX",
+        "offsetY",
+        "scale",
+        "rotationDegrees",
+        "perspectiveX",
+        "perspectiveY",
+        "opacity",
+        "objectFit",
+        "width",
+        "height",
+        "cornerRadius",
+        "cropLeft",
+        "cropTop",
+        "cropRight",
+        "cropBottom"
+      ],
+      "additionalProperties": false
+    },
+    "timeline.action.setTimelineClipAnimation": {
+      "type": "object",
+      "properties": {
+        "clipId": {
+          "type": "string"
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "parameter": {
+                "type": "string"
+              },
+              "keyframes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "localSeconds": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 3600
+                    },
+                    "value": {
+                      "type": "number"
+                    },
+                    "interpolation": {
+                      "type": "string",
+                      "enum": [
+                        "hold",
+                        "linear",
+                        "ease-in",
+                        "ease-out",
+                        "ease-in-out",
+                        "bezier"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "localSeconds",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 0,
+                "maxItems": 20000
+              }
+            },
+            "required": [
+              "parameter",
+              "keyframes"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "clipId",
+        "channels"
+      ],
+      "additionalProperties": false
+    },
+    "timeline.action.setTimelineClipBlendMode": {
+      "type": "object",
+      "properties": {
+        "clipId": {
+          "type": "string"
+        },
+        "blendMode": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "screen",
+            "soft-light"
+          ]
+        }
+      },
+      "required": [
+        "clipId",
+        "blendMode"
+      ],
+      "additionalProperties": false
+    },
+    "timeline.action.saveTimeline": {
+      "type": "object",
+      "properties": {
+        "outputPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "outputPath"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "referenceNotation": {
+    "result": "earlier plan step ID",
+    "field": "trackId or createdClipId",
+    "resolution": "Resolve author-side before app.invoke_command; never send reference object as a literal native ID."
+  },
+  "nativeExamples": [
+    {
+      "path": "marketing/native-recreation-v4/projects/looksy-native-portrait-in-progress-checkpoint-1.json",
+      "sha256": "5c5ac69035e789c4a9d5917594d718fcf035bcb619cbdd080f0c231c5364f564",
+      "version": 8,
+      "sequenceFormat": {
+        "audioSampleRate": 48000,
+        "frameRate": 30,
+        "height": 1920,
+        "width": 1080
+      },
+      "trackCount": 413,
+      "clipCount": 502,
+      "rootKeys": [
+        "activeMediaBinId",
+        "activeOutputVariant",
+        "activeSmartCollectionId",
+        "activeTool",
+        "cacheBudgets",
+        "clips",
+        "colorSpace",
+        "createdAt",
+        "dataLevels",
+        "editMode",
+        "exportAlpha",
+        "exportAudioStems",
+        "exportCodec",
+        "exportContainer",
+        "exportEncoderMode",
+        "exportImageSequence",
+        "exportPreset",
+        "exportTwoPass",
+        "linkedSelectionEnabled",
+        "markers",
+        "mediaAssetBins",
+        "mediaAssetMetadata",
+        "mediaBins",
+        "multicamGroups",
+        "name",
+        "posterPath",
+        "projectBinding",
+        "removedMediaAssetIds",
+        "renderPath",
+        "reviewRanges",
+        "sequenceFormat",
+        "smartCollections",
+        "timelineId",
+        "tracks",
+        "transcriptionOptions",
+        "updatedAt",
+        "version"
+      ],
+      "sampleTrackFields": [
+        "trackId",
+        "kind",
+        "laneIndex",
+        "clips",
+        "muted",
+        "audioRole"
+      ],
+      "sampleTitle": {
+        "clipId": "19410062-e98f-48b3-b6b6-795be8f667e1",
+        "mediaType": "title",
+        "titleText": "PHOTO + VIDEO / DESKTOP",
+        "titleFontFamily": "Space Mono",
+        "titleFontSize": 21,
+        "titlePositionX": 0.06018518518518518,
+        "titlePositionY": 0.08619791666666667,
+        "startSeconds": 0,
+        "durationSeconds": 12,
+        "keyframes": [
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0,
+            "value": 0.0625
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.03333333333333333,
+            "value": 0.0514189047
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.06666666666666667,
+            "value": 0.0418810192
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.1,
+            "value": 0.0337359434
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.13333333333333333,
+            "value": 0.0268409896
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.16666666666666666,
+            "value": 0.0210611834
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.2,
+            "value": 0.0162692628
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.23333333333333334,
+            "value": 0.012345679
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.26666666666666666,
+            "value": 0.0091785959
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.3,
+            "value": 0.00666389
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.3333333333333333,
+            "value": 0.0047051511
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.36666666666666664,
+            "value": 0.0032136815
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.4,
+            "value": 0.0021084965
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.43333333333333335,
+            "value": 0.001316324
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.4666666666666667,
+            "value": 0.0007716049
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.5,
+            "value": 0.0004164931
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.5333333333333333,
+            "value": 0.0002008551
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.5666666666666667,
+            "value": 8.22702e-05
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.6,
+            "value": 2.60308e-05
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.6333333333333333,
+            "value": 5.1419e-06
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.6666666666666666,
+            "value": 3.214e-07
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.7,
+            "value": 0
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 12,
+            "value": 0
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 0,
+            "value": 1
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8,
+            "value": 1
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.033333333333333,
+            "value": 0.9999123797
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.066666666666666,
+            "value": 0.9993210781
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.1,
+            "value": 0.9977817535
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.133333333333333,
+            "value": 0.9949122299
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.166666666666666,
+            "value": 0.9903896709
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.2,
+            "value": 0.9839477539
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.233333333333333,
+            "value": 0.975373845
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.266666666666667,
+            "value": 0.9645061728
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.3,
+            "value": 0.9512310028
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.333333333333334,
+            "value": 0.9354798117
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.366666666666667,
+            "value": 0.9172264617
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.4,
+            "value": 0.896484375
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.433333333333334,
+            "value": 0.8733037077
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.466666666666667,
+            "value": 0.8477685245
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.5,
+            "value": 0.8199939728
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.533333333333333,
+            "value": 0.7901234568
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.566666666666666,
+            "value": 0.7583258123
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.6,
+            "value": 0.7247924805
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.633333333333333,
+            "value": 0.6897346826
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.666666666666666,
+            "value": 0.6533805941
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.7,
+            "value": 0.6159725189
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.733333333333333,
+            "value": 0.5777640637
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.766666666666667,
+            "value": 0.5390173123
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.8,
+            "value": 0.5
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.833333333333334,
+            "value": 0.4609826877
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.866666666666667,
+            "value": 0.4222359363
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.9,
+            "value": 0.3840274811
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.933333333333334,
+            "value": 0.3466194059
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.966666666666667,
+            "value": 0.3102653174
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9,
+            "value": 0.2752075195
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.033333333333333,
+            "value": 0.2416741877
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.066666666666666,
+            "value": 0.2098765432
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.1,
+            "value": 0.1800060272
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.133333333333333,
+            "value": 0.1522314755
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.166666666666666,
+            "value": 0.1266962923
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.2,
+            "value": 0.103515625
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.233333333333333,
+            "value": 0.0827735383
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.266666666666667,
+            "value": 0.0645201883
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.3,
+            "value": 0.0487689972
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.333333333333334,
+            "value": 0.0354938272
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.366666666666667,
+            "value": 0.024626155
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.4,
+            "value": 0.0160522461
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.433333333333334,
+            "value": 0.0096103291
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.466666666666667,
+            "value": 0.0050877701
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.5,
+            "value": 0.0022182465
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.533333333333333,
+            "value": 0.0006789219
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.566666666666666,
+            "value": 8.76203e-05
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.6,
+            "value": 0
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 12,
+            "value": 0
+          }
+        ]
+      },
+      "sampleShape": {
+        "clipId": "f9d33a00-fedd-4148-ac5c-bf1c75b4c0e7",
+        "mediaType": "title",
+        "titleShapeType": "rectangle",
+        "titleShapeWidth": 1,
+        "titleShapeHeight": 1,
+        "titleBackgroundColor": "#ff0b0d12",
+        "titlePositionX": 0.5,
+        "titlePositionY": 0.5
+      },
+      "portability": "Historical source paths may be offline; not a ready-to-import campaign template."
+    },
+    {
+      "path": "marketing/native-recreation-v4/projects/looksy-native-landscape-in-progress-checkpoint-5.json",
+      "sha256": "b9e718b22063c0237f5713c7576349b86c6702e717cb7abcc84728a37314c144",
+      "version": 8,
+      "sequenceFormat": {
+        "audioSampleRate": 48000,
+        "frameRate": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "trackCount": 642,
+      "clipCount": 855,
+      "rootKeys": [
+        "activeMediaBinId",
+        "activeOutputVariant",
+        "activeSmartCollectionId",
+        "activeTool",
+        "cacheBudgets",
+        "clips",
+        "colorSpace",
+        "createdAt",
+        "dataLevels",
+        "editMode",
+        "exportAlpha",
+        "exportAudioStems",
+        "exportCodec",
+        "exportContainer",
+        "exportEncoderMode",
+        "exportImageSequence",
+        "exportPreset",
+        "exportTwoPass",
+        "linkedSelectionEnabled",
+        "markers",
+        "mediaAssetBins",
+        "mediaAssetMetadata",
+        "mediaBins",
+        "multicamGroups",
+        "name",
+        "posterPath",
+        "projectBinding",
+        "removedMediaAssetIds",
+        "renderPath",
+        "reviewRanges",
+        "sequenceFormat",
+        "smartCollections",
+        "timelineId",
+        "tracks",
+        "transcriptionOptions",
+        "updatedAt",
+        "version"
+      ],
+      "sampleTrackFields": [
+        "trackId",
+        "kind",
+        "laneIndex",
+        "clips",
+        "muted",
+        "audioRole"
+      ],
+      "sampleTitle": {
+        "clipId": "6a128774-806c-4794-b6f8-7386a4b8ef1a",
+        "mediaType": "title",
+        "titleText": "PHOTO + VIDEO / DESKTOP",
+        "titleFontFamily": "Space Mono",
+        "titleFontSize": 21,
+        "titlePositionX": 0.046875,
+        "titlePositionY": 0.08842592592592592,
+        "startSeconds": 0,
+        "durationSeconds": 12,
+        "keyframes": [
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0,
+            "value": 0.1111111111
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.03333333333333333,
+            "value": 0.0914113861
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.06666666666666667,
+            "value": 0.0744551453
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.1,
+            "value": 0.0599750104
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.13333333333333333,
+            "value": 0.0477173149
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.16666666666666666,
+            "value": 0.0374421037
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.2,
+            "value": 0.0289231339
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.23333333333333334,
+            "value": 0.0219478738
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.26666666666666666,
+            "value": 0.0163175037
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.3,
+            "value": 0.0118469156
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.3333333333333333,
+            "value": 0.0083647131
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.36666666666666664,
+            "value": 0.0057132116
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.4,
+            "value": 0.0037484382
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.43333333333333335,
+            "value": 0.0023401315
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.4666666666666667,
+            "value": 0.0013717421
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.5,
+            "value": 0.0007404322
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.5333333333333333,
+            "value": 0.0003570757
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.5666666666666667,
+            "value": 0.0001462582
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.6,
+            "value": 4.6277e-05
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.6333333333333333,
+            "value": 9.1411e-06
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.6666666666666666,
+            "value": 5.713e-07
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 0.7,
+            "value": 0
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "frameOffsetY",
+            "roving": false,
+            "seconds": 12,
+            "value": 0
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 0,
+            "value": 1
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8,
+            "value": 1
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.033333333333333,
+            "value": 0.9999123797
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.066666666666666,
+            "value": 0.9993210781
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.1,
+            "value": 0.9977817535
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.133333333333333,
+            "value": 0.9949122299
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.166666666666666,
+            "value": 0.9903896709
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.2,
+            "value": 0.9839477539
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.233333333333333,
+            "value": 0.975373845
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.266666666666667,
+            "value": 0.9645061728
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.3,
+            "value": 0.9512310028
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.333333333333334,
+            "value": 0.9354798117
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.366666666666667,
+            "value": 0.9172264617
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.4,
+            "value": 0.896484375
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.433333333333334,
+            "value": 0.8733037077
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.466666666666667,
+            "value": 0.8477685245
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.5,
+            "value": 0.8199939728
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.533333333333333,
+            "value": 0.7901234568
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.566666666666666,
+            "value": 0.7583258123
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.6,
+            "value": 0.7247924805
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.633333333333333,
+            "value": 0.6897346826
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.666666666666666,
+            "value": 0.6533805941
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.7,
+            "value": 0.6159725189
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.733333333333333,
+            "value": 0.5777640637
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.766666666666667,
+            "value": 0.5390173123
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.8,
+            "value": 0.5
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.833333333333334,
+            "value": 0.4609826877
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.866666666666667,
+            "value": 0.4222359363
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.9,
+            "value": 0.3840274811
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.933333333333334,
+            "value": 0.3466194059
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 8.966666666666667,
+            "value": 0.3102653174
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9,
+            "value": 0.2752075195
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.033333333333333,
+            "value": 0.2416741877
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.066666666666666,
+            "value": 0.2098765432
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.1,
+            "value": 0.1800060272
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.133333333333333,
+            "value": 0.1522314755
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.166666666666666,
+            "value": 0.1266962923
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.2,
+            "value": 0.103515625
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.233333333333333,
+            "value": 0.0827735383
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.266666666666667,
+            "value": 0.0645201883
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.3,
+            "value": 0.0487689972
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.333333333333334,
+            "value": 0.0354938272
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.366666666666667,
+            "value": 0.024626155
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.4,
+            "value": 0.0160522461
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.433333333333334,
+            "value": 0.0096103291
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.466666666666667,
+            "value": 0.0050877701
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.5,
+            "value": 0.0022182465
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.533333333333333,
+            "value": 0.0006789219
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.566666666666666,
+            "value": 8.76203e-05
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 9.6,
+            "value": 0
+          },
+          {
+            "bezierHandlesLinked": true,
+            "bezierInCustom": false,
+            "bezierInTimeSeconds": 0,
+            "bezierInValue": 0,
+            "bezierOutCustom": false,
+            "bezierOutTimeSeconds": 0,
+            "bezierOutValue": 0,
+            "interpolation": "linear",
+            "parameter": "opacity",
+            "roving": false,
+            "seconds": 12,
+            "value": 0
+          }
+        ]
+      },
+      "sampleShape": {
+        "clipId": "4ef2c0ff-f22c-4715-8df9-d108d1032876",
+        "mediaType": "title",
+        "titleShapeType": "rectangle",
+        "titleShapeWidth": 1,
+        "titleShapeHeight": 1,
+        "titleBackgroundColor": "#ff0b0d12",
+        "titlePositionX": 0.5,
+        "titlePositionY": 0.5
+      },
+      "portability": "Historical source paths may be offline; not a ready-to-import campaign template."
+    }
+  ]
+}

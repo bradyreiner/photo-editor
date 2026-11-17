@@ -16,6 +16,10 @@ inline QVariantMap gaussian_camera_prior(const QVariantMap& metadata, QSize prep
   const auto focal = focal35 / 43.27 * std::hypot(prepared_size.width(), prepared_size.height());
   QVariantMap identity = metadata;
   identity.remove("available"); identity.remove("backend");
+  // Exposure time identifies a photograph, not its camera/lens calibration.
+  // Keeping it in this key silently made ordinary consecutive shots separate
+  // cameras even when the body serial, lens and focal settings matched.
+  identity.remove("captureTime");
   identity.insert("width", prepared_size.width()); identity.insert("height", prepared_size.height());
   const auto group = QString::fromLatin1(QCryptographicHash::hash(
       QJsonDocument::fromVariant(identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());

@@ -10,7 +10,13 @@
     QObject::connect(&engine, &QQmlEngine::warnings, &engine, [import_warnings](const QList<QQmlError>& errors) {
       for (const auto& error : errors) {
         const auto message = error.toString();
-        if (message.contains(QStringLiteral("ImportView.qml"))) import_warnings->append(message);
+        if (message.contains(QStringLiteral("ImportView.qml")) ||
+            message.contains(QStringLiteral("ImportImageTile.qml")) ||
+            message.contains(QStringLiteral("ImportSourceRow.qml")) ||
+            message.contains(QStringLiteral("ImportFolderRow.qml")) ||
+            message.contains(QStringLiteral("ImportFolderChip.qml"))) {
+          import_warnings->append(message);
+        }
       }
     });
     // This fixture intentionally uses a nonexistent database URL. Keep its
@@ -50,6 +56,15 @@
     process_layout_events(8);
     auto* workspace = find_named_object(import_root, QStringLiteral("importWorkspace"));
     if (!workspace) return fail("Import workspace unavailable");
+    const auto import_style_errors = qml_popup_style_violations(import_root);
+    if (!import_style_errors.isEmpty()) {
+      std::cerr << import_style_errors.join('\n').toStdString() << '\n';
+      return fail("Import application shell violates shared popup styling");
+    }
+
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_IMPORT_REDESIGN_PROOF_DIR")) {
+#include "import_redesign_proof.inc"
+    }
 
     const auto multi_folder_root = runtime_root.filePath(QStringLiteral("Multi Folder Picker"));
     const auto first_folder = QDir(multi_folder_root).filePath(QStringLiteral("Camera A/Day 1"));
@@ -132,19 +147,25 @@
     workspace->setProperty("workflowProfile", QStringLiteral("studio"));
     workspace->setProperty("pendingImportRootPath", source);
     workspace->setProperty("pendingImportPaths", QStringList{photo});
+    workspace->setProperty("pendingImportKind", QStringLiteral("selection"));
     workspace->setProperty("importMode", QStringLiteral("referenced"));
     workspace->setProperty("importProjectChooserOpen", true);
     if (!QMetaObject::invokeMethod(workspace, "refreshImportPreflight") ||
         !catalog_assets.importPreflightBusy() || workspace->property("canConfirmImport").toBool())
       return fail("Import review did not disable confirmation during the asynchronous scan");
+    auto* confirm = find_named_object(import_root, QStringLiteral("importPersistentPrimaryButton"));
+    if (!confirm || !item_visible(qobject_cast<QQuickItem*>(confirm)) ||
+        confirm->property("enabled").toBool() ||
+        confirm->property("disabledReason").toString().isEmpty())
+      return fail("The persistent Import action should explain why it is disabled during preflight");
     QElapsedTimer timer;
     timer.start();
     while (catalog_assets.importPreflightBusy() && timer.elapsed() < 5000) process_layout_events(1);
     process_layout_events(8);
     const auto result = workspace->property("importPreflight").toMap();
-    auto* confirm = find_named_object(import_root, QStringLiteral("importPreflightConfirmButton"));
     if (catalog_assets.importPreflightBusy() || result.value(QStringLiteral("importableCount")).toInt() != 1 ||
-        !workspace->property("canConfirmImport").toBool() || !confirm || !confirm->property("enabled").toBool())
+        !workspace->property("canConfirmImport").toBool() || !confirm || !confirm->property("enabled").toBool() ||
+        confirm->property("text").toString() != QStringLiteral("Import selected photos · 1"))
       return fail("Import UI did not publish the completed report and enable confirmation");
     workspace->setProperty("rawJpegPolicy", QStringLiteral("raw-only"));
     if (!catalog_assets.importPreflightBusy() || workspace->property("canConfirmImport").toBool())
@@ -205,14 +226,18 @@
     auto* review_imported = find_named_item(import_root, QStringLiteral("importReviewImportedButton"));
     QVariant completion_summary_value;
     QVariant backup_receipt_value;
+    QVariant backup_receipt_summary_value;
     if (!QMetaObject::invokeMethod(
             workspace, "importCompletionSummaryText", Q_RETURN_ARG(QVariant, completion_summary_value)) ||
         !QMetaObject::invokeMethod(
-            workspace, "importBackupReceiptText", Q_RETURN_ARG(QVariant, backup_receipt_value))) {
+            workspace, "importBackupReceiptText", Q_RETURN_ARG(QVariant, backup_receipt_value)) ||
+        !QMetaObject::invokeMethod(
+            workspace, "importBackupReceiptSummaryText", Q_RETURN_ARG(QVariant, backup_receipt_summary_value))) {
       return fail("Import completion text should be exposed by the active ImportView state");
     }
     const auto completion_summary = completion_summary_value.toString();
     const auto backup_receipt = backup_receipt_value.toString();
+    const auto backup_receipt_summary = backup_receipt_summary_value.toString();
     QQuickItem* rendered_completion_summary = nullptr;
     QQuickItem* rendered_backup_receipt = nullptr;
     QList<QObject*> summary_children;
@@ -221,18 +246,35 @@
       auto* item = qobject_cast<QQuickItem*>(child);
       if (!item_visible(item)) continue;
       if (item->property("text").toString() == completion_summary) rendered_completion_summary = item;
-      if (item->property("text").toString() == backup_receipt) rendered_backup_receipt = item;
+      if (item->property("text").toString() == backup_receipt_summary) rendered_backup_receipt = item;
     }
     const auto expected_completion = QStringLiteral(
         "Imported 2 · resumed 1 · duplicates 1 · unsupported 1 · unreadable/failures 0");
     const auto expected_backup_receipt = QStringLiteral(
         "Verified backup · 3 copies · SHA-256 · %1").arg(backup_destination);
+    auto* backup_receipt_accessibility = rendered_backup_receipt
+        ? QAccessible::queryAccessibleInterface(rendered_backup_receipt) : nullptr;
+    const auto accessible_backup_receipt = backup_receipt_accessibility
+        ? backup_receipt_accessibility->text(QAccessible::Description) : QString{};
     if (!item_visible(receipt_card) || !item_visible(review_imported) ||
         review_imported->property("text").toString() != QStringLiteral("Review imported") ||
         completion_summary != expected_completion || backup_receipt != expected_backup_receipt ||
+        backup_receipt_summary != QStringLiteral("Verified backup · 3 copies · SHA-256 · %1")
+            .arg(QFileInfo(QDir::cleanPath(backup_destination)).fileName()) ||
+        backup_receipt_summary.contains(backup_destination) ||
         !item_visible(rendered_completion_summary) || !item_visible(rendered_backup_receipt) ||
         !contains_with_tolerance(scene_rect(receipt_card), scene_rect(rendered_completion_summary)) ||
-        !contains_with_tolerance(scene_rect(receipt_card), scene_rect(rendered_backup_receipt))) {
+        !contains_with_tolerance(scene_rect(receipt_card), scene_rect(rendered_backup_receipt)) ||
+        accessible_backup_receipt != backup_receipt) {
+      std::cerr << "Completed receipt: summary=" << completion_summary.toStdString()
+                << " expectedSummary=" << expected_completion.toStdString()
+                << " receipt=" << backup_receipt.toStdString()
+                << " expectedReceipt=" << expected_backup_receipt.toStdString()
+                << " compactReceipt=" << backup_receipt_summary.toStdString()
+                << " destinationName=" << QFileInfo(QDir::cleanPath(backup_destination)).fileName().toStdString()
+                << " renderedSummary=" << item_visible(rendered_completion_summary)
+                << " renderedReceipt=" << item_visible(rendered_backup_receipt)
+                << " accessibleReceipt=" << accessible_backup_receipt.toStdString() << '\n';
       return fail("Completed import counts, verified-backup receipt, and Review imported action should render together");
     }
 
@@ -293,6 +335,12 @@
         receipt_manifest_file.write(QJsonDocument(receipt_visual_manifest).toJson(QJsonDocument::Indented)) <= 0) {
       return fail("Completed import receipt proof should write its visual manifest");
     }
+    const auto retained_job_id = job_queue.latestJobForKind(QStringLiteral("catalog_import")).value("jobId").toString();
+    if (!send_activation_key(find_named_item(import_root, QStringLiteral("importDismissSummaryButton"))) ||
+        item_visible(receipt_card) || job_queue.latestJobForKind(QStringLiteral("catalog_import")).value("jobId").toString() != retained_job_id)
+      return fail("Dismissing a completed import should hide its summary while preserving job history");
+    workspace->setProperty("dismissedImportJobId", QString{});
+    process_layout_events(3);
     if (!send_activation_key(review_imported) ||
         !wait_for_condition([&]() {
           return import_root->property("libraryWorkspaceMode").toString() == QStringLiteral("library") &&

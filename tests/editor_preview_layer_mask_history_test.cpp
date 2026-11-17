@@ -45,16 +45,27 @@ int main(int argc, char** argv) {
       QString());
 
   controller.addMask(QStringLiteral("linear"));
-  if (controller.maskCount() != 1 || controller.photoLayerCount() != 1 || !controller.canUndo()) {
-    return fail("mask creation should create a linked layer and enter undo history");
+  if (controller.maskCount() != 1 || controller.photoLayerCount() != 0 ||
+      !controller.hasWorkingSelection() || !controller.canUndo()) {
+    return fail("selection creation should enter undo history without creating an adjustment layer");
   }
+  const auto independent_selection_set_id = controller.workingSelectionSetId();
+  const auto independent_selection_mask_id = controller.maskStack().first().toMap()
+      .value(QStringLiteral("id")).toString();
+  if (independent_selection_set_id.isEmpty() || independent_selection_mask_id.isEmpty())
+    return fail("selection history proof requires stable selection identities");
   controller.undo();
-  if (controller.maskCount() != 0 || controller.photoLayerCount() != 0 || !controller.canRedo()) {
-    return fail("undo should remove a newly created mask and linked adjustment layer");
+  if (controller.maskCount() != 0 || controller.photoLayerCount() != 0 ||
+      controller.hasWorkingSelection() || !controller.canRedo()) {
+    return fail("undo should remove the selection without changing layer ownership");
   }
   controller.redo();
-  if (controller.maskCount() != 1 || controller.photoLayerCount() != 1) {
-    return fail("redo should restore a newly created mask and linked adjustment layer");
+  if (controller.maskCount() != 1 || controller.photoLayerCount() != 0 ||
+      !controller.hasWorkingSelection() ||
+      controller.workingSelectionSetId() != independent_selection_set_id ||
+      controller.maskStack().first().toMap().value(QStringLiteral("id")).toString() !=
+          independent_selection_mask_id) {
+    return fail("redo should restore the same independent working selection without a layer");
   }
 
   controller.setActiveMaskExposure(0.46);
@@ -70,18 +81,57 @@ int main(int argc, char** argv) {
     return fail("redo should restore the active mask edit");
   }
 
-  if (!controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("vibrance"), 37.0)) {
-    return fail("layer-local color history proof should edit the linked adjustment layer");
+  const auto independent_selection_stack = controller.maskStack();
+  if (!controller.addAdjustmentLayer(QStringLiteral("History Adjustment")) ||
+      controller.photoLayerCount() != 1 || controller.maskStack() != independent_selection_stack ||
+      controller.workingSelectionSetId() != independent_selection_set_id) {
+    return fail("explicit adjustment-layer creation should preserve the independent working selection");
+  }
+  const auto explicit_layer = controller.photoLayers().first().toMap();
+  const auto explicit_layer_id = explicit_layer.value(QStringLiteral("id")).toString();
+  if (explicit_layer_id.isEmpty() ||
+      explicit_layer.value(QStringLiteral("kind")).toString() != QStringLiteral("adjustment") ||
+      !explicit_layer.value(QStringLiteral("selectionMaskSetId")).toString().isEmpty()) {
+    return fail("explicit adjustment layer should not take ownership of the working selection");
   }
   controller.undo();
+  if (controller.photoLayerCount() != 0 || controller.maskStack() != independent_selection_stack ||
+      controller.workingSelectionSetId() != independent_selection_set_id || !controller.canRedo()) {
+    return fail("undo of explicit layer creation should leave the working selection independent");
+  }
+  controller.redo();
+  if (controller.photoLayerCount() != 1) {
+    return fail("redo of explicit layer creation should restore one adjustment layer");
+  }
+  const auto restored_explicit_layer = controller.photoLayers().first().toMap();
+  if (restored_explicit_layer.value(QStringLiteral("id")).toString() != explicit_layer_id ||
+      !restored_explicit_layer.value(QStringLiteral("selectionMaskSetId")).toString().isEmpty() ||
+      controller.maskStack() != independent_selection_stack ||
+      controller.workingSelectionSetId() != independent_selection_set_id) {
+    return fail("redo of explicit layer creation should restore its owner without linking the selection");
+  }
+
+  if (!controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("vibrance"), 37.0)) {
+    return fail("layer-local color history proof should edit the explicitly created adjustment layer");
+  }
+  controller.undo();
+  if (controller.photoLayerCount() != 1) {
+    return fail("undo of a layer edit should preserve the explicitly created adjustment layer");
+  }
   auto history_layer = controller.photoLayers().at(0).toMap();
   if (!almost_equal(history_layer.value(QStringLiteral("vibrance")).toDouble(), 0.0) ||
-      !controller.canRedo()) {
+      !controller.canRedo() || controller.maskStack() != independent_selection_stack ||
+      controller.workingSelectionSetId() != independent_selection_set_id) {
     return fail("undo should restore the previous layer-local color edit");
   }
   controller.redo();
+  if (controller.photoLayerCount() != 1) {
+    return fail("redo of a layer edit should preserve the explicitly created adjustment layer");
+  }
   history_layer = controller.photoLayers().at(0).toMap();
-  if (!almost_equal(history_layer.value(QStringLiteral("vibrance")).toDouble(), 37.0)) {
+  if (!almost_equal(history_layer.value(QStringLiteral("vibrance")).toDouble(), 37.0) ||
+      controller.maskStack() != independent_selection_stack ||
+      controller.workingSelectionSetId() != independent_selection_set_id) {
     return fail("redo should restore the layer-local color edit");
   }
 

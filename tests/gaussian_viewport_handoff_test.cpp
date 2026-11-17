@@ -1,5 +1,6 @@
 #include "gaussian_scene_viewport.h"
 #include "gaussian_physical_camera.h"
+#include "gaussian_saved_views.h"
 #include <QGuiApplication>
 #include <QTemporaryDir>
 #include <QDir>
@@ -35,11 +36,17 @@ struct WorkGate {
 class FixtureRenderer final : public GaussianSceneRenderer {
  public:
   std::atomic_int calls{0};
+  std::atomic_bool last_interactive{false};
+  std::atomic_int last_samples{0};
+  std::atomic_bool last_film_active{false};
   std::atomic_bool cancel_next_refinement{false}, cancellation_entered{false}, cancellation_observed{false};
   std::shared_ptr<GaussianSceneRenderer> native;
   std::shared_ptr<WorkGate> gate;
   GaussianFrame renderWithOptions(const std::shared_ptr<const GaussianSceneData>& scene,
       const GaussianCamera& camera, bool readback, std::optional<double> seconds, const GaussianRenderOptions& options) override {
+    last_interactive.store(options.interactive);
+    last_samples.store(camera.photo.lens.samples);
+    last_film_active.store(camera.photo.film.active());
     if (!readback && !options.interactive && cancel_next_refinement.exchange(false)) {
       cancellation_entered.store(true);
       QElapsedTimer timer; timer.start();
@@ -83,19 +90,144 @@ struct GaussianSceneViewportTestAccess {
     auto scene = std::make_shared<GaussianSceneData>(*viewport.scene_);
     GaussianPoint p; p.center_opacity = {0,0,3,0.9F}; p.covariance_a = {0.01F,0,0,0.01F};
     p.covariance_b = {0,0.0001F,0,0};
-    if (too_close) { p.center_opacity[2] = 0.2F; scene->cameras[0].photo.lens.aperture_radius = 0.1F; }
+    // Exceed the current aperture/focus bound at the picked distance while
+    // retaining a valid authored camera at its original one-unit focus.
+    if (too_close) { p.center_opacity[2] = 0.2F; scene->cameras[0].photo.lens.aperture_radius = 1.2F; }
     scene->points = {p}; viewport.scene_ = scene;
     const auto camera = viewport.currentCamera();
     viewport.frame_.native_texture = 1; viewport.frame_.native_lease = std::make_shared<int>(1);
     viewport.frame_.size = camera.image_size; viewport.frame_.metrics.insert("camera", camera.description());
+    viewport.submitted_ = viewport.requested_; viewport.render_epoch_ = viewport.epoch_;
+    viewport.frame_request_ = viewport.requested_; viewport.frame_epoch_ = viewport.epoch_;
   }
   static void finishFocusWithoutDelivery(GaussianSceneViewport& viewport) { viewport.focus_pick_.waitForFinished(); }
+  static bool orbitTargetRegression() {
+    GaussianSceneViewport viewport;
+    viewport.setSize({640,480});
+    primeFocus(viewport,std::make_shared<FixtureRenderer>());
+    auto scene = std::make_shared<GaussianSceneData>(*viewport.scene_);
+    scene->points[0].center_opacity[0] = 0.5F;
+    viewport.scene_ = scene;
+    const auto original = viewport.fullCamera();
+    if (!viewport.orbitAroundAt(400,240).value("ok").toBool()) return false;
+    viewport.focus_pick_.waitForFinished();
+    QElapsedTimer timer; timer.start();
+    while (viewport.focus_pick_active_ && timer.elapsed() < 3000)
+      QCoreApplication::processEvents(QEventLoop::AllEvents,10);
+    if (viewport.focus_pick_active_ || !viewport.orbit_target_ ||
+        !viewport.status().value("focusPickResult").toMap().value("orbitTargetSelected").toBool() ||
+        viewport.fullCamera().description() != original.description()) return false;
+    viewport.setVisible(false);
+    const auto target = *viewport.orbit_target_;
+    const auto projection = [](const GaussianCamera& camera,QVector3D subject) {
+      const auto relative = subject-camera.position;
+      const float z = QVector3D::dotProduct(relative,camera.forward);
+      return QVector2D(QVector3D::dotProduct(relative,camera.right)/z,
+          QVector3D::dotProduct(relative,camera.down)/z);
+    };
+    const auto projected = projection(original,target);
+    viewport.orbit(25,12);
+    const auto orbited = viewport.fullCamera();
+    if ((projection(orbited,target)-projected).length() > 1e-5F ||
+        std::abs((orbited.position-target).length()-(original.position-target).length()) > 1e-5F ||
+        orbited.photo != original.photo) return false;
+    viewport.pan(0.1,-0.05);
+    const auto moved = viewport.fullCamera();
+    if (!viewport.orbit_target_ || (projection(moved,*viewport.orbit_target_)-projected).length() > 1e-5F ||
+        (moved.position-orbited.position).length() < 0.01F || moved.photo != original.photo) return false;
+    viewport.dolly(1);
+    const auto dollied = viewport.fullCamera();
+    if ((dollied.position-*viewport.orbit_target_).length() >= (moved.position-*viewport.orbit_target_).length() ||
+        dollied.photo != original.photo) return false;
+    viewport.resetCamera();
+    return !viewport.orbit_target_ && viewport.fullCamera().description() == original.description();
+  }
+  static bool freeCameraRegression() {
+    GaussianSceneViewport viewport;
+    viewport.setVisible(false);
+    prime(viewport,std::make_shared<FixtureRenderer>());
+    const auto original = viewport.fullCamera();
+    const auto same_vector = [](QVector3D a,QVector3D b) { return (a-b).length() < 2e-5F; };
+    viewport.look(60,15);
+    const auto turned = viewport.fullCamera();
+    if (!same_vector(turned.position,original.position) ||
+        same_vector(turned.forward,original.forward) || turned.photo != original.photo) return false;
+    viewport.moveCamera(0,0,1.25);
+    const auto first_move = viewport.fullCamera();
+    if (!same_vector(first_move.position-turned.position,turned.forward*1.25F) ||
+        !same_vector(first_move.forward,turned.forward)) return false;
+    viewport.look(-110,-35);
+    const auto second_turn = viewport.fullCamera();
+    if (!same_vector(second_turn.position,first_move.position) ||
+        QVector3D::dotProduct(second_turn.forward,turned.forward) > 0.5F) return false;
+    viewport.moveCamera(0,0,0.75);
+    const auto second_move = viewport.fullCamera();
+    if (!same_vector(second_move.position-second_turn.position,second_turn.forward*0.75F)) return false;
+    viewport.roll(45);
+    const auto rolled = viewport.fullCamera();
+    if (!same_vector(rolled.position,second_move.position) ||
+        !same_vector(rolled.forward,second_move.forward) ||
+        same_vector(rolled.right,second_move.right)) return false;
+    viewport.moveCamera(0.25,-0.2,0);
+    const auto strafed = viewport.fullCamera();
+    if (!same_vector(strafed.position-rolled.position,rolled.right*0.25F-rolled.down*0.2F)) return false;
+    viewport.roll(-45);
+    const auto unrolled = viewport.fullCamera();
+    if (!same_vector(unrolled.position,strafed.position) ||
+        !same_vector(unrolled.right,second_move.right) ||
+        !same_vector(unrolled.down,second_move.down) || unrolled.photo != original.photo) return false;
+    // A chosen orbit subject remains a world-space anchor during free flight.
+    const auto target = unrolled.position+unrolled.forward*4+unrolled.right*0.3F;
+    viewport.orbit_target_ = target;
+    viewport.moveCamera(0,0,0.25);
+    if (!viewport.orbit_target_ || !same_vector(*viewport.orbit_target_,target)) return false;
+    const auto before_orbit = viewport.fullCamera();
+    viewport.orbit(25,10);
+    const auto orbited = viewport.fullCamera();
+    if (same_vector(orbited.position,before_orbit.position) ||
+        std::abs((orbited.position-target).length()-(before_orbit.position-target).length()) > 2e-5F ||
+        !same_vector(*viewport.orbit_target_,target) || orbited.photo != original.photo) return false;
+    viewport.look(180,0);
+    const auto facing_away = viewport.fullCamera();
+    viewport.orbit(8,0);
+    const auto resumed_orbit = viewport.fullCamera();
+    if (same_vector(resumed_orbit.position,facing_away.position) || !viewport.orbit_target_ ||
+        QVector3D::dotProduct(*viewport.orbit_target_-resumed_orbit.position,resumed_orbit.forward) <= 0 ||
+        resumed_orbit.photo != original.photo) return false;
+    viewport.resetCamera();
+    return !viewport.orbit_target_ && viewport.fullCamera().description() == original.description();
+  }
   static void physicalFocus(GaussianSceneViewport& viewport) {
     GaussianPhysicalCameraSettings p; p.metres_per_scene_unit = 0.5; p.focus_distance_m = 1;
     const auto base = viewport.fullCamera();
     viewport.saved_camera_ = *make_gaussian_physical_camera(base,base.image_size,p).camera;
     const auto camera = viewport.currentCamera();
     viewport.frame_.size = camera.image_size; viewport.frame_.metrics["camera"] = camera.description();
+  }
+  static bool focusPublicationGuards() {
+    for (int mode = 0; mode < 3; ++mode) {
+      GaussianSceneViewport viewport;
+      viewport.setSize({640,480});
+      primeFocus(viewport,std::make_shared<FixtureRenderer>());
+      auto authored = viewport.fullCamera(); authored.photo.lens.auto_focus = true;
+      viewport.saved_camera_ = authored;
+      const auto camera = viewport.currentCamera();
+      auto resolved = camera; resolved.photo.lens.auto_focus = false;
+      resolved.photo.lens.focus_distance = 3;
+      viewport.frame_.metrics["camera"] = camera.description();
+      viewport.frame_.metrics["resolvedCamera"] = resolved.description();
+      viewport.frame_.metrics["autofocus"] = QVariantMap{{"locked",true},{"resolvedFocusDistance",3}};
+      // A newly submitted worker has the same pose, but has not published an image.
+      // Composition changes also advance the scene epoch independently of the pose.
+      if (mode == 1) viewport.submitted_ = ++viewport.requested_;
+      if (mode == 2) viewport.render_epoch_ = ++viewport.epoch_;
+      if (viewport.status().value("autofocus").toMap().isEmpty() != (mode != 0)) return false;
+      if (mode != 0 && viewport.pickFocusAt(320,240).value("ok").toBool()) return false;
+      viewport.setVisible(false);
+      if (!viewport.setFocusMode("manual").value("ok").toBool() ||
+          std::abs(viewport.fullCamera().photo.lens.focus_distance-(mode == 0 ? 3.0F : 1.0F)) > 1e-6F) return false;
+    }
+    return true;
   }
   static bool progressivePublicationGuards() {
     for (int mode = 0; mode < 9; ++mode) {
@@ -120,6 +252,7 @@ struct GaussianSceneViewportTestAccess {
       const bool published = viewport.status().value("publishedPhase") == "refining";
       viewport.render_active_ = false; viewport.export_in_flight_ = false;
       if (published != (mode == 0) || viewport.progressive_frames_->takeLatest()) return false;
+      if (published && (viewport.frame_request_ != 7 || viewport.frame_epoch_ != 3)) return false;
     }
     return true;
   }
@@ -256,6 +389,22 @@ static bool progressive_preview_regression() {
   if (!viewport.setPhotoSettings(film_photo.description()).value("ok").toBool() || viewport.status().value("navigating").toBool() ||
       !wait_for([&] { return viewport.status().value("previewPhase") == "photo"; }) ||
       viewport.status().value("metrics").toMap().value("camera").toMap().value("width").toInt() != 1440) return failed(11);
+  // Optical adjustments keep the aperture and film in the live image. Their
+  // bounded sampling budget must never overwrite the authored/export recipe.
+  viewport.beginCameraAdjustment();
+  film_photo.lens.aperture_radius = 0.05F;
+  film_photo.lens.samples = 512;
+  const int before_optics = viewport.status().value("publishedFrames").toInt();
+  if (!viewport.setPhotoSettings(film_photo.description()).value("ok").toBool() ||
+      !wait_for([&] { return viewport.status().value("publishedFrames").toInt() > before_optics; }) ||
+      !viewport.status().value("cameraAdjusting").toBool() || renderer->last_interactive.load() ||
+      renderer->last_samples.load() != 32 || !renderer->last_film_active.load() ||
+      viewport.status().value("lensSettings").toMap().value("samples").toInt() != 512 ||
+      viewport.status().value("metrics").toMap().value("camera").toMap().value("width").toInt() != 720) return failed(12);
+  viewport.endCameraAdjustment();
+  if (!wait_for([&] { return viewport.status().value("previewPhase") == "photo"; }) ||
+      viewport.status().value("cameraAdjusting").toBool() || renderer->last_samples.load() != 512 ||
+      viewport.status().value("metrics").toMap().value("camera").toMap().value("width").toInt() != 1440) return failed(13);
   // Wheel navigation settles without pointer-release events.
   viewport.dolly(1);
   if (!wait_for([&] { return viewport.status().value("previewPhase") == "photo"; })) return failed(6);
@@ -302,7 +451,7 @@ static bool lifetime_regression(const std::shared_ptr<const GaussianSceneData>& 
     std::cout << "load teardown_us=" << elapsed << '\n';
     responsive &= elapsed < 100000;
   }
-  for (const auto mode : {QStringLiteral("preview"), QStringLiteral("photo"), QStringLiteral("queued-photo")}) {
+  for (const auto& mode : {QStringLiteral("preview"), QStringLiteral("photo"), QStringLiteral("queued-photo")}) {
     auto gate = std::make_shared<WorkGate>();
     auto renderer = std::make_shared<FixtureRenderer>(); renderer->gate = gate;
     if (native) renderer->native = make_gaussian_scene_renderer();
@@ -357,14 +506,17 @@ int main(int argc, char** argv) {
     if (mode == 1) viewport.orbit(2,0);
     if (!wait_for([&] { return !viewport.status().value("focusPicking").toBool(); })) return 1;
     const auto focus = viewport.status().value("lensSettings").toMap().value("focusDistance").toDouble();
-    if (std::abs(focus-(mode == 0 || mode == 3 ? 3.0 : 1.0)) > 1e-6) return 1;
+    if (std::abs(focus-(mode == 0 || mode == 3 ? 3.0 : 1.0)) > 1e-6) {
+      std::cerr << "Focus mode " << mode << " resolved to " << focus << ": "
+          << QJsonDocument::fromVariant(viewport.status()).toJson().constData(); return 1;
+    }
     if (mode == 3) {
       const auto camera = GaussianSceneViewportTestAccess::camera(viewport);
       if (!camera.physical || !gaussian_physical_camera_consistent(camera) ||
           camera.physical->settings.focus_distance_m != 1.5 || camera.physical->settings.f_number != 2.8) return 1;
     }
     if (mode == 2 && (viewport.status().value("focusPickError").toString().isEmpty() ||
-        std::abs(viewport.status().value("lensSettings").toMap().value("apertureRadius").toDouble()-0.1) > 1e-6)) return 1;
+        std::abs(viewport.status().value("lensSettings").toMap().value("apertureRadius").toDouble()-1.2) > 1e-6)) return 1;
   }
   {
     GaussianSceneViewport viewport; auto fixture = std::make_shared<FixtureRenderer>();
@@ -384,7 +536,10 @@ int main(int argc, char** argv) {
     const auto cleared = GaussianSceneViewportTestAccess::camera(viewport);
     if (cleared.physical || cleared.fx != camera.fx || cleared.fy != camera.fy || cleared.photo != altered) return 1;
   }
-  if (!GaussianSceneViewportTestAccess::progressivePublicationGuards()) return 1;
+  if (!GaussianSceneViewportTestAccess::focusPublicationGuards()) { std::cerr << "Focus publication guards failed\n"; return 1; }
+  if (!GaussianSceneViewportTestAccess::progressivePublicationGuards()) { std::cerr << "Progressive publication guards failed\n"; return 1; }
+  if (!GaussianSceneViewportTestAccess::orbitTargetRegression()) { std::cerr << "Picked orbit target regression failed\n"; return 1; }
+  if (!GaussianSceneViewportTestAccess::freeCameraRegression()) { std::cerr << "Free look, local movement, roll and orbit switching failed\n"; return 1; }
   if (!progressive_preview_regression()) {
     std::cerr << "Live-to-photo preview must settle automatically, preserve perspective and pause while hidden\n";
     return EXIT_FAILURE;

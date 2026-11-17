@@ -1067,6 +1067,7 @@ fn field_unsigned_i32(exif: &exif::Exif, tag: Tag) -> Option<i32> {
             Value::Long(values) => values.first().and_then(|value| i32::try_from(*value).ok()),
             _ => None,
         })
+        .filter(|value| *value > 0)
 }
 
 fn field_rational_f64(exif: &exif::Exif, tag: Tag) -> Option<f64> {
@@ -1081,6 +1082,7 @@ fn field_rational_f64(exif: &exif::Exif, tag: Tag) -> Option<f64> {
             }),
             _ => None,
         })
+        .filter(|value| value.is_finite() && *value > 0.0)
 }
 
 const EXIF_DATE_TIME_FORMAT: &[time::format_description::FormatItem<'static>] =
@@ -1671,6 +1673,90 @@ mod tests {
             .write(&mut output, false)
             .expect("encode EXIF fixture");
         fs::write(path, output.into_inner()).expect("write EXIF fixture");
+    }
+
+    #[test]
+    fn unknown_exif_exposure_values_do_not_reject_an_import() {
+        let directory = tempdir().expect("temporary directory");
+        for (name, numerator, denominator, iso, expected_aperture, expected_iso) in [
+            ("zero", 0, 1, 0, None, None),
+            ("zero-denominator", 28, 0, 100, None, Some(100)),
+            ("valid", 28, 10, 400, Some(2.8), Some(400)),
+        ] {
+            let path = directory.path().join(format!("{name}.tif"));
+            write_tiff_with_exif(
+                &path,
+                &[
+                    ascii_exif_field(Tag::Make, "Canon"),
+                    ascii_exif_field(Tag::DateTimeOriginal, "2026:10:18 17:03:43"),
+                    Field {
+                        tag: Tag::FNumber,
+                        ifd_num: In::PRIMARY,
+                        value: Value::Rational(vec![exif::Rational {
+                            num: numerator,
+                            denom: denominator,
+                        }]),
+                    },
+                    Field {
+                        tag: Tag::PhotographicSensitivity,
+                        ifd_num: In::PRIMARY,
+                        value: Value::Short(vec![iso]),
+                    },
+                ],
+            );
+            let original = fs::read(&path).unwrap();
+            let metadata = extract_metadata(&path).expect("read exposure EXIF fixture");
+            assert_eq!(metadata.aperture, expected_aperture, "{name}");
+            assert_eq!(metadata.iso, expected_iso, "{name}");
+            // Invalid optional exposure data must not discard other EXIF metadata.
+            assert!(!metadata.camera_make.is_empty());
+            assert_eq!(metadata.capture_year, 2026);
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+        let request = ImportRequest {
+            drive_id: "exposure-fixture".into(),
+            drive_name: "Exposure fixtures".into(),
+            mount_path: directory.path().into(),
+            import_mode: ImportMode::Referenced,
+            selected_paths: Vec::new(),
+            managed_root: None,
+            backup_root: None,
+            organization_template: "source".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Skip,
+        };
+        let summary = discover_assets(&request).expect("all photos must remain importable");
+        assert_eq!(summary.assets.len(), 3);
+        assert!(summary
+            .assets
+            .iter()
+            .all(|asset| asset.aperture.is_none_or(|v| v.is_finite() && v > 0.0)));
+        assert!(summary
+            .assets
+            .iter()
+            .all(|asset| asset.iso.is_none_or(|v| v > 0)));
+    }
+
+    #[test]
+    fn unknown_primary_iso_uses_valid_iso_speed_fallback() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("fallback.tif");
+        write_tiff_with_exif(
+            &path,
+            &[
+                Field {
+                    tag: Tag::PhotographicSensitivity,
+                    ifd_num: In::PRIMARY,
+                    value: Value::Short(vec![0]),
+                },
+                Field {
+                    tag: Tag::ISOSpeed,
+                    ifd_num: In::PRIMARY,
+                    value: Value::Long(vec![800]),
+                },
+            ],
+        );
+        assert_eq!(extract_metadata(&path).unwrap().iso, Some(800));
     }
 
     #[test]

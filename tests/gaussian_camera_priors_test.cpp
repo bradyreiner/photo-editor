@@ -17,6 +17,13 @@ int main() {
       std::abs(scaled.value("focalPixels").toDouble() * 2 - prior.value("focalPixels").toDouble()) > 1e-10) return EXIT_FAILURE;
   const auto parameters = prior.value("parameters").toString().split(',');
   if (parameters.size() != 4 || parameters[1].toDouble() != 400 || parameters[2].toDouble() != 300 || parameters[3] != "0") return EXIT_FAILURE;
+  auto earlier = metadata; earlier.insert("captureTime", "2026:10:25 12:00:00");
+  auto later = metadata; later.insert("captureTime", "2026:10:25 12:00:01");
+  if (gaussian_camera_prior(earlier, QSize(800,600)).value("groupKey") !=
+      gaussian_camera_prior(later, QSize(800,600)).value("groupKey")) {
+    std::cerr << "Consecutive exposures from the same identified camera/lens must share optical calibration.\n";
+    return EXIT_FAILURE;
+  }
   for (const auto& key : {"make", "model", "lens", "bodySerial", "focalMm"}) {
     auto changed = metadata;
     changed.insert(QString::fromLatin1(key), key == QStringLiteral("focalMm") ? QVariant(36.0) : QVariant(QStringLiteral("other")));

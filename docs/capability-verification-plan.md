@@ -22,6 +22,11 @@ If a capability cannot meet this bar yet, it must be marked as experimental,
 hidden from the primary workflow, or removed from the professional UI until it
 can be made coherent.
 
+The guarded editor regression suite, CI merge status, hardware performance
+budgets, and exact-commit native release qualification are described in
+[Editor regression protection](editor-regression-protection.md). This plan remains
+the acceptance owner; the executable contract enforces its named regression cases.
+
 ## Verification Levels
 
 Use the strongest level that applies. Pixel and geometry features need
@@ -446,3 +451,96 @@ reason.
 98. Make all toolbar buttons stable width so text and icon changes do not shift layout.
 99. Audit every visible command for whether it is functional, placeholder, or disabled.
 100. Establish one interaction contract: select tool, adjust settings, act on canvas, finish or cancel, see result.
+
+
+## Professional content tools — 2026-10-29
+
+User-approved specifications and completion gates: [Professional content tools roadmap](photoshop-professional-tools-roadmap.md). This section owns status for the new program; masking, timeline and performance owners retain their existing acceptance scopes. Foundation implementation and professional/native qualification are tracked separately.
+
+<!-- work-id: PS-PRO-001 -->
+### PS-PRO-001: Smart Objects and reusable components
+
+**Status:** In progress. First slice implemented: embedded/linked image content, shared duplicates, Make Independent, asynchronous Replace Contents, inspector controls, layer/render/thumbnail wiring and history. Batch 2 adds linked Current/Missing/Changed checks, shared Relink/Update/Embed, worker-side instance preparation and stale-result/history checks. Batch 3 adds bounded editable nested documents, isolated child drafts/preview, shared Apply/Cancel, image replacement, recipe 17/provenance 4, and canonical reopen plus real PNG export checks. Batch 4 adds isolated nested editing in the ordinary canvas, per-frame selection/history, text/transform/layer/mask/paint tools, merged-artwork Object selection, inherited locks and atomic return; actual Main pointer/keyboard and controller export/reopen checks cover the delivered slice. Component source-based selections and retouch have scoped controller, real-photo reopen/export and LaMa evidence in the [selection and retouch qualification](evidence/color-range-component-retouch-2026-11-01/README.md). Shared object-table storage and authored RAW/HDR now have [final scoped Debug evidence](evidence/component-storage-layer-styles-2026-11-02/README.md); the [follow-up checklist](component-storage-and-layer-styles-qualification.md) records the remaining full-item gates. Native, camera-variety, large-document performance and full item gates remain open. See [batch 4 evidence](evidence/photoshop-professional-tools-batch4-2026-10-30/README.md). See [batch 3 evidence](evidence/photoshop-professional-tools-batch3-2026-10-29/README.md). See [batch 2 evidence](evidence/photoshop-professional-tools-batch2-2026-10-29/README.md). See [batch evidence](evidence/photoshop-professional-tools-batch1-2026-10-29/README.md).
+
+<!-- work-id: PS-PRO-002 -->
+### PS-PRO-002: Pen tool, paths and vector masks
+
+**Status:** In progress. First slice implemented: versioned cubic paths, geometry operations, real canvas anchor/handle authoring, editable fill/stroke layers, closed-path working selections, crop/group mapping and undo/reopen routes. Batch 2 adds persistent vector masks with independent layer targets and coverage-preserving move/Alt-copy, anchor insertion/deletion and corner/smooth/handle/numeric controls, plus acknowledged/cancellable async path commits. Batch 3 adds explicit coverage-preserving Follow layer / Fixed document conversion and a declared editable SVG import/export subset with controller round-trip checks. Snapping, full boolean authoring, vector feathering, larger/tiled mask rasters, native/performance and full item gates remain open. See [batch 3 evidence](evidence/photoshop-professional-tools-batch3-2026-10-29/README.md). See [batch 2 evidence](evidence/photoshop-professional-tools-batch2-2026-10-29/README.md). See [batch evidence](evidence/photoshop-professional-tools-batch1-2026-10-29/README.md).
+
+<!-- work-id: PS-PRO-003 -->
+### PS-PRO-003: Blend If and advanced blending
+
+**Status:** In progress. First slice implemented: source/underlying split tonal ranges, Gray/RGB, bypass/reset, coalesced inspector gestures, layer/group/adjustment rendering, persistence/cache identity and accelerated-path fallback. Fill/Opacity separation, knockout, native/HDR real-media/performance and full item gates remain open. See [batch evidence](evidence/photoshop-professional-tools-batch1-2026-10-29/README.md).
+
+<!-- work-id: PS-PRO-004 -->
+### PS-PRO-004: Shared Layer Styles
+
+**Status:** In progress. The first slice implements ordered strokes, shadows, glows, overlays and bevel/emboss with a desktop inspector, copy/reusable preset files, mask ownership, history, versioned persistence, resource preflight and CPU/export integration. The shared [45-check Debug receipt](evidence/component-storage-layer-styles-2026-11-02/README.md) covers the delivered slice and existing selection/mask regressions. See the [acceptance checklist](component-storage-and-layer-styles-qualification.md). The next [authoring slice](hdr-retouch-style-authoring-qualification.md) adds gradient stop editing, solid/gradient strokes and independent style-mask create/edit/replace/clear, with shared paint/erase targeting and stable undo ownership. Its [51-check Debug receipt](evidence/hdr-retouch-style-authoring-2026-11-02/README.md) records the integrated run and corrected UI fixture rerun. The [canvas and lighting slice](canvas-style-and-compound-mask-qualification.md) adds preview-only shadow/gradient gestures, one-step commit/cancel, opt-in document lighting, nested-light isolation and compound selection/layer/style/effect-mask journeys. Its [scoped Debug receipt](evidence/canvas-style-light-compound-masks-2026-11-02/README.md) records production-component gestures, rendered pixels, schema negotiation and isolated catalog persistence. The [interaction cleanup](mask-layer-ui-qualification.md) adds explicit mask-to-owner return actions, rejected-transition preservation, menu ownership/lock guards, reachable layer content commands and shared UI/numeric style enforcement; see its [Debug receipt](evidence/mask-layer-ui-2026-11-02/README.md). Mounted Main/native authoring, performance and legacy text-style migration equivalence remain open.
+
+<!-- work-id: PS-PRO-005 -->
+### PS-PRO-005: Mesh Warp and Puppet Warp
+
+**Status:** Queued.
+
+<!-- work-id: PS-PRO-006 -->
+### PS-PRO-006: Professional typography
+
+**Status:** First dimensional batch implemented with scoped Debug/offscreen qualification: editable mesh extrusion/bevel, object/camera controls, independent four-corner perspective, source-text editing and component persistence. The [dimensional typography contract](dimensional-typography-plan.md) defines done and implementation limits. The [scoped evidence receipt](evidence/dimensional-typography-2026-11-03/README.md) distinguishes automated geometry, UI/controller, persistence and export checks from native/Release/human acceptance. Existing mixed styling, contour text, variable axes and surface materials remain foundations. Warp/envelopes, per-letter composition, kinetic type and the broader PS-PRO-006 checklist remain open.
+
+<!-- work-id: PS-PRO-007 -->
+### PS-PRO-007: Coordinated artboards and design variants
+
+**Status:** In progress. The 2026-11-07 [professional expansion program](professional-expansion-program.md) starts with multi-format image delivery through the existing export worker: saved/undoable original, square, portrait, story and landscape selections, aspect-preserving fit/center crop, collision-safe plans, crop preflight and per-output manifest metadata. Independently editable layout bounds, shared content with local overrides, actual native workflow and full-item qualification remain open.
+
+<!-- work-id: PS-PRO-008 -->
+### PS-PRO-008: Channels and calculations
+
+**Status:** Queued.
+
+<!-- work-id: PS-PRO-009 -->
+### PS-PRO-009: Select and Mask finishing
+
+**Status:** Queued; preserve the independent-selection contract.
+
+<!-- work-id: PS-PRO-010 -->
+### PS-PRO-010: Actions, batch production and delivery preflight
+
+**Status:** In progress. Multi-format image delivery is the first shared production slice in the [professional expansion program](professional-expansion-program.md), extending existing preflight, proof/manifest, cancellation and retry. Recorded parameterized actions, table-driven content replacement, portable project dependencies and full-item acceptance remain open.
+
+<!-- work-id: PS-PRO-011 -->
+### PS-PRO-011: Persistent subjects across media
+
+**Status:** Queued; depends on proven static masks and tracking qualification.
+
+<!-- work-id: PS-PRO-012 -->
+### PS-PRO-012: One design, multiple deliverables
+
+**Status:** Queued; depends on components and layout variants.
+
+<!-- work-id: PS-PRO-013 -->
+### PS-PRO-013: Depth-aware compositing
+
+**Status:** Queued; extend existing scene infrastructure.
+
+<!-- work-id: PS-PRO-014 -->
+### PS-PRO-014: Animate existing artwork
+
+**Status:** Queued; reuse existing timeline/curve infrastructure.
+
+## Professional expansion — 2026-11-07
+
+The user authorized all nine workstreams in the [professional expansion program](professional-expansion-program.md).
+The existing item owners above retain their full acceptance gates. This table
+tracks the additional scope without counting foundations as completed workflows.
+
+| Workstream | Status | Acceptance owner / next gate |
+| --- | --- | --- |
+| Coordinated design variants | In progress: multi-format image delivery | PS-PRO-007; independent layout bounds and shared/local overrides remain open. |
+| Reference-based shoot matching | In progress: deterministic pixel-based reference matching | Separate lighting/look amounts; rendered review with outliers unchecked; selected proposals commit as one undoable batch with stale recipe/source checks. See [qualification](shoot-match-qualification.md). Cross-camera shoots, human photographic acceptance and native/performance qualification remain open. |
+| Depth-aware lighting/compositing | Queued | PS-PRO-013; shared depth, occlusion, light and shadow workflow through export. |
+| Professional image restoration | Queued | Local denoise/enlargement first; declared model/runtime/source support and photographic quality review per capability. |
+| Tracked subject masks | Queued | PS-PRO-011; corrective frames, confidence/occlusion and persistent segmentation output. |
+| Advanced retouching | Queued | PS-PRO-008 plus editable dodge/burn, clone controls and texture-preserving workflow. |
+| Mesh and puppet warp | Queued | PS-PRO-005; durable mesh/pins and direct canvas Apply/Cancel with render parity. |
+| Intelligent shoot review | Queued | Extend burst/compare foundations with qualified focus/eye-state analysis and near-duplicate review. |
+| Production automation and delivery | In progress: shared multi-format delivery path | PS-PRO-010; recorded actions, table-driven replacement and portable project packaging remain open. |

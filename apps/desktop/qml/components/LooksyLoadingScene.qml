@@ -82,7 +82,8 @@ Item {
             text: Math.round(root.boundedProgress * 100) + "%"
             horizontalAlignment: Text.AlignHCenter
             color: theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 11
         }
     }

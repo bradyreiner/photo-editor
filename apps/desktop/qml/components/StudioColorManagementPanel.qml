@@ -91,7 +91,7 @@ ColumnLayout {
                   ? panel.proofingStatusText
                   : "Reference display: " + panel.editorPreview.referenceDisplayTarget
         color: panel.dimText
-        font.family: panel.theme.fontMono
+        font.family: panel.theme.fontUi
         font.pixelSize: 9
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
     }
@@ -159,16 +159,18 @@ ColumnLayout {
     Label {
         Layout.fillWidth: true
         visible: panel.editorPreview.softProofEnabled
+        readonly property var diagnostics: visible
+                ? (panel.editorPreview.colorTransformDiagnostics || ({}))
+                : ({})
         text: {
-            const diagnostics = panel.editorPreview.colorTransformDiagnostics || ({})
             const processor = diagnostics.proofProcessor || "unavailable"
             const profile = diagnostics.proofProfileName || panel.editorPreview.softProofProfile
             return "Proof: " + profile + " · " + processor
         }
-        color: (panel.editorPreview.colorTransformDiagnostics || ({})).proofProcessor ===
+        color: diagnostics.proofProcessor ===
                "Little CMS three-profile soft proof"
                ? panel.theme.success : panel.theme.error
-        font.family: panel.theme.fontMono
+        font.family: panel.theme.fontUi
         font.pixelSize: 9
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
     }
@@ -203,7 +205,7 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 5
-                Label { Layout.preferredWidth: 48; text: iccProfileEntry.modelData.label; color: panel.dimText; font.family: panel.theme.fontMono; font.pixelSize: 9 }
+                Label { Layout.preferredWidth: 48; text: iccProfileEntry.modelData.label; color: panel.dimText; font.family: panel.theme.fontUi; font.pixelSize: 9 }
                 Label {
                     Layout.fillWidth: true
                     text: iccProfileEntry.profileAsset.configured
@@ -228,7 +230,7 @@ ColumnLayout {
                       ? "Verified · " + String(iccProfileEntry.profileAsset.payloadSha256 || "").slice(0, 12)
                       : (iccProfileEntry.profileAsset.executionFailureReason || iccProfileEntry.profileAsset.failureReason || iccProfileEntry.profileAsset.status)
                 color: iccProfileEntry.profileAsset.executionReady ? panel.theme.success : panel.theme.error
-                font.family: panel.theme.fontMono
+                font.family: panel.theme.fontUi
                 font.pixelSize: 9
                 wrapMode: Text.WrapAnywhere
                 maximumLineCount: 2
@@ -247,7 +249,7 @@ ColumnLayout {
         RowLayout {
             Layout.fillWidth: true
             spacing: 5
-            Label { Layout.preferredWidth: 48; text: "DCP"; color: panel.dimText; font.family: panel.theme.fontMono; font.pixelSize: 9 }
+            Label { Layout.preferredWidth: 48; text: "DCP"; color: panel.dimText; font.family: panel.theme.fontUi; font.pixelSize: 9 }
             Label {
                 Layout.fillWidth: true
                 text: dcpProfileEntry.profileAsset.configured
@@ -272,7 +274,7 @@ ColumnLayout {
                   ? "Verified · " + String(dcpProfileEntry.profileAsset.payloadSha256 || "").slice(0, 12) + " · " + (dcpProfileEntry.profileAsset.cameraCompatibility || "unknown")
                   : (dcpProfileEntry.profileAsset.executionFailureReason || dcpProfileEntry.profileAsset.failureReason || dcpProfileEntry.profileAsset.status)
             color: dcpProfileEntry.profileAsset.executionReady ? panel.theme.success : panel.theme.error
-            font.family: panel.theme.fontMono
+            font.family: panel.theme.fontUi
             font.pixelSize: 9
             wrapMode: Text.WrapAnywhere
             maximumLineCount: 2

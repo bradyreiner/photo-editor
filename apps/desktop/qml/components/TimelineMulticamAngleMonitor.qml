@@ -143,7 +143,8 @@ Rectangle {
             anchors.centerIn: parent
             text: "NO MEDIA"
             color: theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: theme.typeCaption
             font.weight: Font.DemiBold
         }
@@ -171,7 +172,8 @@ Rectangle {
                       ? "PROGRAM · " + String(root.angleIndex + 1)
                       : String(root.angleIndex + 1)
                 color: root.activeAngle ? theme.ink950 : theme.textStrong
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeCaption
                 font.weight: Font.DemiBold
             }
@@ -191,7 +193,8 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "AUDIO"
                 color: theme.textStrong
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 font.weight: Font.DemiBold
             }
@@ -224,7 +227,8 @@ Rectangle {
             Label {
                 text: root.sourceTimeText(Number(root.previewState.sourceSeconds || 0))
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
             }
         }

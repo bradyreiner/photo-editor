@@ -101,7 +101,8 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.subtitle
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 font.letterSpacing: 0
                 fontSizeMode: Text.HorizontalFit

@@ -6,7 +6,8 @@ CheckBox {
 
     property string accessibleLabel: ""
     property string accessibleDescription: ""
-    property bool allowLabelWrap: false
+    property string description: ""
+    property bool allowLabelWrap: true
     readonly property string resolvedAccessibleName: {
         const explicitName = String(root.accessibleLabel || "").trim()
         if (explicitName.length > 0)
@@ -30,14 +31,18 @@ CheckBox {
         const explicitDescription = String(root.accessibleDescription || "").trim()
         if (explicitDescription.length > 0)
             return explicitDescription
-        return String(root.text || "").trim()
+        return String(root.description || root.text || "").trim()
     }
     readonly property string toneCheckBoxContract: "tone-checkbox:v1|shared-component:true|accessible-name-role-state:true|keyboard:true|focus-visible:true|hover:true|readable-label:true|theme:true"
 
     Theme { id: theme }
+    readonly property string choiceStyleContract: "choice-style:v1|checkbox|shared|neutral|scaled|fixed-text"
+    readonly property string choiceKind: "checkbox"
+    readonly property real choiceScale: theme.interfaceScale
+    readonly property bool choiceHighContrast: theme.highContrast
 
-    implicitWidth: checkLabel.implicitWidth + leftPadding + rightPadding
-    implicitHeight: Math.max(theme.controlHeightDense, checkLabel.implicitHeight + topPadding + bottomPadding)
+    implicitWidth: Math.max(checkLabel.implicitWidth, detailLabel.visible ? detailLabel.implicitWidth : 0) + leftPadding + rightPadding
+    implicitHeight: Math.max(theme.controlHeightDense, checkContent.implicitHeight + topPadding + bottomPadding)
     font.family: theme.fontUi
     font.pixelSize: theme.typeControl
     font.weight: theme.weightControl
@@ -53,6 +58,8 @@ CheckBox {
     Accessible.description: root.resolvedAccessibleDescription
     Accessible.role: Accessible.CheckBox
     Accessible.checked: root.checked
+    Accessible.onPressAction: if (root.enabled) root.click()
+    Accessible.onToggleAction: if (root.enabled) root.click()
 
     indicator: Rectangle {
         id: checkIndicator
@@ -62,41 +69,55 @@ CheckBox {
         width: theme.scaled(16)
         height: width
         radius: theme.radiusControl
-        color: root.checked ? theme.accentWarm400
+        color: root.checkState !== Qt.Unchecked ? theme.textStrong
                : root.enabled && root.hovered ? theme.fieldHoverFill : theme.fieldFill
-        border.width: root.visualFocus ? theme.focusBorderWidth : theme.hairlineWidth
-        border.color: root.visualFocus ? theme.focusRing
-                      : root.checked ? theme.accentWarm400
-                      : theme.controlEdge
+        border.width: theme.highContrast ? theme.hairlineWidth : 0
+        border.color: theme.controlEdge
         Accessible.ignored: true
 
         AppIcon {
             anchors.centerIn: parent
             width: theme.scaled(11)
             height: width
-            name: "check"
+            name: root.checkState === Qt.PartiallyChecked ? "minus" : "check"
             color: theme.ink950
-            visible: root.checked
+            visible: root.checkState !== Qt.Unchecked
         }
     }
 
-    contentItem: Text {
-        id: checkLabel
-        text: root.text
-        font: root.font
-        color: root.enabled ? theme.textStrong : theme.textMuted
-        verticalAlignment: Text.AlignVCenter
-        wrapMode: root.allowLabelWrap ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap
-        maximumLineCount: root.allowLabelWrap ? 2 : 1
-        elide: Text.ElideNone
-        fontSizeMode: Text.HorizontalFit
-        minimumPixelSize: theme.typeCaption
+    contentItem: Column {
+        id: checkContent
+        spacing: root.description.length > 0 ? theme.space2 : 0
+        Text {
+            id: checkLabel
+            objectName: "sharedChoiceLabel"
+            width: parent.width
+            text: root.text
+            font: root.font
+            color: root.enabled ? theme.textStrong : theme.textMuted
+            wrapMode: root.allowLabelWrap ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap
+            elide: Text.ElideNone
+            fontSizeMode: Text.FixedSize
+        }
+        Text {
+            id: detailLabel
+            objectName: "sharedChoiceCaption"
+            width: parent.width
+            visible: root.description.length > 0
+            text: root.description
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeCaption
+            color: theme.textMuted
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            elide: Text.ElideNone
+            fontSizeMode: Text.FixedSize
+        }
     }
 
-    background: Rectangle {
-        radius: theme.radiusControl
-        color: root.enabled && root.hovered ? theme.editorControlHover : "transparent"
-        border.width: root.visualFocus ? theme.focusBorderWidth : 0
-        border.color: theme.focusRing
+    background: CommandButtonSurface {
+        focused: root.visualFocus
+        interactiveEnabled: root.enabled
+        hovered: root.hovered
+        fillColor: theme.commandFill("secondary", false, root.hovered, root.down, root.enabled, true)
     }
 }

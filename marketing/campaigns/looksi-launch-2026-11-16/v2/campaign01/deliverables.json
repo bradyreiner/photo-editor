@@ -1,0 +1,57 @@
+{
+  "id": "01",
+  "title": "I wanted to make this.",
+  "preferred_format": "Finished text-led first-person builder letter",
+  "founder_filming_required_for_primary": false,
+  "optional_founder_version": "self-shoot-director.md",
+  "hero": "images/01-i-wanted-to-make-this.png",
+  "hero_editable": "images/01-i-wanted-to-make-this.svg",
+  "carousel": [
+    {
+      "png": "carousel/01-slide.png",
+      "svg": "carousel/01-slide.svg"
+    },
+    {
+      "png": "carousel/02-slide.png",
+      "svg": "carousel/02-slide.svg"
+    },
+    {
+      "png": "carousel/03-slide.png",
+      "svg": "carousel/03-slide.svg"
+    },
+    {
+      "png": "carousel/04-slide.png",
+      "svg": "carousel/04-slide.svg"
+    },
+    {
+      "png": "carousel/05-slide.png",
+      "svg": "carousel/05-slide.svg"
+    },
+    {
+      "png": "carousel/06-slide.png",
+      "svg": "carousel/06-slide.svg"
+    }
+  ],
+  "film": "video/01-builder-letter.mp4",
+  "duration_seconds": 32,
+  "fps": 30,
+  "dimensions": [
+    1080,
+    1920
+  ],
+  "hook_variants": [
+    "video/01-hook-bring-a-real-project.mp4",
+    "video/01-hook-what-should-this-handle.mp4"
+  ],
+  "storyboard": "boards/01-storyboard.png",
+  "storyboard_editable": "boards/01-storyboard.svg",
+  "review": "index.html",
+  "source_dates": {
+    "photo_before_chosen": "2026-11-16",
+    "first_light_board": "2026-11-16",
+    "native_tone_curve_recording": "2026-10-25"
+  },
+  "status": "Finished review creative; no publication performed",
+  "central_copy_change_proposal": "Primary campaign01 is32s finished letter with optional founder shoot, rather than40s unfilmed founder placeholder. Actual historical footage dated on-screen; current still exports not current action recording.",
+  "provenance": "provenance.json"
+}

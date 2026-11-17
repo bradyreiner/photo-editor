@@ -30,6 +30,7 @@ class LocalSimilaritySearch final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool configured READ configured NOTIFY changed)
   Q_PROPERTY(bool running READ running NOTIFY changed)
+  Q_PROPERTY(bool preparing READ preparing NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
   Q_PROPERTY(QString query READ query NOTIFY changed)
   Q_PROPERTY(QVariantList results READ results NOTIFY changed)
@@ -49,7 +50,12 @@ class LocalSimilaritySearch final : public QObject {
   bool configureExecutable(const QString& executable, const QString& model_root,
                            const QString& device, const QString& index_path);
   bool configured() const { return !worker_.isEmpty(); }
+  bool preparing() const { return catalog_preparing_; }
   void setSetupStatus(const QString& status);
+  void beginCatalogPreparation(const QString& query, const QString& status);
+  void updateCatalogPreparationStatus(const QString& status);
+  void endCatalogPreparation();
+  void failCatalogPreparation(const QString& status);
   void clearConfiguration();
   bool running() const;
   QString status() const { return status_; }
@@ -80,7 +86,7 @@ class LocalSimilaritySearch final : public QObject {
   LocalImageTextEncoder encoder_;
   QFutureWatcher<SimilaritySearchWork> work_;
   std::shared_ptr<std::atomic_bool> cancelled_;
-  bool active_ = false, work_pending_ = false;
+  bool active_ = false, work_pending_ = false, catalog_preparing_ = false;
   bool executable_ = false;
   quint64 generation_ = 0, work_generation_ = 0;
   QString phase_, request_id_, python_, worker_, model_root_, device_, index_path_;

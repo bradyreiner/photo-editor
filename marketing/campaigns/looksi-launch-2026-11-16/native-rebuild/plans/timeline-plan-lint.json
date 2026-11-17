@@ -1,0 +1,61 @@
+{
+  "schema": "looksy.native-plan-lint/v1",
+  "status": "passed",
+  "nativeExecutionPerformed": false,
+  "checks": [
+    "Unbound destination guards present",
+    "Unique stable plan step IDs",
+    "References point only backward and select correct returned ID field",
+    "Selected source schema properties, enums, types and bounds",
+    "Clip bounds within sequence and native minimum one-frame duration",
+    "Canonical source files and exact bytes/SHA-256",
+    "No finished external campaign video/carousel import; failed first finish excluded",
+    "Audio source length covers native trim",
+    "Ordered unique local keyframes within clip on 30fps clock",
+    "Native save is last, fresh and under native-rebuild",
+    "Scene coverage starts/ends on film bounds",
+    "Full-frame backdrop uses a low ordinary video lane, not an above-media graphics lane",
+    "Export kept outside authoring mutation recipe"
+  ],
+  "plans": [
+    {
+      "plan": "timeline-campaign01.commands.json",
+      "status": "pass-source-and-plan-lint-only",
+      "commands": 39,
+      "sourceAssets": 3,
+      "durationSeconds": 32
+    },
+    {
+      "plan": "timeline-campaign02.commands.json",
+      "status": "pass-source-and-plan-lint-only",
+      "commands": 63,
+      "sourceAssets": 9,
+      "durationSeconds": 42
+    },
+    {
+      "plan": "timeline-campaign03.commands.json",
+      "status": "pass-source-and-plan-lint-only",
+      "commands": 39,
+      "sourceAssets": 3,
+      "durationSeconds": 33
+    },
+    {
+      "plan": "timeline-campaign04.commands.json",
+      "status": "pass-source-and-plan-lint-only",
+      "commands": 74,
+      "sourceAssets": 1,
+      "durationSeconds": 24
+    },
+    {
+      "plan": "timeline-campaign05.commands.json",
+      "status": "pass-source-and-plan-lint-only",
+      "commands": 51,
+      "sourceAssets": 5,
+      "durationSeconds": 36
+    }
+  ],
+  "limitations": [
+    "No live schema discovery, native invocation, native preview, save or render was performed.",
+    "These checks do not prove font resolution, compositing, photographic color, rendered quality, native editability or human approval."
+  ]
+}

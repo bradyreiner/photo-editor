@@ -1,0 +1,68 @@
+{
+  "observedAt": "2026-11-02T04:53:42.829996+00:00",
+  "accepted": true,
+  "documentHash": "4152ebc24fb0b919bb76ff86c6050360fa7dd65a73dc2fd966ac0ab8bc46dbce",
+  "estimatedOutputBytes": 18576000,
+  "idempotentReplay": false,
+  "jobId": "484f045d-bf77-4ebf-993e-b85ad9d84c41",
+  "maximumOutputBytes": 268435456,
+  "outputIntegrity": {
+    "algorithm": "sha256-full-v1",
+    "fileBytes": 18511550,
+    "outputPath": "/private/tmp/looksy-dense-timeline-v7iaxqgh/data/timelines/renders/3db4e4fb-6737-415c-b6ee-dde766e7c237-1c7a25ee-64be-4425-a7db-d9d9ea877cf4.mp4",
+    "schema": "delivery-integrity:v1",
+    "sha256": "6cedcbd366c42d2d4b116557016bf2fbd0905f48d5fc1e8d6f92f7ed9f3bb596",
+    "sidecarPath": "/private/tmp/looksy-dense-timeline-v7iaxqgh/data/timelines/renders/3db4e4fb-6737-415c-b6ee-dde766e7c237-1c7a25ee-64be-4425-a7db-d9d9ea877cf4.mp4.integrity.json",
+    "valid": true
+  },
+  "outputPath": "/private/tmp/looksy-dense-timeline-v7iaxqgh/data/timelines/renders/3db4e4fb-6737-415c-b6ee-dde766e7c237-1c7a25ee-64be-4425-a7db-d9d9ea877cf4.mp4",
+  "progress": 100,
+  "renderKind": "review-excerpt",
+  "renderRange": {
+    "endFrameExclusive": 360,
+    "frameRate": 30,
+    "startFrame": 0
+  },
+  "requestId": "1c7a25ee-64be-4425-a7db-d9d9ea877cf4",
+  "resourceId": "timeline:3db4e4fb-6737-415c-b6ee-dde766e7c237",
+  "reviewOutputVerification": {
+    "audioChannels": 2,
+    "audioCodec": "aac",
+    "audioDurationSeconds": 12,
+    "audioStartTimeSeconds": 0,
+    "avStartSkewSeconds": 0,
+    "containerDurationSeconds": 12,
+    "decodedFrameCount": 360,
+    "endFrameExclusive": 360,
+    "expectedFrameCount": 360,
+    "expectedFrameRate": 30,
+    "formatName": "mov,mp4,m4a,3gp,3g2,mj2",
+    "frameRate": 30,
+    "height": 1080,
+    "ok": true,
+    "probedFrameRate": 30,
+    "startFrame": 0,
+    "videoCodec": "h264",
+    "videoDurationSeconds": 12,
+    "videoStartTimeSeconds": 0,
+    "width": 1920
+  },
+  "runtimeDiagnostic": {
+    "jobProgress": 98,
+    "phase": "atomic-publish",
+    "stage": "publishing-timeline-export"
+  },
+  "snapshotBytes": 53323604,
+  "snapshotSha256": "4152ebc24fb0b919bb76ff86c6050360fa7dd65a73dc2fd966ac0ab8bc46dbce",
+  "sourceVerification": {
+    "bytesRead": 603271454,
+    "errorCode": "",
+    "ok": true,
+    "sourceCount": 7,
+    "stage": "before-publish",
+    "totalBytes": 603271454,
+    "verifiedSourceCount": 7
+  },
+  "stage": "completed",
+  "status": "Completed"
+}

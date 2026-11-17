@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Looksy — complete rebuilt trailer</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #171819;
+        color: #f2f1ed;
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 1180px;
+        margin: auto;
+        padding: 32px;
+        display: grid;
+        grid-template-columns: minmax(240px, 420px) 1fr;
+        gap: 48px;
+        align-items: center;
+        min-height: 100dvh;
+      }
+      video {
+        width: 100%;
+        max-height: 90dvh;
+        display: block;
+        background: #101010;
+        box-shadow: 0 20px 90px #0008;
+      }
+      h1 {
+        font-size: 42px;
+        line-height: 1.05;
+        letter-spacing: -2px;
+        margin: 12px 0 20px;
+      }
+      p {
+        color: #bcbdb9;
+        max-width: 440px;
+      }
+      .eyebrow {
+        color: #91d9ea;
+        font-size: 12px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      button,
+      a.primary {
+        border: 1px solid #48494a;
+        border-radius: 8px;
+        padding: 10px 14px;
+        background: #252627;
+        color: #f2f1ed;
+        font: inherit;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      button:hover,
+      a.primary:hover {
+        background: #363738;
+      }
+      #start {
+        background: #3282ff;
+        border-color: #3282ff;
+        font-weight: 700;
+        padding: 14px 20px;
+      }
+      .chapters {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 28px 0;
+      }
+      .chapters button {
+        font-size: 13px;
+      }
+      .credit {
+        font-size: 12px;
+      }
+      .credit a {
+        color: #bcbdb9;
+      }
+      #status {
+        min-height: 24px;
+        color: #91d9ea;
+        font-size: 14px;
+      }
+      @media (max-width: 700px) {
+        main {
+          padding: 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+          align-items: stretch;
+        }
+        video {
+          max-height: 75dvh;
+          width: auto;
+          max-width: 100%;
+          margin: auto;
+        }
+        h1 {
+          font-size: 32px;
+        }
+        .chapters {
+          margin: 16px 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <video
+        id="film"
+        controls
+        playsinline
+        preload="auto"
+        poster="cohesive-poster.jpg"
+        aria-label="Looksy complete 120-second trailer with music"
+      >
+        <source src="looksy-complete-trailer.mp4" type="video/mp4" />
+      </video>
+      <section>
+        <div class="eyebrow">Complete rebuilt trailer · review draft</div>
+        <h1>Looksy.<br />Your whole creative workflow.</h1>
+        <p>
+          120 seconds. One Nepal project, from RAW development and layered
+          design to video, carousel, delivery, and optional local assistance.
+          Music included.
+        </p>
+        <button id="start" type="button">
+          Play from beginning · with sound
+        </button>
+        <p id="status" aria-live="polite">Ready to play.</p>
+        <nav class="chapters" aria-label="Trailer chapters">
+          <button data-time="0">00:00 · Introduction</button>
+          <button data-time="6">00:06 · Import & cull</button>
+          <button data-time="13">00:13 · Custom color engine</button>
+          <button data-time="26">00:26 · Masks & pixels</button>
+          <button data-time="35">00:35 · Composition</button>
+          <button data-time="49">00:49 · Effects</button>
+          <button data-time="56">00:56 · Video production</button>
+          <button data-time="73">01:13 · Carousel</button>
+          <button data-time="87">01:27 · Delivery</button>
+          <button data-time="94">01:34 · Local AI search</button>
+          <button data-time="105">01:45 · Local agent</button>
+          <button data-time="117">01:57 · Ending</button>
+        </nav>
+        <a class="primary" href="looksy-complete-trailer.mp4" download
+          >Download MP4</a
+        >
+        <p class="credit">
+          Music: A Game — Michael Ramir C /
+          <a href="https://mixkit.co/free-stock-music/edm/">Mixkit</a>. Review
+          selection.
+        </p>
+      </section>
+    </main>
+    <script>
+      const film = document.querySelector("#film");
+      const status = document.querySelector("#status");
+      async function playAt(time) {
+        film.currentTime = time;
+        film.muted = false;
+        film.volume = 0.8;
+        try {
+          await film.play();
+          status.textContent = "Playing with sound.";
+        } catch {
+          status.textContent = "Use the video play button to start.";
+        }
+      }
+      document
+        .querySelector("#start")
+        .addEventListener("click", () => playAt(0));
+      document
+        .querySelectorAll("[data-time]")
+        .forEach((button) =>
+          button.addEventListener("click", () =>
+            playAt(Number(button.dataset.time)),
+          ),
+        );
+      film.addEventListener("pause", () => {
+        status.textContent = film.ended ? "End of full trailer." : "Paused.";
+      });
+      film.addEventListener("error", () => {
+        status.textContent = "The video could not load. Try the MP4 download.";
+      });
+    </script>
+  </body>
+</html>

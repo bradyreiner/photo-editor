@@ -1,0 +1,44 @@
+{
+  "status": "UNEXECUTED INPUTS - NOT A NATIVE PROJECT OR RECEIPT",
+  "canvas": [
+    1080,
+    1350
+  ],
+  "expected_nonbase_layers": 4,
+  "layer_kinds": [
+    "text",
+    "pixel with native vectorPath",
+    "source photograph",
+    "fill"
+  ],
+  "source": {
+    "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5071.jpg",
+    "sha256": "646ff307414c0aab62c67c57425618fc865a562ee4deadc1a4aa42e6d33a8b67",
+    "kind": "camera JPEG preview photograph; primitive source only"
+  },
+  "native_structure_reference": {
+    "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/.photo-editor/nepal-near-far/production-native-document.json",
+    "sha256": "41ffa4e5558b861c700873274421bfd953df846bd9e1dbc593d413f409a067a4"
+  },
+  "routes": {
+    "preferred": "Live UI New Boards then Presets > Manage > Import Preset Bundle; choose candidate folder and apply canary",
+    "alternative": "Live UI native Paste Layers using MIME application/x-looksy-photo-layers-v1; same canvas size and Paste in Place"
+  },
+  "proof_required": [
+    "App imports/applies without validation error",
+    "Headline appears as editable native text",
+    "Photograph is an independent source layer, not a flattened cover",
+    "Blue rule has editable native vectorPath, not a raster screenshot",
+    "Change headline in app; Undo restores exact copy",
+    "Save Boards through app; Saved state and stable document ID recorded",
+    "Open actual exported image and inspect text/photo/rule",
+    "Open another document then reopen canary; native layers and source references retained"
+  ],
+  "claims": {
+    "app_imported": false,
+    "app_edited": false,
+    "app_saved": false,
+    "app_reopened": false,
+    "app_exported": false
+  }
+}

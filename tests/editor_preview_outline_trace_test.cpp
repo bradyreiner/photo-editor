@@ -568,7 +568,7 @@ int main(int argc, char** argv) {
           1.0,
           {1.0, 1.0, 1.0});
   const auto single_brush_before_expand =
-      single_brush_outline_controller.activeMaskOutlinePaths();
+      settled_outline_paths(single_brush_outline_controller);
   const auto single_brush_before_trace =
       single_brush_outline_controller.activeMaskOutlineTrace();
   single_brush_outline_controller.setActiveMaskSelectionExpand(55.0);
@@ -583,7 +583,7 @@ int main(int argc, char** argv) {
           1.0,
           {1.0, 1.0, 1.0});
   const auto single_brush_after_expand =
-      single_brush_outline_controller.activeMaskOutlinePaths();
+      settled_outline_paths(single_brush_outline_controller);
   const auto single_brush_after_trace =
       single_brush_outline_controller.activeMaskOutlineTrace();
   if (single_brush_outline_controller.activeMaskKind() != QStringLiteral("brush") ||
@@ -593,7 +593,7 @@ int main(int argc, char** argv) {
       single_brush_before_expand == single_brush_after_expand) {
     const auto detail =
         QStringLiteral(
-            "single brush raster outline should respond immediately to selection expansion "
+            "single brush raster outline should reflect selection expansion after worker completion "
             "(before=%1 after=%2 beforeSource=%3 afterSource=%4 beforeRevision=%5 afterRevision=%6 "
             "beforeHash=%7 afterHash=%8 beforeAlphaHash=%9 afterAlphaHash=%10)")
             .arg(single_brush_before_expand.size())
@@ -790,8 +790,7 @@ int main(int argc, char** argv) {
       mask_view_source.contains(QStringLiteral("scheduleSmartSelectPreview(point.position.x")) ||
       !studio_workspace_source.contains(QStringLiteral("function normalizedPointForViewport(x, y) {\n        const point = viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
       !studio_workspace_source.contains(QStringLiteral("if (!previewContext.hasActiveMask || kind === \"object\") {\n            const objectMode = workspaceContext.applyObjectPickModeForModifierState(mouse.modifiers)")) ||
-      !studio_workspace_source.contains(QStringLiteral("previewContext.smartSelectSubtractAt(point.x, point.y, !previewContext.hasActiveMask)")) ||
-      !studio_workspace_source.contains(QStringLiteral("previewContext.smartSelectAddAt(point.x, point.y, !previewContext.hasActiveMask)")) ||
+      !studio_workspace_source.contains(QStringLiteral("previewContext.pickMaskAt(point.x, point.y, objectMode, !previewContext.hasActiveMask)")) ||
       studio_workspace_source.contains(QStringLiteral("smartSelectAddAt(mouse.x")) ||
       studio_workspace_source.contains(QStringLiteral("smartSelectSubtractAt(mouse.x"))) {
     return fail("Smart/Object selection hover, prompt, stroke, and one-click commit paths should all use mapper-backed normalized image coordinates");
@@ -884,8 +883,8 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("previewContext.applyActiveSelectionPixel(point.x, point.y, operation)"))) {
     return fail("StudioWorkspace Pixel Brush should expose Add/Erase operation state and write mapped source pixels through the controller");
   }
-  if (!controller_source.contains(QStringLiteral("fallback_metadata.insert(QStringLiteral(\"smartFallback\"), true);")) ||
-      !controller_source.contains(QStringLiteral("Created an editable rough selection fallback for refinement.")) ||
+  if (controller_source.contains(QStringLiteral("Created an editable rough selection fallback for refinement.")) ||
+      !controller_source.contains(QStringLiteral("A failed object pick is not a geometric selection.")) ||
       !mask_inspector_source.contains(QStringLiteral("function smartSelectionFallbackState(mask)")) ||
       !mask_inspector_source.contains(QStringLiteral("metadata.smartFallback === true ? \"Editable preview\" : \"\"")) ||
       !mask_inspector_source.contains(QStringLiteral("const fallbackState = root.smartSelectionFallbackState(mask)")) ||
@@ -895,7 +894,7 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("const fallbackState = root.smartSelectionFallbackState(root.activeMaskData())")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property string fallbackState: root.smartSelectionFallbackState(root.activeMaskData())")) ||
       !studio_workspace_source.contains(QStringLiteral("selectedMaskHeader.fallbackState.length > 0"))) {
-    return fail("Smart selection rough fallback masks should expose a visible editable preview state in mask status UI");
+    return fail("Failed picks preserve coverage while older rough fallback masks remain inspectable");
   }
   const auto snap_close_branch_index =
       studio_workspace_source.indexOf(QStringLiteral("workspaceContext.completeActivePolygonIfSnappingToFirst("));
@@ -1101,7 +1100,7 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("onClicked: root.movePhotoLayerPreservingSelection(layerIndex, -1)")) ||
       !studio_workspace_source.contains(QStringLiteral("onClicked: root.movePhotoLayerPreservingSelection(layerIndex, 1)")) ||
       !studio_workspace_source.contains(QStringLiteral("property bool developerDiagnosticsEnabled: false")) ||
-      !studio_workspace_source.contains(QStringLiteral("developer-diagnostics-menu:v3|image-inspection:user-accessible|advanced-details:developer-mode-gated|canvas-overlays:collapsed|focus:false-color:gamut:zone:diagnostic-only|hidden-during-mask-work:true|hidden-during-primary-hud:true|default-visible:false")) ||
+      !studio_workspace_source.contains(QStringLiteral("developer-diagnostics-menu:v4|image-inspection:user-accessible|advanced-details:developer-mode-gated|canvas-overlays:collapsed|inspection:clipping-peaking-false-color-gamut-zone|mask-work:available|primary-hud:preserved|default-visible:false")) ||
       !studio_workspace_source.contains(QStringLiteral("tooltip: \"Inspect clipping, focus, gamut, and tonal zones.\"")) ||
       !studio_workspace_source.contains(QStringLiteral("visible: root.diagnosticsPanelOpen && !root.maskWorkActive && !editViewport.primaryCanvasHudActive")) ||
       !studio_workspace_source.contains(QStringLiteral("CanvasCoordinateMapper")) ||

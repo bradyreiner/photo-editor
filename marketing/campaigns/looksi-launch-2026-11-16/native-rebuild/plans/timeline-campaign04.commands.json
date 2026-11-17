@@ -1,0 +1,2194 @@
+{
+  "schema": "looksy.native-authoring-command-plan/v1",
+  "executionState": "planning-only-unbound",
+  "resourceId": "UNBOUND",
+  "taskId": "UNBOUND",
+  "title": "The last tweak. Again.",
+  "authoringOrigin": "Execute typed commands inside Looksy; this JSON is not an imported project.",
+  "sequence": {
+    "width": 1080,
+    "height": 1920,
+    "frameRate": 30,
+    "audioSampleRate": 48000
+  },
+  "colorSpace": "Rec.709",
+  "dataLevels": "Legal",
+  "durationSeconds": 24,
+  "nativeProjectSchemaVersionObserved": 8,
+  "nativeCreation": {
+    "tool": "timeline.create_draft",
+    "arguments": {
+      "settings": {
+        "timelineName": "LOOKSi C04 — The last tweak. Again.",
+        "width": 1080,
+        "height": 1920,
+        "frameRate": 30,
+        "audioSampleRate": 48000,
+        "colorSpace": "Rec.709",
+        "dataLevels": "Legal",
+        "trackLayout": "creator_social"
+      }
+    }
+  },
+  "bindingRequired": [
+    "Fresh native resourceId",
+    "Current admitted taskId",
+    "Current startingDocumentHash",
+    "Canonical existing outputDirectory admitted to task",
+    "Live available command schemas"
+  ],
+  "admissionActions": [
+    {
+      "kind": "text",
+      "summary": "Create editable campaign titles and native graphic shapes."
+    },
+    {
+      "kind": "layers",
+      "summary": "Create and arrange native Timeline tracks and clips."
+    },
+    {
+      "kind": "media",
+      "summary": "Import only the listed raw/native source assets as individual clips."
+    },
+    {
+      "kind": "framing",
+      "summary": "Frame sources and animate native position, scale and opacity."
+    },
+    {
+      "kind": "audio",
+      "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+    },
+    {
+      "kind": "delivery",
+      "summary": "Save readback-verified native project and prepare native H.264 export."
+    }
+  ],
+  "sourceAssets": [
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign04/audio/original-sound-design.wav",
+      "bytes": 4608078,
+      "sha256": "4d5c2737e7e4cf7198a526975ab46055921a4ad78519d5817262400b2be0ef9e"
+    }
+  ],
+  "scenePlan": [
+    {
+      "startSeconds": 0,
+      "endSeconds": 3,
+      "purpose": "A confidently held hook, then a second thought.",
+      "nativeObjects": [
+        "two separate native title clips"
+      ],
+      "acceptance": "No implied version-management product capability."
+    },
+    {
+      "startSeconds": 3,
+      "endSeconds": 8,
+      "purpose": "File-name pile becomes relatable creative indecision.",
+      "nativeObjects": [
+        "four independent text clips with native entrance keys"
+      ],
+      "acceptance": "Filenames are graphic storytelling, not a fake app file browser."
+    },
+    {
+      "startSeconds": 8,
+      "endSeconds": 18,
+      "purpose": "Native poster colors and type explore scale; a pointer cross follows considered alternatives, then rests.",
+      "nativeObjects": [
+        "three screen-blended native ellipses",
+        "editable poster title",
+        "four choice titles",
+        "two pointer shapes"
+      ],
+      "acceptance": "No accidental clipping. Poster explicitly an original campaign graphic, not Looksy app output or feature proof."
+    },
+    {
+      "startSeconds": 18,
+      "endSeconds": 24,
+      "purpose": "A breath and a larger closing question.",
+      "nativeObjects": [
+        "editable maker disclosure and CTA"
+      ],
+      "acceptance": "All copy fits a phone preview; no face shoot or fake UI prerequisite."
+    }
+  ],
+  "steps": [
+    {
+      "id": "c04-track-ink",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "ink",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-ink",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c04-track-ink",
+          "field": "trackId"
+        },
+        "shapeType": "rectangle",
+        "startSeconds": 0,
+        "durationSeconds": 24,
+        "values": {
+          "positionX": 0.5,
+          "positionY": 0.5,
+          "shapeWidth": 1,
+          "shapeHeight": 1,
+          "backgroundColor": "#08090B",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c04-track-hook",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "hook",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-hook",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-hook",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 0,
+        "durationSeconds": 3,
+        "values": {
+          "text": "The last tweak.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 103,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.3,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-hook-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-hook",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 3.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.325,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.3,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-again",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "again",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-again",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-again",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 1.5,
+        "durationSeconds": 1.5,
+        "values": {
+          "text": "Again.",
+          "fontFamily": "Instrument Serif",
+          "fontSize": 115,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#00FF96",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.47,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-again-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-again",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 1.266666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 1.5,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.495,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.47,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-revision-0",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "revision-0",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-revision-0",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-revision-0",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 3.0,
+        "durationSeconds": 5.0,
+        "values": {
+          "text": "final.jpg",
+          "fontFamily": "Space Mono",
+          "fontSize": 43,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.11,
+          "positionY": 0.28,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-revision-0-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-revision-0",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.30500000000000005,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.28,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-revision-1",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "revision-1",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-revision-1",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-revision-1",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 3.5,
+        "durationSeconds": 4.5,
+        "values": {
+          "text": "final_final.jpg",
+          "fontFamily": "Space Mono",
+          "fontSize": 43,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.135,
+          "positionY": 0.35500000000000004,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-revision-1-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-revision-1",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.266666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.5,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.38000000000000006,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.35500000000000004,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-revision-2",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "revision-2",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-revision-2",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-revision-2",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 4.0,
+        "durationSeconds": 4.0,
+        "values": {
+          "text": "final_final_2.jpg",
+          "fontFamily": "Space Mono",
+          "fontSize": 43,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.16,
+          "positionY": 0.43000000000000005,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-revision-2-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-revision-2",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 3.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.45500000000000007,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.43000000000000005,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-revision-3",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "revision-3",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-revision-3",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-revision-3",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 4.5,
+        "durationSeconds": 3.5,
+        "values": {
+          "text": "actually_final.jpg",
+          "fontFamily": "Space Mono",
+          "fontSize": 43,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#00FF96",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.185,
+          "positionY": 0.505,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-revision-3-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-revision-3",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 3.266666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 3.5,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.53,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.505,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-question",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "question",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-question",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-question",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 6,
+        "durationSeconds": 2,
+        "values": {
+          "text": "One more thing…",
+          "fontFamily": "Instrument Serif",
+          "fontSize": 62,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.7,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-question-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-question",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 1.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.725,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.7,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-poster-color-0",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "poster-color-0",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-poster-color-0",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c04-track-poster-color-0",
+          "field": "trackId"
+        },
+        "shapeType": "ellipse",
+        "startSeconds": 8,
+        "durationSeconds": 10,
+        "values": {
+          "positionX": 0.4,
+          "positionY": 0.51,
+          "shapeWidth": 0.3,
+          "shapeHeight": 0.23,
+          "backgroundColor": "#FF2222",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c04-poster-color-0-blend",
+      "commandId": "timeline.action.setTimelineClipBlendMode",
+      "values": {
+        "clipId": {
+          "result": "c04-poster-color-0",
+          "field": "createdClipId"
+        },
+        "blendMode": "screen"
+      }
+    },
+    {
+      "id": "c04-poster-color-0-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-poster-color-0",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameScale",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.94,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": 1.05,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0.98,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 10.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-poster-color-1",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "poster-color-1",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-poster-color-1",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c04-track-poster-color-1",
+          "field": "trackId"
+        },
+        "shapeType": "ellipse",
+        "startSeconds": 8,
+        "durationSeconds": 10,
+        "values": {
+          "positionX": 0.5,
+          "positionY": 0.51,
+          "shapeWidth": 0.3,
+          "shapeHeight": 0.23,
+          "backgroundColor": "#00FF55",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c04-poster-color-1-blend",
+      "commandId": "timeline.action.setTimelineClipBlendMode",
+      "values": {
+        "clipId": {
+          "result": "c04-poster-color-1",
+          "field": "createdClipId"
+        },
+        "blendMode": "screen"
+      }
+    },
+    {
+      "id": "c04-poster-color-1-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-poster-color-1",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameScale",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.94,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": 1.05,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0.98,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 10.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-poster-color-2",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "poster-color-2",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-poster-color-2",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c04-track-poster-color-2",
+          "field": "trackId"
+        },
+        "shapeType": "ellipse",
+        "startSeconds": 8,
+        "durationSeconds": 10,
+        "values": {
+          "positionX": 0.6,
+          "positionY": 0.51,
+          "shapeWidth": 0.3,
+          "shapeHeight": 0.23,
+          "backgroundColor": "#2255FF",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c04-poster-color-2-blend",
+      "commandId": "timeline.action.setTimelineClipBlendMode",
+      "values": {
+        "clipId": {
+          "result": "c04-poster-color-2",
+          "field": "createdClipId"
+        },
+        "blendMode": "screen"
+      }
+    },
+    {
+      "id": "c04-poster-color-2-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-poster-color-2",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameScale",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.94,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": 1.05,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0.98,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 10.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-poster-type",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "poster-type",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-poster-type",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-poster-type",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 8,
+        "durationSeconds": 10,
+        "values": {
+          "text": "A LITTLE\nMORE EYE.",
+          "fontFamily": "Archivo Black",
+          "fontSize": 83,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "center",
+          "positionX": 0.5,
+          "positionY": 0.51,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-poster-type-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-poster-type",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 9.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 10.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.535,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.51,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-art-disclosure",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "art-disclosure",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-art-disclosure",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-art-disclosure",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 8,
+        "durationSeconds": 10,
+        "values": {
+          "text": "Original campaign graphic",
+          "fontFamily": "Space Mono",
+          "fontSize": 36,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.77,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-art-disclosure-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-art-disclosure",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 9.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 10.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.795,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.77,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-choice-1",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "choice-1",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-choice-1",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-choice-1",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 8,
+        "durationSeconds": 2,
+        "values": {
+          "text": "A bit bigger?",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 66,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.18,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-choice-1-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-choice-1",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 1.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.205,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.18,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-choice-2",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "choice-2",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-choice-2",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-choice-2",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 10,
+        "durationSeconds": 2,
+        "values": {
+          "text": "Or a little quieter?",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 66,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.18,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-choice-2-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-choice-2",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 1.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.205,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.18,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-choice-3",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "choice-3",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-choice-3",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-choice-3",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 12,
+        "durationSeconds": 2,
+        "values": {
+          "text": "Move it back.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 66,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.18,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-choice-3-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-choice-3",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 1.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.205,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.18,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-choice-4",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "choice-4",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-choice-4",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-choice-4",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 14,
+        "durationSeconds": 4,
+        "values": {
+          "text": "There.",
+          "fontFamily": "Instrument Serif",
+          "fontSize": 79,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.18,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-choice-4-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-choice-4",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 3.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.205,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.18,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-pointer-cross",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "pointer-cross",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-pointer-horizontal",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c04-track-pointer-cross",
+          "field": "trackId"
+        },
+        "shapeType": "rectangle",
+        "startSeconds": 8,
+        "durationSeconds": 6,
+        "values": {
+          "positionX": 0.78,
+          "positionY": 0.62,
+          "shapeWidth": 0.065,
+          "shapeHeight": 0.003,
+          "backgroundColor": "#F4F3EC",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c04-pointer-vertical",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c04-track-pointer-cross",
+          "field": "trackId"
+        },
+        "shapeType": "rectangle",
+        "startSeconds": 8,
+        "durationSeconds": 6,
+        "values": {
+          "positionX": 0.78,
+          "positionY": 0.62,
+          "shapeWidth": 0.005,
+          "shapeHeight": 0.037,
+          "backgroundColor": "#F4F3EC",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c04-pointer-h-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-pointer-horizontal",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameOffsetX",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": -0.12,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0.05,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "frameOffsetY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": -0.1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0.06,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-pointer-v-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-pointer-vertical",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameOffsetX",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": -0.12,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0.05,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "frameOffsetY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 2.0,
+                "value": -0.1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0.06,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-builder-disclosure",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "builder-disclosure",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-builder-disclosure",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-builder-disclosure",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 18,
+        "durationSeconds": 6,
+        "values": {
+          "text": "I’m building LOOKSi.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 80,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.29,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-builder-disclosure-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-builder-disclosure",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.315,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.29,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-product-category",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "product-category",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-product-category",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-product-category",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 18.3,
+        "durationSeconds": 5.7,
+        "values": {
+          "text": "Photo + video.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 82,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.42,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-product-category-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-product-category",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.466666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.7,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.445,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.42,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-maker-line",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "maker-line",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-maker-line",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-maker-line",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 18.6,
+        "durationSeconds": 5.4,
+        "values": {
+          "text": "For people who care\nhow it looks.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 64,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.56,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-maker-line-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-maker-line",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.133333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.4,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.5850000000000001,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.56,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-cta",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "cta",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c04-cta",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c04-track-cta",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 18.9,
+        "durationSeconds": 5.1,
+        "values": {
+          "text": "What’s your\n“last tweak”?",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 65,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#00FF96",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.76,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c04-cta-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-cta",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.866666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.1,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.785,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.76,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-track-source-score",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "audio",
+        "name": "source-score",
+        "audioRole": "music"
+      }
+    },
+    {
+      "id": "c04-source-score",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c04-track-source-score",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c04:source-score",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign04/audio/original-sound-design.wav",
+        "displayLabel": "source-score",
+        "durationSeconds": 24,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 24,
+        "startSeconds": 0,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c04-source-score-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c04-source-score",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "audioGainDb",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": -60,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.266666667,
+                "value": -8,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 23.333333333,
+                "value": -8,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 24.0,
+                "value": -60,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c04-save-native-project-copy",
+      "commandId": "timeline.action.saveTimeline",
+      "values": {
+        "outputPath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign04/projects/campaign04-native-v1.json"
+      }
+    }
+  ],
+  "completionStatus": "Not authored in Looksy; no native deliverable or export exists from this plan.",
+  "reviewRequirements": [
+    "Inspect native title/shape text and source identities",
+    "Verify track compositing order in native preview",
+    "Native preview and visible proof at every cut",
+    "Readback-verified project save",
+    "Native delivery preflight",
+    "Native export receipt reaches completed with output integrity",
+    "Full decode/phone-size/audio review",
+    "Human creative approval pending"
+  ]
+}

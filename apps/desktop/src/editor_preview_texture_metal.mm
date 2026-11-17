@@ -1,4 +1,5 @@
 #include "editor_preview_texture.h"
+#include "editor_preview_texture_upload.h"
 
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 
@@ -101,15 +102,17 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
         return false;
       }
 
-      const auto upload_image = uploadImageForFormat(image, pixel_format_);
+      const auto upload = premultiplied_preview_upload_region(
+          image, upload_rect, pixel_format_ == MTLPixelFormatRGBA16Float);
+      const auto& upload_image = upload.image;
       if (upload_image.isNull()) {
         return false;
       }
 
       const auto bytes_per_pixel = qsizetype{bytesPerPixelForFormat(pixel_format_)};
       const auto* source = upload_image.constBits() +
-                           upload_rect.y() * upload_image.bytesPerLine() +
-                           upload_rect.x() * bytes_per_pixel;
+                           upload.source_offset.y() * upload_image.bytesPerLine() +
+                           upload.source_offset.x() * bytes_per_pixel;
       const auto metal_region = MTLRegionMake2D(
           static_cast<NSUInteger>(upload_rect.x()),
           static_cast<NSUInteger>(upload_rect.y()),
@@ -192,7 +195,7 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
                                        width:static_cast<NSUInteger>(destination_size.width())
                                       height:static_cast<NSUInteger>(destination_size.height())
                                    mipmapped:NO];
-      descriptor.usage = MTLTextureUsageShaderRead;
+      descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
       descriptor.storageMode = MTLStorageModeShared;
       id<MTLTexture> replacement = [device_ newTextureWithDescriptor:descriptor];
       id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
@@ -208,6 +211,8 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
           return false;
         }
         [command_buffer encodeWaitForEvent:ready_event value:surface.ready_event_value()];
+      } else if (!surface.producer_completed_successfully()) {
+        return false;
       }
       id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
       if (encoder == nil) return false;
@@ -216,14 +221,10 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
                      sourceSize:MTLSizeMake(texture_.width, texture_.height, 1)
                       toTexture:replacement destinationSlice:0 destinationLevel:0
              destinationOrigin:MTLOriginMake(0, 0, 0)];
-      [encoder copyFromTexture:source
-                   sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
-                     sourceSize:MTLSizeMake(source.width, source.height, 1)
-                      toTexture:replacement destinationSlice:0 destinationLevel:0
-             destinationOrigin:MTLOriginMake(
-                                   static_cast<NSUInteger>(destination_region.x()),
-                                   static_cast<NSUInteger>(destination_region.y()), 0)];
       [encoder endEncoding];
+      if (!encodePremultipliedSurface(source, replacement, command_buffer,
+              static_cast<NSUInteger>(destination_region.x()),
+              static_cast<NSUInteger>(destination_region.y()))) return false;
       const auto serial = ++publication_serial_;
       const auto alive = alive_;
       [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
@@ -241,32 +242,9 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
     }
   }
 
-  bool adoptNativeSurface(
-      const photo_editor::pipeline::metal::MetalOutputSurface& surface) override {
-    if (!available_ ||
-        surface.format() != photo_editor::pipeline::metal::
-                                MetalOutputSurfaceFormat::Bgra8UnormSrgbEncoded ||
-        surface.native_texture_handle() == 0U ||
-        !surface.producer_completed_successfully() ||
-        surface.device_registry_id() != static_cast<std::uint64_t>(device_.registryID)) {
-      return false;
-    }
-    @autoreleasepool {
-      auto source = (__bridge id<MTLTexture>)(
-          reinterpret_cast<void*>(surface.native_texture_handle()));
-      if (source == nil || source.pixelFormat != MTLPixelFormatBGRA8Unorm ||
-          source.device.registryID != device_.registryID ||
-          static_cast<int>(source.width) != surface.width() ||
-          static_cast<int>(source.height) != surface.height()) {
-        return false;
-      }
-      texture_ = source;
-      pixel_format_ = MTLPixelFormatBGRA8Unorm;
-      ++publication_serial_;
-      return true;
-    }
-  }
-
+  // Display conversion is asynchronous even for a completed producer. The
+  // synchronous base-class entry point remains unsupported rather than
+  // blocking the GUI thread on a GPU conversion.
   bool adoptNativeSurfaceAsync(
       const photo_editor::pipeline::metal::MetalOutputSurface& surface,
       NativePatchCommitGuard commit_guard,
@@ -286,13 +264,17 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
       if (source == nil || source.pixelFormat != MTLPixelFormatBGRA8Unorm ||
           source.device.registryID != device_.registryID ||
           static_cast<int>(source.width) != surface.width() ||
-          static_cast<int>(source.height) != surface.height() || ready_event == nil ||
-          surface.ready_event_value() == 0U) {
+          static_cast<int>(source.height) != surface.height() ||
+          (ready_event != nil ? surface.ready_event_value() == 0U
+                              : !surface.producer_completed_successfully())) {
         return false;
       }
       id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
-      if (command_buffer == nil) return false;
-      [command_buffer encodeWaitForEvent:ready_event value:surface.ready_event_value()];
+      auto replacement = makePremultipliedSurfaceTexture(source);
+      if (command_buffer == nil || replacement == nil) return false;
+      if (ready_event != nil)
+        [command_buffer encodeWaitForEvent:ready_event value:surface.ready_event_value()];
+      if (!encodePremultipliedSurface(source, replacement, command_buffer)) return false;
       const auto serial = ++publication_serial_;
       const auto alive = alive_;
       [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
@@ -302,7 +284,7 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
           const auto publish = gpu_completed && publication_serial_ == serial &&
                                (!commit_guard || commit_guard());
           if (publish) {
-            texture_ = source;
+            texture_ = replacement;
             pixel_format_ = MTLPixelFormatBGRA8Unorm;
           }
           if (completion) completion(publish);
@@ -357,13 +339,8 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
 
  private:
   [[nodiscard]] static bool isDirectRgba16FloatUploadFormat(QImage::Format format) {
-    return format == QImage::Format_RGBA16FPx4;
-  }
-
-  [[nodiscard]] static bool isDirectBgraUploadFormat(QImage::Format format) {
-    return format == QImage::Format_ARGB32 ||
-           format == QImage::Format_ARGB32_Premultiplied ||
-           format == QImage::Format_RGB32;
+    return format == QImage::Format_RGBA16FPx4 ||
+           format == QImage::Format_RGBA16FPx4_Premultiplied;
   }
 
   [[nodiscard]] static MTLPixelFormat preferredPixelFormatForImage(const QImage& image) {
@@ -381,14 +358,49 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
   }
 
   [[nodiscard]] static QImage uploadImageForFormat(const QImage& image, MTLPixelFormat format) {
-    if (format == MTLPixelFormatRGBA16Float) {
-      return isDirectRgba16FloatUploadFormat(image.format())
-                 ? image
-                 : image.convertToFormat(QImage::Format_RGBA16FPx4);
+    return premultiplied_preview_upload_image(image, format == MTLPixelFormatRGBA16Float);
+  }
+
+  id<MTLTexture> makePremultipliedSurfaceTexture(id<MTLTexture> source) const {
+    auto* descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+        width:source.width height:source.height mipmapped:NO];
+    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    descriptor.storageMode = MTLStorageModeShared;
+    return [device_ newTextureWithDescriptor:descriptor];
+  }
+
+  bool encodePremultipliedSurface(id<MTLTexture> source, id<MTLTexture> destination,
+      id<MTLCommandBuffer> command, NSUInteger offset_x = 0, NSUInteger offset_y = 0) {
+    if (premultiply_pipeline_ == nil) {
+      // Native engine surfaces are immutable straight-alpha output. Convert a
+      // display copy on the GPU before filtering/blending, without readback.
+      NSString* shader = @"#include <metal_stdlib>\nusing namespace metal;\n"
+          "kernel void preview_premultiply(texture2d<float, access::read> source [[texture(0)]],"
+          " texture2d<float, access::write> destination [[texture(1)]],"
+          " constant uint2& offset [[buffer(0)]], uint2 p [[thread_position_in_grid]]) {"
+          " if (p.x >= source.get_width() || p.y >= source.get_height()) return;"
+          " float4 value = source.read(p); value.rgb *= value.a;"
+          " destination.write(value, p + offset); }";
+      NSError* error = nil;
+      auto library = [device_ newLibraryWithSource:shader options:nil error:&error];
+      auto function = [library newFunctionWithName:@"preview_premultiply"];
+      premultiply_pipeline_ = function == nil ? nil
+          : [device_ newComputePipelineStateWithFunction:function error:&error];
+      if (premultiply_pipeline_ == nil) return false;
     }
-    return isDirectBgraUploadFormat(image.format())
-               ? image
-               : image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    auto encoder = [command computeCommandEncoder];
+    if (encoder == nil) return false;
+    const std::uint32_t offset[]{static_cast<std::uint32_t>(offset_x),
+                                 static_cast<std::uint32_t>(offset_y)};
+    [encoder setComputePipelineState:premultiply_pipeline_];
+    [encoder setTexture:source atIndex:0];
+    [encoder setTexture:destination atIndex:1];
+    [encoder setBytes:offset length:sizeof(offset) atIndex:0];
+    [encoder dispatchThreads:MTLSizeMake(source.width, source.height, 1)
+        threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+    [encoder endEncoding];
+    return true;
   }
 
   bool ensureTexture(const QSize& size, MTLPixelFormat pixel_format) {
@@ -418,6 +430,7 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
 
   id<MTLDevice> device_ = nil;
   id<MTLCommandQueue> command_queue_ = nil;
+  id<MTLComputePipelineState> premultiply_pipeline_ = nil;
   id<MTLTexture> texture_ = nil;
   MTLPixelFormat pixel_format_ = MTLPixelFormatInvalid;
   bool available_ = false;

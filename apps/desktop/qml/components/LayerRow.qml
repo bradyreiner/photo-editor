@@ -79,7 +79,7 @@ Rectangle {
 
     Theme { id: theme }
 
-    readonly property bool hovered: rowHover.containsMouse
+    readonly property bool hovered: rowHoverTracker.hovered || rowHover.containsMouse
     readonly property bool thumbnailReady: thumbnailAvailable && thumbnailSource.length > 0
     readonly property int rowHeight: Math.max(compact ? 48 : 56,
                                                Math.max(layerTextColumn.implicitHeight + theme.space12,
@@ -126,8 +126,9 @@ Rectangle {
                                                    String(root.thumbnailZoneSize) +
                                                    "|decode:" + String(screenAwareThumbnailSourceSize) +
                                                    "|dpr:" + thumbnailDevicePixelRatio.toFixed(2)
-    readonly property bool contextualActionsVisible: hovered || activeFocus || selected || activeMask
-    readonly property real contextualActionOpacity: 1.0
+    readonly property bool contextualActionsVisible: hovered || activeFocus || lockAction.activeFocus ||
+                                                       visibilityAction.activeFocus || menuAction.activeFocus
+    readonly property real contextualActionOpacity: contextualActionsVisible ? 1.0 : 0.0
 
     Layout.fillWidth: true
     Layout.preferredHeight: rowHeight
@@ -148,6 +149,9 @@ Rectangle {
     Keys.onReturnPressed: root.clicked()
     Keys.onEnterPressed: root.clicked()
     Keys.onSpacePressed: root.clicked()
+
+    // Observe the whole row, including labels and badges above its click area.
+    HoverHandler { id: rowHoverTracker }
 
     MouseArea {
         id: rowHover
@@ -367,8 +371,10 @@ Rectangle {
             Layout.preferredWidth: root.actionZoneWidth
             spacing: 5
             opacity: root.contextualActionOpacity
+            enabled: root.contextualActionsVisible
 
             Components.ToolButton {
+                id: lockAction
                 objectName: root.lockButtonObjectName
                 visible: root.showLockButton
                 iconName: "lock"
@@ -413,7 +419,8 @@ Rectangle {
                     anchors.rightMargin: 5
                     text: root.maskLabel === "No Mask" ? "NO" : "MASK"
                     color: root.activeMask ? root.activeMaskAccent : (root.maskLabel !== "No Mask" ? root.accent : theme.textMuted)
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 8
                     font.weight: Font.DemiBold
                     horizontalAlignment: Text.AlignHCenter
@@ -430,7 +437,8 @@ Rectangle {
                 Layout.preferredWidth: 34
                 text: Math.max(0, Math.min(100, root.opacityPercent)) + "%"
                 color: theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignRight
@@ -440,11 +448,12 @@ Rectangle {
             }
 
             Components.ToolButton {
+                id: visibilityAction
                 objectName: root.visibilityButtonObjectName
                 visible: root.showVisibilityButton
                 iconName: root.hidden ? "hidden" : "visible"
                 compact: true
-                active: !root.hidden
+                active: false
                 enabled: root.visibilityButtonEnabled
                 label: root.hidden ? "Show layer" : "Hide layer"
                 disabledReason: root.visibilityDisabledReason
@@ -452,8 +461,10 @@ Rectangle {
             }
 
             MenuButton {
+                id: menuAction
                 objectName: root.menuButtonObjectName
                 visible: root.showMenuButton
+                activeFocusOnTab: true
                 text: "More"
                 iconName: "menu"
                 compact: true

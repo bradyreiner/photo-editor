@@ -2,6 +2,7 @@
 #include "brush_live_preview_raster.h"
 #include "brush_matte_rebuild.h"
 #include "brush_stroke_sampling.h"
+#include "photo_editor/pipeline/brush_edge_math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +38,20 @@ double tip(double distance, double hardness, double feather, double radius = 24.
 
 int main() {
   using namespace photo_editor::desktop;
+  for (const double radius : {20.0, 120.0}) {
+    int partial_samples = 0;
+    for (int pixel = static_cast<int>(radius) - 3; pixel <= static_cast<int>(radius) + 3; ++pixel) {
+      const auto weight = photo_editor::pipeline::circular_brush_coverage_pixels(
+          static_cast<double>(pixel), radius, 1.0);
+      if (weight > 0.0 && weight < 1.0) ++partial_samples;
+    }
+    if (partial_samples != 1 ||
+        photo_editor::pipeline::circular_brush_coverage_pixels(radius - 1.0, radius, 1.0) != 1.0 ||
+        photo_editor::pipeline::circular_brush_coverage_pixels(radius, radius, 1.0) != 0.5 ||
+        photo_editor::pipeline::circular_brush_coverage_pixels(radius + 1.0, radius, 1.0) != 0.0) {
+      return fail("Hardness 1 must have a one-raster-pixel antialias band at every brush size.");
+    }
+  }
   // Independent analytical oracle: a circular tip, including completely hard
   // and soft extremes, must have the same alpha in either pixel direction.
   for (const auto size : {QSize(801, 401), QSize(401, 801), QSize(401, 401)}) {
@@ -134,6 +149,22 @@ int main() {
   source_aware.insert("brushAutoMask", true);
   if (!mask_with_rebuilt_brush_matte(source_aware, size, "preview").isEmpty())
     return fail("Auto Mask must retain authoritative alpha instead of replaying without source colors.");
+  const QSize edge_size(41,21);
+  QImage edge_source(edge_size,QImage::Format_ARGB32);
+  for (int y=0;y<edge_size.height();++y) for (int x=0;x<edge_size.width();++x)
+    edge_source.setPixelColor(x,y,x<21 ? QColor(220,35,25) : QColor(25,45,220));
+  const BrushPreviewPoint edge_point{.x=0.5,.y=0.5,.size=0.5,.flow=1.0,
+      .auto_mask_anchor_x=0.25,.auto_mask_anchor_y=0.5};
+  auto edge_committed=blank(edge_size);
+  (void)rasterize_brush_point_into_mask(&edge_committed,&edge_source,edge_point.x,edge_point.y,
+      edge_point.size,edge_point.flow,edge_point.opacity,0.0,false,false,0.05,
+      edge_point.auto_mask_anchor_x,edge_point.auto_mask_anchor_y,true,{},nullptr,nullptr,nullptr,
+      {.circular=true,.hardness=1.0});
+  BrushLivePreviewRaster edge_live;
+  edge_live.append(edge_size,{edge_point},{.feather=0.0,.hardness=1.0,.circular=true},
+      &edge_source,0.05,true,{},false);
+  if (edge_live.alpha!=edge_committed.value("segmentationData").toByteArray())
+    return fail("Protect Edges alone must use identical live and committed coverage without enabling color selection.");
   std::cout << "continuous_sweep_max_alpha_error=" << maximum_error << " samples=" << samples.size() << '\n';
   return EXIT_SUCCESS;
 }

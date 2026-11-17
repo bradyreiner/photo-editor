@@ -137,6 +137,30 @@
       return fail("Studio polish should reach the Edit workspace");
     }
     auto* edit = find_named_object(studio_root, QStringLiteral("editStudioWorkspace"));
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_BLANK_CANVAS")) {
+      // A retained controller can still have the preceding smoke asset while
+      // catalog selection/recipe hydration reaches the newly created Main.
+      // Require this fixture's identity before testing its Base row controls.
+      const auto fixture_asset_id = catalog_assets.assetIdForFilePath(photo_path);
+      if (fixture_asset_id.isEmpty() || !catalog_assets.selectAssetById(fixture_asset_id, true))
+        return fail("Canvas proof must select its registered disposable-catalog photo");
+      if (!catalog_assets.assetRecipeReady(fixture_asset_id)) catalog_assets.requestAssetRecipes({fixture_asset_id});
+      if (!wait_for_condition([&] { return catalog_assets.selectedAssetId() == fixture_asset_id &&
+            catalog_assets.selectedRecipeReady() && !catalog_assets.loading(); }, 15000))
+        return fail("Canvas proof must hydrate the exact selected source recipe before opening Edit");
+      QVariant opened;
+      if (!QMetaObject::invokeMethod(studio_root, "loadSelectedAssetIntoEditor", Q_RETURN_ARG(QVariant, opened)) || !opened.toBool() ||
+          !wait_for_condition([&] { return editor_preview.assetId() == fixture_asset_id && editor_preview.hasAsset() &&
+              studio_root->property("openedCatalogFilePath").toString() == photo_path &&
+              !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 20000)) {
+        std::cerr << "Canvas source readiness: selected=" << catalog_assets.selectedAssetId().toStdString()
+                  << " expected=" << fixture_asset_id.toStdString() << " editor=" << editor_preview.assetId().toStdString()
+                  << " hasAsset=" << editor_preview.hasAsset() << " processing=" << editor_preview.processing()
+                  << " fullRender=" << editor_preview.fullRenderRunning() << " status=" << editor_preview.status().toStdString() << '\n';
+        return fail("Canvas proof must finish the exact registered source's production editor load");
+      }
+      process_layout_events(8);
+    }
     if (!edit || !wait_for_condition([&] {
           return editor_preview.hasAsset() && !editor_preview.processing();
         }, 15000)) {
@@ -151,8 +175,12 @@
     if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_BLANK_CANVAS")) {
 #include "blank_canvas_interactions.inc"
     }
-    const QStringList densities{QStringLiteral("comfortable"), QStringLiteral("balanced"),
-                                QStringLiteral("compact")};
+    const bool isolated_text_proof = qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_TEXT_PERF_ONLY");
+    const QStringList densities = isolated_text_proof ? QStringList{} :
+        QStringList{QStringLiteral("comfortable"), QStringLiteral("balanced"), QStringLiteral("compact")};
+    if (isolated_text_proof && !QMetaObject::invokeMethod(edit, "setInterfaceDensity",
+            Q_ARG(QVariant, QVariant(QStringLiteral("compact")))))
+      return fail("Isolated text proof should use its fixed interface density");
     const auto native_proof = qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER");
     const QList<QSize> studio_sizes{QSize(1180, 768), QSize(1440, 900),
                                   native_proof ? QSize(1920, 900) : QSize(1920, 1080)};
@@ -176,12 +204,12 @@
         if (!capture_visual_proof(studio_window, studio_root, proof_dir,
               QStringLiteral("edit-%1-%2").arg(density).arg(size.width()),
               size.width(), size.height(),
-              {QStringLiteral("editImageViewport"), QStringLiteral("editWorkspaceLayoutButton"),
-               QStringLiteral("activeEditTargetModeLabel")}, &studio_manifest)) {
+              {QStringLiteral("editImageViewport"), QStringLiteral("editViewMoreButton"),
+               QStringLiteral("activeEditTargetBreadcrumbLabel")}, &studio_manifest)) {
           return fail("Edit density should render its canvas, layout control, and editing target");
         }
-        auto* target = find_named_object(studio_root, QStringLiteral("activeEditTargetModeLabel"));
-        if (!target || target->property("text").toString() != QStringLiteral("Editing: Entire image")) {
+        auto* target = find_named_object(studio_root, QStringLiteral("activeEditTargetBreadcrumbLabel"));
+        if (!target || target->property("text").toString() != QStringLiteral("Base Image")) {
           return fail("Edit should identify the adjustment target in plain language");
         }
         auto* viewport = find_named_item(studio_root, QStringLiteral("editImageViewport"));
@@ -309,7 +337,8 @@
     auto* paint_color = find_named_item(studio_root, QStringLiteral("photoPaintColorButton"));
     auto* paint_advanced = find_named_item(studio_root, QStringLiteral("photoPaintAdvancedButton"));
     auto* paint_rail_button = find_named_item(studio_root, QStringLiteral("editRailPaintButton"));
-    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_TYPOGRAPHY_ONLY")) {
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_TYPOGRAPHY_ONLY") ||
+        qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_TEXT_PERF_ONLY")) {
 #include "typography_inspector_proof.inc"
     }
     if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_TOOL_SIDEBARS")) {
@@ -392,6 +421,33 @@
     // Reactivating a target schedules the HUD's Flow/Layout polish. Wait for
     // that geometry before computing coordinates for a real pointer drag.
     process_layout_events(8);
+    auto* tools_splitter = find_named_item(studio_root, QStringLiteral("creativeToolsResizeHandle"));
+    if (!item_visible(tools_splitter)) return fail("Docked tools should expose their resize divider");
+    if (QGuiApplication::platformName() == QStringLiteral("cocoa")) activate_native_test_application();
+    studio_window->raise();
+    studio_window->requestActivate();
+    if (!wait_for_condition([&] { return QGuiApplication::focusWindow() == studio_window; }, 5000))
+      return fail("The tool-divider keyboard proof requires its window to have focus");
+    tools_splitter->forceActiveFocus(Qt::TabFocusReason);
+    process_layout_events(2);
+    const auto initial_tools_height = creative_tools_panel->height();
+    QKeyEvent resize_up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+    QCoreApplication::sendEvent(studio_window, &resize_up);
+    process_layout_events(8);
+    if (!wait_for_condition([&] {
+          return tools_splitter->hasActiveFocus() && creative_tools_panel->height() < initial_tools_height - 1;
+        }, 3000)) {
+      std::cerr << "Tool divider: focus=" << tools_splitter->hasActiveFocus()
+                << " before=" << initial_tools_height << " after=" << creative_tools_panel->height()
+                << " preference=" << edit->property("editCreativeToolsHeight").toDouble()
+                << " accepted=" << resize_up.isAccepted() << '\n';
+      return fail("The focused tool divider should shrink the panel with Up");
+    }
+    QKeyEvent resize_home(QEvent::KeyPress, Qt::Key_Home, Qt::NoModifier);
+    QCoreApplication::sendEvent(studio_window, &resize_home);
+    process_layout_events(8);
+    if (std::abs(edit->property("editCreativeToolsHeight").toDouble() - 440.0) > 1)
+      return fail("Home should restore the default tool-panel split");
     const auto initial_brush_size = paint_overlay->property("brushSize").toDouble();
     const auto size_bounds = scene_rect(paint_size);
     if (!item_visible(creative_tools_panel) || !item_visible(creative_paint_host) ||
@@ -767,7 +823,8 @@
     const QStringList brush_hud_control_names{
         QStringLiteral("brushHudSurface"), QStringLiteral("brushHudAddButton"),
         QStringLiteral("brushHudEraseButton"), QStringLiteral("brushHudResetDefaultsButton"),
-        QStringLiteral("brushHudSizeField"), QStringLiteral("brushHudHardnessVerticalSlider"),
+        QStringLiteral("brushHudSizeField"), QStringLiteral("brushHudTipPreview"),
+        QStringLiteral("brushHudHardnessVerticalSlider"),
         QStringLiteral("brushHudFlowVerticalSlider"), QStringLiteral("brushHudDoneButton")};
     for (const auto& density : densities) {
       if (!QMetaObject::invokeMethod(edit, "setInterfaceDensity",
@@ -799,7 +856,8 @@
                  QStringLiteral("brushHudSurface"),
                  QStringLiteral("brushHudAddButton"), QStringLiteral("brushHudEraseButton"),
                  QStringLiteral("brushHudResetDefaultsButton"),
-                 QStringLiteral("brushHudSizeField"), QStringLiteral("brushHudHardnessVerticalSlider"),
+                 QStringLiteral("brushHudSizeField"), QStringLiteral("brushHudTipPreview"),
+        QStringLiteral("brushHudHardnessVerticalSlider"),
                  QStringLiteral("brushHudFlowVerticalSlider"), QStringLiteral("brushHudDoneButton"),
                  QStringLiteral("brushLayerInspectorHeader"), QStringLiteral("brushLayerInspectorTargetNameLabel"),
                  QStringLiteral("maskToolRail")}, &studio_manifest)) {
@@ -872,12 +930,12 @@
       studio_window->grabWindow().save(QDir(proof_dir).filePath(QStringLiteral("tools-close-failure.png")));
       return fail("Closing Creative Tools should hide its controls without changing the active brush or layer stack");
     }
-    QVariant layout_menu_items_value;
-    if (!QMetaObject::invokeMethod(edit, "workspaceLayoutMenuItems",
-          Q_RETURN_ARG(QVariant, layout_menu_items_value))) {
-      return fail("The Edit Layout menu should expose its Tool controls entry");
-    }
-    const auto layout_menu_items = layout_menu_items_value.toList();
+    auto* layout_button = find_named_item(studio_root, QStringLiteral("editViewMoreButton"));
+    if (!item_visible(layout_button)) return fail("The Edit View menu should remain available");
+    const auto layout_menu_items_value = layout_button->property("menuItems");
+    const auto layout_menu_items = layout_menu_items_value.canConvert<QJSValue>()
+        ? layout_menu_items_value.value<QJSValue>().toVariant().toList()
+        : layout_menu_items_value.toList();
     int tools_menu_index = -1;
     for (int index = 0; index < layout_menu_items.size(); ++index) {
       if (layout_menu_items.at(index).toMap().value(QStringLiteral("key")).toString() == QStringLiteral("tools")) {
@@ -885,14 +943,13 @@
         break;
       }
     }
-    auto* layout_button = find_named_item(studio_root, QStringLiteral("editWorkspaceLayoutButton"));
-    if (!layout_button || tools_menu_index < 0 ||
+    if (tools_menu_index < 0 ||
         !QMetaObject::invokeMethod(layout_button, "openMenu")) {
-      return fail("The Layout menu should offer a direct way to reopen Creative Tools");
+      return fail("The View menu should offer a direct way to reopen Creative Tools");
     }
-    const auto tools_menu_row_name = QStringLiteral("editWorkspaceLayoutButtonPopupItem%1").arg(tools_menu_index);
+    const auto tools_menu_row_name = QStringLiteral("editViewMoreButtonPopupItem%1").arg(tools_menu_index);
     auto* tools_menu_row = find_named_item(studio_root, tools_menu_row_name);
-    auto* tools_menu_popup = find_named_object(studio_root, QStringLiteral("editWorkspaceLayoutButtonPopup"));
+    auto* tools_menu_popup = find_named_object(studio_root, QStringLiteral("editViewMoreButtonPopup"));
     if (!tools_menu_row || !tools_menu_popup || !wait_for_condition([&] {
           return tools_menu_popup->property("opened").toBool();
         }, 3000) || !click_studio_item(tools_menu_row) ||
@@ -911,7 +968,7 @@
                 << " toolsVisible=" << edit->property("editCreativeToolsVisible").toBool()
                 << " ready=" << brush_tool_ready() << " panel=" << creative_tools_panel->isVisible() << '\n';
       studio_window->grabWindow().save(QDir(proof_dir).filePath(QStringLiteral("tools-reopen-failure.png")));
-      return fail("Layout > Tool controls should reopen the current brush state without recreating layers");
+      return fail("View > Tool controls should reopen the current brush state without recreating layers");
     }
     if (!click_studio_item(creative_tools_float) ||
         !wait_for_condition([&] { return edit->property("editCreativeToolsFloating").toBool(); }, 5000) ||
@@ -1374,7 +1431,7 @@
           return fail("Timeline task layouts should preserve global density");
         }
         QStringList required{QStringLiteral("timelineProgramMonitor"), QStringLiteral("timelineViewport"),
-                             QStringLiteral("timelineLayoutPresetButton")};
+                             QStringLiteral("timelinePanelStrip")};
         if (preset == QStringLiteral("audio")) {
           required.append(QStringLiteral("timelineStudioAudioDock"));
           required.append(QStringLiteral("timelineStudioAudioMixerTitle"));
@@ -1382,8 +1439,8 @@
           required.append(QStringLiteral("timelineVideoColorInspector"));
           required.append(QStringLiteral("timelineDockedProgramScopes"));
         } else if (preset == QStringLiteral("finish")) {
-          required.append(QStringLiteral("timelineEffectsInspector"));
-          required.append(QStringLiteral("timelineWorkspaceToolsButton"));
+          required.append(QStringLiteral("timelineFinishingDock"));
+          required.append(QStringLiteral("timelineFinishingCaptionsButton"));
         }
         if (!wait_for_condition([&] {
               return std::all_of(required.cbegin(), required.cend(), [&](const QString& name) {
@@ -1408,24 +1465,14 @@
           return fail("Timeline task layout should finish loading its visible tools before capture");
         }
         if (preset == QStringLiteral("finish") && !finish_tools_pointer_verified) {
-          auto* tools_button = find_named_item(
-              studio_root, QStringLiteral("timelineWorkspaceToolsButton"));
-          if (!click_studio_item(tools_button) ||
-              !wait_for_condition([&] {
-                auto* popup = find_named_object(
-                    studio_root, QStringLiteral("timelineWorkspaceToolsButtonPopup"));
-                return popup && popup->property("opened").toBool() &&
-                       named_object_visible_for_proof(
-                           studio_root, QStringLiteral("timelineWorkspaceToolsButtonPopupItem0"));
-              }, 3000) ||
-              !capture_visual_proof(
+          auto* captions_button = find_named_item(
+              studio_root, QStringLiteral("timelineFinishingCaptionsButton"));
+          if (!capture_visual_proof(
                   studio_window, studio_root, proof_dir,
-                  QStringLiteral("timeline-finish-tools-menu"),
-                  studio_window->width(), studio_window->height(),
-                  required + QStringList{QStringLiteral("timelineWorkspaceToolsButtonPopupItem0")},
+                  QStringLiteral("timeline-finish-caption-tools"),
+                  studio_window->width(), studio_window->height(), required,
                   &studio_manifest) ||
-              !click_studio_item(find_named_item(
-                  studio_root, QStringLiteral("timelineWorkspaceToolsButtonPopupItem0"))) ||
+              !click_studio_item(captions_button) ||
               !wait_for_condition([&] {
                 auto* captions = find_named_object(
                     studio_root, QStringLiteral("timelineCaptionGeneratorPopup"));
@@ -1437,7 +1484,7 @@
                     studio_root, QStringLiteral("timelineCaptionGeneratorPopup"));
                 return captions && !captions->property("visible").toBool();
               }, 3000)) {
-            return fail("Finish workspace should open caption tools through its visible Tools menu");
+            return fail("Finishing should open caption tools through its visible dock control");
           }
           finish_tools_pointer_verified = true;
         }
@@ -1448,8 +1495,8 @@
             return fail("Timeline task layouts should render without hiding their editing surfaces");
           }
           const QRectF window_bounds(0, 0, studio_window->width(), studio_window->height());
-          auto* mode = find_named_item(studio_root, QStringLiteral("timelineEditModeMenuButton"));
-          auto* select_tool = find_named_item(studio_root, QStringLiteral("timelineToolMenuButton"));
+          auto* mode = find_named_item(studio_root, QStringLiteral("timelineActionsMenuButton"));
+          auto* select_tool = find_named_item(studio_root, QStringLiteral("timelineSelectToolButton"));
           if (!item_visible(mode) || !item_visible(select_tool) ||
               !window_bounds.contains(scene_rect(mode)) ||
               std::abs(scene_rect(mode).top() - scene_rect(select_tool).top()) > 2) {

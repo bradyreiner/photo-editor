@@ -1,0 +1,7 @@
+{
+  "adapterBytes": 2919317,
+  "tensorCount": 24,
+  "parameters": 729088,
+  "nonzeroLoraBParameters": 364544,
+  "allFinite": true
+}

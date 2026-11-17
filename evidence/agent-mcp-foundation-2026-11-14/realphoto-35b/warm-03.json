@@ -1,0 +1,76 @@
+{
+    "automaticCommitAllowed": false,
+    "cloudUsed": false,
+    "contract": "agent-live-local-runtime-smoke-v1",
+    "fixtureKind": "source-image-override",
+    "localOnly": true,
+    "modelFamily": "qwen35moe",
+    "modelId": "ollama-qwen36-35b",
+    "ollamaModel": "qwen3.6:35b",
+    "parameterSize": "35.5B",
+    "photographerApprovalRequired": true,
+    "planning": {
+        "decision": "recipe_patch",
+        "elapsedMs": 8828,
+        "fallbackUsed": false,
+        "generationSchemaByteCount": 1597,
+        "generationSchemaContract": "agent-operation-discriminated-generation-v2",
+        "globalChangePolicy": "allow",
+        "globalChangePolicyCorrection": {
+        },
+        "imageIncluded": true,
+        "ok": true,
+        "ollamaServer": {
+            "evalCount": 549,
+            "evalDurationMs": 8738,
+            "loadDurationMs": 3,
+            "promptEvalCount": 3305,
+            "promptEvalDurationMs": 45,
+            "totalDurationMs": 8822
+        },
+        "responseCharCount": 1873,
+        "summary": "The image shows a mountain range at dusk with a soft, colorful sky. The user wants a 'cinematic evening look' which implies a slight color grade (e.g., towards purple/blue in shadows or teal/orange in highlights) and gentle contrast enhancement. The 'natural color' request suggests avoiding overly dramatic shifts. The ",
+        "transport": {
+            "durationMs": 8823,
+            "endpoint": "http://127.0.0.1:11434",
+            "ok": true,
+            "path": "/api/chat",
+            "responseBytes": 2847,
+            "retryable": false,
+            "statusCode": 200,
+            "timeoutMs": -1
+        }
+    },
+    "probeAvailable": true,
+    "proofCritique": {
+        "elapsedMs": 1661,
+        "imageIncluded": true,
+        "needsUserReview": false,
+        "ok": true,
+        "ollamaServer": {
+            "available": true,
+            "evalCount": 91,
+            "evalDurationMs": 1598,
+            "loadDurationMs": 2,
+            "promptEvalCachedCount": 1872,
+            "promptEvalCount": 1876,
+            "promptEvalDurationMs": 38,
+            "totalDurationMs": 1657
+        },
+        "pass": true,
+        "summary": "The image successfully renders a restrained cinematic evening look with gentle contrast and natural color. The framing is preserved, and the sky highlights are protected from clipping. No text layers were requested or present.",
+        "tasteConfidence": ",95",
+        "transport": {
+            "durationMs": 1657,
+            "endpoint": "http://127.0.0.1:11434",
+            "ok": true,
+            "path": "/api/chat",
+            "responseBytes": 908,
+            "retryable": false,
+            "statusCode": 200,
+            "timeoutMs": -1
+        }
+    },
+    "quantizationLevel": "Q4_K_M",
+    "sourceSha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56"
+}

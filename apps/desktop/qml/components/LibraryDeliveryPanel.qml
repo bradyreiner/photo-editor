@@ -133,7 +133,8 @@ Item {
                 Label {
                     text: root.completedCount
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                     Accessible.name: root.completedCount + " completed"
                 }
@@ -146,7 +147,8 @@ Item {
                 Label {
                     text: root.failedCount
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                     Accessible.name: root.failedCount + " failed"
                 }
@@ -159,7 +161,8 @@ Item {
                 Label {
                     text: root.queuedCount
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                     Accessible.name: root.queuedCount + " queued"
                 }
@@ -187,21 +190,24 @@ Item {
             Label {
                 text: root.completedCount + " done"
                 color: root.completedCount > 0 ? theme.success : theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 Accessible.name: root.completedCount + " completed exports"
             }
             Label {
                 text: root.failedCount + " failed"
                 color: root.failedCount > 0 ? theme.error : theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 Accessible.name: root.failedCount + " failed exports"
             }
             Label {
                 text: root.queuedCount + " queued"
                 color: root.queuedCount > 0 ? theme.accentCool400 : theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 Accessible.name: root.queuedCount + " queued exports"
             }
@@ -209,7 +215,8 @@ Item {
                 visible: root.runningCount > 0
                 text: root.runningCount + " running"
                 color: theme.accentWarm400
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
             }
         }
@@ -233,7 +240,8 @@ Item {
                 Label {
                     text: "LAST VERIFIED OUTPUT"
                     color: theme.textFaint
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                     font.letterSpacing: 0.35
                 }

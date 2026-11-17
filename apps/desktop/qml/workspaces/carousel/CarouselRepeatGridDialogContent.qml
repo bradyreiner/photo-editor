@@ -196,7 +196,8 @@ ColumnLayout {
                         anchors.centerIn: parent
                         text: Number(modelData.cellIndex || 0) + 1
                         color: theme.textStrong
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 10
                     }
                 }
@@ -214,7 +215,8 @@ ColumnLayout {
                   Math.round(Number(carouselRepeatGridDialog.preview.resultWidth || 0)) + " × " +
                   Math.round(Number(carouselRepeatGridDialog.preview.resultHeight || 0)) + " px"
             color: theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 10
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             elide: Text.ElideNone

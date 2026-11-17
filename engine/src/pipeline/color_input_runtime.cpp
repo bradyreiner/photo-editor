@@ -374,13 +374,15 @@ constexpr double kInputPi = std::numbers::pi_v<double>;
   parameters.execute_camera_linear_highlight_reconstruction =
       camera_linear_highlight_reconstruction_enabled(state.input_transform);
   if (parameters.execute_camera_linear_highlight_reconstruction) {
-    const auto mode_strength =
-        state.input_transform.highlight_reconstruction_mode == "Camera Default"
-            ? 0.60
-            : 1.0;
     parameters.highlight_reconstruction_strength =
-        mode_strength *
-        std::clamp(1.50 - recipe.highlight_headroom, 0.50, 1.0);
+        camera_linear_highlight_reconstruction_strength(
+            state.input_transform, recipe.highlight_headroom);
+    if (engine_characterized_camera_input && !dcp_input) {
+      parameters.camera_neutral = multiply_matrix3_vector(
+          invert_matrix3(parameters.camera_profile), {1.0, 1.0, 1.0});
+      parameters.camera_neutral_reconstruction_strength =
+          state.input_transform.highlight_reconstruction_mode == "Camera Default" ? 0.60 : 1.0;
+    }
   } else {
     parameters.highlight_reconstruction_strength =
         highlight_reconstruction_strength(state) *
@@ -440,10 +442,17 @@ constexpr double kInputPi = std::numbers::pi_v<double>;
 [[nodiscard]] ColorPixel apply_normalize_raw_stage(
     const ColorPixel& input,
     const InputStageParameters& parameters,
-    const PipelineColorContext&) {
+    const PipelineColorContext&,
+    double normalized_x,
+    double normalized_y) {
   auto pixel = parameters.white_balance_after_camera_profile
                    ? input
                    : apply_rgb_matrix(input, parameters.white_balance);
+  // Sensor clipping precedes the user's black/white-level remapping.
+  if (parameters.execute_camera_linear_highlight_reconstruction) {
+    pixel = reconstruct_camera_neutral_highlight(
+        pixel, parameters.camera_neutral, parameters.camera_neutral_reconstruction_strength);
+  }
   const auto normalize_channel = [&](float channel) {
     const auto normalized = (static_cast<double>(channel) - parameters.raw_black_level) /
                             (parameters.raw_white_level - parameters.raw_black_level);
@@ -461,7 +470,11 @@ constexpr double kInputPi = std::numbers::pi_v<double>;
     pixel = apply_camera_linear_highlight_reconstruction(
         pixel,
         parameters.highlight_reconstruction_strength,
-        parameters.highlight_reconstruction);
+        parameters.highlight_reconstruction,
+        normalized_x >= 0.0 && normalized_x <= 1.0
+            ? parameters.source_area_x + normalized_x * parameters.source_area_width : -1.0,
+        normalized_y >= 0.0 && normalized_y <= 1.0
+            ? parameters.source_area_y + normalized_y * parameters.source_area_height : -1.0);
   }
   return pixel;
 }
@@ -582,7 +595,9 @@ constexpr double kInputPi = std::numbers::pi_v<double>;
           apply_normalize_raw_stage(
               input,
               parameters,
-              context),
+              context,
+              normalized_x,
+              normalized_y),
           parameters,
           context,
           normalized_x,

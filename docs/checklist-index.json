@@ -16,6 +16,13 @@
       "canonicalOwner": "docs/capability-verification-plan.md"
     },
     {
+      "id": "DOC-APP-AUDIT-REMEDIATION-2026-10-25",
+      "path": "docs/app-audit-remediation-2026-10-25.md",
+      "area": "capability-acceptance",
+      "state": "supporting",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
       "id": "DOC-CAROUSEL-DELIVERY",
       "path": "docs/carousel-delivery-100-checklist.md",
       "area": "carousel",
@@ -413,6 +420,48 @@
       "area": "photographer-workflow-ui",
       "state": "supporting",
       "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-HIGH-IMPACT-AUDIT-2026-10-23",
+      "path": "docs/timeline-high-impact-audit-2026-10-23.md",
+      "area": "timeline",
+      "state": "supporting",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-PHOTOSHOP-PROFESSIONAL-TOOLS",
+      "path": "docs/photoshop-professional-tools-roadmap.md",
+      "area": "professional-content-tools",
+      "state": "supporting",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-APP-IMPROVEMENT",
+      "path": "docs/app-improvement-plan.md",
+      "area": "capability-acceptance",
+      "state": "supporting",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-COLOR-APP-AUDIT-2026-10-28",
+      "path": "docs/color-and-app-engine-audit-2026-10-28.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-AUTHORING-WORKFLOW-2026-10-28",
+      "path": "docs/editor-authoring-workflow-repair-plan-2026-10-28.md",
+      "area": "masking-layers",
+      "state": "supporting",
+      "canonicalOwner": "docs/mask-layer-selection-checklist.md"
+    },
+    {
+      "id": "DOC-GAUSSIAN-FILM-PLANE-2026-10-26",
+      "path": "docs/gaussian-film-plane-2026-10-26.md",
+      "area": "capability-acceptance",
+      "state": "supporting",
+      "canonicalOwner": "docs/capability-verification-plan.md"
     }
   ]
 }

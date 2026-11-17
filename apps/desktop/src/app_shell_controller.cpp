@@ -1,14 +1,18 @@
 #include "app_shell_controller.h"
+#include "editor_shortcut_registry.h"
 
 #include "edit_adjustment_patch.h"
 
 #include <QDesktopServices>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QImage>
 #include <QLinearGradient>
 #include <QPainter>
@@ -505,6 +509,14 @@ void AppShellController::clearDisplayCalibration() {
           "color/displayCalibration"));
   settings.sync();
   emit preferencesChanged();
+}
+
+bool AppShellController::copyTextToClipboard(const QString& text) const {
+  if (text.isEmpty() || qobject_cast<QGuiApplication*>(QCoreApplication::instance()) == nullptr) return false;
+  auto* clipboard = QGuiApplication::clipboard();
+  if (clipboard == nullptr) return false;
+  clipboard->setText(text);
+  return true;
 }
 
 bool AppShellController::revealPath(const QString& path) const {
@@ -1051,6 +1063,60 @@ QVariantMap AppShellController::shortcutOverrides() const {
   return settings.value(kShortcutOverridesKey).toMap();
 }
 
+QVariantList AppShellController::shortcutDefinitions() const {
+  QVariantList values;
+  for (const auto& item : editor_shortcuts()) {
+    values.push_back(QVariantMap{{QStringLiteral("id"), item.id},
+                                {QStringLiteral("label"), item.label},
+                                {QStringLiteral("context"), item.context},
+                                {QStringLiteral("sequence"), shortcutSequence(item.id, item.sequence)},
+                                {QStringLiteral("defaultSequence"), item.sequence}});
+  }
+  return values;
+}
+
+QString AppShellController::canonicalShortcutSequence(const QString& sequence) const {
+  return canonical_editor_shortcut(sequence);
+}
+
+QStringList AppShellController::shortcutConflicts(
+    const QString& shortcut_id, const QString& sequence,
+    const QVariantMap& proposed_overrides) const {
+  return editor_shortcut_conflict_labels(shortcut_id.trimmed(), sequence, proposed_overrides);
+}
+
+bool AppShellController::shortcutKeymapValid(const QVariantMap& overrides) const {
+  return validate_editor_shortcuts(overrides, nullptr);
+}
+
+bool AppShellController::exportShortcutKeymap(const QString& path_or_url) const {
+  if (path_or_url.trimmed().isEmpty()) return false;
+  QSaveFile file(normalized_storage_path(path_or_url));
+  if (!file.open(QIODevice::WriteOnly)) return false;
+  const QJsonObject document{{QStringLiteral("schema"), QStringLiteral("looksy-keymap:v1")},
+                             {QStringLiteral("overrides"), QJsonObject::fromVariantMap(shortcutOverrides())}};
+  const auto data = QJsonDocument(document).toJson(QJsonDocument::Indented);
+  return file.write(data) == data.size() && file.commit();
+}
+
+bool AppShellController::importShortcutKeymap(const QString& path_or_url) {
+  if (path_or_url.trimmed().isEmpty()) return false;
+  QFile file(normalized_storage_path(path_or_url));
+  constexpr qint64 maximum_keymap_size = 1024 * 1024;
+  if (!file.open(QIODevice::ReadOnly) || file.size() > maximum_keymap_size) return false;
+  QJsonParseError error;
+  const auto document = QJsonDocument::fromJson(file.read(maximum_keymap_size + 1), &error);
+  if (error.error != QJsonParseError::NoError || !document.isObject()) return false;
+  const auto object = document.object();
+  if (object.value(QStringLiteral("schema")).toString() != QStringLiteral("looksy-keymap:v1") ||
+      !object.value(QStringLiteral("overrides")).isObject()) return false;
+  const auto mappings = object.value(QStringLiteral("overrides")).toObject();
+  for (auto it = mappings.begin(); it != mappings.end(); ++it) {
+    if (!it.value().isString()) return false;
+  }
+  return setShortcutOverrides(mappings.toVariantMap());
+}
+
 QString AppShellController::shortcutSequence(
     const QString& shortcut_id,
     const QString& default_sequence) const {
@@ -1073,30 +1139,19 @@ bool AppShellController::setShortcutOverride(
 }
 
 bool AppShellController::setShortcutOverrides(const QVariantMap& overrides) {
-  QSet<QString> used_sequences;
   QVariantMap normalized;
-  for (auto iterator = overrides.cbegin(); iterator != overrides.cend(); ++iterator) {
-    const auto id = iterator.key().trimmed();
-    const auto sequence = iterator.value().toString().trimmed();
-    const auto conflict_key = sequence.toLower();
-    if (id.isEmpty() || sequence.isEmpty() || used_sequences.contains(conflict_key)) {
-      return false;
-    }
-    used_sequences.insert(conflict_key);
-    normalized.insert(id, sequence);
-  }
+  if (!validate_editor_shortcuts(overrides, &normalized)) return false;
   writeSetting(QString::fromUtf8(kShortcutOverridesKey), normalized);
   emit preferencesChanged();
   return true;
 }
 
-void AppShellController::resetShortcutOverride(const QString& shortcut_id) {
+bool AppShellController::resetShortcutOverride(const QString& shortcut_id) {
   auto overrides = shortcutOverrides();
   if (overrides.remove(shortcut_id.trimmed()) == 0) {
-    return;
+    return true;
   }
-  writeSetting(QString::fromUtf8(kShortcutOverridesKey), overrides);
-  emit preferencesChanged();
+  return setShortcutOverrides(overrides);
 }
 
 }  // namespace photo_editor::desktop

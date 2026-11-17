@@ -1,0 +1,29 @@
+# P21 Timeline preview diagnostic — 148.5 s
+
+## Finding
+
+There is no source-versus-sequence preview-mode switch exposed by `timeline.preview_at_time` or a separate read-only MCP tool. The captured central viewer is the Timeline Program monitor. At 148.5 s it shows only the selected shoe on black, while native structure reports 35 visual clips active by time at that frame, including the type panel, copy, vector paths, title plates, and the paint-opacity readout. Their graphics tracks are visible, unmuted, nonsoloed, and unlocked; the compact clip rows do not expose the per-clip `videoVisible`/`multicamActive` flags. The screenshot therefore points to a missing or stale Program-layer projection in this UI state, not a selected Source monitor or a video decoder failure.
+
+This is not yet enough to name a persistent QML defect. Inspection happened while P21 task `90532fb6-f84b-4b58-9d20-461aa4a31709` still reported `active=true`, `status=review`; the saved-audit hash was current, but the compact live summary reported `saved=false`, `dirty=true`. Recheck the Program capture after the task is released before changing code or declaring the playback path broken.
+
+## Read-only evidence
+
+- Visible capture: `program-preview-148.5.png`, copied from `/private/tmp/looksy-dense-timeline-v7iaxqgh/cache/timeline-visible-proofs/timeline-visible-8d7656a1-91bd-4ab7-b58f-623410e24372.png`; 2570×1612 physical pixels; SHA-256 `b22186e73840ffbcb6ab371ae8342c88448807fd7c1a229abcdfd7ea52fa65cf`. It shows the Program transport timecode `00:02:28:15`, the isolated orange shoe on black, and no poster, brush, type panel, or other copy. The timeline ruler remains around 0:40–0:53 while the playhead is 2:28:15.
+- `timeline.inspect_document` returned resource `timeline:3db4e4fb-6737-415c-b6ee-dde766e7c237`, document hash `8c125de95668c44c2a578721ae5ece46bad59b155391f9bf7655efca677a3c86`, duration 298 s, 196 tracks, and ready=true.
+- `timeline.inspect_structure(scope=clips, sequenceSeconds=148.5)` sampled frame 4455 at 30 fps and returned all 37 active clips: 31 titles, 3 motion generators, 1 photo, 2 audio. The selected shoe clip `d5338ffd-b461-4ed9-b216-d222f6b01c85` is active from 142–150 s. The 148.5 s `PAINT OPACITY / 62%` title is active through 148.5333 s. Full bounded rows are in `active-148.5-readonly-structure.json`.
+- `timeline.inspect_structure(scope=tracks, offset=26, maxItems=64)` reports all 64 queried graphics tracks as visible, unmuted, nonsoloed, and unlocked. The visible lower timeline area therefore does not reflect an empty native document. Rows are in `track-visibility-26-89.json`.
+- `timeline.inspect_playback_performance` returned `hasVideoSource=false`, `mediaReady=false`, `playbackHealth=idle`, preview quality `none`. That is consistent with this interval’s active media mix (photo/title/generator, no video clips); it does not explain missing QML title/generator layers. The original preview seek receipt also reported frame presentation unverified, so it is not proof that a frame was physically presented after the seek.
+- `timeline.inspect_render_geometry` reports both `currentClip` and `programClip` as the selected shoe. Its Program-item lookups are inconclusive: the traversal was truncated (`visualTraversalTruncated=true`) after 6,341 QObject and 2,421 visual items, and returned `found=false` for the requested Program items. Do not interpret those false fields as proof that the delegates do not exist. Bounded responses are retained in `program-geometry-reads.json`.
+
+## Source trace
+
+- `TimelineDocumentController::programClipRef()` prefers the visible selected photo/video as Program primary (`apps/desktop/src/timeline_document_controller.cpp:47184-47208`). Here the selected photo is also active at the sampled time.
+- `TimelineView.qml` builds Program background layers from `sequenceTrackModel` and filters them at the sequence playhead (`apps/desktop/qml/workspaces/TimelineView.qml:6835-6838, 6914-6935, 7504-7516`). If that QML projection is empty or stale, the selected primary can remain visible while other time-active layers are absent, assuming their per-clip visibility flags are enabled. The current MCP structure read confirms the native source data, but does not expose the live QML model length.
+- `timeline.preview_at_time` accepts only `resourceId`, `documentHash`, and `seconds`; it pauses playback and seeks the sequence clock (`apps/desktop/src/photo_automation_bridge.cpp:2666-2712`). It has no source/sequence mode parameter. The Source panel is a separate `TimelineSourcePanel` (`apps/desktop/qml/workspaces/TimelineView.qml:25543-25555`); `previewSource` is only read by gap-state UI guards.
+- The horizontal mismatch is explained by current follow logic: paused playhead changes call `followTimelinePlayheadIfNeeded()`, but that function immediately returns unless `sequencePlaying` is true (`apps/desktop/qml/workspaces/TimelineView.qml:4307-4314, 8596-8608`). Thus the seek changes the Program timecode but leaves the old 0:40–0:53 viewport in place. This is a distinct view-follow issue, not evidence that the sequence seek failed.
+
+## Next diagnostic step
+
+After P21 is released, capture the same visible Program frame again with no route or zoom changes. If the full layer stack returns, the held/review task state was a relevant transient. If it still shows only the selected shoe while the read-only structure still returns 35 visual clips, inspect the live `sequenceTrackModel`/Program layer projection before changing rendering code. Also center the paused playhead through an explicitly authorized view-navigation step only after preserving this capture; the current seek call intentionally does not move the timeline viewport.
+
+No source, project, app, worker, playback state, or UI route was changed by this audit. Read-only MCP calls were confined to isolated worker PID 98633.

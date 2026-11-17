@@ -14,6 +14,8 @@ Rectangle {
     property string selectedAssetId: ""
     property bool filterActive: false
     property bool agentAvailable: false
+    property var modelSetupController: null
+    signal setupRequested()
     signal searchRequested(string query)
     signal showMatchesRequested()
     signal clearRequested()
@@ -52,8 +54,8 @@ Rectangle {
 
         Label {
             Layout.fillWidth: true
-            visible: !root.similarityAvailable && root.similarityStatus.length > 0
-            text: root.similarityStatus
+            visible: root.similarityMode && !root.similarityAvailable && text.length > 0
+            text: root.modelSetupController ? root.modelSetupController.status : root.similarityStatus
             textFormat: Text.PlainText
             color: theme.textMuted
             font.pixelSize: 11
@@ -61,10 +63,10 @@ Rectangle {
         }
         RowLayout {
             Layout.fillWidth: true
-            visible: root.similarityAvailable
+            visible: root.similarityAvailable || root.similarityMode
             ToolOptionToggle {
                 objectName: "visualSearchSimilarityToggle"
-                label: "Similarity search · SigLIP 2"
+                label: "Embedding search · SigLIP 2"
                 helperText: "Ranks similar photos locally. Specific details are not verified."
                 checked: root.similarityMode
                 toggleEnabled: root.controller && !root.controller.running
@@ -110,6 +112,15 @@ Rectangle {
             }
         }
 
+        ActionButton {
+            objectName: "visualSearchModelSetupButton"
+            visible: root.similarityMode && root.modelSetupController !== null
+            text: root.similarityAvailable ? "Search model settings" : "Set up embedding model"
+            showText: true
+            compact: true
+            enabled: root.controller && !root.controller.running
+            onClicked: root.setupRequested()
+        }
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
@@ -118,7 +129,7 @@ Rectangle {
                 objectName: "visualSearchQueryInput"
                 Layout.fillWidth: true
                 placeholderText: "Describe a photo — e.g. a person outdoors with warm backlight"
-                enabled: root.controller && !root.controller.running
+                enabled: root.controller && !root.controller.running && (!root.similarityMode || root.similarityAvailable)
                 Accessible.name: "Visual search description"
                 onAccepted: if (text.trim().length > 0) root.searchRequested(text)
             }
@@ -127,7 +138,8 @@ Rectangle {
                 text: "Find photos"
                 showText: true
                 compact: true
-                enabled: root.controller && !root.controller.running && queryInput.text.trim().length > 0
+                enabled: root.controller && !root.controller.running && queryInput.text.trim().length > 0 &&
+                         (!root.similarityMode || root.similarityAvailable)
                 onClicked: root.searchRequested(queryInput.text)
             }
             ActionButton {
@@ -205,7 +217,7 @@ Rectangle {
             }
             ActionButton {
                 objectName: "visualSearchSettingsButton"
-                visible: !root.modelConfig.vision
+                visible: !root.similarityMode && !root.modelConfig.vision
                 text: "AI Edit settings"
                 showText: true
                 compact: true

@@ -138,10 +138,32 @@ int main(int argc, char** argv) {
     return fail("More than two probes ran, or the model event loop stalled");
   const QSet<QString> initial{launched(1), launched(2)};
   if (initial != QSet<QString>{"clip-0.mp4", "clip-1.mp4"}) return fail("Unexpected initial probe order");
-  model.setVisibleAssetRange(5, 6);
-  model.selectIndex(7);
-  if (!release("clip-0.mp4") || !wait_until([&]() { return launch_count() >= 3; }) || launched(3) != "clip-7.mp4")
+  const auto row_for_asset_id = [&](const QString& asset_id) {
+    for (int row = 0; row < model.rowCount(); ++row) {
+      if (model.data(model.index(row, 0), CatalogAssetModel::AssetIdRole).toString() == asset_id) return row;
+    }
+    return -1;
+  };
+  const auto selected_row = row_for_asset_id(QStringLiteral("asset-7"));
+  const auto visible_first_row = row_for_asset_id(QStringLiteral("asset-5"));
+  const auto visible_last_row = row_for_asset_id(QStringLiteral("asset-6"));
+  if (selected_row < 0 || visible_first_row < 0 || visible_last_row != visible_first_row + 1)
+    return fail("Cannot resolve selected and visible fixture assets by identity");
+  model.setVisibleAssetRange(visible_first_row, visible_last_row);
+  if (!model.selectAssetById(QStringLiteral("asset-7")) ||
+      model.selectedAssetId() != QStringLiteral("asset-7"))
+    return fail("The intended selected fixture identity was not published");
+  if (!release("clip-0.mp4")) return fail("Cannot release initial selected probe");
+  if (!wait_until([&]() { return launch_count() >= 3; }))
+    return fail("No background duration probe started after releasing a worker");
+  if (launched(3) != "clip-7.mp4") {
+    std::cerr << "Duration priority diagnostic: selectedIndex=" << model.selectedIndex()
+              << " selectedAssetId=" << model.selectedAssetId().toStdString()
+              << " launchCount=" << launch_count()
+              << " launch3=" << launched(3).toStdString()
+              << " visibleAssetIds=asset-5..asset-6\n";
     return fail("New selection did not precede background probes");
+  }
   if (!release("clip-7.mp4") || !wait_until([&]() { return launch_count() >= 4; }) || launched(4) != "clip-5.mp4")
     return fail("Visible rows did not precede background probes");
   if (!release("clip-5.mp4") || !wait_until([&]() { return launch_count() >= 5; }) || launched(5) != "clip-6.mp4")

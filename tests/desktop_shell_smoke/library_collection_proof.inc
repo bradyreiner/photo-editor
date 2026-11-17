@@ -1,7 +1,10 @@
     const auto photo_path = runtime_root.filePath(QStringLiteral("collection-photo.png"));
     if (!write_overlay_visual_fixture(photo_path, QStringLiteral("saturated")))
       return fail("Collection proof must create a photo fixture");
+    QImage review_photo(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/tests/fixtures/creative-tools/landscape-mountain-source.jpg"));
+    if (review_photo.isNull() || !review_photo.save(photo_path)) return fail("Library proof must decode a real photo");
     auto photo = make_asset(QStringLiteral("collection-photo"), photo_path);
+    photo.rating = 5;
     auto video = make_asset(QStringLiteral("collection-video"), photo_path);
     video.media_type = QStringLiteral("video");
     auto board = make_asset(QStringLiteral("collection-board"), QString());
@@ -12,7 +15,16 @@
     if (!QDir().mkpath(QFileInfo(canvas_path).absolutePath()) || !QFile::copy(photo_path, canvas_path))
       return fail("Collection proof must create a legacy board backing source");
     auto board_source = make_asset(QStringLiteral("collection-board-source"), canvas_path);
-    catalog_assets.replaceAssetsForTesting({photo, video, board, timeline, board_source});
+    const auto blank_path = runtime_root.filePath(QStringLiteral("canvas-documents/blank/source.png"));
+    QDir().mkpath(QFileInfo(blank_path).absolutePath());
+    QImage blank(640, 480, QImage::Format_ARGB32_Premultiplied); blank.fill(Qt::transparent);
+    if (!blank.save(blank_path)) return fail("Blank Canvas fixture must be saved");
+    auto canvas = make_asset(QStringLiteral("collection-blank-canvas"), blank_path);
+    catalog_assets.replaceAssetsForTesting({photo, video, board, timeline, board_source, canvas});
+    for (const auto& asset : {photo, video, canvas}) {
+      catalog_assets.applyThumbnailResultForTesting(asset.asset_id, asset.file_path,
+          catalog_assets.assetById(asset.asset_id).value("adjustmentPatchJson").toString(), QUrl::fromLocalFile(asset.file_path).toString());
+    }
     const auto board_patch = photo_editor::desktop::serialize_adjustment_patch_json(
         photo_editor::desktop::EditRecipeState{}, photo_editor::desktop::all_adjustment_groups(),
         photo_editor::desktop::AdjustmentPatchScope::AssetBound);
@@ -66,15 +78,36 @@
         catalog_assets.mediaCollectionFilter() != QStringLiteral("images") ||
         !capture(QStringLiteral("images-media-only"), {QStringLiteral("studioLibraryGalleryGrid")}))
       return fail("Images must render only photos and videos");
+    catalog_assets.selectAssetById(photo.asset_id);
+    catalog_assets.setSelectedRating(5);
+    process_layout_events(8);
     catalog_assets.setMediaTypeFilter(QStringLiteral("videos"));
     catalog_assets.clearFilters();
     if (catalog_assets.rowCount() != 2) return fail("Clearing filters must preserve Images scope");
+    catalog_assets.selectAssetById(photo.asset_id);
+    process_layout_events(8);
+    if (!capture(QStringLiteral("gold-stars-and-selection"), {QStringLiteral("studioLibraryGalleryGrid")})) return fail("Rated photo capture failed");
+    auto* rating_star = find_named_item(collection_root, QStringLiteral("libraryRatingStar"));
+    if (!item_visible(rating_star)) return fail("Rated photos must display filled gold stars");
+    if (!activate(QStringLiteral("libraryCanvasesCollectionButton")) ||
+        !wait_for_condition([&] { return catalog_assets.rowCount() == 1; }, 3000) ||
+        catalog_assets.galleryAssetAt(0).value("assetId").toString() != canvas.asset_id ||
+        catalog_assets.galleryAssetAt(0).value("fileType").toString() != QStringLiteral("CANVAS") ||
+        !capture(QStringLiteral("blank-canvas-separated"), {QStringLiteral("studioLibraryGalleryGrid")}))
+      return fail("Blank canvases must render in their own collection with a subtle type label");
+    if (!activate(QStringLiteral("libraryImagesCollectionButton")) || catalog_assets.rowCount() != 2)
+      return fail("Photos must stay separate after visiting Canvases");
     if (!activate(QStringLiteral("libraryCarouselsCollectionButton")) ||
         library->property("libraryCollection").toString() != QStringLiteral("boards") ||
         find_named_item(collection_root, QStringLiteral("libraryImagesCollectionButton"))->property("active").toBool() ||
         !find_named_item(collection_root, QStringLiteral("libraryCarouselsCollectionButton"))->property("active").toBool() ||
         !capture(QStringLiteral("boards-documents"), {QStringLiteral("savedBoardsGrid")}))
       return fail("Boards tab must open its document page");
+    if (!wait_for_condition([&] {
+          auto* cover = find_named_item(collection_root, QStringLiteral("savedBoardThumbnail"));
+          return cover && cover->property("status").toInt() == 1;
+        }, 15000) || !capture(QStringLiteral("boards-rendered-cover"), {QStringLiteral("savedBoardThumbnail")}))
+      return fail("Saved Boards must render a real cover without changing the open editor");
     if (!activate(QStringLiteral("libraryTimelinesCollectionButton")) ||
         !wait_for_condition([&]() {
           auto* list = find_named_object(collection_root, QStringLiteral("savedTimelinesList"));

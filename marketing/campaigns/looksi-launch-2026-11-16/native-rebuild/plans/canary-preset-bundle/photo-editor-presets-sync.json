@@ -1,0 +1,534 @@
+{
+  "format": "photo-editor-preset-sync",
+  "version": 3,
+  "presets": [
+    {
+      "name": "LOOKSi Native Canary 2026-11-16",
+      "pack": "LOOKSi Native Authoring Canary",
+      "category": "Creative",
+      "adjustmentGroups": [
+        "layers"
+      ],
+      "adjustmentPatch": {
+        "format": "photo-editor-adjustment-patch",
+        "version": 1,
+        "scope": "source-agnostic",
+        "groups": [
+          "layers"
+        ],
+        "adjustmentState": {
+          "colorGrading": {
+            "amount": 100,
+            "balance": 0,
+            "highlights": {
+              "hue": 0,
+              "luminance": 0,
+              "saturation": 0
+            },
+            "midtones": {
+              "hue": 0,
+              "luminance": 0,
+              "saturation": 0
+            },
+            "shadows": {
+              "hue": 0,
+              "luminance": 0,
+              "saturation": 0
+            }
+          },
+          "colorMixer": {
+            "channel": "Reds",
+            "hue": 0,
+            "luminance": 0,
+            "model": "OKLab",
+            "saturation": 0
+          },
+          "colorPipeline": {
+            "blackPointCompensationEnabled": true,
+            "cameraProfileAsset": {},
+            "cameraProfileRenderingModel": "dng-profile-v2",
+            "exportOutputProfile": "sRGB",
+            "gamutMappingEnabled": true,
+            "gamutMappingPolicy": "Perceptual",
+            "headroom": 1,
+            "inputProfile": "Embedded",
+            "outputBlackPoint": 0,
+            "photographicRenderingModel": "legacy-oklch-v1",
+            "previewOutputProfile": "sRGB",
+            "profileAssets": {
+              "export": {},
+              "input": {},
+              "preview": {},
+              "proof": {}
+            },
+            "proofing": {
+              "renderIntent": "Relative Colorimetric",
+              "simulateInkBlack": false,
+              "simulatePaperWhite": false
+            },
+            "renderIntent": "Perceptual",
+            "rendererTransitionLook": "none",
+            "sourceBlackPoint": 0,
+            "workingProfile": "Linear ProPhoto RGB"
+          },
+          "cropTransform": {
+            "contentAwareFill": false,
+            "liquifyCenterX": 0.5,
+            "liquifyCenterY": 0.5,
+            "liquifyRadius": 0.25,
+            "liquifyStrength": 0,
+            "perspectiveHorizontal": 0,
+            "perspectiveVertical": 0,
+            "preset": "Original",
+            "rotation": 0,
+            "scale": 1,
+            "skewX": 0,
+            "skewY": 0,
+            "uprightHorizontalGuideAngle": 0,
+            "uprightMode": "Off",
+            "uprightVerticalGuideAngle": 0,
+            "zoom": 1
+          },
+          "curves": {
+            "channels": [],
+            "mode": "parametric",
+            "parametric": {
+              "darks": 0,
+              "highlights": 0,
+              "lights": 0,
+              "shadows": 0
+            }
+          },
+          "exportTransform": {
+            "colorSpace": "sRGB"
+          },
+          "globalAdjustments": {
+            "adaptiveContrast": 0,
+            "blacks": 0,
+            "brightness": 0,
+            "clarity": 0,
+            "colorNr": 0,
+            "contrast": 0,
+            "dehaze": 0,
+            "exposure": 0,
+            "filmicShoulder": 0,
+            "filmicToe": 0,
+            "hdrLocalTone": 0,
+            "highlights": 0,
+            "levelsBlackPoint": 0,
+            "levelsGamma": 0,
+            "levelsWhitePoint": 0,
+            "luminanceNr": 0,
+            "saturation": 0,
+            "shadows": 0,
+            "sharpenDetail": 0,
+            "sharpenMasking": 0,
+            "sharpenRadius": 1,
+            "sharpening": 0,
+            "temperature": 0,
+            "texture": 0,
+            "tint": 0,
+            "vibrance": 0,
+            "whites": 0,
+            "zoneDeepShadows": 0,
+            "zoneHighlights": 0,
+            "zoneLights": 0,
+            "zoneMidtones": 0,
+            "zoneShadows": 0
+          },
+          "guideSettings": {
+            "customGuides": []
+          },
+          "history": {
+            "activeBranchId": "main",
+            "snapshots": []
+          },
+          "layers": [
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 1,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "text": "Native layers.\nReal control.",
+              "fontFamily": "Space Grotesk",
+              "fontSize": 100,
+              "fontWeight": 600,
+              "textColor": "#202522",
+              "textAlignment": "left",
+              "pixelWidth": 960,
+              "pixelHeight": 240,
+              "x": 60,
+              "y": 145,
+              "id": "candidate-canary-1",
+              "kind": "text",
+              "name": "Canary - editable headline"
+            },
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 1,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "vectorPath": {
+                "schema": "photo-vector-path",
+                "version": 1,
+                "coordinateSpace": "normalized",
+                "subpaths": [
+                  {
+                    "id": "canary-rectangle",
+                    "closed": true,
+                    "anchors": [
+                      {
+                        "id": "corner-0",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.05555555555555555,
+                          0.3111111111111111
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "id": "corner-1",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.9444444444444444,
+                          0.3111111111111111
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "id": "corner-2",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.9444444444444444,
+                          0.32
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "id": "corner-3",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.05555555555555555,
+                          0.32
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "vectorFillEnabled": true,
+              "vectorFillColor": "#3282FF",
+              "vectorStrokeEnabled": false,
+              "pixelWidth": 1080,
+              "pixelHeight": 1350,
+              "x": 0,
+              "y": 0,
+              "id": "candidate-canary-2",
+              "kind": "pixel",
+              "name": "Canary - editable vector blue rule"
+            },
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 0.5333333333333333,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "sourcePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5071.jpg",
+              "pixelWidth": 1800,
+              "pixelHeight": 1200,
+              "x": 60,
+              "y": 450,
+              "id": "candidate-canary-3",
+              "kind": "source",
+              "name": "Canary - independent raw photograph"
+            },
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 1,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "fillColor": "#F1EFE7",
+              "fillAlpha": 1,
+              "pixelWidth": 1080,
+              "pixelHeight": 1350,
+              "x": 0,
+              "y": 0,
+              "id": "candidate-canary-4",
+              "kind": "fill",
+              "name": "Canary - editable paper"
+            }
+          ],
+          "maskSetSchemaVersion": 2,
+          "maskSets": [],
+          "maskStack": [],
+          "optics": {
+            "chromaticAberration": 0,
+            "lensDistortion": 0,
+            "lensVignette": 0
+          },
+          "outputTransform": {
+            "previewColorSpace": "sRGB",
+            "previewMode": "Monitor",
+            "softProofEnabled": false,
+            "softProofProfile": "sRGB"
+          },
+          "overlayItems": [],
+          "photoLayers": [
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 1,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "text": "Native layers.\nReal control.",
+              "fontFamily": "Space Grotesk",
+              "fontSize": 100,
+              "fontWeight": 600,
+              "textColor": "#202522",
+              "textAlignment": "left",
+              "pixelWidth": 960,
+              "pixelHeight": 240,
+              "x": 60,
+              "y": 145,
+              "id": "candidate-canary-1",
+              "kind": "text",
+              "name": "Canary - editable headline"
+            },
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 1,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "vectorPath": {
+                "schema": "photo-vector-path",
+                "version": 1,
+                "coordinateSpace": "normalized",
+                "subpaths": [
+                  {
+                    "id": "canary-rectangle",
+                    "closed": true,
+                    "anchors": [
+                      {
+                        "id": "corner-0",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.05555555555555555,
+                          0.3111111111111111
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "id": "corner-1",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.9444444444444444,
+                          0.3111111111111111
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "id": "corner-2",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.9444444444444444,
+                          0.32
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "id": "corner-3",
+                        "kind": "corner",
+                        "handlesLinked": false,
+                        "point": [
+                          0.05555555555555555,
+                          0.32
+                        ],
+                        "in": [
+                          0,
+                          0
+                        ],
+                        "out": [
+                          0,
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "vectorFillEnabled": true,
+              "vectorFillColor": "#3282FF",
+              "vectorStrokeEnabled": false,
+              "pixelWidth": 1080,
+              "pixelHeight": 1350,
+              "x": 0,
+              "y": 0,
+              "id": "candidate-canary-2",
+              "kind": "pixel",
+              "name": "Canary - editable vector blue rule"
+            },
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 0.5333333333333333,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "sourcePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5071.jpg",
+              "pixelWidth": 1800,
+              "pixelHeight": 1200,
+              "x": 60,
+              "y": 450,
+              "id": "candidate-canary-3",
+              "kind": "source",
+              "name": "Canary - independent raw photograph"
+            },
+            {
+              "enabled": true,
+              "opacity": 1,
+              "blendMode": "normal",
+              "scale": 1,
+              "rotation": 0,
+              "canvasWidth": 1080,
+              "canvasHeight": 1350,
+              "solo": false,
+              "locked": false,
+              "fillColor": "#F1EFE7",
+              "fillAlpha": 1,
+              "pixelWidth": 1080,
+              "pixelHeight": 1350,
+              "x": 0,
+              "y": 0,
+              "id": "candidate-canary-4",
+              "kind": "fill",
+              "name": "Canary - editable paper"
+            }
+          ],
+          "presetApplications": [],
+          "rawAdjustments": {
+            "blackLevel": 0,
+            "bluePrimaryHue": 0,
+            "bluePrimarySaturation": 0,
+            "boost": 0,
+            "calibrationHue": 0,
+            "calibrationSaturation": 0,
+            "cameraMatchingLook": "Standard",
+            "chromaNoiseReduction": 0,
+            "chromaticAdaptationMethod": "Bradford",
+            "demosaicQuality": "Balanced",
+            "detail": 0,
+            "exposure": 0,
+            "falseColorSuppression": 0,
+            "gamutMapping": false,
+            "greenPrimaryHue": 0,
+            "greenPrimarySaturation": 0,
+            "highlightReconstructionMode": "Enabled",
+            "highlightReconstructionModel": "camera-linear-opposed-v2",
+            "highlightRecovery": true,
+            "hotDeadPixelCleanup": 0,
+            "inputProfile": "Embedded",
+            "inputTransformEnabled": true,
+            "lensCorrection": true,
+            "moireReduction": 0,
+            "redPrimaryHue": 0,
+            "redPrimarySaturation": 0,
+            "shadowBoost": 1,
+            "whiteBalanceOverride": false,
+            "whiteBalanceTemperature": 5200,
+            "whiteBalanceTint": 0,
+            "whiteLevel": 1
+          },
+          "retouchStack": []
+        }
+      }
+    }
+  ]
+}

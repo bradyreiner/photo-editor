@@ -8,6 +8,7 @@ Item {
     property bool compact: false
     property bool showMark: true
     property bool showDescriptor: false
+    property real compactLogoHeight: 34
     property string descriptor: "AI VISUAL COMPANION"
 
     Theme { id: theme }
@@ -15,7 +16,7 @@ Item {
     readonly property string brandLockupContract:
         "looksy-brand-lockup:v4|source:provided-looksy-logo|lettering:exact-raster|period:additive-rgb|variants:dark-light"
     readonly property bool lightLogo: root.foreground.r < 0.5
-    readonly property real logoHeight: root.compact ? 34 : 44
+    readonly property real logoHeight: root.compact ? root.compactLogoHeight : 44
     readonly property real logoAspectRatio: root.showMark ? (1795 / 454) : (1473 / 454)
     readonly property url logoSource: {
         if (root.showMark)
@@ -53,7 +54,8 @@ Item {
         anchors.topMargin: 3
         text: root.descriptor
         color: theme.textMuted
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: root.compact ? 7 : 8
         font.weight: Font.Medium
         font.letterSpacing: root.compact ? 1.35 : 1.7

@@ -1,4 +1,6 @@
 #include "ai_model_runtime.h"
+#include "sam2_mask_coverage.h"
+#include "ai_inpaint_patch_region.h"
 #include "qimage_color_conversion.h"
 #include <QtGui/qrgbafloat.h>
 
@@ -56,11 +58,8 @@ constexpr auto kSam2EncoderRelativePath = "selection/sam2_hiera_tiny_image_encod
 constexpr auto kSam2EncoderContract = "sam2-hiera-tiny-image-encoder-fp32-1024-v1";
 constexpr auto kSam2DecoderRelativePath = "selection/sam2_hiera_tiny_image_decoder.onnx";
 constexpr auto kSam2DecoderContract = "sam2-hiera-tiny-image-decoder-fp32-1024-v1";
-// Keep soft SAM2 edges while preserving explicit prompt polarity at alpha 96.
-[[maybe_unused]] constexpr auto kSam2MaskAlphaLogitScale = 0.40F;
-[[maybe_unused]] constexpr auto kSam2MaximumMaskAlphaLogitScale = 2.0F;
-[[maybe_unused]] constexpr auto kSam2PositivePromptAlphaLogitThreshold = -0.50F;
-[[maybe_unused]] constexpr auto kSam2NegativePromptAlphaLogitThreshold = -0.60F;
+// Legacy padded logits cannot be reused against square SAM2 embeddings.
+[[maybe_unused]] constexpr auto kSam2RefinementContract = "sam2-square-1024:v2";
 [[maybe_unused]] constexpr auto kHighTextureExemplarResidualMean = 6.0;
 
 QString default_model_root() {
@@ -1488,12 +1487,11 @@ class OnnxAiRuntime final {
       const auto image = convert_tagged_qimage_color_space(color_managed_source,
           QColorSpace(QColorSpace::SRgb), QImage::Format_RGB888,
           QImageColorConversionPurpose::DecodeNormalization);
-      const auto scale = static_cast<double>(model_size) /
-                         static_cast<double>(std::max(image.width(), image.height()));
-      const auto resized_width = std::clamp(
-          qRound(static_cast<double>(image.width()) * scale), 1, model_size);
-      const auto resized_height = std::clamp(
-          qRound(static_cast<double>(image.height()) * scale), 1, model_size);
+      // SAM2Transforms resizes both axes to the encoder resolution. A
+      // longest-edge resize with padding uses SAM1's coordinate convention and
+      // misaligns SAM2 image features, point prompts and returned mask logits.
+      constexpr auto resized_width = model_size;
+      constexpr auto resized_height = model_size;
       const auto resized = image.scaled(
           QSize(resized_width, resized_height), Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                                .convertToFormat(QImage::Format_RGB888);
@@ -1593,6 +1591,7 @@ class OnnxAiRuntime final {
             static_cast<qsizetype>(model_mask_size * model_mask_size) *
             static_cast<qsizetype>(sizeof(float));
         const auto has_exact_refinement_logits =
+            previous_mask->refinement_logits_contract == QLatin1String(kSam2RefinementContract) &&
             previous_mask->width == image.width() &&
             previous_mask->height == image.height() &&
             previous_mask->refinement_logits_width == model_mask_size &&
@@ -1700,7 +1699,7 @@ class OnnxAiRuntime final {
       }
       const auto candidate_count = static_cast<int>(mask_shape_out[1]);
       const auto plane_size = static_cast<std::size_t>(model_mask_size * model_mask_size);
-      constexpr auto prompt_logit_threshold = -0.34F;
+      constexpr auto prompt_logit_threshold = 0.0F;
       const auto sample_candidate_logit = [&](int candidate, const SmartSelectPrompt& prompt) {
         const auto resized_x = std::clamp(prompt.x * resized_width, 0.0, static_cast<double>(resized_width - 1));
         const auto resized_y = std::clamp(prompt.y * resized_height, 0.0, static_cast<double>(resized_height - 1));
@@ -1721,34 +1720,17 @@ class OnnxAiRuntime final {
       };
       auto best_candidate = -1;
       auto best_score = -std::numeric_limits<float>::infinity();
-      auto best_mask_alpha_logit_scale = kSam2MaskAlphaLogitScale;
       for (int candidate = 0; candidate < candidate_count; ++candidate) {
         auto honors_all_prompts = true;
-        auto candidate_mask_alpha_logit_scale = kSam2MaskAlphaLogitScale;
-        auto maximum_candidate_mask_alpha_logit_scale =
-            kSam2MaximumMaskAlphaLogitScale;
         for (const auto& prompt : prompts) {
           if (prompt.box.isValid()) continue;
           const auto logit = sample_candidate_logit(candidate, prompt);
-          honors_all_prompts = honors_all_prompts &&
-              (prompt.negative ? logit < prompt_logit_threshold
-                               : logit >= prompt_logit_threshold);
-          if (prompt.negative && logit < 0.0F) {
-            candidate_mask_alpha_logit_scale = std::max(
-                candidate_mask_alpha_logit_scale,
-                kSam2NegativePromptAlphaLogitThreshold / logit + 0.01F);
-          } else if (!prompt.negative && logit < 0.0F) {
-            maximum_candidate_mask_alpha_logit_scale = std::min(
-                maximum_candidate_mask_alpha_logit_scale,
-                kSam2PositivePromptAlphaLogitThreshold / logit);
-          }
+          honors_all_prompts = honors_all_prompts && std::isfinite(logit) &&
+              (prompt.negative ? logit < prompt_logit_threshold : logit > prompt_logit_threshold);
         }
-        honors_all_prompts = honors_all_prompts &&
-            candidate_mask_alpha_logit_scale <= maximum_candidate_mask_alpha_logit_scale;
         if (honors_all_prompts && scores[candidate] > best_score) {
           best_candidate = candidate;
           best_score = scores[candidate];
-          best_mask_alpha_logit_scale = candidate_mask_alpha_logit_scale;
         }
       }
       if (best_candidate < 0) {
@@ -1765,6 +1747,7 @@ class OnnxAiRuntime final {
           plane_size * sizeof(float));
       result.refinement_logits_width = model_mask_size;
       result.refinement_logits_height = model_mask_size;
+      result.refinement_logits_contract = QString::fromLatin1(kSam2RefinementContract);
       result.width = image.width();
       result.height = image.height();
       result.mask_data.resize(result.width * result.height);
@@ -1786,10 +1769,14 @@ class OnnxAiRuntime final {
           const auto b = logits[static_cast<std::size_t>(y1 * model_mask_size + x0)] * static_cast<float>(1.0 - fx) +
                          logits[static_cast<std::size_t>(y1 * model_mask_size + x1)] * static_cast<float>(fx);
           const auto logit = a * static_cast<float>(1.0 - fy) + b * static_cast<float>(fy);
-          const auto probability =
-              1.0F / (1.0F + std::exp(-std::clamp(
-                  logit * best_mask_alpha_logit_scale, -16.0F, 16.0F)));
-          const auto alpha = std::clamp(qRound(probability * 255.0F), 0, 255);
+          const auto gradient_x = (
+              (logits[static_cast<std::size_t>(y0 * model_mask_size + x1)] -
+               logits[static_cast<std::size_t>(y0 * model_mask_size + x0)]) * static_cast<float>(1.0 - fy) +
+              (logits[static_cast<std::size_t>(y1 * model_mask_size + x1)] -
+               logits[static_cast<std::size_t>(y1 * model_mask_size + x0)]) * static_cast<float>(fy)) *
+              model_mask_size / result.width;
+          const auto gradient_y = (b - a) * model_mask_size / result.height;
+          const auto alpha = sam2_mask_coverage(logit, gradient_x, gradient_y);
           output[x] = static_cast<char>(alpha);
         }
       }
@@ -2178,6 +2165,10 @@ class OnnxAiRuntime final {
       result.patch_y = bounds.y();
       result.patch_width = bounds.width();
       result.patch_height = bounds.height();
+      if (!retain_reviewed_inpaint_output(&result, reviewed_bounds)) {
+        result.success = false;
+        result.error_message = QStringLiteral("Unable to preserve the reviewed LaMa repair region.");
+      }
       return result;
     } catch (const Ort::Exception& exception) {
       result.error_message = QStringLiteral("LaMa ONNX inference failed: %1")

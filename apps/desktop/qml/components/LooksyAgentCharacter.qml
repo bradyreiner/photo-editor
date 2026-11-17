@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 
 Item {
     id: root
@@ -30,7 +31,8 @@ Item {
     property int frame: 0
     readonly property real feetBaseline: height * 0.909
     readonly property real armReachAngle: 36
-    readonly property bool motionEnabled: animated && visible && enabled && !reducedMotion && !theme.reducedMotion
+    readonly property bool motionEnabled: root.Window.window !== null && root.Window.window.visible
+        && width > 0 && height > 0 && animated && visible && enabled && !reducedMotion && !theme.reducedMotion
     readonly property string normalizedMode: String(mode || "idle").toLowerCase()
     readonly property string normalizedTool: String(tool || "auto").toLowerCase()
     readonly property bool walking: normalizedMode === "walk" || normalizedMode === "walking"
@@ -84,6 +86,11 @@ Item {
             drawing.reactionAmount = 0
         }
     }
+    Component.onDestruction: {
+        blinkSequence.stop()
+        reaction.stop()
+        motionAnimation.stop()
+    }
     Timer {
         interval: 4700; repeat: true
         running: root.motionEnabled && !root.glyphOnly
@@ -115,6 +122,7 @@ Item {
         fragmentShader: "qrc:/photo-editor/shaders/agent_robot.frag.qsb"
         blending: true
         UniformAnimator {
+            id: motionAnimation
             target: drawing; uniform: "motionPhase"
             from: 0; to: 1; duration: 12000; loops: Animation.Infinite
             running: root.motionEnabled

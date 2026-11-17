@@ -1,0 +1,8 @@
+{
+  "schema": "looksy-catalog-snapshot-baseline-v1",
+  "operation": "catalog_snapshot 0",
+  "elapsed_seconds": 8.375913291005418,
+  "stdout_bytes": 352715309,
+  "sha256": "b55d8ff2d897b61aad17bc0fbcf498fe01ff5ee2687e0acc8417d9f3e8a1077c",
+  "exit_code": 0
+}

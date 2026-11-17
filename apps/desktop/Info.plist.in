@@ -28,6 +28,8 @@
   <string>Copyright © 2026 @FRAMEHOUSE_LEGAL_PUBLISHER@. All rights reserved.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Looksy uses speech recognition to create editable, word-timed captions from video audio you choose to transcribe.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Looksy uses the microphone to record voiceover takes you request in the Timeline audio mixer.</string>
   <key>LooksySupportURL</key>
   <string>@FRAMEHOUSE_SUPPORT_URL@</string>
   <key>LooksyPrivacyURL</key>

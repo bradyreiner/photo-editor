@@ -29,7 +29,7 @@ struct GaussianPhysicalCameraResult {
 // upright projection mirrors the real inverted film image by convention.
 // Center-crop the explicitly oriented sensor to output aspect; never stretch it.
 inline GaussianPhysicalCameraResult make_gaussian_physical_camera(const GaussianCamera& pose, QSize output,
-    const GaussianPhysicalCameraSettings& physical) {
+    const GaussianPhysicalCameraSettings& physical, bool preserve_gate = false) {
   const auto fail = [](const QString& error) { return GaussianPhysicalCameraResult{{}, {}, error}; };
   if (!physical.valid()) return fail("Supply a valid measured scene scale, sensor gate, focal length, f-number and focus beyond the focal length.");
   if (output.width() < 1 || output.height() < 1 || output.width() > 8192 || output.height() > 8192 || !pose.photo.valid())
@@ -44,21 +44,32 @@ inline GaussianPhysicalCameraResult make_gaussian_physical_camera(const Gaussian
   const double focus_mm = physical.focus_distance_m * 1000;
   const double image_distance_mm = physical.focal_length_mm * focus_mm / (focus_mm-physical.focal_length_mm);
   const double aspect = static_cast<double>(output.width()) / output.height();
-  const double gate_width = std::min(physical.sensor_width_mm, physical.sensor_height_mm * aspect);
-  const double gate_height = gate_width / aspect;
+  if (preserve_gate && (!pose.physical || !pose.physical->valid() ||
+      pose.physical->settings.sensor_width_mm!=physical.sensor_width_mm ||
+      pose.physical->settings.sensor_height_mm!=physical.sensor_height_mm))
+    return fail("A frozen film gate requires the same sensor dimensions.");
+  const double gate_width = preserve_gate ? pose.physical->gate_width_mm :
+      std::min(physical.sensor_width_mm, physical.sensor_height_mm * aspect);
+  const double gate_height = preserve_gate ? pose.physical->gate_height_mm : gate_width / aspect;
   const double focal_pixels = image_distance_mm * output.width() / gate_width;
+  const double focal_pixels_y = image_distance_mm * output.height() / gate_height;
   const double focus_units = physical.focus_distance_m / physical.metres_per_scene_unit;
   const double radius_units = physical.focal_length_mm / (2000 * physical.f_number * physical.metres_per_scene_unit);
-  if (!std::isfinite(focal_pixels) || focal_pixels > 1e8 || focus_units < 0.01 || focus_units > 1e8 || radius_units > focus_units * 0.25)
+  if (!std::isfinite(focal_pixels) || !std::isfinite(focal_pixels_y) || std::max(focal_pixels,focal_pixels_y) > 1e8 || focus_units < 0.01 || focus_units > 1e8 || radius_units > focus_units * gaussian_max_aperture_focus_ratio)
     return fail("Physical camera exceeds the renderer's projection or scene-unit bounds.");
   auto camera = pose;
   camera.image_size = output;
-  camera.fx = camera.fy = static_cast<float>(focal_pixels);
+  camera.fx = static_cast<float>(focal_pixels);
+  camera.fy = static_cast<float>(focal_pixels_y);
   camera.cx = static_cast<float>(output.width()) / 2;
   camera.cy = static_cast<float>(output.height()) / 2;
   camera.photo.focal_scale = 1;
   camera.photo.lens.focus_distance = static_cast<float>(focus_units);
   camera.photo.lens.aperture_radius = static_cast<float>(radius_units);
+  // Recalibrating scene scale must retain an authored physical barrel distance
+  // in millimetres, just as the physical focal length and f-number are retained.
+  if (pose.physical) camera.photo.lens.vignetting_distance = static_cast<float>(
+      pose.photo.lens.vignetting_distance * pose.physical->settings.metres_per_scene_unit / physical.metres_per_scene_unit);
   camera.physical = GaussianPhysicalCalibration{physical,gate_width,gate_height};
   if (!gaussian_physical_camera_consistent(camera)) return fail("Physical camera cannot be represented by the current renderer.");
   auto calibration = physical.description();

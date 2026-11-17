@@ -1,0 +1,116 @@
+[
+  {
+    "source": "/Users/bradyreiner/Downloads/IMG_1207.mov",
+    "source_sha256": "2cd29bdd3b2516f3adab327fb4c45f94632dbd7ccbdb53d0b4c51caa1ade800a",
+    "preview": "public/media/launch-1207.mp4",
+    "preview_sha256": "67961de9b22a77fab574cd56c77ae8eebd32a89d255e70a30dd67800de4d7df0",
+    "trim_seconds": [
+      1,
+      12
+    ],
+    "preview_dimensions": [
+      1920,
+      1080
+    ],
+    "source_metadata": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video",
+          "width": 3840,
+          "height": 2160,
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "30000/1001"
+        },
+        {
+          "codec_type": "audio",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "audio",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        }
+      ],
+      "format": {
+        "duration": "14.511667"
+      }
+    },
+    "provenance": "Local preview from original 4K Rec.709 source; original unchanged. Not a Looksy export. Source audio used for waveform only."
+  },
+  {
+    "source": "/Users/bradyreiner/Downloads/IMG_1268.mov",
+    "source_sha256": "0671a9ebbd634266c6052647f503985558787b5c3901a163bdd75f072ac1c86d",
+    "preview": "public/media/launch-1268.mp4",
+    "preview_sha256": "f7cb30fcb3aa93f989eca8ec3feb729207519da4505f9a9050d9e424e2613419",
+    "trim_seconds": [
+      1,
+      12
+    ],
+    "preview_dimensions": [
+      1920,
+      1080
+    ],
+    "source_metadata": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video",
+          "width": 3840,
+          "height": 2160,
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "30/1"
+        },
+        {
+          "codec_type": "audio",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "audio",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        },
+        {
+          "codec_type": "data",
+          "r_frame_rate": "0/0"
+        }
+      ],
+      "format": {
+        "duration": "13.700000"
+      }
+    },
+    "provenance": "Local preview from original 4K Rec.709 source; original unchanged. Not a Looksy export. Source audio used for waveform only."
+  }
+]

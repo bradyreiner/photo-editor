@@ -30,10 +30,11 @@ Rectangle {
     property string menuTooltip: "More options for " + title
     property bool expandable: false
     property bool expanded: true
+    property bool panelSurface: false
     readonly property int headerMinimumHeight: theme.controlHeightDense
     readonly property int headerActionSize: theme.controlHeightDense
-    readonly property int headerChevronColumnWidth: 14
-    readonly property int headerAccentColumnWidth: 10
+    readonly property int headerChevronColumnWidth: theme.scaled(14)
+    readonly property int headerAccentColumnWidth: theme.scaled(10)
     readonly property bool sectionInteractive: root.enabled && root.expandable
     readonly property string resolvedTitle: root.uppercaseTitle ? root.title.toUpperCase() : root.title
     readonly property string resolvedTooltipText: root.title +
@@ -69,13 +70,16 @@ Rectangle {
     radius: 0
     color: "transparent"
     border.width: 0
+    border.color: theme.controlEdge
     opacity: root.enabled ? 1.0 : 0.58
     activeFocusOnTab: root.expandable
     Accessible.name: root.title
     Accessible.description: !root.enabled && root.disabledReason.length > 0
                              ? root.disabledReason
                              : root.helpText.length > 0 ? root.helpText : root.subtitle
-    Accessible.role: root.expandable ? Accessible.Button : Accessible.StaticText
+    // A text/button leaf hides the section's editable children from macOS AX.
+    Accessible.role: Accessible.Grouping
+    Accessible.onPressAction: root.toggleExpanded()
 
     function toggleExpanded() {
         if (!root.sectionInteractive)
@@ -118,6 +122,14 @@ Rectangle {
             Layout.fillWidth: true
             implicitHeight: Math.max(root.headerMinimumHeight, headerLayout.implicitHeight)
 
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -theme.space4
+                radius: theme.radiusControl
+                color: theme.ink800
+                visible: root.panelSurface
+            }
+
             HoverHandler {
                 id: headerHover
             }
@@ -148,6 +160,7 @@ Rectangle {
 
                     Label {
                         id: titleLabel
+                        objectName: root.objectName.length > 0 ? root.objectName + "Title" : ""
                         text: root.resolvedTitle
                         color: root.enabled ? theme.textStrong : theme.textFaint
                         font.family: root.titleFontFamily
@@ -156,9 +169,8 @@ Rectangle {
                         font.letterSpacing: root.titleLetterSpacing
                         verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideNone
-                        fontSizeMode: Text.HorizontalFit
-                        minimumPixelSize: theme.typeCaption
-                        maximumLineCount: 1
+                        fontSizeMode: Text.FixedSize
+                        wrapMode: Text.Wrap
                         Layout.fillWidth: true
 
                         AppToolTip {

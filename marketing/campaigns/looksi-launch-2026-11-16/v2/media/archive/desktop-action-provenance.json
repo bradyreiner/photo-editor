@@ -1,0 +1,61 @@
+[
+  {
+    "source": "capture/action-pass/tone-curve.mov",
+    "output": "public/media/desktop-action/tone-curve.mp4",
+    "crop": [
+      112,
+      76,
+      2570,
+      1504
+    ],
+    "note": "Native app capture. Only black window surround removed, resized. No image adjustment simulated."
+  },
+  {
+    "source": "capture/action-pass/subject-mask.mov",
+    "output": "public/media/desktop-action/subject-mask.mp4",
+    "crop": [
+      112,
+      76,
+      2570,
+      1504
+    ],
+    "note": "Native app capture. Only black window surround removed, resized. No image adjustment simulated."
+  },
+  {
+    "source": "capture/action-pass/poster-type.mov",
+    "output": "public/media/desktop-action/poster-type.mp4",
+    "crop": [
+      112,
+      76,
+      2570,
+      1504
+    ],
+    "note": "Native app capture. Only black window surround removed, resized. No image adjustment simulated."
+  },
+  {
+    "source": "capture/action-pass/mask-exposure.mov",
+    "output": "public/media/desktop-action/mask-exposure.mp4",
+    "crop": [
+      112,
+      76,
+      2570,
+      1504
+    ],
+    "note": "Native app capture. Only black window surround removed, resized. No image adjustment simulated."
+  },
+  {
+    "source": "capture/action-pass/color-setting.mov",
+    "output": "public/media/desktop-action/color-edit.mp4",
+    "segmentsSeconds": [
+      [
+        9,
+        15
+      ],
+      [
+        20,
+        22
+      ]
+    ],
+    "note": "Native Color Mixer input changes from 0 to +24 percent. Processing wait trimmed, no simulated photographic response."
+  }
+]

@@ -4,13 +4,18 @@ bool TimelineDocumentController::analyzeSelectedClipSurface(const QVariantMap& s
   return startTrackingAnalysis(seed, false, false, false, true);
 }
 bool TimelineDocumentController::surfaceTrackDraftReady(const Clip& clip) const {
+  const auto ref = clipRefAt(flattenedIndexForClipId(clip.clip_id));
+  const auto* track = trackAt(ref.track_index);
+  return track != nullptr && surfaceTrackDraftReady(clip, *track);
+}
+bool TimelineDocumentController::surfaceTrackDraftReady(
+    const Clip& clip, const Track& track) const {
   const auto data = clip.motion_tracking.value(QStringLiteral("surfaceTrackDraft")).toMap();
   const auto fps = data.value(QStringLiteral("fps")).toDouble();
   const auto start = data.value(QStringLiteral("trimStart")).toDouble();
   const auto end = data.value(QStringLiteral("trimEnd")).toDouble();
   const auto count = data.value(QStringLiteral("frameCount")).toInt();
-  const auto* track = trackAt(clipRefAt(flattenedIndexForClipId(clip.clip_id)).track_index);
-  return track && sceneAttachmentGeometrySupported(clip, *track) &&
+  return sceneAttachmentGeometrySupported(clip, track) &&
       data.value(QStringLiteral("sourceSignature")).toString() == clip.source_identity_signature &&
       count >= 2 && count <= 900 && data.value(QStringLiteral("previewFrames")).toList().size() == count &&
       std::isfinite(fps) && fps >= 1 && fps <= 30 && std::isfinite(start) && std::isfinite(end) &&
@@ -18,11 +23,17 @@ bool TimelineDocumentController::surfaceTrackDraftReady(const Clip& clip) const 
       clip.trim_end_seconds <= end + kBoundaryEpsilon;
 }
 bool TimelineDocumentController::surfaceTrackMetadataReady(const Clip& clip) const {
+  ++surface_track_metadata_index_fallbacks_;
+  const auto ref = clipRefAt(flattenedIndexForClipId(clip.clip_id));
+  const auto* track = trackAt(ref.track_index);
+  return track != nullptr && surfaceTrackMetadataReady(clip, *track);
+}
+bool TimelineDocumentController::surfaceTrackMetadataReady(
+    const Clip& clip, const Track& track) const {
   const auto data = clip.motion_tracking.value(QStringLiteral("surfaceTrack")).toMap();
-  const auto* track = trackAt(clipRefAt(flattenedIndexForClipId(clip.clip_id)).track_index);
   const auto samples = data.value(QStringLiteral("samples")).toList();
   const auto fps = data.value(QStringLiteral("fps")).toDouble();
-  if (!track || !sceneAttachmentGeometrySupported(clip, *track) || clip.playback_rate <= 0 ||
+  if (!sceneAttachmentGeometrySupported(clip, track) || clip.playback_rate <= 0 ||
       data.value(QStringLiteral("sourceSignature")).toString() != clip.source_identity_signature ||
       data.value(QStringLiteral("solveId")).toString().isEmpty() || data.value(QStringLiteral("schemaVersion")).toInt() != 1 ||
       data.value(QStringLiteral("width")).toInt() < 2 || data.value(QStringLiteral("height")).toInt() < 2 ||
@@ -64,21 +75,40 @@ bool TimelineDocumentController::surfaceTrackMetadataReady(const Clip& clip) con
 }
 QVariantList TimelineDocumentController::surfaceTrackSources() const {
   QVariantList rows;
-  for (const auto& track : tracks_) for (const auto& clip : track.clips) {
-    if (track.kind != TrackKind::Video || !surfaceTrackMetadataReady(clip)) continue;
-    const auto data = clip.motion_tracking.value(QStringLiteral("surfaceTrack")).toMap();
-    const auto samples = data.value(QStringLiteral("samples")).toList();
-    double minimum = 1, error = 0;
-    for (const auto& value : samples) {
-      const auto sample = value.toMap();
-      minimum = qMin(minimum, sample.value(QStringLiteral("confidence")).toDouble());
-      error += sample.value(QStringLiteral("errorPx")).toDouble();
+  for (const auto& track : tracks_) {
+    if (track.kind != TrackKind::Video) {
+      continue;
     }
-    rows.append(QVariantMap{{QStringLiteral("clipId"), clip.clip_id}, {QStringLiteral("displayLabel"), clip.display_label},
-        {QStringLiteral("filePath"), clip.file_path}, {QStringLiteral("trimStartSeconds"), data.value(QStringLiteral("trimStart"))},
-        {QStringLiteral("minConfidence"), minimum}, {QStringLiteral("meanErrorPx"), error / samples.size()},
-        {QStringLiteral("sampleCount"), samples.size()},
-        {QStringLiteral("occlusionAvailable"), timelineForegroundCutoutReady(clip.foreground_cutout, clip.source_identity_signature, clip.trim_start_seconds, clip.trim_end_seconds)}});
+    for (const auto& clip : track.clips) {
+      // The track is already known here. Resolving this clip ID back through
+      // the globally ordered flattened list sorts/rebuilds that list twice
+      // per source row during a single property projection.
+      if (!surfaceTrackMetadataReady(clip, track)) {
+        continue;
+      }
+      const auto data = clip.motion_tracking.value(QStringLiteral("surfaceTrack")).toMap();
+      const auto samples = data.value(QStringLiteral("samples")).toList();
+      double minimum = 1.0;
+      double error = 0.0;
+      for (const auto& value : samples) {
+        const auto sample = value.toMap();
+        minimum = qMin(minimum, sample.value(QStringLiteral("confidence")).toDouble());
+        error += sample.value(QStringLiteral("errorPx")).toDouble();
+      }
+      rows.append(QVariantMap{
+          {QStringLiteral("clipId"), clip.clip_id},
+          {QStringLiteral("displayLabel"), clip.display_label},
+          {QStringLiteral("filePath"), clip.file_path},
+          {QStringLiteral("trimStartSeconds"), data.value(QStringLiteral("trimStart"))},
+          {QStringLiteral("minConfidence"), minimum},
+          {QStringLiteral("meanErrorPx"), error / samples.size()},
+          {QStringLiteral("sampleCount"), samples.size()},
+          {QStringLiteral("occlusionAvailable"),
+           timelineForegroundCutoutReady(
+               clip.foreground_cutout, clip.source_identity_signature,
+               clip.trim_start_seconds, clip.trim_end_seconds)},
+      });
+    }
   }
   return rows;
 }

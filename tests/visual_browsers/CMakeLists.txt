@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.28)
+project(LooksyVisualBrowserProof LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
+enable_testing()
+get_filename_component(PHOTO_EDITOR_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+foreach(ui_test visual_example_card_ui_test preset_browser_ui_test photo_effect_browser_test)
+  add_executable(${ui_test} "${PHOTO_EDITOR_SOURCE_DIR}/tests/${ui_test}.cpp")
+  target_compile_definitions(${ui_test} PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PHOTO_EDITOR_SOURCE_DIR}"
+    PHOTO_EFFECT_TEST_ROOT="${PHOTO_EDITOR_SOURCE_DIR}")
+  target_link_libraries(${ui_test} PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+  target_compile_options(${ui_test} PRIVATE -Wall -Wextra -Wpedantic)
+  add_test(NAME ${ui_test} COMMAND ${ui_test})
+  set_tests_properties(${ui_test} PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QML_DISABLE_DISK_CACHE=1")
+endforeach()

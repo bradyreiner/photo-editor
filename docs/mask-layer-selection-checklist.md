@@ -1,5 +1,59 @@
 # Mask, Layer, and Selection System Checklist
 
+## Active follow-up (2026-11-01)
+
+The next batch closes additive multi-pick Color Range behavior and source-aware
+component Heal/Clone/Patch/inpainting before Shared Layer Styles. Its working
+record is [Color Range, component retouch, and real-project qualification](evidence/color-range-component-retouch-2026-11-01/README.md).
+
+- [x] New Color Range picks retain each sampled hue with editable tolerance;
+  removing a sample, undo/redo, component snapshots, export, and recipe reopen
+  agree. Existing recipes keep their authored appearance until explicitly edited.
+- [x] Component retouch samples the captured child composition and corrects the
+  composed result while preserving partial alpha, child-layer editability, masks,
+  source identity, cancellation, and Apply/Cancel history. Ordinary photo retouch
+  remains unchanged.
+- [x] A real-photo mask/layer workflow saves through the production journal and
+  catalog, exits normally, and reopens in a distinct process with the same IDs,
+  recipe, output pixels, and unchanged original source.
+- [ ] Native mouse/keyboard, real-subject quality, foreground presentation, and
+  latency have separate measured receipts; headless/process tests do not close
+  these gates.
+- [x] Refresh the stale Carousel empty-board source assertion and run its gate.
+
+The non-native follow-up passed 46 scoped workflow checks; receipts and exact
+limits are linked above. Native testing was deferred at the user’s request.
+
+## Interaction qualification (2026-10-31)
+
+The implementation markers below are feature-level receipts. They do not mean every combination of selections, masks, layers, tools, history, and document state has passed. The current delivery expands qualification across those combinations before adding more professional tools.
+
+Each case must identify the selected layer ID, selected mask ID, working-selection coverage, affected pixels, unaffected sibling/outside pixels, and history delta where applicable. Rejected actions must preserve the authored recipe and history, including the redo branch. A screenshot alone cannot establish these invariants.
+
+| Interaction family | Required outcome | Evidence and remaining gate |
+| --- | --- | --- |
+| Selection composition and tool changes | Subject/Object/brush/range/geometry changes retain coverage until explicit Clear/Deselect; Add/Subtract/Intersect and inversion compose correctly. Switching layers retains selection without creating an adjustment. | Existing controller and extracted-route tests; broaden actual Main pointer/keyboard cases and composed coverage assertions. |
+| Empty, full, and absent selection | An active empty selection clips all edits; no selection allows the normal layer footprint; inversion and undo preserve that distinction. | The named active-empty versus deselected matrix case passes coverage, rendered-pixel, undo, and rejected-action redo assertions. |
+| Layer versus mask targeting | Row/name, layer thumbnail, mask thumbnail, multi-select, and reselect choose stable IDs and the intended inspector/tool without altering authored content. | Existing component/UI receipts; expand actual Main events at compact and standard sizes. |
+| Attachment ownership | Reveal/Hide makes an independent mask on supported layer kinds. Move keeps identity; copy makes a new independent identity. Self/stale/invalid drops leave state unchanged. | Seven owner kinds pass the controller/render matrix. Main pointer events cover attach, move, Alt-copy, stale and locked rejection, same-name independence, and explicit primary/intersection rows. Intersection operations preserve their domain and inspected owner through history. |
+| Locks and ancestors | Direct and inherited locks reject attach, invert, remove, transfer, and painting. Read-only inspection remains available. Source and destination locks both matter. | Named matrix cases pass direct/ancestor locks, shared locked consumers, legacy source aliases, and in-flight ancestor-lock rejection. Main locked inspection and drop rejection also pass. |
+| Mask state versus layer state | Mask bypass, density/opacity, inversion, removal, layer opacity, visibility, alpha lock, and group state have distinct effects; undo restores the exact attachment and pixels. | Require positive and negative rendered comparisons, stable mask IDs, and explicit history assertions. |
+| Paint and erase | Retained selection clips the chosen layer; selecting a mask edits coverage. Sibling layers and pixels outside coverage stay unchanged through switches and queued strokes. | Existing controller/paint receipts; broaden actual Main tool switching and pointer strokes. |
+| Coordinates and transforms | Crop, zoom/pan, transformed owners, linked/fixed mask basis, and soft edges keep preview, commit, reopened document, and export aligned. | Existing focused coordinate/basis tests; native zoom/Retina and real-photo workflow remain open. |
+| Model changes during gestures | Reorder, reparent, rename, duplicate, collapsed groups, asset switches, stale drag payloads, cancellation, and asynchronous results retain the captured target or fail without mutation. | Existing focused stale/session checks; expand UI races and exact no-op history assertions. |
+| History and persistence | One user gesture makes one logical undo step; rejected/no-op actions make none. Undo/redo and save/reopen preserve IDs, coverage, target semantics, and final pixels. | Main Add and Exposure gestures, mask menus, transfer, exact undo/redo, flattened export, and fresh-controller serialized-recipe reload pass. Catalog journaling/recovery and native process relaunch remain separate gates. |
+| Focus and shortcuts | Ctrl/Cmd+Shift+I, Deselect, brush/erase, and undo act on the correct target; typing in text/numeric/name fields does not trigger canvas commands. Menus perform their labels' actions. | Actual Main checks text-input suppression, inversion/deselect/history shortcuts, mask-menu actions, Escape, opener focus restoration, and unchanged tool/recipe on menu dismissal. Native key mapping and broader field combinations remain open. |
+| Nested components | Selection samples captured child composition, edits stay inside the child, Apply publishes once, Cancel preserves parent state, and unsupported source operations give an actionable reason. | Generated/range sampling and source-aware edge refinement pass the focused captured-child workflows in the current receipt. Component retouch/clone/inpainting and depth remain guarded; native and real-photo quality gates stay open. |
+| Native presentation and professional quality | Foreground macOS input, Retina mapping, tablet behavior, real-subject refinement, export/reopen, and visible latency work together. | Open. Offscreen Main tests, synthetic segmentation, source assertions, and controller pixels do not qualify these gates. |
+
+Proof levels are recorded separately: controller/render behavior; production component fixtures; actual Main QML input; native foreground presentation; persistence/export; and human photographic quality/performance. A passing lower level must not close a higher-level gate. The active implementation scope remains items 1–50; this matrix expands their interaction proof.
+
+Current interaction delivery: [production fixes, named matrix, UI journeys, receipts, and qualification limits](evidence/mask-layer-interactions-2026-10-31/README.md). The controller/render matrix passes all 15 named cases across adjustment, pixel, source, fill, text, shape, and group owners. Ordinary range-mask preview/export now use the same sampling prefix, and component source selections/ranges/edge refinement use captured child appearance. Final Main input receipts are recorded separately from those controller results.
+
+Independent selections and layer masks (2026-10-29): creating or refining a selection no longer creates an adjustment layer. The working selection clips edits on the active layer and survives tool/layer changes until Deselect. Reveal/Hide Selection copies coverage into an independent mask on an adjustment, pixel, source, fill, text, group, or unlocked Base Image layer. Mask thumbnails select coverage editing; layer thumbnails select layer/color controls. Drag moves an attachment; Alt/Option-drag copies it. Disable/Enable preserves the attachment, and Remove detaches it explicitly. [Implementation, nine focused tests, screenshots, and qualification limits](evidence/independent-selections-layer-masks-2026-10-29/README.md).
+
+Working-selection update (2026-10-29): Ctrl/Cmd+Shift+I now inverts the composed selection, Ctrl/Cmd+D deselects, and Paint/Eraser automatically clip to the retained selection on the chosen pixel/photo layer. Dirty brush sessions finish before pixel-tool activation; source layers materialize atomically with undo and queued-stroke preservation. [Focused tests and native qualification limits](evidence/selection-layer-paint-2026-10-29/README.md).
+
 Current qualification refresh (2026-09-19): the user's broader professional-tool request is assessed in the supporting [professional editing tools audit and upgrade plan](professional-editing-tools-upgrade-plan.md). It covers masking, selection, color painting/erasing, inpainting, typography and photo effects, with delivery dependencies and native performance/quality gates. Existing item receipts below remain scoped to their named tests; they do not establish completion of these broader workflows. Use this owner for implementation status and the supporting plan for the current specification.
 
 First implementation batch (2026-09-19): incremental live brush coverage, asynchronous auto-mask feedback, safe direct mask switching and draft typography fidelity are implemented. See [test results, native text screenshots and measurement limits](evidence/editing-tools-2026-09-19/README.md). These results qualify those fixes, not the entire professional-tool program. Continue with related tools in complete workflows; diagnosis and verification accompany each fix rather than becoming separate delivery phases.
@@ -26,8 +80,8 @@ Scope note: the active implementation checklist is items 1-50. Future work shoul
 
 ## Layer Model and Editing Target
 
-1. [x] Auto-create or reuse a linked adjustment layer whenever a selection mask is created.
-2. [x] Show masks as child attachments under their adjustment layer in the Layers panel.
+1. [x] Keep working selections independent of layers; create adjustment layers and attach masks only through explicit actions.
+2. [x] Show mask thumbnails and child attachments under their owning layer in the Layers panel.
 3. [x] Show a locked Base Image layer as the bottom layer.
 4. [x] Make the active edit target explicit in the UI.
 5. [x] Clicking a layer switches the inspector controls to that layer's values.
@@ -95,7 +149,7 @@ The active checklist is intentionally limited to items 1-50. Each group below wa
 
 | Items | Necessity | Current proof |
 | --- | --- | --- |
-| 1-10 | Required so creating a selection produces a clear editable adjustment layer, masks appear under their owner, Base Image remains distinct, and thumbnails reflect real layer/mask state instead of stale UI snapshots. | `editor_preview_controller_test`, `editor_preview_layer_adjustment_test`, and `desktop_shell_smoke_test` cover automatic selection layers, child mask attachments, Base Image/global target separation, layer/mask selection state, visible/locked/solo states, alpha-backed mask thumbnails, masked adjustment thumbnails, and thumbnail cache invalidation. |
+| 1-10 | Required so selections remain independent, layer masks have explicit owners and editing targets, and thumbnails reflect actual coverage. | The 2026-10-29 receipt supersedes automatic-layer expectations. `selection_layer_mask_workflow_test` proves zero automatic layers, independent attachment and mask/pixel targets, Base Image masks, bypass, transfers, undo and persistence. `selection_mask_ui_test` proves production menu clicks, thumbnail targeting, drag move/copy and Hide pointer input. Existing layer-adjustment thumbnail checks pass with explicit owner fixtures. |
 | 11-23 | Required so a mask can drive full color editing instead of a small special-case slider subset. | `editor_preview_layer_adjustment_test` proves layer-local light, white balance, advanced tone, point/parametric curves, HSL/color mixer, RGB mixer, black and white, grading, replacement, skin, harmony, LUT stack, resets, copy/paste, and sync behavior stay isolated to the selected adjustment layer and do not leak into Base Image/global state. `layer_lut_render_parity_test` proves masked layer-local LUT rendering parity. |
 | 24-31 | Required so the user sees a clean, exact mask overlay/outline instead of noisy RGB matte artifacts or stale low-resolution segmentation. | `editor_preview_controller_test` proves brush outlines and full-resolution mattes replay committed stroke geometry, live brush preview uses the shared raster path, normal overlay output is source-free and single-color, diagnostic modes are kept out of normal shortcut cycling, and show-active-only/show-all state is explicit. `desktop_shell_smoke_test` proves overlay color/opacity controls and normal-mode QML contracts. |
 | 32-40 | Required so selection tools remain discoverable, compact, cancelable, and nonblocking. | `desktop_shell_smoke_test` proves the left icon-first expandable selection rail, compact top controls, right inspector ownership, modal Done/Cancel/Exit paths, shortcuts, hold-space pan, add/subtract/intersect modifiers, smart-selection hover preview, and nonblocking activity/failure UI. |
@@ -107,8 +161,8 @@ This matrix exists so each active item has an explicit reason to exist and an au
 
 | Item | Necessity | Proof surface |
 | --- | --- | --- |
-| 1 | Selection must create an editable target automatically so users do not paint an invisible orphan mask. | `editor_preview_controller_test` and `desktop_shell_smoke_test` prove selection mask creation creates/reuses linked adjustment layers and selects the linked target. |
-| 2 | Masks must be discoverable under the layer that owns their adjustments. | `desktop_shell_smoke_test` proves nested mask attachment rows and mask-row routing in the Layers panel. |
+| 1 | Selection geometry must clip the active layer without creating an unrelated adjustment or changing that layer. | `selection_layer_mask_workflow_test` and `selection_tool_composition_test` prove zero automatic layers, persistent selection identity, independent masks and clipped Paint/Eraser. Explicit color-layer creation remains available. |
+| 2 | Masks must be discoverable and editable under their owning layer. | `selection_mask_ui_test` proves thumbnail selection, actual mask menu actions, drag move and Alt/Option copy using the production components and routes. Nested attachment rows remain available. |
 | 3 | Base Image must remain a distinct locked global target so layer edits cannot silently overwrite global edits. | `desktop_shell_smoke_test` proves the locked bottom Base Image row and global target state. |
 | 4 | Users need a visible active target to know whether they are editing base, layer, or mask state. | `desktop_shell_smoke_test` proves the target bar and breadcrumb state. |
 | 5 | Layer clicks must route sliders and curves to that layer, not the global recipe. | `desktop_shell_smoke_test` and `editor_preview_layer_adjustment_test` prove selected-layer adjustment routing and isolation. |

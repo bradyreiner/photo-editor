@@ -1,0 +1,197 @@
+{
+  "schema": "looksy-local-validation-identities-v1",
+  "createdUtc": "2026-10-26T19:19:39.094286+00:00",
+  "dirtyTreePreserved": true,
+  "sources": {
+    "apps/desktop/src/catalog_asset_model.cpp": {
+      "bytes": 411834,
+      "sha256": "58e9f1f7dd82f17a1356868399c6156ede5d7456bfde5455eb49cd84582d35fa"
+    },
+    "apps/desktop/src/catalog_asset_model.h": {
+      "bytes": 56995,
+      "sha256": "bf5c9784c59daaa67c35a165be75d5a966cad948926431678ad30f9018a1437c"
+    },
+    "apps/desktop/src/catalog_similarity_search.cpp": {
+      "bytes": 15401,
+      "sha256": "647ac78a16f00e5b1fc522e8a0cd8b5a3d2f7860af054c0a5297e9262b3a62de"
+    },
+    "apps/desktop/src/catalog_similarity_search.h": {
+      "bytes": 1828,
+      "sha256": "427101d5c28a58af231da75709b0731dd97caf40ce42db59e97ca1193a66f7b7"
+    },
+    "apps/desktop/src/local_similarity_search.cpp": {
+      "bytes": 16139,
+      "sha256": "7ad3589ec9137bc2bba7f2d0bd8937f88700ee588404fe35d6346bda19743caa"
+    },
+    "apps/desktop/src/local_similarity_search.h": {
+      "bytes": 4541,
+      "sha256": "caf94d241d954d1cce4b51011dd22978661e52cf0cab21f098c61e1c17dd207e"
+    },
+    "apps/desktop/src/editor_preview_controller.cpp": {
+      "bytes": 2157325,
+      "sha256": "cfe34433d147960bd32be52dbb7add344c2e82e8f67f6f198d8bdf11fd8b6645"
+    },
+    "apps/desktop/src/photo_render_utils.cpp": {
+      "bytes": 175313,
+      "sha256": "5b77393e4769dc586e73f913386205bcb8067ccdd94c4eaa8e416795c64f12e6"
+    },
+    "apps/desktop/src/thumbnail_refresh_queue_service.cpp": {
+      "bytes": 57813,
+      "sha256": "0452e37e8f5cd0c8fdf416c875ebf398b0d761c6170ea3b1e6b7177f30dd9286"
+    },
+    "apps/desktop/src/timeline_document_controller.cpp": {
+      "bytes": 2146766,
+      "sha256": "1694e3d626af610989515d21771b9106ffdb9eed5980182d2eceb9d2b80451b9"
+    },
+    "apps/desktop/src/timeline_document_controller.h": {
+      "bytes": 127045,
+      "sha256": "66251d180162c8515ac1f0c762ec31bde315eb02cdc70a244bf63a8011a5e2ca"
+    },
+    "apps/desktop/src/timeline_playback_controller.cpp": {
+      "bytes": 252123,
+      "sha256": "198b747e045cb7226210781463d209dd96da70743308e8411f5bc4dac277c8c4"
+    },
+    "apps/desktop/qml/Main.qml": {
+      "bytes": 203696,
+      "sha256": "22aceeefe83cec439e42b12a44a40718dd5530deac42eb1484e269e933eb7e25"
+    },
+    "apps/desktop/qml/workspaces/LibraryView.qml": {
+      "bytes": 185628,
+      "sha256": "a81226e397898fec0787e1d7a0dd5357b4c04360a06fff36008005771a96af4f"
+    },
+    "apps/desktop/qml/workspaces/StudioWorkspace.qml": {
+      "bytes": 1570410,
+      "sha256": "116dee38a3fcb3afe39e1749cd574598c04a565dd6ed73eba962c45b88a2755a"
+    },
+    "apps/desktop/qml/workspaces/ExportView.qml": {
+      "bytes": 103805,
+      "sha256": "d75ab316c14876a8b91b1990aac935406f488d885f26aa319ce8a279919f2676"
+    },
+    "apps/desktop/qml/workspaces/TimelineView.qml": {
+      "bytes": 1921403,
+      "sha256": "7be15f2393398d9921d83bfe5f922cb42b335f0708e531c22b30aaa72b16ad40"
+    },
+    "apps/desktop/qml/components/TimelineClipContent.qml": {
+      "bytes": 8584,
+      "sha256": "a58774846c493c98a6258827a639a64adef471abdcbb8908227b04687d5b115a"
+    },
+    "apps/desktop/qml/components/Theme.qml": {
+      "bytes": 17245,
+      "sha256": "ee500b59e55dbe2dce248e4d383c38c669dadee0e4d17343a0428adc44aaf78b"
+    },
+    "apps/desktop/qml/components/LibraryNavigationPanel.qml": {
+      "bytes": 20596,
+      "sha256": "0ee653a9d31a171a187e9537a3843481bcea66061b72bc5e786a0e2d515b4352"
+    },
+    "engine/include/photo_editor/pipeline/color_adjustments.h": {
+      "bytes": 46264,
+      "sha256": "c1206cb9c219ab6626c242cadc1fcbfa7c74b7c7bbef9d48a1335abc90c0192f"
+    },
+    "engine/src/pipeline/color_layer_runtime.cpp": {
+      "bytes": 104238,
+      "sha256": "3456ac74abd81f6d47bdbd1da5ac21ce4bf28087c23d96f98c1c31aa27aaa310"
+    },
+    "rust/crates/catalog/src/lib.rs": {
+      "bytes": 183901,
+      "sha256": "794f6526ec28c53b5cbd2d35177cff5de86e37177475f222075739e149dfe28f"
+    },
+    "rust/crates/catalog/src/bin/catalog_snapshot.rs": {
+      "bytes": 3804,
+      "sha256": "bbe7c6bf2e6f7b1b391ce76ed195e8e2ab6ac270d93638f7c76d157be5c72d1c"
+    },
+    "tests/CMakeLists.txt": {
+      "bytes": 401154,
+      "sha256": "b0b123fe8f79ca5e0d01277d19ab36388b9f2b4d6fe11d3b8e5435f3b4c59c81"
+    },
+    "tests/catalog_similarity_search_contract.cpp": {
+      "bytes": 11327,
+      "sha256": "c28ae701994d4f6ff8a71e74a76ca27e6bb0dddaa9047d13dfa773ecfe915839"
+    },
+    "tests/catalog_asset_model_test.cpp": {
+      "bytes": 115110,
+      "sha256": "e0ca53f1f9bed01452c4e7fac4086114557d0cb2765da30996c2331d7b50cdb8"
+    },
+    "tests/timeline_frame_scheduling_test.cpp": {
+      "bytes": 83121,
+      "sha256": "58642924a379b62344bdf6a47ad17d0faeb0ecae0663e6f8b8a5ccea1d625936"
+    },
+    "tests/timeline_interaction_feedback_proof.inc": {
+      "bytes": 9647,
+      "sha256": "299c2bc1beb5f2462199797951e1ed48d855ab51edda5d71448a937c224bd360"
+    },
+    "tests/timeline_stress_runtime_proof.inc": {
+      "bytes": 7711,
+      "sha256": "138875b467fbe4237fe440263ac2d199edfac7a8c1b2a955da5ec9ad93bfc8f0"
+    },
+    "tests/catalog_search_full_catalog_snapshot_proof.inc": {
+      "bytes": 7363,
+      "sha256": "babd5c27d123018f0f846b17a0343cf0633e2d7466f720b27035498550aa7058"
+    },
+    "apps/desktop/src/main.cpp": {
+      "bytes": 204982,
+      "sha256": "e6395d76e5fc9704b33ef44a17b0406c3be6fefe0086e7e5081297e66194f967"
+    },
+    "apps/desktop/src/agent_edit_controller.cpp": {
+      "bytes": 1631358,
+      "sha256": "dc3e74edaa122384cbde905ec228933dcee7b47f82bb8d5d1986d2cf0397a757"
+    },
+    "apps/desktop/src/photo_automation_bridge.cpp": {
+      "bytes": 94536,
+      "sha256": "322b2f0261a9f4077a86cb2efd88902d73f8bf32e62c055507fe0d79fdd220ae"
+    },
+    "tests/actual_app_workflow_benchmark_driver.cpp": {
+      "bytes": 445864,
+      "sha256": "afc3bacb970f84334af22836db01b22d465eafc0c5a7ff1e05147c87a65149c1"
+    },
+    "tests/editor_preview_controller_test.cpp": {
+      "bytes": 1176582,
+      "sha256": "09b22a9fabe466ce64742a6009adf4f019ef55fc00c70f5571a375247580f899"
+    },
+    "tests/photo_pixel_paint_test.cpp": {
+      "bytes": 144916,
+      "sha256": "45ed21313d7329b3dbddea216c893c3cc9f987e9df13d8b44be0002bbe998ea9"
+    },
+    "tests/photo_layer_adjustment_recipe_test.cpp": {
+      "bytes": 4768,
+      "sha256": "33f8a78a2fea6fd742ac363aa4e7ee38044d3273781c92077f1e5d686c4e0ca5"
+    },
+    "tests/timeline-track-surface-fixture.qml": {
+      "bytes": 5923,
+      "sha256": "edf689a4b755992d17c929d16ed684fcc417b3d08b7c1f86772fd17436b8a766"
+    },
+    "tests/timeline_direct_edit_tools_test.cpp": {
+      "bytes": 26802,
+      "sha256": "7e27c9cbf6ca77868717ddf8c3e74546eaf945b0c9584f9b7747d31ab2c74467"
+    }
+  },
+  "binaries": {
+    "build/release-macos/apps/desktop/Looksy.app/Contents/MacOS/Looksy": {
+      "bytes": 132286728,
+      "sha256": "10b5ba3aa9d85bb9736f25f9710338eed0ff3b32fcc4c3f74288a89af04699d1"
+    },
+    "build/release-macos/tests/actual_app_workflow_benchmark_driver": {
+      "bytes": 47355688,
+      "sha256": "69b6505ba7c973d7a64c1951eb0205ec61b98fc75f53f82e4e4bf9d55024b717"
+    },
+    "build/release-macos/tests/catalog_asset_model_test": {
+      "bytes": 14007800,
+      "sha256": "6e6f4ea949127d08e2657191408118635e0d008c526193d456aac4b39179d332"
+    },
+    "rust/target/debug/catalog_snapshot": {
+      "bytes": 15201392,
+      "sha256": "a2dd5269f438b9c60d1746a52d43ab2b65e07a776fa79a1d13373ac65d63070f"
+    },
+    "build/release-macos/tests/editor_preview_controller_test": {
+      "bytes": 13245504,
+      "sha256": "32830e2bdee40c22977c09df4644e00a7d95d3a6f1c31e80a122e89e44ecb9e3"
+    },
+    "build/release-macos/tests/photo_pixel_paint_test": {
+      "bytes": 35515736,
+      "sha256": "a9ae2a0c6291d32b27c33e549a6e94f69a6f4cd97d94fca9b4a52ff360868d42"
+    },
+    "build/release-macos/tests/timeline_frame_scheduling_test": {
+      "bytes": 34955664,
+      "sha256": "f413bc4e24b45c8930258e48563eea4661efdf0eecff70b393e7c8dd0ef9fe4d"
+    }
+  }
+}

@@ -9,9 +9,9 @@ inline double gaussian_radical_inverse(unsigned index, unsigned base) {
   while (index) { value += (index % base) * factor; index /= base; factor /= base; }
   return value;
 }
-// Uniform-area low-discrepancy disk samples, rejected against a rounded polygon
-// boundary. Rejection avoids biasing density toward polygon corners. Prefixes
-// are stable when increasing quality; rotation rotates the same samples.
+// Importance sample the radial pupil response r^edge, rejected against a
+// rounded polygon boundary. The zero-edge case keeps the original uniform-area
+// sequence exactly. Rejection avoids polygon-corner bias; prefixes are stable.
 inline std::vector<QVector2D> gaussian_aperture_samples(const GaussianLensSettings& lens) {
   if (!lens.valid()) return {};
   if (lens.aperture_radius == 0) return {{0, 0}};
@@ -19,7 +19,8 @@ inline std::vector<QVector2D> gaussian_aperture_samples(const GaussianLensSettin
   const double pi = std::numbers::pi;
   const double rotation = lens.rotation_degrees * pi / 180;
   for (unsigned index = 1; result.size() < static_cast<size_t>(lens.samples) && index < 65536; ++index) {
-    const double radius = std::sqrt(gaussian_radical_inverse(index, 2));
+    const double u = gaussian_radical_inverse(index, 2);
+    const double radius = lens.aperture_edge == 0 ? std::sqrt(u) : std::pow(u,1.0/(2+lens.aperture_edge));
     const double angle = 2 * pi * gaussian_radical_inverse(index, 3);
     if (lens.blades != 0) {
       const double half_sector = pi / lens.blades;
@@ -27,10 +28,11 @@ inline std::vector<QVector2D> gaussian_aperture_samples(const GaussianLensSettin
       const double polygon_radius = std::cos(half_sector) / std::cos(edge_angle);
       if (radius > polygon_radius + lens.roundness * (1 - polygon_radius)) continue;
     }
-    result.emplace_back(static_cast<float>(radius * std::cos(angle + rotation) * lens.aperture_radius),
-        static_cast<float>(radius * std::sin(angle + rotation) * lens.aperture_radius));
+    const double stretch = std::sqrt(lens.bokeh_aspect);
+    result.emplace_back(static_cast<float>(radius * std::cos(angle + rotation) * lens.aperture_radius / stretch),
+        static_cast<float>(radius * std::sin(angle + rotation) * lens.aperture_radius * stretch));
   }
-  return result;
+  return result.size() == static_cast<size_t>(lens.samples) ? result : std::vector<QVector2D>{};
 }
 // Parallel off-axis views converge at the same plane: projected displacement
 // is focal * apertureOffset * (1/focusDistance - 1/depth).

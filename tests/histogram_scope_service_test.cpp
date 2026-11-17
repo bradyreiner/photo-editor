@@ -3,6 +3,8 @@
 #include <iostream>
 #include <numeric>
 #include <utility>
+#include <limits>
+#include <qrgbafloat.h>
 
 #include <QColor>
 #include <QImage>
@@ -156,5 +158,43 @@ int main() {
       return fail("scope color must not depend on alpha storage representation");
     }
   }
+
+  // User-facing quality modes must change sample budgets and plot resolution.
+  QImage large(2048, 1024, QImage::Format_ARGB32);
+  large.fill(QColor(70, 100, 150));
+  auto previous_samples = 0;
+  for (const auto& quality : {QStringLiteral("Fast"), QStringLiteral("Balanced"), QStringLiteral("Precise")}) {
+    const auto options = photo_editor::desktop::histogram_scope_options(quality);
+    const auto measured = photo_editor::desktop::compute_histogram_scope_data_with_options(large, options);
+    if (measured.sample_count <= previous_samples ||
+        measured.density_red.size() != options.columns * options.levels ||
+        count_sum(measured.red_counts) != measured.sample_count)
+      return fail("scope quality must change real sampling and retain every sampled pixel");
+    previous_samples = measured.sample_count;
+  }
+  const auto live = photo_editor::desktop::compute_histogram_scope_data_with_options(
+      large, photo_editor::desktop::histogram_scope_options(QStringLiteral("Precise"), true));
+  if (live.sample_count != 256 * 128)
+    return fail("live Precise scopes must stay bounded before settled refinement");
+
+  QImage hdr(4, 1, QImage::Format_RGBA32FPx4);
+  auto* pixels = reinterpret_cast<QRgbaFloat32*>(hdr.scanLine(0));
+  pixels[0] = QRgbaFloat32{-0.25f, -0.25f, -0.25f, 1};
+  pixels[1] = QRgbaFloat32{2, 2, 2, 1};
+  pixels[2] = QRgbaFloat32{4, 4, 4, 1};
+  pixels[3] = QRgbaFloat32{std::numeric_limits<float>::quiet_NaN(), 0, 0, 1};
+  photo_editor::desktop::HistogramScopeOptions extended;
+  extended.minimum = -0.25; extended.maximum = 4;
+  const auto hdr_result = photo_editor::desktop::compute_histogram_scope_data_with_options(hdr, extended);
+  if (hdr_result.sample_count != 3 || hdr_result.rejected_sample_count != 1 ||
+      hdr_result.red_counts[0].toInt() != 1 || hdr_result.red_counts[135].toInt() != 1 ||
+      hdr_result.red_counts[255].toInt() != 1 || hdr_result.highlight_clip_count != 2 ||
+      hdr_result.shadow_clip_count != 1)
+    return fail("HDR plots must retain negative and superwhite levels and reject nonfinite samples");
+  extended.region = QRectF(0.25, 0, 0.25, 1);
+  const auto roi = photo_editor::desktop::compute_histogram_scope_data_with_options(hdr, extended);
+  if (roi.sample_count != 1 || roi.red_counts[135].toInt() != 1 ||
+      std::abs(roi.waveform_red[0].toMap().value(QStringLiteral("avg")).toDouble() - 2.25 / 4.25) > 1e-6)
+    return fail("region scopes must exclude outside pixels and retain region-relative waveform coordinates");
   return EXIT_SUCCESS;
 }

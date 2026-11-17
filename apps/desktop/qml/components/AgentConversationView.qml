@@ -23,6 +23,10 @@ Item {
     readonly property bool sessionFlowAvailable: sessionController !== null && sessionController !== undefined
     readonly property bool failureDetailsOpen: sessionFlowAvailable && sessionTerminal.failureDetailsOpen
     property bool inspirationEntryFocusRetryScheduled: false
+    property bool memoryDetailsExpanded: false
+    property bool historyDetailsExpanded: false
+    property bool activityHistoryExpanded: false
+    property bool reviewDetailsExpanded: false
 
     Timer {
         id: inspirationEntryFocusRetryTimer
@@ -104,9 +108,7 @@ Item {
 
     function pageDetail() {
         if (page === 0)
-            return dialog.scopeCount(dialog.scopeMode) >= 3
-                    ? "I have the photos from your workspace. Tell me how they should feel; I’ll show samples before touching the rest."
-                    : "I have the photo from your workspace. Tell me how it should feel; you can undo the edit until you apply it."
+            return "You’ll preview the edit before applying it."
         if (page === 1 && dialog.styleStartMode === "learn")
             return "Choose one or more finished examples. I'll learn their recipe and rendered character, then keep the new look project-local."
         if (page === 1 && dialog.styleStartMode === "built-in")
@@ -118,62 +120,13 @@ Item {
         return dialog.agentSpeechDetail()
     }
 
-    component SoftButton: Button {
-        id: button
+    component SoftButton: ActionButton {
         property bool primary: false
         property bool selected: false
-        property bool compact: false
         property string accessibleLabel: ""
-        property string tooltipText: ""
-        property string disabledReason: ""
-        readonly property string resolvedAccessibleName: String(button.accessibleLabel || button.text || "").trim()
-        readonly property string resolvedAccessibleDescription: !button.enabled && button.disabledReason.length > 0
-                                                                  ? button.disabledReason
-                                                                  : button.tooltipText
-        implicitHeight: compact ? 32 : 44
-        implicitWidth: Math.max(118, buttonLabel.implicitWidth + 34)
-        leftPadding: compact ? 10 : 17
-        rightPadding: compact ? 10 : 17
-        activeFocusOnTab: true
-        hoverEnabled: true
-        Accessible.name: resolvedAccessibleName
-        Accessible.description: resolvedAccessibleDescription
-        Accessible.role: Accessible.Button
-
-        AppToolTip {
-            targetItem: button
-            followPointer: true
-            visible: button.hovered && button.resolvedAccessibleDescription.length > 0
-            delay: 250
-            text: button.resolvedAccessibleDescription
-        }
-
-        background: Rectangle {
-            radius: 12
-            color: button.primary
-                   ? (button.down ? Qt.darker(root.primaryAccent, 1.08) : root.primaryAccent)
-                   : button.selected
-                     ? root.themeObject.alpha(root.primaryAccent, button.hovered ? 0.30 : 0.22)
-                   : (button.hovered ? root.themeObject.alpha(root.paper, 0.16)
-                                     : root.themeObject.alpha(root.paper, 0.09))
-            border.width: button.visualFocus ? 2 : button.selected ? 1 : 0
-            border.color: button.visualFocus ? root.paper : root.themeObject.alpha(root.primaryAccent, 0.72)
-            opacity: button.enabled ? 1 : 0.42
-            Behavior on color { ColorAnimation { duration: 120 } }
-        }
-
-        contentItem: Label {
-            id: buttonLabel
-            text: button.text
-            color: root.paper
-            font.family: root.uiFont
-            font.pixelSize: 13
-            font.weight: Font.DemiBold
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-
-        HoverHandler { cursorShape: button.enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor }
+        accessibleName: accessibleLabel
+        active: selected
+        tone: primary ? "primary" : "secondary"
     }
 
     component SuggestionCard: Item {
@@ -242,7 +195,7 @@ Item {
                     text: String(card.suggestion.title || "Inspiration")
                     color: root.paper
                     font.family: root.uiFont
-                    font.pixelSize: 13
+                    font.pixelSize: root.themeObject.typeLabel
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
                 }
@@ -252,7 +205,7 @@ Item {
                     text: card.photo ? "Reference photo" : String(card.suggestion.detail || "")
                     color: root.themeObject.alpha(root.paper, 0.62)
                     font.family: root.uiFont
-                    font.pixelSize: 10
+                    font.pixelSize: root.themeObject.typeMicro
                     maximumLineCount: card.photo ? 1 : 3
                     elide: Text.ElideRight
                     wrapMode: Text.WordWrap
@@ -295,9 +248,9 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: root.width < 480 ? 48 : 78
-            Layout.minimumHeight: root.width < 480 ? 48 : 78
-            Layout.maximumHeight: root.width < 480 ? 48 : 78
+            Layout.preferredHeight: pageHeaderTextColumn.implicitHeight + 24
+            Layout.minimumHeight: pageHeaderTextColumn.implicitHeight + 24
+            Layout.maximumHeight: pageHeaderTextColumn.implicitHeight + 24
             spacing: 18
 
 
@@ -307,6 +260,7 @@ Item {
                 color: "transparent"
 
                 ColumnLayout {
+                    id: pageHeaderTextColumn
                     anchors.fill: parent
                     anchors.leftMargin: 4
                     anchors.rightMargin: 12
@@ -321,7 +275,8 @@ Item {
                         font.family: root.displayFont
                         font.pixelSize: root.width < 480 ? 21 : 25
                         font.weight: Font.DemiBold
-                        elide: Text.ElideRight
+                        wrapMode: Text.WordWrap
+                        elide: Text.ElideNone
                     }
 
                     Label {
@@ -330,7 +285,7 @@ Item {
                         text: root.pageDetail()
                         color: root.themeObject.alpha(root.paper, 0.62)
                         font.family: root.uiFont
-                        font.pixelSize: 13
+                        font.pixelSize: root.themeObject.typeLabel
                         lineHeight: 1.18
                         wrapMode: Text.WordWrap
                         maximumLineCount: 3
@@ -385,10 +340,10 @@ Item {
                                 Layout.fillWidth: true
                                 spacing: 1
                                 Label {
-                                    text: "EDITING"
+                                    text: "Editing"
                                     color: root.themeObject.alpha(root.paper, 0.50)
-                                    font.family: root.themeObject.fontMono
-                                    font.pixelSize: 9
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     font.letterSpacing: 1.2
                                 }
                                 Label {
@@ -397,7 +352,7 @@ Item {
                                     text: root.dialog.targetSummary()
                                     color: root.paper
                                     font.family: root.uiFont
-                                    font.pixelSize: 13
+                                    font.pixelSize: root.themeObject.typeLabel
                                     font.weight: Font.DemiBold
                                     elide: Text.ElideRight
                                 }
@@ -407,19 +362,10 @@ Item {
                                 text: root.dialog.scopeCount(root.dialog.scopeMode) +
                                       " photo" + (root.dialog.scopeCount(root.dialog.scopeMode) === 1 ? "" : "s")
                                 color: root.themeObject.alpha(root.paper, 0.54)
-                                font.family: root.themeObject.fontMono
-                                font.pixelSize: 10
+                                font.family: root.themeObject.fontUi
+                                font.pixelSize: root.themeObject.typeMicro
                             }
                         }
-                    }
-
-                    Label {
-                        text: "YOUR GOAL"
-                        color: root.themeObject.alpha(root.paper, 0.54)
-                        font.family: root.themeObject.fontMono
-                        font.pixelSize: 10
-                        font.letterSpacing: 1.5
-                        font.weight: Font.DemiBold
                     }
 
                     Rectangle {
@@ -455,9 +401,9 @@ Item {
                             selectionColor: root.primaryAccent
                             selectedTextColor: root.paper
                             font.family: root.uiFont
-                            font.pixelSize: 17
+                            font.pixelSize: root.themeObject.typeHero
                             wrapMode: TextEdit.Wrap
-                            background: Item {}
+                            background: InputFieldSurface { inputControl: parent; inlineField: true }
                             onTextChanged: {
                                 if (root.dialog.hasController())
                                     root.dialog.agentEditController.userInstructions = text
@@ -486,7 +432,7 @@ Item {
                             color: root.dialog.directionError.length > 0 ? root.themeObject.error
                                                                          : root.themeObject.alpha(root.paper, 0.50)
                             font.family: root.uiFont
-                            font.pixelSize: 11
+                            font.pixelSize: root.themeObject.typeMicro
                             wrapMode: Text.WordWrap
                             Accessible.description: root.dialog.batchForecastExplanation()
                         }
@@ -494,21 +440,43 @@ Item {
                         SoftButton {
                             id: detailsButton
                             objectName: "agentDetailsToggle"
-                            text: root.dialog.detailsExpanded ? "Hide Details" : "Details"
+                            text: root.dialog.detailsExpanded ? "Hide details" : "Details"
                             onClicked: root.dialog.setDetailsExpanded(!root.dialog.detailsExpanded)
+                        }
+
+                        SoftButton {
+                            objectName: "agentMemoryDetailsToggle"
+                            text: "Memory"
+                            selected: root.memoryDetailsExpanded
+                            Accessible.name: root.memoryDetailsExpanded
+                                             ? "Hide local memory details"
+                                             : "Show local memory details"
+                            onClicked: root.memoryDetailsExpanded = !root.memoryDetailsExpanded
+                        }
+
+                        SoftButton {
+                            objectName: "agentRunHistoryToggle"
+                            text: "History"
+                            selected: root.historyDetailsExpanded
+                            Accessible.name: root.historyDetailsExpanded
+                                             ? "Hide run verification history"
+                                             : "Show run verification history"
+                            onClicked: root.historyDetailsExpanded = !root.historyDetailsExpanded
                         }
 
                         SoftButton {
                             objectName: "agentAddInspirationButton"
                             visible: root.dialog.detailsExpanded
                             text: "Add inspiration"
+                            tooltipText: "Choose saved looks or photos as references; they will not be edited."
                             enabled: promptEditor.text.trim().length > 0
                             onClicked: root.dialog.preparePromptSuggestions()
                         }
 
                         SoftButton {
                             objectName: "agentPrimaryCreateDraftButton"
-                            text: root.dialog.runButtonLabel()
+                            text: String(root.dialog.runButtonLabel() || "") === "Commit Edits"
+                                  ? "Commit edits" : root.dialog.runButtonLabel()
                             primary: true
                             enabled: root.dialog.directionReady()
                             onClicked: root.dialog.triggerPrimaryDirectionAction()
@@ -539,10 +507,10 @@ Item {
                                     spacing: 1
 
                                     Label {
-                                        text: "YOUR LOOK"
+                                        text: "Your look"
                                         color: root.themeObject.alpha(root.paper, 0.50)
-                                        font.family: root.themeObject.fontMono
-                                        font.pixelSize: 9
+                                        font.family: root.themeObject.fontUi
+                                        font.pixelSize: root.themeObject.typeMicro
                                         font.letterSpacing: 1.2
                                     }
 
@@ -552,7 +520,7 @@ Item {
                                         text: root.dialog.selectedStyleName()
                                         color: root.paper
                                         font.family: root.uiFont
-                                        font.pixelSize: 13
+                                        font.pixelSize: root.themeObject.typeLabel
                                         font.weight: Font.DemiBold
                                         elide: Text.ElideRight
                                     }
@@ -567,7 +535,7 @@ Item {
                                            ? root.themeObject.success
                                            : root.themeObject.alpha(root.paper, 0.54)
                                     font.family: root.uiFont
-                                    font.pixelSize: 10
+                                    font.pixelSize: root.themeObject.typeMicro
                                     horizontalAlignment: Text.AlignRight
                                     elide: Text.ElideRight
                                 }
@@ -630,10 +598,10 @@ Item {
                                 spacing: 2
 
                                 Label {
-                                    text: "EDITING FREEDOM"
+                                    text: "Editing freedom"
                                     color: root.themeObject.alpha(root.paper, 0.50)
-                                    font.family: root.themeObject.fontMono
-                                    font.pixelSize: 9
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     font.letterSpacing: 1.1
                                 }
 
@@ -643,7 +611,7 @@ Item {
                                     text: root.dialog.editingFreedomSummary()
                                     color: root.themeObject.alpha(root.paper, 0.64)
                                     font.family: root.uiFont
-                                    font.pixelSize: 10
+                                    font.pixelSize: root.themeObject.typeMicro
                                     wrapMode: Text.WordWrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -692,20 +660,26 @@ Item {
                         id: detailsPanel
                         objectName: "agentDetailsPanel"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: root.dialog.detailsExpanded ? 180 : 0
-                        visible: root.dialog.detailsExpanded
+                        visible: root.dialog.detailsExpanded || root.memoryDetailsExpanded || root.historyDetailsExpanded
+                        Layout.preferredHeight: visible
+                                                ? Math.min(root.height * 0.56,
+                                                           detailsPanelColumn.implicitHeight +
+                                                           root.themeObject.space28)
+                                                : 0
                         radius: 16
                         color: root.themeObject.alpha(root.paper, 0.065)
                         clip: true
 
                         ColumnLayout {
+                            id: detailsPanelColumn
                             anchors.fill: parent
                             anchors.margins: 14
                             spacing: 10
 
                             RowLayout {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 82
+                                Layout.preferredHeight: root.dialog.detailsExpanded ? 82 : 0
+                                visible: root.dialog.detailsExpanded
                                 spacing: 18
 
                                 ColumnLayout {
@@ -713,10 +687,10 @@ Item {
                                     spacing: 5
 
                                     Label {
-                                        text: "SCOPE"
+                                        text: "Scope"
                                         color: root.themeObject.alpha(root.paper, 0.46)
-                                        font.family: root.themeObject.fontMono
-                                        font.pixelSize: 9
+                                        font.family: root.themeObject.fontUi
+                                        font.pixelSize: root.themeObject.typeMicro
                                         font.letterSpacing: 1.1
                                     }
 
@@ -728,7 +702,7 @@ Item {
                                         model: root.dialog.availableScopeLabels()
                                         currentIndex: root.dialog.scopeChoiceIndex()
                                         accent: root.primaryAccent
-                                        font.pixelSize: 11
+                                        font.pixelSize: root.themeObject.typeMicro
                                         fitTextToWidth: true
                                         showFullTextTooltip: false
                                         Accessible.name: "AI edit scope"
@@ -746,30 +720,30 @@ Item {
                                     Label {
                                         objectName: "agentDetailsLookLabel"
                                         Layout.fillWidth: true
-                                        text: "LOOK  " + root.dialog.selectedStyleName()
+                                        text: "Look  " + root.dialog.selectedStyleName()
                                         color: root.paper
                                         font.family: root.uiFont
-                                        font.pixelSize: 11
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
 
                                     Label {
                                         objectName: "agentDetailsTasteLabel"
                                         Layout.fillWidth: true
-                                        text: "TASTE  " + root.dialog.tasteMirrorLabel()
+                                        text: "Taste  " + root.dialog.tasteMirrorLabel()
                                         color: root.themeObject.alpha(root.paper, 0.62)
                                         font.family: root.uiFont
-                                        font.pixelSize: 10
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
 
                                     Label {
                                         objectName: "agentDetailsEditingFreedomLabel"
                                         Layout.fillWidth: true
-                                        text: "FREEDOM  " + root.dialog.editingFreedomMode().toUpperCase()
+                                        text: "Freedom  " + root.dialog.editingFreedomMode()
                                         color: root.themeObject.alpha(root.paper, 0.62)
                                         font.family: root.uiFont
-                                        font.pixelSize: 10
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
                                 }
@@ -781,20 +755,20 @@ Item {
                                     Label {
                                         objectName: "agentDetailsModelLabel"
                                         Layout.fillWidth: true
-                                        text: "MODEL  " + root.dialog.activeModelLabel()
+                                        text: "Model  " + root.dialog.activeModelLabel()
                                         color: root.paper
                                         font.family: root.uiFont
-                                        font.pixelSize: 11
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
 
                                     Label {
                                         objectName: "agentLiveMcpStatusLabel"
                                         Layout.fillWidth: true
-                                        text: "TOOLS  " + root.dialog.localToolsLabel()
+                                        text: "Tools  " + root.dialog.localToolsLabel()
                                         color: root.themeObject.alpha(root.paper, 0.62)
                                         font.family: root.uiFont
-                                        font.pixelSize: 10
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                         Accessible.description: root.dialog.mcpEndpointLabel()
                                     }
@@ -802,10 +776,10 @@ Item {
                                     Label {
                                         objectName: "agentDetailsRetouchRuntimeLabel"
                                         Layout.fillWidth: true
-                                        text: "RETOUCH  " + root.dialog.retouchRuntimeLabel()
+                                        text: "Retouch  " + root.dialog.retouchRuntimeLabel()
                                         color: root.themeObject.alpha(root.paper, 0.62)
                                         font.family: root.uiFont
-                                        font.pixelSize: 10
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
                                 }
@@ -814,6 +788,8 @@ Item {
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 1
+                                visible: root.dialog.detailsExpanded &&
+                                         (root.memoryDetailsExpanded || root.historyDetailsExpanded)
                                 color: root.themeObject.alpha(root.paper, 0.10)
                             }
 
@@ -822,6 +798,7 @@ Item {
                                 objectName: "agentLiveRunAuditPanel"
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
+                                visible: root.memoryDetailsExpanded || root.historyDetailsExpanded
                                 spacing: 10
 
                                 ColumnLayout {
@@ -831,31 +808,34 @@ Item {
                                     Label {
                                         objectName: "agentLiveMemoryVaultLabel"
                                         Layout.fillWidth: true
-                                        text: "MEMORY  " + root.dialog.memoryVaultLabel()
+                                        visible: root.memoryDetailsExpanded
+                                        text: "Memory  " + root.dialog.memoryVaultLabel()
                                         color: root.paper
                                         font.family: root.uiFont
-                                        font.pixelSize: 10
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
 
                                     Label {
                                         objectName: "agentLiveStyleChangeSummaryLabel"
                                         Layout.fillWidth: true
-                                        text: "LEARNED  " + root.dialog.latestStyleChangeSummary()
+                                        visible: root.memoryDetailsExpanded
+                                        text: "Learned  " + root.dialog.latestStyleChangeSummary()
                                         color: root.themeObject.alpha(root.paper, 0.58)
                                         font.family: root.uiFont
-                                        font.pixelSize: 9
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
 
                                     Label {
                                         objectName: "agentLiveRunProofPathLabel"
                                         Layout.fillWidth: true
-                                        text: "RUN  " + root.dialog.runAuditSummary() + " · " +
+                                        visible: root.historyDetailsExpanded
+                                        text: "Run  " + root.dialog.runAuditSummary() + " · " +
                                               root.dialog.proofArtifactLabel()
                                         color: root.themeObject.alpha(root.paper, 0.58)
                                         font.family: root.uiFont
-                                        font.pixelSize: 9
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                         Accessible.description: root.dialog.latestToolCallSummary()
                                     }
@@ -863,8 +843,9 @@ Item {
                                     Label {
                                         objectName: "agentLiveRunWarningsLabel"
                                         Layout.fillWidth: true
-                                        visible: root.dialog.runWarnings().length > 0 ||
-                                                 root.dialog.detailsActionMessage.length > 0
+                                        visible: root.historyDetailsExpanded &&
+                                                 (root.dialog.runWarnings().length > 0 ||
+                                                  root.dialog.detailsActionMessage.length > 0)
                                         text: root.dialog.detailsActionMessage.length > 0
                                               ? root.dialog.detailsActionMessage
                                               : root.dialog.runWarnings().join(" · ")
@@ -872,25 +853,28 @@ Item {
                                                ? root.themeObject.warning
                                                : root.themeObject.alpha(root.paper, 0.58)
                                         font.family: root.uiFont
-                                        font.pixelSize: 9
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
                                 }
 
                                 SoftButton {
                                     objectName: "agentOpenMemoryVaultButton"
+                                    visible: root.memoryDetailsExpanded
                                     text: "Open vault"
                                     onClicked: root.dialog.openMemoryVault()
                                 }
 
                                 SoftButton {
                                     objectName: "agentOpenMemoryVaultInObsidianButton"
+                                    visible: root.memoryDetailsExpanded
                                     text: "Obsidian"
                                     onClicked: root.dialog.openMemoryVaultInObsidian()
                                 }
 
                                 SoftButton {
                                     objectName: "agentExportRedactedMemoryButton"
+                                    visible: root.memoryDetailsExpanded
                                     text: "Export safe copy"
                                     onClicked: root.dialog.exportRedactedMemoryVault()
                                 }
@@ -918,8 +902,8 @@ Item {
                             Layout.fillWidth: true
                             text: root.dialog.suggestionSummary
                             color: root.themeObject.alpha(root.paper, 0.54)
-                            font.family: root.themeObject.fontMono
-                            font.pixelSize: 10
+                            font.family: root.themeObject.fontUi
+                            font.pixelSize: root.themeObject.typeMicro
                             font.letterSpacing: 0.8
                         }
                         SoftButton {
@@ -936,10 +920,10 @@ Item {
 
                     Label {
                         visible: root.dialog.styleStartMode !== "learn"
-                        text: "LOOK"
+                        text: "Look"
                         color: root.themeObject.alpha(root.paper, 0.76)
-                        font.family: root.themeObject.fontMono
-                        font.pixelSize: 10
+                        font.family: root.themeObject.fontUi
+                        font.pixelSize: root.themeObject.typeMicro
                         font.letterSpacing: 1.4
                         font.weight: Font.DemiBold
                     }
@@ -964,10 +948,10 @@ Item {
 
                     Label {
                         visible: root.dialog.styleStartMode !== "built-in" && root.photoSuggestions().length > 0
-                        text: "OPTIONAL PHOTO REFERENCES"
+                        text: "Optional photo references"
                         color: root.themeObject.alpha(root.paper, 0.76)
-                        font.family: root.themeObject.fontMono
-                        font.pixelSize: 10
+                        font.family: root.themeObject.fontUi
+                        font.pixelSize: root.themeObject.typeMicro
                         font.letterSpacing: 1.4
                         font.weight: Font.DemiBold
                     }
@@ -1009,7 +993,7 @@ Item {
                                    ? root.themeObject.warning
                                    : root.themeObject.alpha(root.paper, 0.52)
                             font.family: root.uiFont
-                            font.pixelSize: 11
+                            font.pixelSize: root.themeObject.typeMicro
                         }
                         SoftButton {
                             text: "Start editing " + root.dialog.scopeCount(root.dialog.scopeMode) +
@@ -1049,7 +1033,7 @@ Item {
                                       : "Finishing the full-resolution edit…"
                                 color: root.paper
                                 font.family: root.displayFont
-                                font.pixelSize: 25
+                                font.pixelSize: root.themeObject.typePageTitle
                                 font.weight: Font.DemiBold
                                 elide: Text.ElideRight
                             }
@@ -1067,7 +1051,7 @@ Item {
                                 }
                                 color: root.themeObject.alpha(root.paper, 0.62)
                                 font.family: root.uiFont
-                                font.pixelSize: 13
+                                font.pixelSize: root.themeObject.typeLabel
                                 wrapMode: Text.WordWrap
                                 maximumLineCount: 2
                                 elide: Text.ElideRight
@@ -1080,8 +1064,8 @@ Item {
                                       (root.dialog.scopeCount(root.dialog.scopeMode) === 1 ? "" : "s") +
                                       "  ·  " + root.dialog.runElapsedSeconds + " sec"
                                 color: root.themeObject.alpha(root.paper, 0.46)
-                                font.family: root.themeObject.fontMono
-                                font.pixelSize: 10
+                                font.family: root.themeObject.fontUi
+                                font.pixelSize: root.themeObject.typeMicro
                                 elide: Text.ElideRight
                             }
                         }
@@ -1103,7 +1087,7 @@ Item {
                               ? String(root.dialog.agentEditController.userInstructions || "") : ""
                         color: root.themeObject.alpha(root.paper, 0.54)
                         font.family: root.uiFont
-                        font.pixelSize: 11
+                        font.pixelSize: root.themeObject.typeMicro
                         wrapMode: Text.WordWrap
                         maximumLineCount: 2
                         elide: Text.ElideRight
@@ -1152,7 +1136,7 @@ Item {
                                 text: "Your photo will appear here"
                                 color: root.themeObject.alpha(root.paper, 0.46)
                                 font.family: root.uiFont
-                                font.pixelSize: 13
+                                font.pixelSize: root.themeObject.typeLabel
                             }
 
                             Rectangle {
@@ -1167,10 +1151,10 @@ Item {
                                 Label {
                                     id: livePreviewBadge
                                     anchors.centerIn: parent
-                                    text: liveAgentPreview.status === Image.Ready ? "LIVE PREVIEW" : "PREVIEW"
+                                    text: liveAgentPreview.status === Image.Ready ? "Live preview" : "Preview"
                                     color: root.themeObject.alpha(root.paper, 0.82)
-                                    font.family: root.themeObject.fontMono
-                                    font.pixelSize: 9
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     font.letterSpacing: 1.0
                                 }
                             }
@@ -1193,7 +1177,7 @@ Item {
                                     text: root.dialog.livePreviewLabel()
                                     color: root.paper
                                     font.family: root.uiFont
-                                    font.pixelSize: 11
+                                    font.pixelSize: root.themeObject.typeMicro
                                     elide: Text.ElideRight
                                 }
                             }
@@ -1205,22 +1189,37 @@ Item {
                             Layout.preferredWidth: 1
                             spacing: 8
 
-                            Label {
-                                text: "WHAT I’M DOING"
-                                color: root.themeObject.alpha(root.paper, 0.52)
-                                font.family: root.themeObject.fontMono
-                                font.pixelSize: 10
-                                font.letterSpacing: 1.2
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Current step"
+                                    color: root.themeObject.alpha(root.paper, 0.72)
+                                    font.family: root.uiFont
+                                    font.pixelSize: root.themeObject.typeCaption
+                                }
+                                SoftButton {
+                                    objectName: "agentRunEventHistoryToggle"
+                                    text: root.activityHistoryExpanded ? "Hide history" : "History"
+                                    selected: root.activityHistoryExpanded
+                                    Accessible.name: root.activityHistoryExpanded
+                                                     ? "Hide recent activity history"
+                                                     : "Show recent activity history"
+                                    onClicked: root.activityHistoryExpanded = !root.activityHistoryExpanded
+                                }
                             }
 
                             ListView {
                                 objectName: "agentLiveActivityTimeline"
                                 Layout.fillWidth: true
-                                Layout.fillHeight: true
+                                Layout.fillHeight: root.activityHistoryExpanded
+                                Layout.preferredHeight: root.activityHistoryExpanded ? 220 : 62
                                 Layout.minimumWidth: 0
                                 clip: true
                                 spacing: 8
-                                model: root.dialog.runEvents().slice(-8).reverse()
+                                model: root.dialog.runEvents()
+                                       .slice(root.activityHistoryExpanded ? -8 : -1)
+                                       .reverse()
                                 delegate: Rectangle {
                                     id: activityEventRow
                                     required property var modelData
@@ -1259,7 +1258,7 @@ Item {
                                                 text: String(activityEventRow.modelData.label || activityEventRow.modelData.stage || "Working")
                                                 color: root.paper
                                                 font.family: root.uiFont
-                                                font.pixelSize: 12
+                                                font.pixelSize: root.themeObject.typeCaption
                                                 font.weight: Font.DemiBold
                                                 elide: Text.ElideRight
                                             }
@@ -1270,7 +1269,7 @@ Item {
                                                 visible: text.length > 0
                                                 color: root.themeObject.alpha(root.paper, 0.56)
                                                 font.family: root.uiFont
-                                                font.pixelSize: 10
+                                                font.pixelSize: root.themeObject.typeMicro
                                                 elide: Text.ElideRight
                                             }
                                         }
@@ -1278,8 +1277,8 @@ Item {
                                         Label {
                                             text: String(activityEventRow.modelData.status || "")
                                             color: root.themeObject.alpha(root.paper, 0.42)
-                                            font.family: root.themeObject.fontMono
-                                            font.pixelSize: 9
+                                            font.family: root.themeObject.fontUi
+                                            font.pixelSize: root.themeObject.typeMicro
                                         }
                                     }
                                 }
@@ -1327,10 +1326,10 @@ Item {
                                 spacing: 2
 
                                 Label {
-                                    text: "EDIT PLAN"
+                                    text: "Edit plan"
                                     color: root.themeObject.alpha(root.paper, 0.48)
-                                    font.family: root.themeObject.fontMono
-                                    font.pixelSize: 9
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     font.letterSpacing: 1
                                 }
 
@@ -1340,7 +1339,7 @@ Item {
                                     text: root.dialog.planSummary()
                                     color: root.paper
                                     font.family: root.uiFont
-                                    font.pixelSize: 11
+                                    font.pixelSize: root.themeObject.typeMicro
                                     wrapMode: Text.WordWrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -1348,10 +1347,11 @@ Item {
 
                                 Label {
                                     Layout.fillWidth: true
+                                    visible: root.reviewDetailsExpanded
                                     text: root.dialog.editIntentSummary()
                                     color: root.themeObject.alpha(root.paper, 0.50)
-                                    font.family: root.themeObject.fontMono
-                                    font.pixelSize: 9
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     elide: Text.ElideRight
                                 }
                             }
@@ -1367,10 +1367,10 @@ Item {
                                 spacing: 4
 
                                 Label {
-                                    text: "VERIFICATION"
+                                    text: "Verification"
                                     color: root.themeObject.alpha(root.paper, 0.48)
-                                    font.family: root.themeObject.fontMono
-                                    font.pixelSize: 9
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     font.letterSpacing: 1
                                 }
 
@@ -1381,12 +1381,23 @@ Item {
                                     color: root.dialog.goalMatchPassed()
                                            ? root.themeObject.success : root.themeObject.warning
                                     font.family: root.uiFont
-                                    font.pixelSize: 12
+                                    font.pixelSize: root.themeObject.typeCaption
                                     font.weight: Font.DemiBold
                                     wrapMode: Text.WordWrap
                                 }
                             }
                         }
+                    }
+
+                    SoftButton {
+                        objectName: "aiEditReviewDetailsToggle"
+                        Layout.alignment: Qt.AlignRight
+                        text: root.reviewDetailsExpanded ? "Hide review details" : "Review details"
+                        selected: root.reviewDetailsExpanded
+                        Accessible.name: root.reviewDetailsExpanded
+                                         ? "Hide edit verification details"
+                                         : "Show edit verification details"
+                        onClicked: root.reviewDetailsExpanded = !root.reviewDetailsExpanded
                     }
 
                     Rectangle {
@@ -1396,7 +1407,8 @@ Item {
                             "agent-professional-consistency-map-v1|basis:within-lighting-group-relative-render-response|metrics:tone-contrast-color-skin|ordering:stable|thresholds:fixed|digest:sha256"
                         Layout.fillWidth: true
                         Layout.preferredHeight: visible ? 188 : 0
-                        visible: !root.dialog.sampleReviewWaiting() &&
+                        visible: root.reviewDetailsExpanded &&
+                                 !root.dialog.sampleReviewWaiting() &&
                                  Boolean(root.dialog.consistencyMap().available)
                         radius: 16
                         color: root.themeObject.alpha(root.paper, 0.075)
@@ -1416,10 +1428,10 @@ Item {
                                 spacing: 2
 
                                 Label {
-                                    text: "CONSISTENCY MAP"
+                                    text: "Consistency map"
                                     color: root.themeObject.alpha(root.paper, 0.50)
-                                    font.family: root.themeObject.fontMono
-                                    font.pixelSize: 9
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     font.letterSpacing: 1.1
                                 }
 
@@ -1429,7 +1441,7 @@ Item {
                                     text: root.dialog.consistencyHeadline()
                                     color: root.paper
                                     font.family: root.displayFont
-                                    font.pixelSize: 17
+                                    font.pixelSize: root.themeObject.typeHero
                                     font.weight: Font.DemiBold
                                     elide: Text.ElideRight
                                 }
@@ -1440,7 +1452,7 @@ Item {
                                     text: root.dialog.consistencySummary()
                                     color: root.themeObject.alpha(root.paper, 0.62)
                                     font.family: root.uiFont
-                                    font.pixelSize: 10
+                                    font.pixelSize: root.themeObject.typeMicro
                                     wrapMode: Text.WordWrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -1504,7 +1516,7 @@ Item {
                                                              "Lighting group " + (consistencyGroupCard.index + 1))
                                                 color: root.paper
                                                 font.family: root.uiFont
-                                                font.pixelSize: 11
+                                                font.pixelSize: root.themeObject.typeMicro
                                                 font.weight: Font.DemiBold
                                                 elide: Text.ElideRight
                                             }
@@ -1523,7 +1535,7 @@ Item {
                                                   : Number(consistencyGroupCard.modelData.photoCount || 0) + " aligned"
                                             color: root.themeObject.alpha(root.paper, 0.64)
                                             font.family: root.uiFont
-                                            font.pixelSize: 10
+                                            font.pixelSize: root.themeObject.typeMicro
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -1563,7 +1575,7 @@ Item {
                                         text: root.dialog.exceptionReviewHeadline()
                                         color: root.paper
                                         font.family: root.displayFont
-                                        font.pixelSize: 21
+                                        font.pixelSize: root.themeObject.typePageTitle
                                         font.weight: Font.DemiBold
                                     }
 
@@ -1572,7 +1584,7 @@ Item {
                                         text: "Exception-first review · verified photos stay out of your queue"
                                         color: root.themeObject.alpha(root.paper, 0.58)
                                         font.family: root.uiFont
-                                        font.pixelSize: 11
+                                        font.pixelSize: root.themeObject.typeMicro
                                     }
                                 }
 
@@ -1608,8 +1620,8 @@ Item {
                                             Layout.fillWidth: true
                                             text: root.dialog.assignmentStoryEyebrow()
                                             color: root.primaryAccent
-                                            font.family: root.themeObject.fontMono
-                                            font.pixelSize: 8
+                                            font.family: root.themeObject.fontUi
+                                            font.pixelSize: root.themeObject.typeMicro
                                             font.weight: Font.DemiBold
                                             font.letterSpacing: 0.7
                                         }
@@ -1620,7 +1632,7 @@ Item {
                                             text: root.dialog.assignmentStoryHeadline()
                                             color: root.paper
                                             font.family: root.uiFont
-                                            font.pixelSize: 12
+                                            font.pixelSize: root.themeObject.typeCaption
                                             font.weight: Font.DemiBold
                                             elide: Text.ElideRight
                                         }
@@ -1631,7 +1643,7 @@ Item {
                                             text: root.dialog.assignmentStoryArcText()
                                             color: root.themeObject.alpha(root.paper, 0.62)
                                             font.family: root.uiFont
-                                            font.pixelSize: 9
+                                            font.pixelSize: root.themeObject.typeMicro
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -1648,8 +1660,8 @@ Item {
                                         text: root.dialog.assignmentStorySummary() + "\n" +
                                               root.dialog.assignmentStoryReceiptText()
                                         color: root.themeObject.alpha(root.paper, 0.58)
-                                        font.family: root.themeObject.fontMono
-                                        font.pixelSize: 8
+                                        font.family: root.themeObject.fontUi
+                                        font.pixelSize: root.themeObject.typeMicro
                                         font.letterSpacing: 0.45
                                         wrapMode: Text.WordWrap
                                     }
@@ -1712,10 +1724,10 @@ Item {
                                                     id: exceptionStatus
                                                     anchors.centerIn: parent
                                                     text: String(exceptionCard.modelData.status || "") === "failed"
-                                                          ? "FAILED" : "CHECK"
+                                                          ? "Failed" : "Check"
                                                     color: root.paper
-                                                    font.family: root.themeObject.fontMono
-                                                    font.pixelSize: 9
+                                                    font.family: root.themeObject.fontUi
+                                                    font.pixelSize: root.themeObject.typeMicro
                                                     font.weight: Font.Bold
                                                 }
                                             }
@@ -1731,7 +1743,7 @@ Item {
                                                 text: root.dialog.reviewIssueTitle(exceptionCard.modelData)
                                                 color: root.paper
                                                 font.family: root.uiFont
-                                                font.pixelSize: 13
+                                                font.pixelSize: root.themeObject.typeLabel
                                                 font.weight: Font.DemiBold
                                             }
 
@@ -1742,7 +1754,7 @@ Item {
                                                 text: root.dialog.reviewIssueSummary(exceptionCard.modelData)
                                                 color: root.themeObject.alpha(root.paper, 0.70)
                                                 font.family: root.uiFont
-                                                font.pixelSize: 11
+                                                font.pixelSize: root.themeObject.typeMicro
                                                 wrapMode: Text.WordWrap
                                                 maximumLineCount: 2
                                                 elide: Text.ElideRight
@@ -1757,7 +1769,7 @@ Item {
                                                           exceptionCard.modelData)
                                                 color: root.themeObject.alpha(root.paper, 0.48)
                                                 font.family: root.uiFont
-                                                font.pixelSize: 10
+                                                font.pixelSize: root.themeObject.typeMicro
                                                 elide: Text.ElideRight
                                             }
 
@@ -1809,7 +1821,7 @@ Item {
                                 text: root.dialog.exceptionReviewFootnote()
                                 color: root.themeObject.alpha(root.paper, 0.58)
                                 font.family: root.uiFont
-                                font.pixelSize: 11
+                                font.pixelSize: root.themeObject.typeMicro
                                 wrapMode: Text.WordWrap
                             }
                         }
@@ -1840,7 +1852,7 @@ Item {
                                       : root.dialog.affectedPhotoSummary()
                                 color: root.paper
                                 font.family: root.displayFont
-                                font.pixelSize: 20
+                                font.pixelSize: root.themeObject.typeHero
                                 font.weight: Font.DemiBold
                                 wrapMode: Text.WordWrap
                             }
@@ -1873,8 +1885,8 @@ Item {
                                         Layout.fillWidth: true
                                         text: root.dialog.assignmentStoryEyebrow()
                                         color: root.primaryAccent
-                                        font.family: root.themeObject.fontMono
-                                        font.pixelSize: 9
+                                        font.family: root.themeObject.fontUi
+                                        font.pixelSize: root.themeObject.typeMicro
                                         font.weight: Font.DemiBold
                                         font.letterSpacing: 0.8
                                     }
@@ -1885,7 +1897,7 @@ Item {
                                         text: root.dialog.assignmentStoryHeadline()
                                         color: root.paper
                                         font.family: root.uiFont
-                                        font.pixelSize: 13
+                                        font.pixelSize: root.themeObject.typeLabel
                                         font.weight: Font.DemiBold
                                         elide: Text.ElideRight
                                     }
@@ -1896,7 +1908,7 @@ Item {
                                         text: root.dialog.assignmentStoryArcText()
                                         color: root.themeObject.alpha(root.paper, 0.78)
                                         font.family: root.uiFont
-                                        font.pixelSize: 11
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
 
@@ -1906,7 +1918,7 @@ Item {
                                         text: root.dialog.assignmentStorySummary()
                                         color: root.themeObject.alpha(root.paper, 0.58)
                                         font.family: root.uiFont
-                                        font.pixelSize: 10
+                                        font.pixelSize: root.themeObject.typeMicro
                                         elide: Text.ElideRight
                                     }
 
@@ -1931,8 +1943,8 @@ Item {
                                                 objectName: "aiEditStoryRoleEvidenceTitle"
                                                 text: root.dialog.shownStoryRoleEvidenceTitle()
                                                 color: root.primaryAccent
-                                                font.family: root.themeObject.fontMono
-                                                font.pixelSize: 8
+                                                font.family: root.themeObject.fontUi
+                                                font.pixelSize: root.themeObject.typeMicro
                                                 font.weight: Font.DemiBold
                                                 font.letterSpacing: 0.55
                                             }
@@ -1943,16 +1955,16 @@ Item {
                                                 text: root.dialog.shownStoryRoleReason()
                                                 color: root.themeObject.alpha(root.paper, 0.66)
                                                 font.family: root.uiFont
-                                                font.pixelSize: 9
+                                                font.pixelSize: root.themeObject.typeMicro
                                                 elide: Text.ElideRight
                                             }
 
                                             Label {
                                                 objectName: "aiEditStoryRoleEvidenceBoundary"
-                                                text: "NO SCENE CLAIM"
+                                                text: "No scene claim"
                                                 color: root.themeObject.alpha(root.paper, 0.34)
-                                                font.family: root.themeObject.fontMono
-                                                font.pixelSize: 7
+                                                font.family: root.themeObject.fontUi
+                                                font.pixelSize: root.themeObject.typeMicro
                                                 font.letterSpacing: 0.45
                                             }
                                         }
@@ -1967,8 +1979,8 @@ Item {
                                             Layout.fillWidth: true
                                             text: root.dialog.assignmentStoryReceiptText()
                                             color: root.themeObject.alpha(root.paper, 0.42)
-                                            font.family: root.themeObject.fontMono
-                                            font.pixelSize: 8
+                                            font.family: root.themeObject.fontUi
+                                            font.pixelSize: root.themeObject.typeMicro
                                             font.letterSpacing: 0.55
                                             elide: Text.ElideRight
                                         }
@@ -1995,7 +2007,7 @@ Item {
                                                     Layout.fillHeight: true
                                                     enabled: root.dialog.canShowPreviousSample()
                                                     label: "Previous sample"
-                                                    iconText: "‹"
+                                                    iconName: "chevron-left"
                                                     accent: root.primaryAccent
                                                     compact: true
                                                     showLabel: false
@@ -2007,8 +2019,8 @@ Item {
                                                     Layout.fillWidth: true
                                                     text: root.dialog.displayedSamplePositionText()
                                                     color: root.themeObject.alpha(root.paper, 0.64)
-                                                    font.family: root.themeObject.fontMono
-                                                    font.pixelSize: 8
+                                                    font.family: root.themeObject.fontUi
+                                                    font.pixelSize: root.themeObject.typeMicro
                                                     font.weight: Font.DemiBold
                                                     horizontalAlignment: Text.AlignHCenter
                                                     verticalAlignment: Text.AlignVCenter
@@ -2021,7 +2033,7 @@ Item {
                                                     Layout.fillHeight: true
                                                     enabled: root.dialog.canShowNextSample()
                                                     label: "Next sample"
-                                                    iconText: "›"
+                                                    iconName: "chevron-right"
                                                     accent: root.primaryAccent
                                                     compact: true
                                                     showLabel: false
@@ -2042,7 +2054,7 @@ Item {
                                             tooltipText: "Choose which reviewed image represents this story role."
                                             compact: true
                                             selected: storyRolePopup.visible
-                                            onClicked: storyRolePopup.open()
+                                            onClicked: storyRolePopup.toggleTransient(storyRoleButton)
                                         }
 
                                         SoftButton {
@@ -2063,12 +2075,13 @@ Item {
                                         AppPopup {
                                             id: storyRolePopup
                                             objectName: "aiEditAssignmentStoryRolePopup"
+                                            transientMenu: true
                                             parent: storyRoleButton
                                             x: storyRoleButton.width - width
                                             y: storyRoleButton.height + 6
                                             width: Math.min(popupAvailableWidth, Math.max(1, 260))
                                             height: Math.min(popupAvailableHeight, Math.max(1, storyRoleMenuColumn.implicitHeight + 12))
-                                            padding: 6
+                                            padding: theme.space6
                                             modal: false
                                             focus: true
                                             closePolicy: Popup.CloseOnEscape |
@@ -2085,7 +2098,8 @@ Item {
                                                 Repeater {
                                                     model: root.dialog.assignmentStoryRoleOptions()
 
-                                                    delegate: Button {
+                                                    delegate: ActionButton {
+                                                        active: currentRole
                                                         id: storyRoleAction
                                                         required property var modelData
                                                         readonly property string roleValue:
@@ -2108,23 +2122,11 @@ Item {
                                                                      roleValue)
                                                         onClicked: {
                                                             const requestedRole = roleValue
-                                                            storyRolePopup.close()
+                                                            storyRolePopup.closeTransient(true)
                                                             root.dialog.assignShownStoryRole(
                                                                 requestedRole)
                                                         }
 
-                                                        background: Rectangle {
-                                                            radius: 8
-                                                            color: storyRoleAction.currentRole
-                                                                   ? root.themeObject.alpha(root.primaryAccent, 0.18)
-                                                                   : storyRoleAction.hovered ||
-                                                                     storyRoleAction.down
-                                                                     ? root.themeObject.alpha(root.paper, 0.10)
-                                                                     : "transparent"
-                                                            border.width: storyRoleAction.currentRole ? 1 : 0
-                                                            border.color: root.themeObject.alpha(
-                                                                              root.primaryAccent, 0.38)
-                                                        }
 
                                                         contentItem: Item {
                                                             Label {
@@ -2134,7 +2136,7 @@ Item {
                                                                 text: String(storyRoleAction.modelData.label || "")
                                                                 color: root.paper
                                                                 font.family: root.uiFont
-                                                                font.pixelSize: 11
+                                                                font.pixelSize: root.themeObject.typeMicro
                                                                 font.weight: Font.DemiBold
                                                                 elide: Text.ElideRight
                                                             }
@@ -2146,7 +2148,7 @@ Item {
                                                                 text: String(storyRoleAction.modelData.detail || "")
                                                                 color: root.themeObject.alpha(root.paper, 0.54)
                                                                 font.family: root.uiFont
-                                                                font.pixelSize: 9
+                                                                font.pixelSize: root.themeObject.typeMicro
                                                                 elide: Text.ElideRight
                                                             }
 
@@ -2155,10 +2157,10 @@ Item {
                                                                 anchors.right: parent.right
                                                                 anchors.top: parent.top
                                                                 visible: storyRoleAction.currentRole
-                                                                text: "CURRENT"
+                                                                text: "Current"
                                                                 color: root.primaryAccent
-                                                                font.family: root.themeObject.fontMono
-                                                                font.pixelSize: 8
+                                                                font.family: root.themeObject.fontUi
+                                                                font.pixelSize: root.themeObject.typeMicro
                                                                 font.weight: Font.DemiBold
                                                                 font.letterSpacing: 0.6
                                                             }
@@ -2177,7 +2179,7 @@ Item {
                                         text: root.dialog.storyPreferenceActionMessage
                                         color: root.themeObject.alpha(root.paper, 0.58)
                                         font.family: root.uiFont
-                                        font.pixelSize: 9
+                                        font.pixelSize: root.themeObject.typeMicro
                                         wrapMode: Text.WordWrap
                                     }
                                 }
@@ -2229,7 +2231,7 @@ Item {
                                             text: root.dialog.correctionTransferHeadline()
                                             color: root.paper
                                             font.family: root.uiFont
-                                            font.pixelSize: 13
+                                            font.pixelSize: root.themeObject.typeLabel
                                             font.weight: Font.DemiBold
                                             elide: Text.ElideRight
                                         }
@@ -2240,7 +2242,7 @@ Item {
                                             text: root.dialog.correctionTransferLesson()
                                             color: root.themeObject.alpha(root.paper, 0.78)
                                             font.family: root.uiFont
-                                            font.pixelSize: 11
+                                            font.pixelSize: root.themeObject.typeMicro
                                             elide: Text.ElideRight
                                         }
 
@@ -2250,16 +2252,16 @@ Item {
                                             text: root.dialog.correctionTransferDetail()
                                             color: root.themeObject.alpha(root.paper, 0.52)
                                             font.family: root.uiFont
-                                            font.pixelSize: 9
+                                            font.pixelSize: root.themeObject.typeMicro
                                             elide: Text.ElideRight
                                         }
                                     }
 
                                     Label {
-                                        text: "MEMORY AFTER APPLY"
+                                        text: "Memory after apply"
                                         color: root.themeObject.alpha(root.paper, 0.48)
-                                        font.family: root.themeObject.fontMono
-                                        font.pixelSize: 9
+                                        font.family: root.themeObject.fontUi
+                                        font.pixelSize: root.themeObject.typeMicro
                                         font.letterSpacing: 0.8
                                     }
                                 }
@@ -2295,10 +2297,10 @@ Item {
                                         anchors.top: parent.top
                                         anchors.margins: 10
                                         text: root.dialog.hasDirectionComparison()
-                                              ? root.dialog.directionDisplayLabel("a") : "BEFORE"
+                                              ? root.dialog.directionDisplayLabel("a") : "Before"
                                         color: root.paper
-                                        font.family: root.themeObject.fontMono
-                                        font.pixelSize: 10
+                                        font.family: root.themeObject.fontUi
+                                        font.pixelSize: root.themeObject.typeMicro
                                         font.weight: Font.DemiBold
                                     }
 
@@ -2338,10 +2340,10 @@ Item {
                                         anchors.top: parent.top
                                         anchors.margins: 10
                                         text: root.dialog.hasDirectionComparison()
-                                              ? root.dialog.directionDisplayLabel("b") : "AFTER"
+                                              ? root.dialog.directionDisplayLabel("b") : "After"
                                         color: root.paper
-                                        font.family: root.themeObject.fontMono
-                                        font.pixelSize: 10
+                                        font.family: root.themeObject.fontUi
+                                        font.pixelSize: root.themeObject.typeMicro
                                         font.weight: Font.DemiBold
                                     }
 
@@ -2364,10 +2366,10 @@ Item {
                                 Layout.fillWidth: true
                                 visible: root.dialog.directionChoiceKey().length > 0
                                 text: "✓ " + root.dialog.directionChoiceLabel() +
-                                      " selected · remembered only after Commit Edits"
+                                      " selected · remembered only after commit edits"
                                 color: root.themeObject.success
                                 font.family: root.uiFont
-                                font.pixelSize: 12
+                                font.pixelSize: root.themeObject.typeCaption
                                 horizontalAlignment: Text.AlignHCenter
                             }
                         }
@@ -2402,15 +2404,15 @@ Item {
                                 selectionColor: root.primaryAccent
                                 selectedTextColor: root.paper
                                 font.family: root.uiFont
-                                font.pixelSize: 13
+                                font.pixelSize: root.themeObject.typeLabel
                                 wrapMode: TextEdit.Wrap
-                                background: Item {}
+                                background: InputFieldSurface { inputControl: parent; inlineField: true }
                                 onTextChanged: root.dialog.alternativeDirectionText = text
                             }
 
                             SoftButton {
                                 objectName: "aiEditCreateComparisonButton"
-                                text: "Create Direction B"
+                                text: "Create direction B"
                                 primary: true
                                 enabled: alternativeDirectionEditor.text.trim().length >= 4
                                 onClicked: root.dialog.compareDirection()
@@ -2447,15 +2449,15 @@ Item {
                                 selectionColor: root.primaryAccent
                                 selectedTextColor: root.paper
                                 font.family: root.uiFont
-                                font.pixelSize: 13
+                                font.pixelSize: root.themeObject.typeLabel
                                 wrapMode: TextEdit.Wrap
-                                background: Item {}
+                                background: InputFieldSurface { inputControl: parent; inlineField: true }
                                 onTextChanged: root.dialog.sampleFeedback = text
                             }
 
                             SoftButton {
                                 objectName: "aiEditSubmitSampleRevisionButton"
-                                text: "Make Changes"
+                                text: "Make changes"
                                 primary: true
                                 enabled: sampleFeedbackEditor.text.trim().length > 0
                                 onClicked: root.dialog.reviseSamples()
@@ -2463,55 +2465,80 @@ Item {
                         }
                     }
 
-                    GridLayout {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        columns: root.width < 700 ? 2 : 4
-                        columnSpacing: 10
-                        rowSpacing: 8
+                        spacing: 8
 
-                        SoftButton {
-                            objectName: "aiEditDiscardDraftButton"
+                        Label {
                             visible: !root.dialog.editCommitted
-                            text: root.dialog.sampleReviewWaiting() ? "Discard samples" : "Discard edit"
-                            onClicked: root.dialog.rejectDraft()
+                            text: "Other review options"
+                            color: root.themeObject.alpha(root.paper, 0.52)
+                            font.family: root.uiFont
+                            font.pixelSize: root.themeObject.typeCaption
                         }
 
-                        SoftButton {
-                            objectName: "aiEditAskForChangesButton"
-                            visible: !root.dialog.editCommitted
-                            text: root.dialog.sampleReviewWaiting()
-                                  ? (root.dialog.revisionExpanded ? "Cancel changes" : "Make Changes")
-                                  : "Change direction"
-                            onClicked: {
-                                if (root.dialog.sampleReviewWaiting())
-                                    root.dialog.revisionExpanded = !root.dialog.revisionExpanded
-                                else
-                                    root.dialog.reviseDraft()
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: root.width < 520 ? 1 : root.width < 900 ? 2 : 3
+                            columnSpacing: 8
+                            rowSpacing: 6
+
+                            SoftButton {
+                                objectName: "aiEditDiscardDraftButton"
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                allowLabelWrap: true
+                                visible: !root.dialog.editCommitted
+                                text: root.dialog.sampleReviewWaiting() ? "Discard samples" : "Discard edit"
+                                onClicked: root.dialog.rejectDraft()
                             }
-                        }
 
-                        SoftButton {
-                            objectName: "aiEditCompareDirectionButton"
-                            visible: !root.dialog.editCommitted &&
-                                     !root.dialog.hasDirectionComparison() &&
-                                     !root.dialog.revisionExpanded &&
-                                     root.dialog.reviewIssues().length <= 0
-                            text: root.dialog.photographerTasteCheckRecommended()
-                                  ? "Compare restrained version"
-                                  : root.dialog.comparisonPromptOpen
-                                    ? "Cancel compare" : "Show me two directions"
-                            onClicked: {
-                                if (root.dialog.photographerTasteCheckRecommended()) {
-                                    root.dialog.startPhotographerTasteCheck()
-                                    return
+                            SoftButton {
+                                objectName: "aiEditAskForChangesButton"
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                allowLabelWrap: true
+                                visible: !root.dialog.editCommitted
+                                text: root.dialog.sampleReviewWaiting()
+                                      ? (root.dialog.revisionExpanded ? "Cancel changes" : "Make changes")
+                                      : "Change direction"
+                                onClicked: {
+                                    if (root.dialog.sampleReviewWaiting())
+                                        root.dialog.revisionExpanded = !root.dialog.revisionExpanded
+                                    else
+                                        root.dialog.reviseDraft()
                                 }
-                                root.dialog.comparisonPromptOpen =
-                                        !root.dialog.comparisonPromptOpen
+                            }
+
+                            SoftButton {
+                                objectName: "aiEditCompareDirectionButton"
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                allowLabelWrap: true
+                                visible: !root.dialog.editCommitted &&
+                                         !root.dialog.hasDirectionComparison() &&
+                                         !root.dialog.revisionExpanded &&
+                                         root.dialog.reviewIssues().length <= 0
+                                text: root.dialog.photographerTasteCheckRecommended()
+                                      ? "Compare restrained version"
+                                      : root.dialog.comparisonPromptOpen
+                                        ? "Cancel compare" : "Show me two directions"
+                                onClicked: {
+                                    if (root.dialog.photographerTasteCheckRecommended()) {
+                                        root.dialog.startPhotographerTasteCheck()
+                                        return
+                                    }
+                                    root.dialog.comparisonPromptOpen =
+                                            !root.dialog.comparisonPromptOpen
+                                }
                             }
                         }
 
                         SoftButton {
                             objectName: "aiEditPrimaryReviewButton"
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            allowLabelWrap: true
                             visible: !root.dialog.revisionExpanded &&
                                      !root.dialog.comparisonPromptOpen &&
                                      !root.dialog.directionComparisonPending()
@@ -2521,11 +2548,19 @@ Item {
                                   ? "Resolve " + root.dialog.reviewIssues().length + " first"
                                   : root.dialog.sampleReviewWaiting()
                                   ? "Apply to All"
-                                  : "Commit Edits"
+                                  : "Commit edits"
                             primary: true
                             enabled: root.dialog.editCommitted ||
                                      (root.dialog.canReviewDraft() &&
                                       root.dialog.reviewIssues().length <= 0)
+                            disabledReason: root.dialog.reviewIssues().length > 0
+                                             ? "Resolve the listed review issues before applying this draft."
+                                             : "The draft must finish its checks before it can be applied."
+                            tooltipText: root.dialog.editCommitted
+                                         ? "Close the finished edit review."
+                                         : root.dialog.sampleReviewWaiting()
+                                           ? "Apply the reviewed look to every selected photo."
+                                           : "Apply this checked edit to the photo."
                             onClicked: {
                                 if (root.dialog.editCommitted)
                                     root.dialog.close()

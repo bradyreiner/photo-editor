@@ -1,0 +1,62 @@
+{
+  "photos": [
+    {
+      "file": "public/media/refine/portrait-window.jpg",
+      "source": "https://www.pexels.com/photo/natural-light-portrait-of-woman-by-window-31987754/",
+      "license": "Pexels license",
+      "license_url": "https://www.pexels.com/license/",
+      "sha256": "430a5fdbe3ce50f0fdaa2df91effb0402c5727c5f363250c554c7ae140f7c358",
+      "creator": "Mayara Caroline Mombelli"
+    },
+    {
+      "file": "public/media/refine/coast-blue.jpg",
+      "source": "https://www.pexels.com/photo/beach-umbrella-by-turquoise-ocean-waves-30729630/",
+      "license": "Pexels license",
+      "license_url": "https://www.pexels.com/license/",
+      "sha256": "cc7b2db60d9a4ba46554eb6d15d16a5100b7a6b638447b5815c3dab686495688",
+      "creator": "Dirk Pothen"
+    },
+    {
+      "file": "public/media/refine/surf.jpg",
+      "source": "https://www.pexels.com/photo/golden-sunset-beach-with-lone-surfer-35710633/",
+      "license": "Pexels license",
+      "license_url": "https://www.pexels.com/license/",
+      "sha256": "fae0ce28fe54c5fca48af915477cf83f5a6c7407d5d31cce9a47c629ae9d6d9f",
+      "creator": "Fernando Silva"
+    },
+    {
+      "file": "public/media/refine/beach.jpg",
+      "source": "https://www.pexels.com/photo/surfer-walking-on-beach-shore-6433597/",
+      "license": "Pexels license",
+      "license_url": "https://www.pexels.com/license/",
+      "sha256": "5aa9ee8982867ad393ff3f088804369fc29b2b8f2ae776c70a793f541f43556b",
+      "creator": "Kalia Chan"
+    }
+  ],
+  "music": {
+    "title": "Opalescent",
+    "creator": "Eugenio Mininni",
+    "source": "https://mixkit.co/free-stock-music/tag/technology/",
+    "asset": "https://assets.mixkit.co/music/593/593.mp3",
+    "license": "Mixkit Stock Music Free License",
+    "license_url": "https://mixkit.co/license/modal/musicFree/",
+    "scope": "Single excerpt, original tempo and pitch, reduced level; no artificial beat loop."
+  },
+  "retouch": {
+    "image": "surf-final.png",
+    "scope": "Illustrative source-region patch retouch with gradient edge blending; original pixels outside the selection are preserved. Not a native Qt inpainting result or performance proof.",
+    "source_region_offset_px": [
+      200,
+      60
+    ],
+    "outside_mask_preserved": true,
+    "source": "surf.jpg",
+    "mask": "surf-mask.png"
+  },
+  "subject_mask": {
+    "image": "portrait-subject.png",
+    "method": "Local inference with app-pinned SAM2 encoder/decoder; original RGB retained.",
+    "source": "portrait-window.jpg"
+  },
+  "raw_color_scope": "JPEGs illustrate the RAW controls; these are not native RAW color-engine exports."
+}

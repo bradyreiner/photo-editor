@@ -74,7 +74,8 @@ ColumnLayout {
                       + Number(carouselDocument.designPackageImportPreview.embeddedAssetCount || 0)
                       + " embedded brand assets"
                 color: theme.textStrong
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 wrapMode: Text.WordWrap
                 elide: Text.ElideNone

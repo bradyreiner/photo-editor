@@ -19,6 +19,8 @@ fi
 [ ! -e "${candidate_root}" ] || {
   printf '%s\n' 'Choose a new output directory so prior evidence is preserved.' >&2; exit 1;
 }
+source "${repo_root}/scripts/build-lock.sh"
+acquire_build_lock "${repo_root}/build/release-macos"
 if [ -z "${postgres_source}" ]; then
   postgres_source="$(brew --prefix postgresql@14)"
 fi

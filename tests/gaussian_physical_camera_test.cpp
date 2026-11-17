@@ -1,5 +1,6 @@
 #include "gaussian_physical_camera.h"
 #include "gaussian_lens_sampling.h"
+#include "gaussian_camera_optics.h"
 #include <QCoreApplication>
 #include <iostream>
 #include <limits>
@@ -64,6 +65,48 @@ int main(int argc, char** argv) {
   if (!portrait.camera || portrait.camera->fx != c.fx || portrait.calibration.value("effectiveGateHeightMm") != 36.0) return 1;
   const auto half = make_gaussian_physical_camera(pose,{2000,3000},p);
   if (!half.camera || half.camera->fx * 2 != portrait.camera->fx || half.camera->photo != portrait.camera->photo) return 1;
+  GaussianPhysicalCameraSettings measured; measured.metres_per_scene_unit=1;
+  const auto authored=make_gaussian_physical_camera(optical_pose,{1920,1080},measured);
+  if (!authored.camera) return 1;
+  const auto optics=gaussian_camera_optics(*authored.camera,30);
+  if (!check(optics.value("ok").toBool() && optics.value("physical").toBool() &&
+      near(optics.value("effectiveGateHeightMm").toDouble(),20.25) &&
+      near(optics.value("focusFromSensorM").toDouble(),2.0+50.0*2000/1950/1000),"Sensor gate or focus reference readout differs")) return 1;
+  // Check the displayed near/far limits against independently projected rays
+  // from the opposite pupil edges. Both boundaries must produce a 30 µm blur.
+  for (const char* key:{"depthOfFieldNearM","depthOfFieldFarM"}) {
+    const double depth=optics.value(QLatin1String(key)).toDouble();
+    const auto& camera=*authored.camera;
+    const auto left=gaussian_aperture_camera(camera,{-camera.photo.lens.aperture_radius,0});
+    const auto right=gaussian_aperture_camera(camera,{camera.photo.lens.aperture_radius,0});
+    const double x_left=left.fx*(-left.position.x())/depth+left.cx;
+    const double x_right=right.fx*(-right.position.x())/depth+right.cx;
+    const double blur_um=std::abs(x_left-x_right)*camera.physical->gate_width_mm/camera.image_size.width()*1000;
+    if (!check(std::abs(blur_um-30)<0.002,"Displayed depth-of-field limit disagrees with pupil ray geometry")) return 1;
+  }
+  measured.focus_distance_m=3;
+  const auto full_refocus=make_gaussian_physical_camera(*authored.camera,{1920,1080},measured,true);
+  const auto rounded_refocus=make_gaussian_physical_camera(authored.camera->resized({1279,719}),{1279,719},measured,true);
+  if (!check(full_refocus.camera && rounded_refocus.camera &&
+      full_refocus.camera->physical->gate_width_mm==rounded_refocus.camera->physical->gate_width_mm &&
+      full_refocus.camera->physical->gate_height_mm==rounded_refocus.camera->physical->gate_height_mm,
+      "Refocus recrops a frozen sensor gate at rounded preview dimensions")) return 1;
+  const auto full_fov=gaussian_camera_optics(*full_refocus.camera),rounded_fov=gaussian_camera_optics(*rounded_refocus.camera);
+  if (!check(std::abs(full_fov.value("horizontalFovDegrees").toDouble()-rounded_fov.value("horizontalFovDegrees").toDouble())<0.0001 &&
+      std::abs(full_fov.value("verticalFovDegrees").toDouble()-rounded_fov.value("verticalFovDegrees").toDouble())<0.0001,
+      "Focus/preview resampling changed the field of view")) return 1;
+  if (!check(!gaussian_camera_optics(*authored.camera,0).value("ok").toBool(),"Invalid blur criterion accepted")) return 1;
+  for (const double focal:{14.0,85.0,135.0,200.0,2000.0}) for (const double stop:{0.1,0.2,0.5,1.4,22.0,128.0}) {
+    auto extreme=measured; extreme.focal_length_mm=focal; extreme.f_number=stop;
+    extreme.focus_distance_m=3;
+    const auto result=make_gaussian_physical_camera(*authored.camera,{1920,1080},extreme,true);
+    if (!check(result.camera && gaussian_physical_camera_consistent(*result.camera) &&
+        gaussian_lens_settings(result.camera->photo.lens.description()).has_value() &&
+        near(result.camera->photo.lens.aperture_radius*2000*extreme.metres_per_scene_unit,focal/stop),
+        "Extreme aperture/zoom failed conversion or persistence")) return 1;
+  }
+  auto below_minimum=measured.description(); below_minimum["fNumber"]=0.099;
+  if (!check(!gaussian_physical_camera_settings(below_minimum),"Subminimum aperture accepted")) return 1;
   for (int fault = 0; fault < 11; ++fault) {
     auto bad = p.description();
     if (fault == 0) bad["metresPerSceneUnit"] = 0;

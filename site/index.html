@@ -4,165 +4,100 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Evaluate Looksy, a local-first photo editor for Apple silicon Macs. Buy a one-time license for personal and client work.">
-  <meta property="og:title" content="Looksy — a better way to see">
-  <meta property="og:description" content="Organize, edit, sequence, design, and export without sending your media library to a cloud service.">
+  <meta name="description" content="A different way to see. Meet Looksy, the native, local-first photo editor for Apple silicon. Explore the color. Download the build.">
+  <meta property="og:title" content="Looksy — A different way to see">
+  <meta property="og:description" content="Your photos. Your point of view. A native photo editor that keeps the creative process on your Mac.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="./assets/og-looksy.png">
-  <meta name="theme-color" content="#090a0b">
-  <title>Looksy — Download</title>
+  <meta name="theme-color" content="#101110">
+  <title>Looksy — A different way to see</title>
   <link rel="icon" href="./assets/looksy-icon.png?v=1" type="image/png">
-  <link rel="stylesheet" href="./styles.css?v=6">
+  <link rel="preload" href="./assets/fonts/Anton.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="./landing.css?v=1">
   <script defer src="./download-config.js?v=6"></script>
   <script defer src="./download-page.js?v=6"></script>
   <script defer src="./legal-page.js?v=1"></script>
+  <script type="module" src="./optical-scene.js?v=1"></script>
 </head>
 <body>
-  <header class="topbar" aria-label="Site header">
-    <a class="brand-mark" href="./" aria-label="Looksy home">
-      <img class="brand-image" src="./assets/looksy-icon.png" alt="">
-      <span>Looksy</span>
-    </a>
-    <nav class="topnav" aria-label="Page sections">
-      <a href="#downloads">Download</a>
+  <a class="skip-link" href="#downloads">Skip to downloads</a>
+  <header class="topbar">
+    <a class="brand-mark" href="./" aria-label="Looksy home"><img src="./assets/looksy-icon.png" width="34" height="34" alt=""><span>looksy<span class="brand-period">®</span></span></a>
+    <nav class="topnav" aria-label="Main navigation">
+      <a href="#included">The editor <span>01</span></a>
       <a id="commerce-nav" href="#support-development">Support</a>
-      <a href="#included">Included</a>
-      <a href="./support.html">Help</a>
+      <a href="./support.html">Help <span>↗</span></a>
     </nav>
+    <a class="nav-download" href="#downloads">Get Looksy <span aria-hidden="true">↘</span></a>
   </header>
 
-  <main class="page-shell">
-    <section class="hero" aria-labelledby="page-title">
+  <main>
+    <section class="hero page-width" aria-labelledby="page-title">
+      <div class="hero-topline micro"><span>A different way to see.</span><span class="release-pill" id="channel-pill">Public alpha</span></div>
       <div class="hero-copy">
-        <div class="release-pill" id="channel-pill">Public alpha</div>
-        <h1 id="page-title">A better way<br>to see.</h1>
-        <p class="lede">
-          Looksy is a native, local-first photo editor for organizing and shaping
-          photography, motion, and visual design on Apple silicon Macs.
-        </p>
-
-        <div class="hero-proof" aria-label="Release qualities">
-          <span>Native desktop app</span>
-          <span>Local catalog</span>
-          <span>Non-destructive edits</span>
-          <span>No photo upload required</span>
+        <h1 id="page-title">SEE IT.<br>FEEL IT.<br><span class="outline-type">MAKE IT.</span></h1>
+        <p class="lede">A native, local-first photo editor for shaping photography on your terms. Less between you and your point of view.</p>
+        <div class="hero-action"><a class="button button-light" href="#downloads">Find your build <span aria-hidden="true">↘</span></a><span class="micro">Made for your Mac.<br>Made for your eye.</span></div>
+      </div>
+      <div class="optical-stage" id="optical-stage" role="img" aria-label="Interactive three-dimensional sculpture of overlapping red, green, and blue light rings">
+        <div class="orbit orbit-one" aria-hidden="true"></div><div class="orbit orbit-two" aria-hidden="true"></div>
+        <span class="stage-coordinate coordinate-top micro" aria-hidden="true">R + G + B = ∞</span>
+        <span class="stage-cross cross-one" aria-hidden="true">+</span><span class="stage-cross cross-two" aria-hidden="true">+</span>
+        <div class="optical-fallback" aria-hidden="true"><i></i><i></i><i></i></div>
+        <canvas id="optical-canvas" aria-hidden="true"></canvas>
+        <span class="stage-coordinate coordinate-bottom micro" aria-hidden="true">FULL SPECTRUM. FULL EXPRESSION.</span>
+      </div>
+      <div class="hero-bottom">
+        <p class="micro hero-caption"><span class="tiny-cross" aria-hidden="true">✳</span> THREE COLORS. ENDLESS POSSIBILITIES.</p>
+        <div class="light-controls" aria-label="Sculpture light controls">
+          <span class="micro controls-hint">Play with the light</span>
+          <button type="button" class="channel-control red" data-channel="0" aria-label="Red light" aria-pressed="true"><i></i>R</button>
+          <button type="button" class="channel-control green" data-channel="1" aria-label="Green light" aria-pressed="true"><i></i>G</button>
+          <button type="button" class="channel-control blue" data-channel="2" aria-label="Blue light" aria-pressed="true"><i></i>B</button>
+          <button type="button" class="motion-control" id="motion-control" aria-label="Pause sculpture motion" aria-pressed="false" hidden>Ⅱ</button>
         </div>
+      </div>
+    </section>
 
-        <div id="downloads" class="download-grid three-up" aria-label="Download installers">
-          <a id="mac-arm-download" class="download-card primary disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="mac-arm">
-            <span class="download-kicker">macOS · Apple silicon</span>
-            <span class="download-title">Download for M-series Mac</span>
-            <span class="download-meta" id="mac-arm-label">DMG not published</span>
-          </a>
-          <a id="mac-intel-download" class="download-card disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="mac-intel">
-            <span class="download-kicker">macOS · Intel</span>
-            <span class="download-title">Download for Intel Mac</span>
-            <span class="download-meta" id="mac-intel-label">DMG not published</span>
-          </a>
-          <a id="windows-download" class="download-card disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="windows">
-            <span class="download-kicker">Windows · x64</span>
-            <span class="download-title">Download for Windows</span>
-            <span class="download-meta" id="windows-label">Installer not published</span>
-          </a>
+    <div class="rgb-rule" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div class="manifesto-strip micro"><span>LOCAL FIRST</span><b>+</b><span>NON-DESTRUCTIVE</span><b>+</b><span>NATIVE BY DESIGN</span><b>+</b><span>YOUR POINT OF VIEW</span></div>
+
+    <section id="included" class="editor-section page-width" aria-labelledby="included-title">
+      <div class="section-heading"><p class="micro section-kicker">01 / THE CREATIVE SPACE</p><h2 id="included-title">YOUR EYE.<br><span class="muted-type">YOUR EDIT.</span></h2><p>From the first frame to the final export.<br>A little less friction. A lot more you.</p></div>
+      <figure class="editor-preview"><div class="preview-chrome"><span class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="micro">LOOKSY / YOUR CREATIVE SPACE</span><span class="micro">● LOCAL</span></div><img src="./assets/app-preview.png?v=1" width="1440" height="900" loading="lazy" alt="The Looksy photo editor showing a photograph, filmstrip, histogram, and tone controls."><figcaption class="micro"><span>THE TOOLS ARE HERE. THE VISION IS YOURS.</span><span>PHOTO / COLOR / COMPOSITION</span></figcaption></figure>
+      <div class="feature-list">
+        <article><span class="feature-number micro">[ 01 ]</span><h3>Find the frame.</h3><p>Import, organize, and cull. Keep your catalog close and your best photographs closer.</p><span class="feature-tag micro">LIBRARY & CULLING</span></article>
+        <article><span class="feature-number micro">[ 02 ]</span><h3>Follow the feeling.</h3><p>Shape tone and color with masks, layers, and non-destructive recipes. Keep room to experiment.</p><span class="feature-tag micro">COLOR & EDITING</span></article>
+        <article><span class="feature-number micro">[ 03 ]</span><h3>Make it yours.</h3><p>Sequence motion, build visual layouts, and queue your exports. Take your point of view further.</p><span class="feature-tag micro">DESIGN & DELIVERY</span></article>
+      </div>
+    </section>
+
+    <section class="download-section" aria-labelledby="download-heading">
+      <div class="page-width download-layout">
+        <div class="download-copy"><p class="micro section-kicker">02 / LESS SCROLLING. MORE CREATING.</p><h2 id="download-heading">GOOD LIGHT.<br><span class="outline-type">GREAT START.</span></h2><p>Your next edit starts here.<br>Pick up the latest available build of Looksy.</p><div class="rgb-dots" aria-hidden="true"><i></i><i></i><i></i></div></div>
+        <div class="download-panel">
+          <div class="download-panel-heading"><span class="micro">GET LOOKSY</span><span class="micro" id="version-value">0.1.0</span></div>
+          <div id="downloads" class="download-grid" aria-label="Download installers" tabindex="-1">
+            <a id="mac-arm-download" class="download-card primary disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="mac-arm"><span class="download-kicker micro">macOS / APPLE SILICON</span><span class="download-title">Download for M-series Mac</span><span class="download-meta" id="mac-arm-label">DMG not published</span><span class="download-arrow" aria-hidden="true">↗</span></a>
+            <a id="mac-intel-download" class="download-card disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="mac-intel"><span class="download-kicker micro">macOS / INTEL</span><span class="download-title">Download for Intel Mac</span><span class="download-meta" id="mac-intel-label">DMG not published</span><span class="download-arrow" aria-hidden="true">↗</span></a>
+            <a id="windows-download" class="download-card disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="windows"><span class="download-kicker micro">WINDOWS / x64</span><span class="download-title">Download for Windows</span><span class="download-meta" id="windows-label">Installer not published</span><span class="download-arrow" aria-hidden="true">↗</span></a>
+          </div>
+          <p id="release-status" class="release-status" role="status">Checking the signed release…</p>
+          <dl class="release-summary"><div><dt>Updated</dt><dd id="updated-value">Not published</dd></div><div><dt>Access</dt><dd id="access-value">Public alpha</dd></div></dl>
+          <a id="release-notes" class="text-link" href="#" aria-disabled="true" tabindex="-1">Release notes are not published yet</a>
+          <p class="tester-note">Alpha software changes quickly. Keep backups of important catalogs and original media.</p>
         </div>
-
-        <p id="release-status" class="release-status" role="status">Checking the signed release…</p>
-        <p class="tester-note">
-          Alpha software can change quickly. Keep backups of important catalogs and original media.
-        </p>
       </div>
-
-      <div class="product-panel app-preview" aria-label="Looksy interface preview">
-        <div class="window-chrome">
-          <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
-          <span class="window-title">Looksy · Edited · sRGB</span>
-        </div>
-        <img class="app-screenshot public-preview" src="./assets/app-preview.png?v=1" alt="Looksy photo editor with image preview, filmstrip, histogram, and tone controls.">
-      </div>
+      <div id="install" class="page-width install-details"><div><span class="micro">SYSTEM REQUIREMENTS</span><p id="mac-requirement">macOS 13 or newer.</p><p id="windows-requirement">Windows 10 22H2 or Windows 11, 64-bit.</p></div><div><span class="micro">YOUR WORK STAYS YOURS</span><p>Photos and catalogs stay on your computer. No photo upload required.</p></div><div><span class="micro">A HAND WHEN YOU NEED IT</span><p><a id="support-link" href="./support.html">Installation, updates, and support ↗</a></p></div></div>
     </section>
 
-    <section class="release-summary" aria-label="Release summary">
-      <div><span class="summary-label">Version</span><strong id="version-value">0.1.0</strong></div>
-      <div><span class="summary-label">Updated</span><strong id="updated-value">Not published</strong></div>
-      <div><span class="summary-label">Access</span><strong id="access-value">Public alpha</strong></div>
-      <div><span class="summary-label">Updates</span><strong>Built in</strong></div>
+    <section id="support-development" class="commerce-section page-width" aria-labelledby="commerce-title">
+      <div class="commerce-copy"><p class="micro section-kicker">03 / INDEPENDENT BY NATURE</p><h2 id="commerce-title">Support a different<br>way to see.</h2><p id="commerce-description">The public alpha does not require an activation server. Optional support helps fund signing, hardware testing, and camera coverage.</p></div>
+      <div class="commerce-actions"><a id="support-payment" class="commerce-button primary disabled" href="#" aria-disabled="true" tabindex="-1">Support development</a><a id="purchase-button" class="commerce-button disabled" href="#" aria-disabled="true" tabindex="-1">Buy a supporter license</a><a id="subscription-button" class="commerce-button disabled" href="#" aria-disabled="true" tabindex="-1" hidden>Subscriptions opening soon</a><a id="purchase-recovery" class="commerce-button disabled" href="#" aria-disabled="true" tabindex="-1" hidden>Find my purchase</a><small id="commerce-detail">Payments are not represented as tax-deductible charitable donations.</small><small><a href="./terms.html">License terms</a> / <a href="./refunds.html">Refund policy</a></small></div>
     </section>
-
-    <section id="install" class="content-grid" aria-label="Download details">
-      <article>
-        <h2>System requirements</h2>
-        <ul>
-          <li id="mac-requirement">macOS 13 or newer.</li>
-          <li id="windows-requirement">Windows 10 22H2 or Windows 11, 64-bit.</li>
-          <li>Install only signed builds published from this page.</li>
-        </ul>
-      </article>
-      <article>
-        <h2>Private by default</h2>
-        <p>Photos, catalogs, and diagnostic logs remain on your computer. Support bundles are created locally and shared only when you choose.</p>
-      </article>
-      <article>
-        <h2>Release notes</h2>
-        <p><a id="release-notes" href="#" aria-disabled="true">Release notes are not published yet</a></p>
-      </article>
-      <article>
-        <h2>Need help?</h2>
-        <p><a id="support-link" href="./support.html">Installation, updates, and support</a></p>
-      </article>
-    </section>
-
-    <section id="support-development" class="commerce-section" aria-labelledby="commerce-title">
-      <div class="commerce-copy">
-        <p class="section-kicker">Independent software</p>
-        <h2 id="commerce-title">Use the alpha freely. Support the work if it earns it.</h2>
-        <p id="commerce-description">
-          The public alpha does not require an activation server. Optional support helps fund signing,
-          hardware testing, camera coverage, and the unglamorous work of making catalogs and exports dependable.
-        </p>
-      </div>
-      <div class="commerce-actions">
-        <a id="support-payment" class="commerce-button primary disabled" href="#" aria-disabled="true">Support development</a>
-        <a id="purchase-button" class="commerce-button disabled" href="#" aria-disabled="true">Buy a supporter license</a>
-        <a id="subscription-button" class="commerce-button disabled" href="#" aria-disabled="true" hidden>Subscriptions opening soon</a>
-        <a id="purchase-recovery" class="commerce-button disabled" href="#" aria-disabled="true" hidden>Find my purchase</a>
-        <small id="commerce-detail">Payments are not represented as tax-deductible charitable donations.</small>
-        <small><a href="./terms.html">License terms</a> · <a href="./refunds.html">Refund policy</a></small>
-      </div>
-    </section>
-
-    <section id="included" class="feature-section" aria-labelledby="included-title">
-      <div class="section-heading">
-        <p class="section-kicker">Alpha scope</p>
-        <h2 id="included-title">A complete visual workflow is the product.</h2>
-      </div>
-      <div class="feature-grid">
-        <article><h3>Import and cull</h3><p>Bring in focused libraries, review photographs quickly, and keep catalog state local.</p></article>
-        <article><h3>Studio</h3><p>Work with tone, color, masks, layers, profiles, and non-destructive recipes.</p></article>
-        <article><h3>Timeline and design</h3><p>Sequence motion, build visual layouts, and move between media without leaving the workspace.</p></article>
-        <article><h3>Export and recover</h3><p>Queue deliverables, preserve edits across relaunches, and create backups before catalog migrations.</p></article>
-      </div>
-    </section>
-
-    <section class="trust-section" aria-labelledby="trust-title">
-      <div>
-        <p class="section-kicker">Release trust</p>
-        <h2 id="trust-title">Signed installers. Verified updates. Human-readable policies.</h2>
-      </div>
-      <div class="trust-links">
-        <a href="./privacy.html">Privacy</a>
-        <a href="./terms.html">Terms</a>
-        <a href="./refunds.html">Refunds</a>
-        <a href="./licenses.html">Third-party licenses</a>
-        <a href="./support.html">Support</a>
-      </div>
-    </section>
-
-    <noscript><p class="noscript">JavaScript is required to resolve the latest signed installer links.</p></noscript>
+    <noscript><p class="noscript page-width">JavaScript is required to resolve the latest signed installer links. The RGB sculpture is decorative.</p></noscript>
   </main>
 
-  <footer class="site-footer">
-    <span>© 2026 <span data-legal-publisher>Publisher identity pending release approval</span></span>
-    <span>Looksy public alpha</span>
-  </footer>
+  <footer class="site-footer page-width"><div class="footer-top"><a class="footer-wordmark" href="./" aria-label="Looksy home">looksy<span>↗</span></a><p class="micro">A DIFFERENT WAY TO SEE.<br>ANOTHER WAY TO CREATE.</p></div><div class="footer-bottom"><span>© 2026 <span data-legal-publisher>Publisher identity pending release approval</span></span><nav aria-label="Policies and support"><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms</a><a href="./refunds.html">Refunds</a><a href="./licenses.html">Licenses</a><a href="./support.html">Support ↗</a></nav><a href="#page-title">Back to top ↑</a></div></footer>
 </body>
 </html>

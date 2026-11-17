@@ -34,6 +34,14 @@ Rectangle {
     property real lastPointerY: 0
     property int axisLock: 0 // 0: both, 1: horizontal, 2: vertical
     property bool fineMode: false
+    readonly property string axisValueSummary: (xLabel.length > 0 ? xLabel : qsTr("Horizontal")) + ": "
+                                               + (xValueText.length > 0 ? xValueText : xValue.toFixed(1)) + " · "
+                                               + (yLabel.length > 0 ? yLabel : qsTr("Vertical")) + ": "
+                                               + (yValueText.length > 0 ? yValueText : yValue.toFixed(1))
+    readonly property string interactionHelpText: qsTr("%1 increases right; %2 increases up. Current: %3. Double-click to reset.")
+                                                 .arg(xLabel.length > 0 ? xLabel : qsTr("Horizontal"))
+                                                 .arg(yLabel.length > 0 ? yLabel : qsTr("Vertical"))
+                                                 .arg(axisValueSummary)
 
     function finishDrag(cancel) {
         if (!dragging)
@@ -63,6 +71,10 @@ Rectangle {
 
     Theme { id: theme }
 
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Grouping
+    Accessible.name: title.length > 0 ? title : qsTr("Two-axis adjustment")
+    Accessible.description: interactionHelpText + qsTr(" Hold Shift for fine adjustment, Control to lock one axis, or Escape to cancel.")
     Layout.fillWidth: true
     Layout.preferredHeight: compact ? 120 : 168
     radius: 4
@@ -106,27 +118,29 @@ Rectangle {
         spacing: 7
 
         RowLayout {
-            visible: !pad.compact
+            visible: !pad.compact && (pad.title.length > 0 || pad.xValueText.length > 0 || pad.yValueText.length > 0)
             Layout.fillWidth: true
             spacing: 8
 
             Label {
                 Layout.fillWidth: true
+                visible: pad.title.length > 0
                 text: pad.title
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 11
-                font.weight: Font.Black
-                font.capitalization: Font.AllUppercase
+                font.pixelSize: theme.typeCaption
+                font.weight: Font.DemiBold
                 font.letterSpacing: 0
                 elide: Text.ElideNone
             }
             Label {
+                visible: pad.xValueText.length > 0 || pad.yValueText.length > 0
                 text: pad.xValueText + "  /  " + pad.yValueText
                 color: "#C8D2DC"
-                font.family: theme.fontMono
-                font.pixelSize: 10
-                font.weight: Font.Bold
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
+                font.pixelSize: theme.typeCaption
+                font.weight: Font.Medium
                 font.letterSpacing: 0
             }
         }
@@ -206,9 +220,8 @@ Rectangle {
                 text: pad.xLabel
                 color: theme.alpha(theme.textStrong, 0.76)
                 font.family: theme.fontUi
-                font.pixelSize: 9
-                font.weight: Font.Bold
-                font.capitalization: Font.AllUppercase
+                font.pixelSize: theme.typeCaption
+                font.weight: Font.Medium
                 font.letterSpacing: 0
             }
             Label {
@@ -219,12 +232,12 @@ Rectangle {
                 text: pad.yLabel
                 color: theme.alpha(theme.textStrong, 0.76)
                 font.family: theme.fontUi
-                font.pixelSize: 9
-                font.weight: Font.Bold
-                font.capitalization: Font.AllUppercase
+                font.pixelSize: theme.typeCaption
+                font.weight: Font.Medium
                 font.letterSpacing: 0
             }
             MouseArea {
+                id: padInteraction
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.CrossCursor
@@ -275,14 +288,11 @@ Rectangle {
                 onCanceled: pad.finishDrag(true)
             }
         }
-        Label {
-            Layout.fillWidth: true
-            visible: !pad.compact
-            text: "Shift: fine · Ctrl: lock axis · Esc: cancel"
-            color: theme.textMuted
-            font.family: theme.fontUi
-            font.pixelSize: 9
-            wrapMode: Text.WordWrap
+        AppToolTip {
+            targetItem: field
+            visible: (padInteraction.containsMouse || pad.activeFocus) && !pad.dragging
+            text: pad.interactionHelpText
+            shortcutText: qsTr("Shift: fine · Ctrl: lock axis · Esc: cancel")
         }
     }
 }

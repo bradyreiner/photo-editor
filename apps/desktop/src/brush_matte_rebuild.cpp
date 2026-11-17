@@ -10,12 +10,26 @@
 
 namespace photo_editor::desktop {
 
+bool brush_history_requires_source(const QVariantMap& mask) {
+  if (mask.value(QStringLiteral("brushAutoMask")).toBool() ||
+      mask.value(QStringLiteral("brushProtectEdges")).toBool()) return true;
+  for (const auto& stroke : mask.value(QStringLiteral("brushStrokes")).toList()) {
+    const auto settings = stroke.toMap().value(QStringLiteral("settings")).toMap();
+    if (settings.value(QStringLiteral("autoMask")).toBool() ||
+        settings.value(QStringLiteral("protectEdges")).toBool()) return true;
+  }
+  return false;
+}
+
 QRect rasterize_brush_history_into_mask(
     QVariantMap* mask, const QImage* source_image,
     photo_editor::pipeline::CancellationToken cancellation,
-    bool* cancelled, qint64* candidate_pixels, qint64* edge_pixels) {
+    bool* cancelled, qint64* candidate_pixels, qint64* edge_pixels,
+    const QRectF& coordinate_area, const QSizeF& basis_pixel_extent) {
   if (cancelled) *cancelled = false;
   if (!mask) return {};
+  if (brush_history_requires_source(*mask) &&
+      (source_image == nullptr || source_image->isNull())) return {};
   QRect dirty;
   auto alpha = mask->value(QStringLiteral("segmentationData")).toByteArray();
   const auto width = mask->value(QStringLiteral("segmentationWidth")).toInt();
@@ -33,7 +47,8 @@ QRect rasterize_brush_history_into_mask(
     const auto feather = version2 ? settings.value(QStringLiteral("feather"), 0.75).toDouble()
                                  : mask->value(QStringLiteral("feather"), 0.75).toDouble();
     const BrushRasterGeometry geometry{.circular = version2,
-        .hardness = settings.value(QStringLiteral("hardness"), 0.25).toDouble()};
+        .hardness = settings.value(QStringLiteral("hardness"), 0.25).toDouble(),
+        .coordinate_area = coordinate_area, .basis_pixel_extent = basis_pixel_extent};
     const auto auto_mask = settings.value(QStringLiteral("autoMask"),
         mask->value(QStringLiteral("brushAutoMask"), false)).toBool();
     const auto protect_edges = settings.value(QStringLiteral("protectEdges"),
@@ -44,7 +59,11 @@ QRect rasterize_brush_history_into_mask(
       auto point = brush_preview_point_from_variant(sample, 0.5, 0.5,
           mask->value(QStringLiteral("brushSize"), 0.08).toDouble(),
           mask->value(QStringLiteral("brushFlow"), 1.0).toDouble());
-      if (stroke.value(QStringLiteral("operation")).toString() == QStringLiteral("erase")) point.erase = true;
+      if (stroke.value(QStringLiteral("operation")).toString().trimmed().toLower() ==
+          QStringLiteral("erase")) point.erase = true;
+      // A subtractive companion stores positive coverage; subtraction happens
+      // when its mask source is composed with the preserved legacy source.
+      if (mask->value(QStringLiteral("brushCompositeSource")).toBool()) point.erase=false;
       bool point_cancelled = false;
       dirty = dirty.united(rasterize_brush_point_into_alpha(&alpha, width, height, source_image,
           point.x, point.y, point.size, point.flow, point.opacity, feather, point.erase,
@@ -63,14 +82,15 @@ QRect rasterize_brush_history_into_mask(
 QVariantMap mask_with_rebuilt_brush_matte(
     const QVariantMap& mask,
     const QSize& target_size,
-    const QString& purpose) {
+    const QString& purpose,
+    const QRectF& coordinate_area, const QSizeF& basis_pixel_extent) {
   QElapsedTimer rebuild_timer;
   rebuild_timer.start();
   const auto target_width = std::max(1, target_size.width());
   const auto target_height = std::max(1, target_size.height());
   if (normalized_mask_kind(mask.value(QStringLiteral("kind")).toString()) !=
           QStringLiteral("brush") ||
-      target_width <= 1 || target_height <= 1) {
+      !target_size.isValid() || target_size.isEmpty()) {
     return {};
   }
 
@@ -78,6 +98,10 @@ QVariantMap mask_with_rebuilt_brush_matte(
   if (points.isEmpty()) {
     return {};
   }
+
+  // Do this before allocating an output-sized buffer: a committed constrained
+  // matte is retained rather than replaced by an unconstrained reconstruction.
+  if (brush_history_requires_source(mask)) return {};
 
   auto rebuilt_mask = mask;
   rebuilt_mask.insert(
@@ -87,14 +111,8 @@ QVariantMap mask_with_rebuilt_brush_matte(
   rebuilt_mask.insert(QStringLiteral("segmentationHeight"), target_height);
   // Source-aware strokes cannot be reconstructed without their source colors.
   // Keep their committed matte and let the caller scale that authoritative alpha.
-  if (mask.value(QStringLiteral("brushAutoMask")).toBool() ||
-      mask.value(QStringLiteral("brushProtectEdges")).toBool()) return {};
-  for (const auto& stroke : mask.value(QStringLiteral("brushStrokes")).toList()) {
-    const auto settings = stroke.toMap().value(QStringLiteral("settings")).toMap();
-    if (settings.value(QStringLiteral("autoMask")).toBool() ||
-        settings.value(QStringLiteral("protectEdges")).toBool()) return {};
-  }
-  (void)rasterize_brush_history_into_mask(&rebuilt_mask);
+  (void)rasterize_brush_history_into_mask(&rebuilt_mask, nullptr, {}, nullptr,
+      nullptr, nullptr, coordinate_area, basis_pixel_extent);
   rebuilt_mask.insert(QStringLiteral("scaledMattePurpose"), purpose);
   rebuilt_mask.insert(
       QStringLiteral("scaledMatteSourceWidth"),

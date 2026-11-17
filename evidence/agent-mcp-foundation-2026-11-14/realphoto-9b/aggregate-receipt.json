@@ -1,0 +1,126 @@
+{
+  "capturedAtUtc": "2026-11-14T19:54:02.275933+00:00",
+  "contract": "agent-live-local-runtime-tier-benchmark-v1",
+  "deadlineAssessment": {
+    "contract": "agent-fast-draft-hardware-deadline-v1",
+    "deadlineMs": 30000,
+    "deadlinePrecedesWarmPlanningP50ByMs": -20348,
+    "deadlinePrecedesWarmPlanningP95ByMs": -19058,
+    "hardwareTier": "balanced",
+    "policyAcceptedForThisTier": false,
+    "policyChangeRequired": true
+  },
+  "generation": {
+    "contract": "agent-operation-discriminated-generation-v2",
+    "currentRequestAuthoritative": true,
+    "globalChangePolicy": "allow",
+    "schemaByteCount": 1597
+  },
+  "guardrails": {
+    "allPlanningImageGrounded": true,
+    "allProofCritiquesImageGrounded": true,
+    "allRunsLocalOnly": true,
+    "allRunsPassed": true,
+    "automaticCommitAllowed": false,
+    "cloudUsed": false,
+    "fallbackUsed": false,
+    "photographerApprovalRequired": true
+  },
+  "host": {
+    "architecture": "arm64",
+    "detectedHardwareTier": "balanced",
+    "hardwareTier": "balanced",
+    "macOSVersion": "26.3.1",
+    "memoryBytes": 51539607552,
+    "memoryGiB": 48
+  },
+  "input": {
+    "fixtureKind": "source-image-override",
+    "sourceSha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56"
+  },
+  "method": {
+    "coldDefinition": "ollama stop immediately before each planning request",
+    "percentileMethod": "nearest-rank",
+    "proofCritiqueConditionForColdRuns": "warm follow-up after the cold planning request loaded the model",
+    "sampleCountPerCondition": 5,
+    "warmDefinition": "same model remains resident across unchanged requests"
+  },
+  "runtime": {
+    "modelFamily": "qwen3_5",
+    "modelId": "ollama-qwen35-9b",
+    "ollamaModel": "qwen3.5:9b",
+    "parameterSize": "9.7B",
+    "quantizationLevel": "nvfp4"
+  },
+  "sampleReceipts": [
+    {
+      "condition": "warm",
+      "path": "warm-01.json",
+      "sha256": "68a95a6c538c11836c1aa3b2e8e6dfb3afe70ff014c41a328526742d4fd82a7b"
+    },
+    {
+      "condition": "warm",
+      "path": "warm-02.json",
+      "sha256": "b13379976dc48b5bdaa27da89ca5e9ac25be4d4ad06def3a55c9b946a3880109"
+    },
+    {
+      "condition": "warm",
+      "path": "warm-03.json",
+      "sha256": "4adf0954a384f7d1563049a5e6d51c62b63aea862f219b13a49b2c6c4d9a9428"
+    },
+    {
+      "condition": "warm",
+      "path": "warm-04.json",
+      "sha256": "f9a9880c0418bdd8b6d13e073fc0889894bdd839dd960e1d73005b90b82efb61"
+    },
+    {
+      "condition": "warm",
+      "path": "warm-05.json",
+      "sha256": "abe8788905549c5dee5a775e53ad7e5e5653d364b05cc38e2173a6bf163090a0"
+    }
+  ],
+  "warm": {
+    "planningMs": {
+      "max": 10942,
+      "mean": 9842.2,
+      "min": 9031,
+      "p50": 9652,
+      "p95": 10942,
+      "samples": [
+        9652,
+        10942,
+        9031,
+        9046,
+        10540
+      ]
+    },
+    "proofCritiqueMs": {
+      "max": 3420,
+      "mean": 2876.4,
+      "min": 2592,
+      "p50": 2731,
+      "p95": 3420,
+      "samples": [
+        3420,
+        2592,
+        2724,
+        2731,
+        2915
+      ]
+    },
+    "totalMs": {
+      "max": 13534,
+      "mean": 12718.6,
+      "min": 11755,
+      "p50": 13072,
+      "p95": 13534,
+      "samples": [
+        13072,
+        13534,
+        11755,
+        11777,
+        13455
+      ]
+    }
+  }
+}

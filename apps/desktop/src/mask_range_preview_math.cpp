@@ -166,11 +166,21 @@ void update_color_range_constraints_from_samples(QVariantMap* mask) {
   auto center = std::atan2(sin_sum, cos_sum) / (2.0 * M_PI);
   center = wrap_unit(center);
   auto hue_range = 0.04;
-  for (const auto& sample_value : samples) {
-    const auto sample = sample_value.toMap();
-    hue_range = std::max(
-        hue_range,
-        circular_distance_unit(sample.value(QStringLiteral("hue")).toDouble(), center) + 0.04);
+  if (mask->value(QStringLiteral("colorSampleMode")).toString() == QStringLiteral("union")) {
+    // In union mode this remains the shared, editable radius around each
+    // swatch. Adding a distant hue must not widen every swatch's tolerance.
+    const auto authored_radius = mask->value(QStringLiteral("hueRange"), 0.12).toDouble();
+    hue_range = std::isfinite(authored_radius)
+                    ? std::clamp(authored_radius, 0.02, 0.5)
+                    : 0.12;
+  } else {
+    // Preserve the legacy center/radius calculation for existing recipes.
+    for (const auto& sample_value : samples) {
+      const auto sample = sample_value.toMap();
+      hue_range = std::max(
+          hue_range,
+          circular_distance_unit(sample.value(QStringLiteral("hue")).toDouble(), center) + 0.04);
+    }
   }
 
   mask->insert(QStringLiteral("hueCenter"), center);

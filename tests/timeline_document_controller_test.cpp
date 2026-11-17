@@ -1,39 +1,854 @@
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <tuple>
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QColor>
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QFontMetricsF>
+#include <QHash>
 #include <QImage>
+#include <QMetaObject>
+#include <QQmlContext>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QQmlPropertyMap>
+#include <QJSValue>
 #include <QProcess>
+#include <QPainter>
+#include <QPromise>
 #include <QSaveFile>
 #include <QSettings>
+#include <QScopedValueRollback>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QThread>
+#include <QTransform>
 #include <QUrl>
+#include <QUuid>
+#include <QQmlComponent>
+#include <QQmlEngine>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QSet>
 
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "job_runner.h"
 #include "job_store.h"
 #include "app_bootstrap.h"
+#include "agent_timeline_commands.h"
 #include "decoded_image_cache.h"
+#include "creative_fonts.h"
 #include "timeline_asset_store.h"
+#include "timeline_bounded_h264_export.h"
+#include "timeline_compound_render.h"
+#include "timeline_compound_producer_identity.h"
 #include "timeline_document_controller.h"
+#include "timeline_frame_shadow.h"
+#include "timeline_frame_quad_overscan.h"
+#include "timeline_frame_quad_warp.h"
+#include "timeline_fractal_noise_source.h"
+#include "timeline_native_generator_frame_cache.h"
+#include "timeline_presentation_source.h"
+#include "timeline_source_crop.h"
+#include "timeline_sparse_title_roi.h"
+#include "worker_queue_registry.h"
+
+bool run_timeline_mask_frame_cache_pixel_test();
 
 namespace photo_editor::desktop {
 
+struct JobRunnerTestAccess {
+  static QVariantMap state(const JobRunner& runner) {
+    return {
+        {QStringLiteral("ready"), runner.ready_},
+        {QStringLiteral("recovering"), runner.recovering_},
+        {QStringLiteral("queueReading"), runner.queue_reading_},
+        {QStringLiteral("queuePending"), runner.queue_pending_},
+        {QStringLiteral("activeAttempts"), runner.active_attempts_.size()},
+        {QStringLiteral("wakeTimerActive"), runner.wake_timer_.isActive()},
+        {QStringLiteral("wakeTimerIntervalMs"), runner.wake_timer_.interval()},
+    };
+  }
+};
+
 struct TimelineHistoryTestAccess {
+  static QVariantMap sparseTitleFilterProbe(
+      const TimelineDocumentController& controller,
+      bool force_full_canvas_fallback,
+      bool static_title_source_only = false,
+      const QRect& source_alpha_bounds = QRect(400, 300, 500, 300)) {
+    TimelineDocumentController::Clip clip;
+    clip.clip_id = QStringLiteral("sparse-title-filter-probe");
+    clip.media_type = QStringLiteral("title");
+    clip.duration_seconds = 0.5;
+    clip.trim_end_seconds = 0.5;
+    clip.frame_mode = QStringLiteral("stretch");
+    clip.keyframes = {
+        {QStringLiteral("frameScale"), 0.0, 0.65, QStringLiteral("linear")},
+        {QStringLiteral("frameScale"), 14.0 / 30.0, 1.10, QStringLiteral("linear")},
+        {QStringLiteral("frameOffsetX"), 0.0, -0.30, QStringLiteral("linear")},
+        {QStringLiteral("frameOffsetX"), 14.0 / 30.0, 0.30, QStringLiteral("linear")},
+        {QStringLiteral("frameOffsetY"), 0.0, 0.24, QStringLiteral("linear")},
+        {QStringLiteral("frameOffsetY"), 14.0 / 30.0, -0.24, QStringLiteral("linear")},
+        {QStringLiteral("opacity"), 0.0, 0.25, QStringLiteral("linear")},
+        {QStringLiteral("opacity"), 14.0 / 30.0, 0.95, QStringLiteral("linear")},
+    };
+    if (static_title_source_only) {
+      clip.keyframes.clear();
+    }
+    if (force_full_canvas_fallback) {
+      // A disabled stack has no rendered effect. It makes this otherwise
+      // identical graph ineligible while preserving the reference filter path.
+      clip.effects_enabled = false;
+      clip.effect_stack = {QStringLiteral("Fade")};
+    }
+
+    TimelineDocumentController::Track track;
+    track.track_id = QStringLiteral("sparse-title-filter-track");
+    track.kind = TimelineDocumentController::TrackKind::Video;
+    track.display_label = QStringLiteral("Sparse title probe");
+    TimelineDocumentController::SparseTitleOverlayGeometry sparse_overlay;
+    const auto filter_graph = controller.clipVideoFilter(
+        clip, track, 0, 0, QSize(1920, 1080), 0.0, 0.0, false, false, 0.5,
+        QString{}, false, false, -1, -1, QString{}, QString{},
+        source_alpha_bounds, &sparse_overlay);
+    return {
+        {QStringLiteral("filterGraph"), filter_graph},
+        {QStringLiteral("sparse"), !sparse_overlay.size.isEmpty()},
+        {QStringLiteral("roiWidth"), sparse_overlay.size.width()},
+        {QStringLiteral("roiHeight"), sparse_overlay.size.height()},
+        {QStringLiteral("overlayX"), sparse_overlay.x_expression},
+        {QStringLiteral("overlayY"), sparse_overlay.y_expression},
+        {QStringLiteral("finiteTitleFrameCount"),
+         sparse_overlay.finite_title_frame_count},
+    };
+  }
+
+  static QVariantMap combinedTransformFilterProbe(
+      const TimelineDocumentController& controller,
+      const TimelineDocumentController::Clip& clip,
+      const QSize& target_size,
+      double sequence_start_seconds,
+      double segment_duration_seconds) {
+    TimelineDocumentController::Track track;
+    track.track_id = QStringLiteral("combined-transform-filter-track");
+    track.kind = TimelineDocumentController::TrackKind::Video;
+    track.display_label = QStringLiteral("Combined transform probe");
+    QString error;
+    const auto graph = controller.clipVideoFilter(
+        clip, track, 0, 0, target_size, sequence_start_seconds, 0.0, false,
+        false, segment_duration_seconds, QString{}, false, false, -1, -1,
+        QString{}, QString{}, QRect{}, nullptr, &error);
+    return {{QStringLiteral("graph"), graph}, {QStringLiteral("error"), error}};
+  }
+
+  static TimelineDocumentController::Clip transformClipFromJson(
+      const QJsonObject& source,
+      const QSize& source_size = QSize()) {
+    TimelineDocumentController::Clip clip;
+    clip.clip_id = source.value(QStringLiteral("clipId")).toString();
+    clip.asset_id = source.value(QStringLiteral("assetId")).toString();
+    clip.media_type = source.value(QStringLiteral("mediaType")).toString();
+    clip.display_label = source.value(QStringLiteral("displayLabel")).toString();
+    clip.file_path = source.value(QStringLiteral("filePath")).toString();
+    clip.start_seconds = source.value(QStringLiteral("startSeconds")).toDouble();
+    clip.duration_seconds = source.value(QStringLiteral("durationSeconds")).toDouble();
+    clip.trim_start_seconds = source.value(QStringLiteral("trimStartSeconds")).toDouble();
+    clip.trim_end_seconds = source.value(QStringLiteral("trimEndSeconds")).toDouble();
+    clip.frame_mode = source.value(QStringLiteral("frameMode")).toString();
+    clip.frame_scale = source.value(QStringLiteral("frameScale")).toDouble(1.0);
+    clip.frame_rotation_degrees =
+        source.value(QStringLiteral("frameRotationDegrees")).toDouble();
+    clip.frame_offset_x = source.value(QStringLiteral("frameOffsetX")).toDouble();
+    clip.frame_offset_y = source.value(QStringLiteral("frameOffsetY")).toDouble();
+    clip.frame_width = source.value(QStringLiteral("frameWidth")).toDouble(1.0);
+    clip.frame_height = source.value(QStringLiteral("frameHeight")).toDouble(1.0);
+    clip.frame_corner_radius = source.value(QStringLiteral("frameCornerRadius")).toDouble();
+    clip.source_crop_left = source.value(QStringLiteral("sourceCropLeft")).toDouble();
+    clip.source_crop_top = source.value(QStringLiteral("sourceCropTop")).toDouble();
+    clip.source_crop_right = source.value(QStringLiteral("sourceCropRight")).toDouble(1.0);
+    clip.source_crop_bottom = source.value(QStringLiteral("sourceCropBottom")).toDouble(1.0);
+    clip.title_text = source.value(QStringLiteral("titleText")).toString();
+    clip.title_font_family = source.value(QStringLiteral("titleFontFamily")).toString();
+    clip.title_font_size = source.value(QStringLiteral("titleFontSize")).toDouble();
+    clip.title_font_weight = source.value(QStringLiteral("titleFontWeight")).toInt(400);
+    clip.title_italic = source.value(QStringLiteral("titleItalic")).toBool();
+    clip.title_position_x = source.value(QStringLiteral("titlePositionX")).toDouble(0.5);
+    clip.title_position_y = source.value(QStringLiteral("titlePositionY")).toDouble(0.82);
+    clip.title_background_color = source.value(QStringLiteral("titleBackgroundColor")).toString();
+    clip.title_shape_type = source.value(QStringLiteral("titleShapeType")).toString();
+    clip.title_shape_width = source.value(QStringLiteral("titleShapeWidth")).toDouble(0.55);
+    clip.title_shape_height = source.value(QStringLiteral("titleShapeHeight")).toDouble(0.16);
+    clip.title_shape_corner_radius = source.value(QStringLiteral("titleShapeCornerRadius")).toDouble();
+    clip.title_shape_stroke_color = source.value(QStringLiteral("titleShapeStrokeColor")).toString();
+    clip.title_shape_stroke_width = source.value(QStringLiteral("titleShapeStrokeWidth")).toDouble();
+    clip.opacity = source.value(QStringLiteral("opacity")).toDouble(1.0);
+    clip.source_size = source_size;
+    for (const auto& keyframe_value : source.value(QStringLiteral("keyframes")).toArray()) {
+      const auto keyframe_json = keyframe_value.toObject();
+      TimelineDocumentController::ClipKeyframe keyframe(
+          keyframe_json.value(QStringLiteral("parameter")).toString(),
+          keyframe_json.value(QStringLiteral("seconds")).toDouble(),
+          keyframe_json.value(QStringLiteral("value")).toDouble(),
+          keyframe_json.value(QStringLiteral("interpolation")).toString());
+      keyframe.bezier_in_time_seconds =
+          keyframe_json.value(QStringLiteral("bezierInTimeSeconds")).toDouble();
+      keyframe.bezier_in_value = keyframe_json.value(QStringLiteral("bezierInValue")).toDouble();
+      keyframe.bezier_out_time_seconds =
+          keyframe_json.value(QStringLiteral("bezierOutTimeSeconds")).toDouble();
+      keyframe.bezier_out_value = keyframe_json.value(QStringLiteral("bezierOutValue")).toDouble();
+      keyframe.bezier_in_custom = keyframe_json.value(QStringLiteral("bezierInCustom")).toBool();
+      keyframe.bezier_out_custom = keyframe_json.value(QStringLiteral("bezierOutCustom")).toBool();
+      clip.keyframes.push_back(keyframe);
+    }
+    std::sort(clip.keyframes.begin(), clip.keyframes.end(),
+              [](const auto& left, const auto& right) {
+                if (left.parameter != right.parameter) return left.parameter < right.parameter;
+                return left.local_seconds < right.local_seconds;
+              });
+    return clip;
+  }
+
+  static QVariantMap combinedTransformFilterProbeFromJson(
+      const TimelineDocumentController& controller,
+      const QJsonObject& clip_json,
+      const QSize& target_size,
+      const QSize& source_size,
+      double sequence_start_seconds,
+      double segment_duration_seconds) {
+    auto clip = transformClipFromJson(clip_json, source_size);
+    clip.start_seconds = 0.0;
+    return combinedTransformFilterProbe(
+        controller, clip, target_size, sequence_start_seconds,
+        segment_duration_seconds);
+  }
+
+  static bool installSingleVideoClipFromJson(
+      TimelineDocumentController& controller,
+      const QJsonObject& clip_json,
+      const QSize& source_size) {
+    auto clip = transformClipFromJson(clip_json, source_size);
+    clip.start_seconds = 0.0;
+    clip.trim_start_seconds = 0.0;
+    clip.trim_end_seconds = clip.duration_seconds;
+    return installSingleVideoClip(controller, clip);
+  }
+
+  static QString nativeTitleFrameForTransformProbeFromJson(
+      const TimelineDocumentController& controller,
+      const QJsonObject& clip_json,
+      const QSize& target_size) {
+    auto clip = transformClipFromJson(clip_json, target_size);
+    clip.start_seconds = 0.0;
+    return nativeTitleFrameForTransformProbe(controller, clip, target_size);
+  }
+
+  static QVariantMap clipTransformAtFromJson(
+      const TimelineDocumentController& controller,
+      const QJsonObject& clip_json,
+      double local_seconds) {
+    const auto clip = transformClipFromJson(clip_json);
+    auto result = clipTransformAt(controller, clip, local_seconds);
+    result.insert(QStringLiteral("titlePositionX"), controller.evaluatedClipParameter(
+        clip, QStringLiteral("titlePositionX"), local_seconds));
+    result.insert(QStringLiteral("titlePositionY"), controller.evaluatedClipParameter(
+        clip, QStringLiteral("titlePositionY"), local_seconds));
+    result.insert(QStringLiteral("titleFontSize"), controller.evaluatedClipParameter(
+        clip, QStringLiteral("titleFontSize"), local_seconds));
+    result.insert(QStringLiteral("opacity"), controller.evaluatedClipParameter(
+        clip, QStringLiteral("opacity"), local_seconds));
+    return result;
+  }
+
+  static bool installSingleVideoClip(
+      TimelineDocumentController& controller,
+      const TimelineDocumentController::Clip& clip) {
+    const auto track = std::find_if(
+        controller.tracks_.begin(), controller.tracks_.end(),
+        [](const TimelineDocumentController::Track& candidate) {
+          return candidate.kind == TimelineDocumentController::TrackKind::Video;
+        });
+    if (track == controller.tracks_.end() || track->locked) {
+      return false;
+    }
+    track->clips.push_back(clip);
+    return true;
+  }
+
+  static QString nativeTitleFrameForTransformProbe(
+      const TimelineDocumentController& controller,
+      const TimelineDocumentController::Clip& clip,
+      const QSize& target_size) {
+    return controller.ensureTitleFrame(clip, target_size);
+  }
+
+  static QVariantMap clipTransformAt(
+      const TimelineDocumentController& controller,
+      const TimelineDocumentController::Clip& clip,
+      double local_seconds) {
+    return {
+        {QStringLiteral("scale"), controller.evaluatedClipParameter(
+                                      clip, QStringLiteral("frameScale"), local_seconds)},
+        {QStringLiteral("rotation"), controller.evaluatedClipParameter(
+                                         clip, QStringLiteral("frameRotationDegrees"), local_seconds)},
+        {QStringLiteral("offsetX"), controller.evaluatedClipParameter(
+                                        clip, QStringLiteral("frameOffsetX"), local_seconds)},
+        {QStringLiteral("offsetY"), controller.evaluatedClipParameter(
+                                        clip, QStringLiteral("frameOffsetY"), local_seconds)},
+    };
+  }
+
+  static QVariantMap undoState(const TimelineDocumentController& controller) {
+    return {{QStringLiteral("undoCount"), controller.undo_stack_.size()},
+            {QStringLiteral("redoCount"), controller.redo_stack_.size()},
+            {QStringLiteral("canUndo"), controller.canUndo()},
+            {QStringLiteral("canRedo"), controller.canRedo()}};
+  }
+
+  static QVariantMap boundedTitleInputArgumentsProbe(
+      TimelineDocumentController& controller) {
+    controller.createTimelineWithSettings(QVariantMap{
+        {QStringLiteral("timelineName"), QStringLiteral("Finite title input probe")},
+        {QStringLiteral("width"), 1920},
+        {QStringLiteral("height"), 1080},
+        {QStringLiteral("frameRate"), 30.0},
+    });
+    auto track = std::find_if(
+        controller.tracks_.begin(), controller.tracks_.end(),
+        [](const TimelineDocumentController::Track& candidate) {
+          return candidate.kind == TimelineDocumentController::TrackKind::Video;
+        });
+    if (track == controller.tracks_.end()) {
+      return {{QStringLiteral("error"), QStringLiteral("No video track was initialized.")}};
+    }
+    TimelineDocumentController::Clip clip;
+    clip.clip_id = QStringLiteral("finite-title-input-probe");
+    clip.media_type = QStringLiteral("title");
+    clip.display_label = QStringLiteral("Finite title input probe");
+    clip.start_seconds = 0.0;
+    clip.duration_seconds = 0.5;
+    clip.trim_start_seconds = 0.0;
+    clip.trim_end_seconds = 0.5;
+    clip.frame_mode = QStringLiteral("stretch");
+    clip.title_text = QStringLiteral("Finite title input probe");
+    clip.title_font_family = QStringLiteral("Sans Serif");
+    clip.title_font_size = 48.0;
+    clip.title_position_y = 0.5;
+    clip.title_background_color = QStringLiteral("#00000000");
+    track->clips.push_back(clip);
+
+    QString error;
+    const auto arguments = controller.timelineRenderArguments(
+        QStringLiteral("/private/tmp/finite-title-input-probe.mp4"),
+        &error, false, QStringLiteral("bounded-h264-video"), {}, {}, 0,
+        0.0, 0.5);
+    const auto filter_index = arguments.indexOf(QStringLiteral("-filter_complex"));
+    const auto graph = filter_index >= 0 && filter_index + 1 < arguments.size()
+                           ? arguments.at(filter_index + 1)
+                           : QString{};
+    return {
+        {QStringLiteral("error"), error},
+        {QStringLiteral("arguments"), arguments},
+        {QStringLiteral("filterGraph"), graph},
+    };
+  }
+
+  static void stageExportSnapshotDerivedWorkFixture(
+      TimelineDocumentController& controller) {
+    controller.source_integrity_queue_.push_back({});
+    controller.waveform_request_queue_.push_back({});
+    controller.proxy_generation_queue_.push_back(QStringLiteral("export-readiness-fixture"));
+    controller.poster_request_queue_.push_back({});
+    controller.render_cache_status_ = QStringLiteral("rendering");
+  }
+
+  static void stageExportSnapshotMetadataWorkFixture(
+      TimelineDocumentController& controller) {
+    controller.media_analysis_queue_.push_back({});
+  }
+
+  static void setContinuousEditFixture(
+      TimelineDocumentController& controller,
+      bool active) {
+    controller.continuous_edit_active_ = active;
+  }
+
+  static quint64 totalDurationCacheScanCount(
+      const TimelineDocumentController& controller) {
+    return controller.total_duration_cache_scan_count_;
+  }
+
+  static void installDurationCacheFixture(
+      TimelineDocumentController& controller,
+      int track_count,
+      int clip_count,
+      qsizetype keyframe_count = 0) {
+    controller.tracks_.clear();
+    controller.tracks_.reserve(track_count);
+    controller.has_active_timeline_ = true;
+    controller.timeline_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    controller.timeline_name_ = QStringLiteral("Duration cache fixture");
+    controller.sequence_size_ = QSize(1920, 1080);
+    controller.sequence_frame_rate_ = 30.0;
+    controller.selected_clip_id_.clear();
+    controller.selected_clip_ids_.clear();
+    controller.current_index_ = -1;
+    for (auto track_index = 0; track_index < track_count; ++track_index) {
+      TimelineDocumentController::Track track;
+      track.track_id = QStringLiteral("duration-track-%1").arg(track_index);
+      track.display_label = QStringLiteral("V%1").arg(track_index + 1);
+      track.kind = TimelineDocumentController::TrackKind::Video;
+      track.role = QStringLiteral("media");
+      track.lane_index = track_index;
+      if (track_index < clip_count) {
+        TimelineDocumentController::Clip clip;
+        clip.clip_id = QStringLiteral("duration-clip-%1").arg(track_index);
+        clip.media_type = QStringLiteral("title");
+        clip.title_text = QStringLiteral("Duration fixture");
+        clip.duration_seconds = 2.0;
+        clip.trim_start_seconds = 0.0;
+        clip.trim_end_seconds = 2.0;
+        clip.start_seconds = static_cast<double>(track_index) / 100.0;
+        if (track_index == 0 && keyframe_count > 0) {
+          clip.keyframes.reserve(keyframe_count);
+          for (qsizetype index = 0; index < keyframe_count; ++index) {
+            clip.keyframes.push_back(TimelineDocumentController::ClipKeyframe{
+                QStringLiteral("opacity"),
+                static_cast<double>(index) / 30.0,
+                static_cast<double>(index % 5) / 4.0,
+                QStringLiteral("linear")});
+          }
+        }
+        if (controller.selected_clip_id_.isEmpty()) {
+          controller.selected_clip_id_ = clip.clip_id;
+          controller.selected_clip_ids_ = {clip.clip_id};
+          controller.current_index_ = 0;
+        }
+        track.clips.push_back(std::move(clip));
+      }
+      controller.tracks_.push_back(std::move(track));
+    }
+    controller.total_duration_cache_seconds_ = 0.0;
+    controller.total_duration_cache_valid_ = false;
+    controller.total_duration_cache_scan_count_ = 0;
+  }
+
+  static bool setClipStart(
+      TimelineDocumentController& controller,
+      const QString& clip_id,
+      double start_seconds) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.clip_id != clip_id) {
+          continue;
+        }
+        clip.start_seconds = start_seconds;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool setClipMediaType(
+      TimelineDocumentController& controller,
+      const QString& clip_id,
+      const QString& media_type) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.clip_id == clip_id) {
+          clip.media_type = media_type;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static void notifyClipsChanged(TimelineDocumentController& controller) {
+    controller.notifyClipsChanged();
+  }
+
+  static void setDirty(TimelineDocumentController& controller, bool dirty) {
+    controller.setDirty(dirty);
+  }
+
+  static void setStatusForTest(
+      TimelineDocumentController& controller,
+      const QString& status) {
+    controller.setStatus(status);
+  }
+
+  static void setMutationBatchActive(
+      TimelineDocumentController& controller,
+      bool active) {
+    controller.agent_task_mutation_batch_active_ = active;
+  }
+
+  static void setStatusOnlyDisplayLabel(
+      TimelineDocumentController& controller,
+      const QString& clip_id,
+      const QString& label) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.clip_id == clip_id) {
+          clip.display_label = label;
+          return;
+        }
+      }
+    }
+  }
+
+  static bool attachCompoundRenderPreview(
+      TimelineDocumentController& controller,
+      const QString& clip_id,
+      const QString& path) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.clip_id == clip_id) {
+          clip.compound_render_path = path;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static bool setSourceIntegrityEvidence(
+      TimelineDocumentController& controller,
+      const QString& clip_id,
+      const QString& status,
+      const QString& fast_signature,
+      const QString& full_sha256) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.clip_id == clip_id) {
+          clip.source_integrity_status = status;
+          clip.source_identity_signature = fast_signature;
+          clip.source_content_sha256 = full_sha256;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static void attachSourceIntegrityFutureWithoutResult(
+      TimelineDocumentController& controller,
+      const QString& file_path,
+      const QFuture<QVariantMap>& future) {
+    const auto revision_key = QStringLiteral("cancelled-no-result-test");
+    controller.active_source_integrity_request_ = {
+        file_path, revision_key, std::make_shared<std::atomic_bool>(false)};
+    controller.source_integrity_requests_in_flight_.insert(revision_key);
+    controller.source_integrity_watcher_ =
+        new QFutureWatcher<QVariantMap>(&controller);
+    QObject::connect(
+        controller.source_integrity_watcher_,
+        &QFutureWatcher<QVariantMap>::finished,
+        &controller,
+        &TimelineDocumentController::finishActiveSourceIntegrity);
+    controller.source_integrity_watcher_->setFuture(future);
+  }
+
+  static bool sourceIntegrityWatcherDetached(
+      const TimelineDocumentController& controller) {
+    return controller.source_integrity_watcher_ == nullptr &&
+        controller.active_source_integrity_request_.revision_key.isEmpty() &&
+        controller.source_integrity_requests_in_flight_.isEmpty();
+  }
+
+  static bool renderCacheTasksDirty(const TimelineDocumentController& controller) {
+    return controller.render_cache_tasks_dirty_;
+  }
+
+  static int materializeRenderCacheTaskCount(TimelineDocumentController& controller) {
+    controller.render_cache_tasks_dirty_ = true;
+    return static_cast<int>(controller.expectedRenderCacheTasks().size());
+  }
+
+  static bool replayCachedImageMetadata(
+      TimelineDocumentController& controller, const QString& path,
+      const QSize& size, bool bulk) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.file_path == path) clip.media_analysis_status = QStringLiteral("pending");
+      }
+    }
+    const QScopedValueRollback<bool> scheduling(controller.bulk_media_hydration_scheduling_, bulk);
+    controller.applyMediaAnalysis(path, 8.0, false, 0, QString{}, size, QStringLiteral("ready"));
+    return controller.bulk_media_hydration_changed_;
+  }
+
+  static bool updateUneditedSourceMonitor(TimelineDocumentController& controller) {
+    controller.has_source_clip_ = true;
+    controller.source_clip_.file_path = QStringLiteral("/source-monitor-only.png");
+    controller.source_clip_.media_type = QStringLiteral("photo");
+    controller.source_clip_.duration_seconds = 8.0;
+    const QScopedValueRollback<bool> scheduling(controller.bulk_media_hydration_scheduling_, true);
+    controller.applyMediaAnalysis(
+        controller.source_clip_.file_path, 8.0, false, 0, QString{}, QSize(48, 36),
+        QStringLiteral("ready"));
+    controller.applyAudioWaveform(
+        controller.source_clip_.clip_id, controller.source_clip_.file_path,
+        QStringLiteral("file:///source-monitor-only-waveform.png"));
+    return controller.bulk_media_hydration_changed_;
+  }
+
+  static bool finishRuntimeHydrationPublication(TimelineDocumentController& controller) {
+    controller.bulk_media_hydration_changed_ = true;
+    controller.deferred_media_hydration_queue_.push_back({});
+    controller.processIncrementalMediaHydrationBatch();
+    return controller.deferred_media_hydration_queue_.isEmpty() &&
+        !controller.bulk_media_hydration_changed_;
+  }
+
+  static int sourceIntegrityRequestCount(
+      const TimelineDocumentController& controller) {
+    return static_cast<int>(controller.source_integrity_requests_in_flight_.size());
+  }
+
+  static quint64 documentEditRevision(const TimelineDocumentController& controller) {
+    return controller.document_edit_revision_;
+  }
+
+  static int undoDepth(const TimelineDocumentController& controller) {
+    return static_cast<int>(controller.undo_stack_.size());
+  }
+
+  static int redoDepth(const TimelineDocumentController& controller) {
+    return static_cast<int>(controller.redo_stack_.size());
+  }
+
+  static QJsonObject documentObject(const TimelineDocumentController& controller) {
+    return controller.documentObject();
+  }
+
+  static void resetKeyframeJsonCaches(TimelineDocumentController& controller) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        clip.keyframes_json_cache.cache =
+            std::make_shared<TimelineDocumentController::KeyframeJsonArrayCache>();
+        clip.default_framing_keyframes_json_cache.cache =
+            std::make_shared<TimelineDocumentController::KeyframeJsonArrayCache>();
+        for (auto override = clip.output_variant_overrides.begin();
+             override != clip.output_variant_overrides.end(); ++override) {
+          override->framing_keyframes_json_cache.cache =
+              std::make_shared<TimelineDocumentController::KeyframeJsonArrayCache>();
+        }
+      }
+    }
+  }
+
+  static bool setClipDisplayLabel(
+      TimelineDocumentController& controller,
+      const QString& clip_id,
+      const QString& label) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.clip_id == clip_id) {
+          clip.display_label = label;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static bool setTrackDisplayLabel(
+      TimelineDocumentController& controller,
+      const QString& track_id,
+      const QString& label) {
+    for (auto& track : controller.tracks_) {
+      if (track.track_id == track_id) {
+        track.display_label = label;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static QString classifyCachePressureLevel(
+      qint64 installed_memory_bytes,
+      qint64 available_memory_bytes,
+      qint64 disk_total_bytes,
+      qint64 disk_available_bytes) {
+    return TimelineDocumentController::classifyCachePressureLevel(
+        installed_memory_bytes,
+        available_memory_bytes,
+        disk_total_bytes,
+        disk_available_bytes);
+  }
+
+  static QStringList renderArguments(
+      const TimelineDocumentController& controller,
+      const QString& output_path,
+      const QString& output_kind,
+      double range_start_seconds = -1.0,
+      double range_end_seconds = -1.0,
+      QString* error_message = nullptr,
+      const QString& graph_sidecar_path = QString{},
+      photo_editor::desktop::timeline_motion::NativeGeneratorFrameSequenceLease*
+          native_generator_lease = nullptr) {
+    return controller.timelineRenderArguments(
+        output_path, error_message, false, output_kind, {}, {}, 0,
+        range_start_seconds, range_end_seconds, {}, {}, graph_sidecar_path,
+        native_generator_lease);
+  }
+
+  static QString renderTitleFrame(
+      const TimelineDocumentController& controller,
+      const QString& text,
+      const QSize& target_size) {
+    TimelineDocumentController::Clip clip;
+    clip.media_type = QStringLiteral("title");
+    clip.title_text = text;
+    clip.title_font_family = QStringLiteral("Monospace");
+    clip.title_font_size = 32.0;
+    clip.title_line_height = 1.0;
+    clip.title_color = QStringLiteral("#ffffffff");
+    clip.title_background_color = QStringLiteral("#00000000");
+    clip.title_position_x = 0.5;
+    clip.title_position_y = 0.5;
+    return controller.ensureTitleFrame(clip, target_size);
+  }
+
+  static QString renderStyledTitleFrame(
+      TimelineDocumentController& controller,
+      const QString& text,
+      const QString& family,
+      double font_size,
+      double letter_spacing,
+      double line_height,
+      const QSize& target_size,
+      int font_weight = 400,
+      bool italic = false,
+      const QString& alignment = QStringLiteral("center"),
+      double background_padding = 14.0) {
+    controller.sequence_size_ = target_size;
+    TimelineDocumentController::Clip clip;
+    clip.media_type = QStringLiteral("title");
+    clip.title_text = text;
+    clip.title_font_family = family;
+    clip.title_font_size = font_size;
+    clip.title_font_weight = font_weight;
+    clip.title_italic = italic;
+    clip.title_alignment = alignment;
+    clip.caption_background_padding = background_padding;
+    clip.title_letter_spacing = letter_spacing;
+    clip.title_line_height = line_height;
+    clip.title_color = QStringLiteral("#ffffffff");
+    clip.title_background_color = QStringLiteral("#00000000");
+    clip.title_position_x = 0.5;
+    clip.title_position_y = 0.5;
+    return controller.ensureTitleFrame(clip, target_size);
+  }
+
+  static bool runTimelineFfmpeg(
+      const TimelineDocumentController& controller,
+      const QStringList& arguments,
+      QString* error_message = nullptr) {
+    return controller.runTimelineFfmpeg(arguments, error_message);
+  }
+
+  static QVector<photo_editor::desktop::timeline_motion::NativeGeneratorFrameSequenceRequest>
+  nativeGeneratorFrameSequenceRequestsForRange(
+      const TimelineDocumentController& controller,
+      double start_seconds,
+      double end_seconds,
+      const QSize& output_size,
+      bool omit_fully_transparent_windows = false) {
+    return controller.nativeGeneratorFrameSequenceRequestsForRange(
+        start_seconds, end_seconds, output_size,
+        omit_fully_transparent_windows);
+  }
+
+  static QVector<photo_editor::desktop::timeline_motion::NativeMaskFrameSequenceRequest>
+  nativeMaskFrameSequenceRequestsForRange(
+      const TimelineDocumentController& controller,
+      double start_seconds,
+      double end_seconds,
+      const QSize& output_size,
+      bool high_precision = false) {
+    return controller.nativeMaskFrameSequenceRequestsForRange(
+        start_seconds, end_seconds, output_size, high_precision);
+  }
+
+  static bool clipOpacityIsZeroForEveryOutputFrameInRange(
+      const TimelineDocumentController& controller,
+      const QString& clip_id,
+      double start_seconds,
+      double end_seconds) {
+    const auto clip_index = controller.flattenedIndexForClipId(clip_id);
+    if (clip_index < 0) {
+      return false;
+    }
+    const auto ref = controller.clipRefAt(clip_index);
+    const auto* clip = controller.clipAt(ref);
+    const auto* track = controller.trackAt(ref.track_index);
+    return clip != nullptr && track != nullptr &&
+        controller.clipOpacityIsZeroForEveryOutputFrameInRange(
+            *clip, *track, start_seconds, end_seconds);
+  }
+
+  static void setTrackOpacityForTest(
+      TimelineDocumentController& controller,
+      const QString& track_id,
+      double opacity) {
+    for (auto& track : controller.tracks_) {
+      if (track.track_id == track_id) {
+        track.opacity = opacity;
+      }
+    }
+  }
+
+  static void setTrackOpacityKeyframesForTest(
+      TimelineDocumentController& controller,
+      const QString& track_id,
+      const QVector<QPair<double, double>>& values,
+      const QString& interpolation = QStringLiteral("linear")) {
+    for (auto& track : controller.tracks_) {
+      if (track.track_id != track_id) {
+        continue;
+      }
+      track.keyframes.erase(
+          std::remove_if(
+              track.keyframes.begin(), track.keyframes.end(),
+              [](const TimelineDocumentController::ClipKeyframe& keyframe) {
+                return keyframe.parameter == QStringLiteral("opacity");
+              }),
+          track.keyframes.end());
+      for (const auto& [seconds, opacity] : values) {
+        track.keyframes.push_back(TimelineDocumentController::ClipKeyframe{
+            QStringLiteral("opacity"), seconds, opacity, interpolation});
+      }
+      std::sort(
+          track.keyframes.begin(), track.keyframes.end(),
+          [](const TimelineDocumentController::ClipKeyframe& left,
+             const TimelineDocumentController::ClipKeyframe& right) {
+            return left.local_seconds < right.local_seconds;
+          });
+      return;
+    }
+  }
+
   static void requestVideoPoster(
       TimelineDocumentController& controller,
       const QString& file_path) {
@@ -62,6 +877,9 @@ using photo_editor::desktop::decoded_image_cache_snapshot;
 using photo_editor::desktop::insert_decoded_image_cache_entry;
 using photo_editor::desktop::set_decoded_image_cache_budget_bytes;
 using photo_editor::desktop::TimelineDocumentController;
+using photo_editor::desktop::WorkerQueueRegistry;
+using photo_editor::desktop::TimelineSourceCrop;
+namespace timeline_compound = photo_editor::desktop::timeline_compound;
 using photo_editor::desktop::AppBootstrap;
 
 QVariantMap await_cache_summary(TimelineDocumentController& controller) {
@@ -104,6 +922,997 @@ bool nearly_equal(double left, double right, double tolerance = 0.0001) {
   return std::abs(left - right) <= tolerance;
 }
 
+QRect visible_title_bounds(const QImage& image) {
+  auto left = image.width();
+  auto top = image.height();
+  auto right = -1;
+  auto bottom = -1;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      if (image.pixelColor(x, y).alpha() < 32) {
+        continue;
+      }
+      left = qMin(left, x);
+      top = qMin(top, y);
+      right = qMax(right, x);
+      bottom = qMax(bottom, y);
+    }
+  }
+  return right < left || bottom < top
+             ? QRect{}
+             : QRect(QPoint(left, top), QPoint(right, bottom));
+}
+
+QVector<QRect> visible_title_line_bounds(const QImage& image) {
+  QVector<QRect> lines;
+  auto line_top = -1;
+  auto line_bottom = -1;
+  auto line_left = image.width();
+  auto line_right = -1;
+  const auto finish_line = [&]() {
+    if (line_bottom >= line_top && line_top >= 0) {
+      lines.push_back(QRect(
+          QPoint(line_left, line_top), QPoint(line_right, line_bottom)));
+    }
+    line_top = -1;
+    line_bottom = -1;
+    line_left = image.width();
+    line_right = -1;
+  };
+  for (int y = 0; y < image.height(); ++y) {
+    auto row_left = image.width();
+    auto row_right = -1;
+    for (int x = 0; x < image.width(); ++x) {
+      if (image.pixelColor(x, y).alpha() < 32) {
+        continue;
+      }
+      row_left = qMin(row_left, x);
+      row_right = qMax(row_right, x);
+    }
+    if (row_right < row_left) {
+      finish_line();
+      continue;
+    }
+    if (line_top < 0) {
+      line_top = y;
+    }
+    line_bottom = y;
+    line_left = qMin(line_left, row_left);
+    line_right = qMax(line_right, row_right);
+  }
+  finish_line();
+  return lines;
+}
+
+bool run_timeline_title_export_layout_workflow() {
+  TimelineDocumentController controller;
+  const QSize target_size(1920, 1080);
+  const auto single_line_path =
+      photo_editor::desktop::TimelineHistoryTestAccess::renderTitleFrame(
+          controller, QStringLiteral("PHOTO + VIDEO / DESKTOP"), target_size);
+  const auto explicit_lines_path =
+      photo_editor::desktop::TimelineHistoryTestAccess::renderTitleFrame(
+          controller, QStringLiteral("PHOTO + VIDEO\nDESKTOP"), target_size);
+  const QImage single_line(single_line_path);
+  const QImage explicit_lines(explicit_lines_path);
+  const auto single_bounds = visible_title_bounds(single_line);
+  const auto explicit_bounds = visible_title_bounds(explicit_lines);
+  if (single_line.isNull() || explicit_lines.isNull() ||
+      single_bounds.isEmpty() || explicit_bounds.isEmpty() ||
+      single_bounds.height() > 48 ||
+      explicit_bounds.height() < single_bounds.height() + 14) {
+    std::cerr << "title export should keep a measured one-line title on one line while retaining explicit line breaks; singleHeight="
+              << single_bounds.height() << " explicitHeight="
+              << explicit_bounds.height() << '\n';
+    return false;
+  }
+  return true;
+}
+
+struct QuickTitleLayoutSnapshot {
+  QImage image;
+  QRect glyph_bounds;
+  qreal card_y = 0.0;
+  qreal card_height = 0.0;
+  qreal text_y = 0.0;
+  qreal text_height = 0.0;
+  qreal text_implicit_height = 0.0;
+  qreal text_implicit_width = 0.0;
+  qreal text_baseline_offset = 0.0;
+};
+
+bool render_program_quick_title(
+    const QString& text,
+    const QString& family,
+    double font_size,
+    int font_weight,
+    bool italic,
+    double letter_spacing,
+    double line_height,
+    const QString& alignment,
+    double background_padding,
+    const QSize& canvas_size,
+    QuickTitleLayoutSnapshot* snapshot) {
+  if (snapshot == nullptr || !canvas_size.isValid()) {
+    return false;
+  }
+
+  static const auto qml = QStringLiteral(R"qml(
+import QtQuick
+Item {
+    id: root
+    objectName: "programCanvas"
+    property int sequenceWidth: 1920
+    property int sequenceHeight: 1080
+    property real anchorX: 0.5
+    property real anchorY: 0.5
+    property string sampleAlignment: "center"
+    property string sampleText: ""
+    property string sampleFamily: "Sans Serif"
+    property real sampleFontSize: 64
+    property int sampleFontWeight: 400
+    property bool sampleItalic: false
+    property real samplePadding: 14
+    property real sampleLetterSpacing: 0
+    property real sampleLineHeight: 1
+    width: sequenceWidth
+    height: sequenceHeight
+    Item {
+        id: programBackgroundLayer
+        objectName: "programBackgroundLayer"
+        width: root.width
+        height: root.height
+        Rectangle {
+            id: programTitleCard
+            objectName: "programTitleCard"
+            readonly property real styleScale: parent.height / Math.max(1, root.sequenceHeight)
+            readonly property real horizontalSafeInset: 0
+            readonly property real stylePadding: root.samplePadding * styleScale
+            width: Math.min(parent.width,
+                            programTitleText.implicitWidth + stylePadding * 2)
+            height: programTitleText.height + stylePadding * 1.28
+            readonly property real desiredX: root.sampleAlignment === "left"
+                                             ? parent.width * root.anchorX
+                                             : root.sampleAlignment === "right"
+                                               ? parent.width * root.anchorX - width
+                                               : parent.width * root.anchorX - width / 2
+            x: Math.max(0, Math.min(parent.width - width, desiredX))
+            y: parent.height * root.anchorY - height / 2
+            color: "transparent"
+            Text {
+                id: programTitleText
+                objectName: "programTitleText"
+                anchors.centerIn: parent
+                width: Math.min(programBackgroundLayer.width
+                                - programTitleCard.horizontalSafeInset * 2
+                                - programTitleCard.stylePadding * 2,
+                                Math.max(1, implicitWidth))
+                text: root.sampleText
+                textFormat: Text.PlainText
+                color: "#ffffffff"
+                font.family: root.sampleFamily
+                font.pixelSize: Math.max(0.1, root.sampleFontSize
+                                         * programBackgroundLayer.height
+                                         / Math.max(1, root.sequenceHeight))
+                font.weight: root.sampleFontWeight
+                font.italic: root.sampleItalic
+                font.letterSpacing: root.sampleLetterSpacing
+                                    * programTitleCard.styleScale
+                lineHeightMode: Text.FixedHeight
+                lineHeight: root.sampleLineHeight * font.pixelSize
+                horizontalAlignment: root.sampleAlignment === "left"
+                                     ? Text.AlignLeft
+                                     : root.sampleAlignment === "right"
+                                       ? Text.AlignRight : Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                wrapMode: Text.Wrap
+            }
+        }
+    }
+}
+)qml");
+
+  QQmlEngine engine;
+  QQmlComponent component(&engine);
+  component.setData(qml.toUtf8(), QUrl(QStringLiteral("inmemory:ProgramTitle.qml")));
+  QElapsedTimer component_timer;
+  component_timer.start();
+  while (component.status() == QQmlComponent::Loading &&
+         component_timer.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  std::unique_ptr<QObject> root_object(component.create());
+  if (!root_object) {
+    for (const auto& error : component.errors()) {
+      std::cerr << "Quick title component error: " << error.toString().toStdString() << '\n';
+    }
+    return false;
+  }
+  auto* root_item = qobject_cast<QQuickItem*>(root_object.get());
+  if (root_item == nullptr) {
+    std::cerr << "Quick title root should be a QQuickItem\n";
+    return false;
+  }
+  root_object->setProperty("sequenceWidth", canvas_size.width());
+  root_object->setProperty("sequenceHeight", canvas_size.height());
+  root_object->setProperty("sampleText", text);
+  root_object->setProperty("sampleFamily", family);
+  root_object->setProperty("sampleFontSize", font_size);
+  root_object->setProperty("sampleFontWeight", font_weight);
+  root_object->setProperty("sampleItalic", italic);
+  root_object->setProperty("sampleAlignment", alignment);
+  root_object->setProperty("samplePadding", background_padding);
+  root_object->setProperty("sampleLetterSpacing", letter_spacing);
+  root_object->setProperty("sampleLineHeight", line_height);
+
+  QQuickWindow window;
+  window.setColor(Qt::transparent);
+  window.resize(canvas_size);
+  root_item->setParentItem(window.contentItem());
+  window.show();
+  for (int iteration = 0; iteration < 4; ++iteration) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    window.update();
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  snapshot->image = window.grabWindow();
+  auto* card = root_object->findChild<QQuickItem*>(QStringLiteral("programTitleCard"));
+  auto* title = root_object->findChild<QQuickItem*>(QStringLiteral("programTitleText"));
+  if (card == nullptr || title == nullptr || snapshot->image.isNull()) {
+    std::cerr << "Quick title should expose text/card geometry and a rendered image\n";
+    root_item->setParentItem(nullptr);
+    window.hide();
+    return false;
+  }
+  snapshot->card_y = card->y();
+  snapshot->card_height = card->height();
+  snapshot->text_y = title->y();
+  snapshot->text_height = title->height();
+  snapshot->text_implicit_height = title->property("implicitHeight").toReal();
+  snapshot->text_implicit_width = title->property("implicitWidth").toReal();
+  snapshot->text_baseline_offset = title->property("baselineOffset").toReal();
+  snapshot->glyph_bounds = visible_title_bounds(snapshot->image);
+  root_item->setParentItem(nullptr);
+  window.hide();
+  return !snapshot->glyph_bounds.isEmpty();
+}
+
+bool run_timeline_title_preview_export_geometry_probe() {
+  const auto font_failures = photo_editor::desktop::register_creative_fonts();
+  if (!font_failures.isEmpty()) {
+    std::cerr << "Bundled font registration failed: "
+              << font_failures.join(QLatin1Char(',')).toStdString() << '\n';
+    return false;
+  }
+
+  struct Case {
+    QString name;
+    QString text;
+    QString family;
+    double size;
+    int weight;
+    bool italic;
+    double spacing;
+    double line_height;
+    QString alignment;
+    double background_padding;
+  };
+  const QVector<Case> cases = {
+      {QStringLiteral("spacegrotesk-10_2-native-pixel-floor"),
+       QStringLiteral("PIXEL TYPE"),
+       QStringLiteral("Space Grotesk"), 10.2, 400, false, 0.0, 1.0,
+       QStringLiteral("center"), 0.0},
+      {QStringLiteral("spacemono-21"),
+       QStringLiteral("PHOTO + VIDEO / DESKTOP"),
+       QStringLiteral("Space Mono"), 21.0, 400, false, 1.8, 1.0,
+       QStringLiteral("center"), 14.0},
+      {QStringLiteral("anton-145-multiline"),
+       QStringLiteral("One shoot.\nEvery deliverable."),
+       QStringLiteral("Anton"), 145.0, 400, false, -1.8, 1.01,
+       QStringLiteral("center"), 14.0},
+      {QStringLiteral("spacegrotesk-38-lineheight-1.4"),
+       QStringLiteral("From camera RAW to finished photos,\nlayered designs and films. In one app."),
+       QStringLiteral("Space Grotesk"), 38.0, 400, false, 0.0, 1.4,
+       QStringLiteral("center"), 14.0},
+      {QStringLiteral("spacegrotesk-34-bold-italic"),
+       QStringLiteral("A retained family, weight, and italic style."),
+       QStringLiteral("Space Grotesk"), 34.0, 700, true, 0.4, 1.2,
+       QStringLiteral("center"), 14.0},
+      {QStringLiteral("anton-145-left-multiline"),
+       QStringLiteral("One shoot.\nEvery deliverable."),
+       QStringLiteral("Anton"), 145.0, 400, false, -1.8, 1.01,
+       QStringLiteral("left"), 14.0},
+      {QStringLiteral("anton-145-right-multiline"),
+       QStringLiteral("One shoot.\nEvery deliverable."),
+       QStringLiteral("Anton"), 145.0, 400, false, -1.8, 1.01,
+       QStringLiteral("right"), 14.0},
+      {QStringLiteral("anton-145-left-zero-padding"),
+       QStringLiteral("One shoot.\nEvery deliverable."),
+       QStringLiteral("Anton"), 145.0, 400, false, -1.8, 1.01,
+       QStringLiteral("left"), 0.0},
+  };
+  const QSize canvas_size(1920, 1080);
+  TimelineDocumentController controller;
+  for (const auto& test_case : cases) {
+    QuickTitleLayoutSnapshot quick;
+    if (!render_program_quick_title(
+            test_case.text, test_case.family, test_case.size,
+            test_case.weight, test_case.italic,
+            test_case.spacing, test_case.line_height, test_case.alignment,
+            test_case.background_padding,
+            canvas_size, &quick)) {
+      std::cerr << "Quick title render failed for " << test_case.name.toStdString() << '\n';
+      return false;
+    }
+    const auto native_path =
+        photo_editor::desktop::TimelineHistoryTestAccess::renderStyledTitleFrame(
+            controller, test_case.text, test_case.family, test_case.size,
+            test_case.spacing, test_case.line_height, canvas_size,
+            test_case.weight, test_case.italic, test_case.alignment,
+            test_case.background_padding);
+    const QImage native(native_path);
+    const auto native_bounds = visible_title_bounds(native);
+    const auto quick_line_bounds = visible_title_line_bounds(quick.image);
+    const auto native_line_bounds = visible_title_line_bounds(native);
+    if (native.isNull() || native_bounds.isEmpty()) {
+      std::cerr << "Native title render failed for " << test_case.name.toStdString() << '\n';
+      return false;
+    }
+    const auto delta_x = std::abs(native_bounds.x() - quick.glyph_bounds.x());
+    const auto delta_y = std::abs(native_bounds.y() - quick.glyph_bounds.y());
+    const auto delta_width = std::abs(native_bounds.width() - quick.glyph_bounds.width());
+    const auto delta_height = std::abs(native_bounds.height() - quick.glyph_bounds.height());
+    QFont font(test_case.family);
+    font.setPixelSize(qMax(1, qRound(test_case.size)));
+    font.setWeight(static_cast<QFont::Weight>(test_case.weight));
+    font.setItalic(test_case.italic);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, test_case.spacing);
+    const QFontMetricsF metrics(font);
+    const auto expected_first_baseline =
+        canvas_size.height() / 2.0 - quick.text_implicit_height / 2.0 + metrics.ascent();
+    const auto qml_first_baseline =
+        quick.card_y + quick.text_y + quick.text_baseline_offset;
+    const auto baseline_delta = std::abs(qml_first_baseline - expected_first_baseline);
+    if (delta_x > 2 || delta_y > 2 || delta_width > 2 || delta_height > 2 ||
+        baseline_delta > 1.0 || quick_line_bounds.size() != native_line_bounds.size()) {
+      std::cerr << "Preview/export title geometry differs by more than tolerance for "
+                << test_case.name.toStdString()
+                << ": boundsDelta=" << delta_x << ',' << delta_y << ',' << delta_width
+                << ',' << delta_height << " baselineDelta=" << baseline_delta
+                << " lineCount=" << quick_line_bounds.size() << '/'
+                << native_line_bounds.size() << '\n';
+      return false;
+    }
+    for (qsizetype line_index = 0; line_index < quick_line_bounds.size(); ++line_index) {
+      const auto& quick_line = quick_line_bounds.at(line_index);
+      const auto& native_line = native_line_bounds.at(line_index);
+      if (std::abs(quick_line.x() - native_line.x()) > 2 ||
+          std::abs(quick_line.y() - native_line.y()) > 2 ||
+          std::abs(quick_line.width() - native_line.width()) > 2 ||
+          std::abs(quick_line.height() - native_line.height()) > 2) {
+        std::cerr << "Preview/export title line geometry differs for "
+                  << test_case.name.toStdString() << " line=" << line_index
+                  << " qml=" << quick_line.x() << ',' << quick_line.y() << ','
+                  << quick_line.width() << ',' << quick_line.height()
+                  << " native=" << native_line.x() << ',' << native_line.y() << ','
+                  << native_line.width() << ',' << native_line.height() << '\n';
+        return false;
+      }
+    }
+    const auto target_center_y = canvas_size.height() / 2.0;
+    std::cout << "title_layout_probe=" << test_case.name.toStdString()
+              << " qmlCardY=" << quick.card_y
+              << " qmlCardHeight=" << quick.card_height
+              << " qmlTextY=" << quick.text_y
+              << " qmlTextHeight=" << quick.text_height
+              << " qmlImplicitHeight=" << quick.text_implicit_height
+              << " qmlImplicitWidth=" << quick.text_implicit_width
+              << " qmlBaselineOffset=" << quick.text_baseline_offset
+              << " qmlFirstBaseline=" << qml_first_baseline
+              << " expectedFirstBaseline=" << expected_first_baseline
+              << " qmlGlyphBounds=" << quick.glyph_bounds.x() << ','
+              << quick.glyph_bounds.y() << ',' << quick.glyph_bounds.width() << ','
+              << quick.glyph_bounds.height()
+              << " nativeGlyphBounds=" << native_bounds.x() << ','
+              << native_bounds.y() << ',' << native_bounds.width() << ','
+              << native_bounds.height()
+              << " qmlGlyphTopFromAnchor=" << quick.glyph_bounds.top() - target_center_y
+              << " nativeGlyphTopFromAnchor=" << native_bounds.top() - target_center_y
+              << " glyphTopDelta=" << quick.glyph_bounds.top() - native_bounds.top()
+              << " lineTopDeltas=";
+    for (qsizetype line_index = 0; line_index < quick_line_bounds.size(); ++line_index) {
+      std::cout << (line_index == 0 ? "" : ",")
+                << quick_line_bounds.at(line_index).top()
+                     - native_line_bounds.at(line_index).top();
+    }
+    std::cout
+              << '\n';
+  }
+  return true;
+}
+
+bool run_timeline_animated_zoom_rotation_export_workflow() {
+  const QString project_path = QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/marketing/native-recreation-v4/polish-pass-2026-10-30/"
+      "native-projects/looksy-polish-pass15-final-graphics.json");
+  QFile project_file(project_path);
+  if (!project_file.open(QIODevice::ReadOnly)) {
+    std::cerr << "P15 transform fixture is unavailable\n";
+    return false;
+  }
+  const auto project_bytes = project_file.readAll();
+  const auto project_sha = QString::fromLatin1(
+      QCryptographicHash::hash(project_bytes, QCryptographicHash::Sha256).toHex());
+  if (project_sha != QStringLiteral(
+                         "5c6c9df7ead0133cbebe58740200cccf4cfab868ac4bc0f60a5410c62b74851c")) {
+    std::cerr << "P15 transform fixture changed; regenerate a reviewed native fixture\n";
+    return false;
+  }
+  QJsonParseError parse_error;
+  const auto project_document = QJsonDocument::fromJson(project_bytes, &parse_error);
+  if (parse_error.error != QJsonParseError::NoError || !project_document.isObject()) {
+    std::cerr << "P15 transform fixture is not valid JSON\n";
+    return false;
+  }
+
+  const QStringList target_clip_ids{
+      QStringLiteral("0ea39c5b-6d39-44a6-9502-13d428bc8f81"),
+      QStringLiteral("32248f5d-6503-4a90-96a4-3cb6b8b3a2ce"),
+      QStringLiteral("bfb1acc2-b806-4d2c-90f7-7260fafd0b1e"),
+      QStringLiteral("1b774c74-3a8f-4441-8ed4-eb18c272c8fc"),
+      QStringLiteral("a5f0d5ec-068e-4e1d-87c0-66fe7b2dae7d"),
+      QStringLiteral("4654f5e3-09cf-47c9-97ec-66f7eb348e01"),
+      QStringLiteral("6afd8a85-bd96-4674-a154-7fa879c76b83"),
+      QStringLiteral("34573c30-2533-4e3d-8c5c-676222e68439"),
+  };
+  QHash<QString, QJsonObject> clip_objects;
+  for (const auto& track_value : project_document.object().value(QStringLiteral("tracks")).toArray()) {
+    const auto track = track_value.toObject();
+    for (const auto& clip_value : track.value(QStringLiteral("clips")).toArray()) {
+      const auto clip = clip_value.toObject();
+      const auto clip_id = clip.value(QStringLiteral("clipId")).toString();
+      if (target_clip_ids.contains(clip_id)) {
+        clip_objects.insert(clip_id, clip);
+      }
+    }
+  }
+  if (clip_objects.size() != target_clip_ids.size()) {
+    std::cerr << "P15 transform fixture is missing one of the eight reviewed clips\n";
+    return false;
+  }
+
+  QTemporaryDir workspace;
+  if (!workspace.isValid()) {
+    std::cerr << "Could not create a temporary animated-transform test directory\n";
+    return false;
+  }
+  qputenv("PHOTO_EDITOR_CACHE_DIR", QDir(workspace.path()).filePath(QStringLiteral("cache")).toUtf8());
+  constexpr double fps = 30.0;
+  const QSize canvas_size(1920, 1080);
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings(QVariantMap{
+      {QStringLiteral("timelineName"), QStringLiteral("Animated zoom rotation export test")},
+      {QStringLiteral("width"), canvas_size.width()},
+      {QStringLiteral("height"), canvas_size.height()},
+      {QStringLiteral("frameRate"), fps},
+  });
+
+  struct AlphaGeometry final {
+    QRect bounds;
+    QPointF centroid;
+    qint64 pixels = 0;
+  };
+  const auto alpha_geometry = [](const QImage& original) {
+    AlphaGeometry geometry;
+    const auto image = original.convertToFormat(QImage::Format_ARGB32);
+    if (image.isNull()) return geometry;
+    auto left = image.width();
+    auto top = image.height();
+    auto right = -1;
+    auto bottom = -1;
+    long double sum_x = 0.0L;
+    long double sum_y = 0.0L;
+    long double total_weight = 0.0L;
+    for (auto y = 0; y < image.height(); ++y) {
+      const auto* row = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+      for (auto x = 0; x < image.width(); ++x) {
+        const auto alpha = qAlpha(row[x]);
+        if (alpha <= 32) continue;
+        left = qMin(left, x);
+        top = qMin(top, y);
+        right = qMax(right, x);
+        bottom = qMax(bottom, y);
+        ++geometry.pixels;
+        sum_x += (static_cast<long double>(x) + 0.5L) * alpha;
+        sum_y += (static_cast<long double>(y) + 0.5L) * alpha;
+        total_weight += alpha;
+      }
+    }
+    if (right >= left && bottom >= top && total_weight > 0.0L) {
+      geometry.bounds = QRect(left, top, right - left + 1, bottom - top + 1);
+      geometry.centroid = QPointF(static_cast<double>(sum_x / total_weight),
+                                  static_cast<double>(sum_y / total_weight));
+    }
+    return geometry;
+  };
+
+  const auto reference_canvas_for = [&](const QJsonObject& clip,
+                                        const QImage& source) {
+    QImage canvas(canvas_size, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    if (clip.value(QStringLiteral("mediaType")).toString() == QStringLiteral("title")) {
+      QPainter painter(&canvas);
+      painter.drawImage(QPoint(0, 0), source);
+      return canvas;
+    }
+    auto cropped = source;
+    const auto crop = photo_editor::desktop::TimelineSourceCrop{
+        clip.value(QStringLiteral("sourceCropLeft")).toDouble(),
+        clip.value(QStringLiteral("sourceCropTop")).toDouble(),
+        clip.value(QStringLiteral("sourceCropRight")).toDouble(1.0),
+        clip.value(QStringLiteral("sourceCropBottom")).toDouble(1.0)};
+    const auto crop_rect = crop.pixelRect(source.size());
+    if (crop_rect.isValid() && !crop_rect.isEmpty()) cropped = source.copy(crop_rect);
+    const auto frame_width = qMax(
+        1, qRound(canvas_size.width() * qBound(1.0 / canvas_size.width(),
+                  clip.value(QStringLiteral("frameWidth")).toDouble(1.0), 4.0)));
+    const auto frame_height = qMax(
+        1, qRound(canvas_size.height() * qBound(1.0 / canvas_size.height(),
+                   clip.value(QStringLiteral("frameHeight")).toDouble(1.0), 4.0)));
+    const QSize frame_size(frame_width, frame_height);
+    QImage fitted;
+    const auto frame_mode = clip.value(QStringLiteral("frameMode")).toString();
+    if (frame_mode == QStringLiteral("stretch")) {
+      fitted = cropped.scaled(frame_size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    } else if (frame_mode == QStringLiteral("fill")) {
+      fitted = cropped.scaled(frame_size, Qt::KeepAspectRatioByExpanding,
+                              Qt::SmoothTransformation);
+      fitted = fitted.copy(QRect((fitted.width() - frame_width) / 2,
+                                 (fitted.height() - frame_height) / 2,
+                                 frame_width, frame_height));
+    } else {
+      fitted = cropped.scaled(frame_size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    if (fitted.isNull()) return QImage{};
+    QPainter painter(&canvas);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.drawImage(QPoint((canvas_size.width() - fitted.width()) / 2,
+                             (canvas_size.height() - fitted.height()) / 2), fitted);
+    return canvas;
+  };
+
+  const auto transformed_reference = [&](const QJsonObject& clip,
+                                         const QImage& source,
+                                         double local_seconds) {
+    auto reference = QImage(canvas_size, QImage::Format_ARGB32_Premultiplied);
+    reference.fill(Qt::transparent);
+    const auto prepared = reference_canvas_for(clip, source);
+    if (prepared.isNull()) return QImage{};
+    const auto transform = photo_editor::desktop::TimelineHistoryTestAccess::clipTransformAtFromJson(
+        controller, clip, local_seconds);
+    auto scale = transform.value(QStringLiteral("scale")).toDouble();
+    const auto rotation = transform.value(QStringLiteral("rotation")).toDouble();
+    const auto offset_x = transform.value(QStringLiteral("offsetX")).toDouble();
+    const auto offset_y = transform.value(QStringLiteral("offsetY")).toDouble();
+    const auto base_title_position_x = clip.value(QStringLiteral("titlePositionX")).toDouble(0.5);
+    const auto base_title_position_y = clip.value(QStringLiteral("titlePositionY")).toDouble(0.82);
+    const auto title_position_x = transform.value(
+        QStringLiteral("titlePositionX")).toDouble();
+    const auto title_position_y = transform.value(
+        QStringLiteral("titlePositionY")).toDouble();
+    if (clip.value(QStringLiteral("mediaType")).toString() == QStringLiteral("title") &&
+        clip.value(QStringLiteral("titleFontSize")).toDouble() > 1.0e-6) {
+      scale *= transform.value(QStringLiteral("titleFontSize")).toDouble() /
+               clip.value(QStringLiteral("titleFontSize")).toDouble();
+    }
+    const auto position_delta_x = (title_position_x - base_title_position_x) * scale;
+    const auto position_delta_y = (title_position_y - base_title_position_y) * scale;
+    QPainter painter(&reference);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setOpacity(transform.value(QStringLiteral("opacity")).toDouble());
+    painter.translate(
+        canvas_size.width() * 0.5 +
+            canvas_size.width() * (offset_x * 0.25 + position_delta_x),
+        canvas_size.height() * 0.5 +
+            canvas_size.height() * (offset_y * 0.25 + position_delta_y));
+    painter.rotate(rotation);
+    painter.scale(scale, scale);
+    painter.translate(-canvas_size.width() * 0.5, -canvas_size.height() * 0.5);
+    painter.drawImage(QPoint(0, 0), prepared);
+    return reference;
+  };
+
+  const auto compare_pixels = [&](const QImage& actual,
+                                  const QImage& expected,
+                                  const QString& clip_id,
+                                  bool title_raster,
+                                  bool retain_proof_pair,
+                                  double local_seconds) {
+    const auto actual_stats = alpha_geometry(actual);
+    const auto expected_stats = alpha_geometry(expected);
+    if (actual.isNull() || expected.isNull() || actual.size() != canvas_size ||
+        expected.size() != canvas_size ||
+        (actual_stats.bounds.isEmpty() != expected_stats.bounds.isEmpty())) {
+      std::cerr << "animated transform produced an empty or wrong-sized frame for "
+                << clip_id.toStdString() << " actual="
+                << actual.width() << 'x' << actual.height() << " expected="
+                << expected.width() << 'x' << expected.height()
+                << " actualBounds=" << actual_stats.bounds.x() << ','
+                << actual_stats.bounds.y() << ',' << actual_stats.bounds.width()
+                << ',' << actual_stats.bounds.height()
+                << " expectedBounds=" << expected_stats.bounds.x() << ','
+                << expected_stats.bounds.y() << ',' << expected_stats.bounds.width()
+                << ',' << expected_stats.bounds.height() << '\n';
+      return false;
+    }
+    if (actual_stats.bounds.isEmpty()) {
+      return true;
+    }
+    const auto actual_argb = actual.convertToFormat(QImage::Format_ARGB32);
+    const auto expected_argb = expected.convertToFormat(QImage::Format_ARGB32);
+    qint64 intersection = 0;
+    qint64 union_count = 0;
+    for (auto y = 0; y < canvas_size.height(); ++y) {
+      const auto* actual_row = reinterpret_cast<const QRgb*>(actual_argb.constScanLine(y));
+      const auto* expected_row = reinterpret_cast<const QRgb*>(expected_argb.constScanLine(y));
+      for (auto x = 0; x < canvas_size.width(); ++x) {
+        const auto actual_visible = qAlpha(actual_row[x]) > 32;
+        const auto expected_visible = qAlpha(expected_row[x]) > 32;
+        if (actual_visible && expected_visible) ++intersection;
+        if (actual_visible || expected_visible) ++union_count;
+      }
+    }
+    const auto iou = union_count > 0
+                         ? static_cast<double>(intersection) / static_cast<double>(union_count)
+                         : 0.0;
+    const auto centroid_error = QLineF(actual_stats.centroid, expected_stats.centroid).length();
+    const auto bounds_delta = qMax(
+        qMax(qAbs(actual_stats.bounds.left() - expected_stats.bounds.left()),
+             qAbs(actual_stats.bounds.top() - expected_stats.bounds.top())),
+        qMax(qAbs(actual_stats.bounds.width() - expected_stats.bounds.width()),
+             qAbs(actual_stats.bounds.height() - expected_stats.bounds.height())));
+    // Native title and FFmpeg scale/rotate use different antialiasing kernels;
+    // thin glyph edges lower binary-alpha IoU even when their placement and
+    // bounds agree. Keep the tighter silhouette threshold for photo cutouts.
+    const auto minimum_iou = title_raster ? 0.65 : 0.80;
+    if (retain_proof_pair) {
+      const auto proof_directory = qEnvironmentVariable(
+          "PHOTO_EDITOR_TIMELINE_TRANSFORM_PROOF_DIR").trimmed();
+      if (!proof_directory.isEmpty()) {
+        if (!QDir().mkpath(proof_directory)) {
+          std::cerr << "could not create transform proof directory: "
+                    << proof_directory.toStdString() << '\n';
+          return false;
+        }
+        const auto proof_stem = QStringLiteral("%1-%2s")
+                                    .arg(clip_id)
+                                    .arg(QString::number(local_seconds, 'f', 3));
+        auto difference = QImage(canvas_size, QImage::Format_RGB32);
+        for (auto y = 0; y < canvas_size.height(); ++y) {
+          const auto* actual_row = reinterpret_cast<const QRgb*>(actual_argb.constScanLine(y));
+          const auto* expected_row = reinterpret_cast<const QRgb*>(expected_argb.constScanLine(y));
+          auto* difference_row = reinterpret_cast<QRgb*>(difference.scanLine(y));
+          for (auto x = 0; x < canvas_size.width(); ++x) {
+            const auto a = actual_row[x];
+            const auto e = expected_row[x];
+            const auto channel_difference = qMax(
+                qMax(qAbs(qRed(a) - qRed(e)), qAbs(qGreen(a) - qGreen(e))),
+                qMax(qAbs(qBlue(a) - qBlue(e)), qAbs(qAlpha(a) - qAlpha(e))));
+            difference_row[x] = qRgb(channel_difference, channel_difference, channel_difference);
+          }
+        }
+        const auto proof_ok =
+            actual.save(QDir(proof_directory).filePath(proof_stem + QStringLiteral("-actual.png"))) &&
+            expected.save(QDir(proof_directory).filePath(proof_stem + QStringLiteral("-reference.png"))) &&
+            difference.save(QDir(proof_directory).filePath(proof_stem + QStringLiteral("-difference.png")));
+        if (!proof_ok) {
+          std::cerr << "could not retain representative transform pixel proof for "
+                    << clip_id.toStdString() << '\n';
+          return false;
+        }
+        std::cout << "retained_transform_frame clip=" << clip_id.toStdString()
+                  << " localSeconds=" << local_seconds
+                  << " iou=" << iou
+                  << " centroidErrorPx=" << centroid_error
+                  << " boundsDeltaPx=" << bounds_delta
+                  << " minimumIoU=" << minimum_iou << '\n';
+      }
+    }
+    if (iou < minimum_iou || centroid_error > 2.5 || bounds_delta > 4) {
+      std::cerr << "animated zoom/rotation pixels diverged for " << clip_id.toStdString()
+                << " at " << local_seconds << "s: IoU=" << iou
+                << " centroidError=" << centroid_error
+                << " boundsDelta=" << bounds_delta
+                << " minimumIoU=" << minimum_iou << '\n';
+      return false;
+    }
+    return true;
+  };
+
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    std::cerr << "ffmpeg is required for animated transform pixel proof\n";
+    return false;
+  }
+  QHash<QString, QSize> source_sizes;
+  QHash<QString, QImage> photo_sources;
+  for (const auto& clip_id : target_clip_ids) {
+    const auto clip_json = clip_objects.value(clip_id);
+    if (clip_json.value(QStringLiteral("mediaType")).toString() ==
+        QStringLiteral("photo")) {
+      const auto source_path = clip_json.value(QStringLiteral("filePath")).toString();
+      QImage source(source_path);
+      if (source.isNull() || source_path.isEmpty()) {
+        std::cerr << "P15 transform photo source is unavailable for "
+                  << clip_id.toStdString() << '\n';
+        return false;
+      }
+      const auto source_sha = QString::fromLatin1(
+          QCryptographicHash::hash([&]() {
+            QFile file(source_path);
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+          }(), QCryptographicHash::Sha256).toHex());
+      const auto expected_source_sha =
+          clip_json.value(QStringLiteral("sourceContentSha256")).toString();
+      if (expected_source_sha.isEmpty() || source_sha != expected_source_sha) {
+        std::cerr << "P15 transform photo source hash changed for "
+                  << clip_id.toStdString() << '\n';
+        return false;
+      }
+      source_sizes.insert(clip_id, source.size());
+      photo_sources.insert(clip_id, source);
+    }
+  }
+
+  // Exercise the public export path as well as the per-layer pixels. This
+  // catches the old preflight rejection and asserts render planning is read-only.
+  auto photo_guard = clip_objects.value(
+      QStringLiteral("32248f5d-6503-4a90-96a4-3cb6b8b3a2ce"));
+  photo_guard.insert(QStringLiteral("startSeconds"), 0.0);
+  photo_guard.insert(QStringLiteral("durationSeconds"), 10.0);
+  photo_guard.insert(QStringLiteral("trimStartSeconds"), 0.0);
+  photo_guard.insert(QStringLiteral("trimEndSeconds"), 10.0);
+  TimelineDocumentController guard_controller;
+  guard_controller.createTimelineWithSettings(QVariantMap{
+      {QStringLiteral("timelineName"), QStringLiteral("Combined transform preflight fixture")},
+      {QStringLiteral("width"), canvas_size.width()},
+      {QStringLiteral("height"), canvas_size.height()},
+      {QStringLiteral("frameRate"), fps},
+  });
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::installSingleVideoClipFromJson(
+          guard_controller, photo_guard,
+          source_sizes.value(QStringLiteral("32248f5d-6503-4a90-96a4-3cb6b8b3a2ce")))) {
+    std::cerr << "could not install the combined transform preflight fixture\n";
+    return false;
+  }
+  const auto document_before =
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(guard_controller);
+  const auto undo_before =
+      photo_editor::desktop::TimelineHistoryTestAccess::undoState(guard_controller);
+  const auto filter_sidecar = QDir(workspace.path()).filePath(QStringLiteral("combined-transform.ffgraph"));
+  QString preflight_error;
+  const auto export_arguments =
+      photo_editor::desktop::TimelineHistoryTestAccess::renderArguments(
+      guard_controller, QDir(workspace.path()).filePath(QStringLiteral("preflight-%04d.png")),
+      QStringLiteral("image-sequence"), 0.0, 0.1, &preflight_error, filter_sidecar);
+  if (export_arguments.isEmpty() || !preflight_error.isEmpty() ||
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(guard_controller) != document_before ||
+      photo_editor::desktop::TimelineHistoryTestAccess::undoState(guard_controller) != undo_before) {
+    std::cerr << "combined zoom/rotation export planning failed or changed the authored document: "
+              << preflight_error.toStdString() << '\n';
+    return false;
+  }
+  auto preflight_graph = QString{};
+  const auto inline_graph = export_arguments.indexOf(QStringLiteral("-filter_complex"));
+  const auto sidecar_graph = export_arguments.indexOf(QStringLiteral("-filter_complex_script"));
+  if (inline_graph >= 0 && inline_graph + 1 < export_arguments.size()) {
+    preflight_graph = export_arguments.at(inline_graph + 1);
+  } else if (sidecar_graph >= 0 && sidecar_graph + 1 < export_arguments.size()) {
+    QFile graph_file(export_arguments.at(sidecar_graph + 1));
+    if (graph_file.open(QIODevice::ReadOnly)) {
+      preflight_graph = QString::fromUtf8(graph_file.readAll());
+    }
+  }
+  if (!preflight_graph.contains(QStringLiteral("rotate=")) ||
+      !preflight_graph.contains(QStringLiteral("pad="))) {
+    std::cerr << "native render plan omitted the combined zoom/rotation geometry\n";
+    return false;
+  }
+
+  auto oversized_transform = photo_guard;
+  oversized_transform.insert(QStringLiteral("frameScale"), 50.0);
+  const auto oversized_probe =
+      photo_editor::desktop::TimelineHistoryTestAccess::combinedTransformFilterProbeFromJson(
+          guard_controller, oversized_transform, canvas_size,
+          source_sizes.value(QStringLiteral("32248f5d-6503-4a90-96a4-3cb6b8b3a2ce")),
+          0.0, 0.1);
+  if (!oversized_probe.value(QStringLiteral("graph")).toString().isEmpty() ||
+      !oversized_probe.value(QStringLiteral("error")).toString().contains(
+          QStringLiteral("64-megapixel per-layer limit"))) {
+    std::cerr << "combined zoom/rotation should fail closed before exceeding its bounded transform canvas\n";
+    return false;
+  }
+
+  for (const auto& clip_id : target_clip_ids) {
+    const auto clip_json = clip_objects.value(clip_id);
+    const auto is_title = clip_json.value(QStringLiteral("mediaType")).toString() ==
+                          QStringLiteral("title");
+    const auto input_path = is_title
+        ? photo_editor::desktop::TimelineHistoryTestAccess::
+              nativeTitleFrameForTransformProbeFromJson(
+                  controller, clip_json, canvas_size)
+        : clip_json.value(QStringLiteral("filePath")).toString();
+    if (input_path.isEmpty() || !QFileInfo::exists(input_path)) {
+      std::cerr << "could not prepare transform source pixels for "
+                << clip_id.toStdString() << '\n';
+      return false;
+    }
+    const auto duration = qMax(
+        clip_json.value(QStringLiteral("durationSeconds")).toDouble(), 3.0 / fps);
+    QVector<double> sample_starts;
+    auto max_scale_value = -std::numeric_limits<double>::infinity();
+    auto min_scale_value = std::numeric_limits<double>::infinity();
+    auto max_scale_time = 0.0;
+    auto min_scale_time = 0.0;
+    auto min_rotation_value = std::numeric_limits<double>::infinity();
+    auto max_rotation_value = -std::numeric_limits<double>::infinity();
+    auto min_rotation_time = 0.0;
+    auto max_rotation_time = 0.0;
+    auto has_rotation_keys = false;
+    auto first_visible_opacity_time = -1.0;
+    auto full_opacity_time = -1.0;
+    for (const auto& keyframe_value :
+         clip_json.value(QStringLiteral("keyframes")).toArray()) {
+      const auto keyframe = keyframe_value.toObject();
+      const auto parameter = keyframe.value(QStringLiteral("parameter")).toString();
+      const auto value = keyframe.value(QStringLiteral("value")).toDouble();
+      const auto local_seconds = keyframe.value(QStringLiteral("seconds")).toDouble();
+      if (parameter == QStringLiteral("frameScale")) {
+        if (value > max_scale_value) {
+          max_scale_value = value;
+          max_scale_time = local_seconds;
+        }
+        if (value < min_scale_value) {
+          min_scale_value = value;
+          min_scale_time = local_seconds;
+        }
+      } else if (parameter == QStringLiteral("frameRotationDegrees")) {
+        has_rotation_keys = true;
+        if (value < min_rotation_value) {
+          min_rotation_value = value;
+          min_rotation_time = local_seconds;
+        }
+        if (value > max_rotation_value) {
+          max_rotation_value = value;
+          max_rotation_time = local_seconds;
+        }
+      } else if (parameter == QStringLiteral("opacity") && value >= 0.5 &&
+                 first_visible_opacity_time < 0.0) {
+        first_visible_opacity_time = local_seconds;
+      }
+      if (parameter == QStringLiteral("opacity") && value >= 0.999 &&
+          full_opacity_time < 0.0) {
+        full_opacity_time = local_seconds;
+      }
+    }
+    sample_starts.push_back(max_scale_time);
+    if (qAbs(min_scale_time - max_scale_time) > 1.0 / fps) {
+      sample_starts.push_back(min_scale_time);
+    }
+    if (has_rotation_keys &&
+        qAbs(max_rotation_value - min_rotation_value) > 1.0e-6) {
+      sample_starts.push_back(min_rotation_time);
+      sample_starts.push_back(max_rotation_time);
+    }
+    if (first_visible_opacity_time >= 0.0) {
+      sample_starts.push_back(first_visible_opacity_time);
+    }
+    if (full_opacity_time >= 0.0) {
+      sample_starts.push_back(full_opacity_time);
+    }
+    if (sample_starts.isEmpty()) sample_starts.push_back(0.0);
+    std::sort(sample_starts.begin(), sample_starts.end());
+    sample_starts.erase(std::unique(sample_starts.begin(), sample_starts.end(),
+                                     [](double left, double right) {
+                                       return qAbs(left - right) <= 1.0 / fps;
+                                     }),
+                        sample_starts.end());
+    auto visible_frames_compared = 0;
+    for (auto sample_index = 0; sample_index < sample_starts.size(); ++sample_index) {
+      const auto sample_start = qBound(
+          0.0, sample_starts.at(sample_index), qMax(0.0, duration - 3.0 / fps));
+      QString graph_error;
+      const auto probe =
+          photo_editor::desktop::TimelineHistoryTestAccess::combinedTransformFilterProbeFromJson(
+              controller, clip_json, canvas_size, source_sizes.value(clip_id),
+              sample_start, 3.0 / fps);
+      const auto graph = probe.value(QStringLiteral("graph")).toString();
+      graph_error = probe.value(QStringLiteral("error")).toString();
+      if (graph.isEmpty() || !graph_error.isEmpty() ||
+          !graph.contains(QStringLiteral("rotate=")) ||
+          !graph.contains(QStringLiteral("pad="))) {
+        std::cerr << "combined transform filter was not built for "
+                  << clip_id.toStdString() << ": " << graph_error.toStdString() << '\n';
+        return false;
+      }
+      const auto output_pattern = QDir(workspace.path()).filePath(
+          clip_id + QStringLiteral("-%1-%02d.png").arg(sample_index));
+      QProcess process;
+      process.start(ffmpeg, QStringList{
+          QStringLiteral("-y"), QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"),
+          QStringLiteral("error"), QStringLiteral("-loop"), QStringLiteral("1"),
+          QStringLiteral("-framerate"), QStringLiteral("30"), QStringLiteral("-t"),
+          QStringLiteral("0.1"), QStringLiteral("-i"), input_path,
+          QStringLiteral("-filter_complex"), graph, QStringLiteral("-map"),
+          QStringLiteral("[v0]"), QStringLiteral("-frames:v"), QStringLiteral("3"),
+          QStringLiteral("-fps_mode"), QStringLiteral("passthrough"), output_pattern});
+      if (!process.waitForFinished(90000) || process.exitStatus() != QProcess::NormalExit ||
+          process.exitCode() != 0) {
+        std::cerr << "ffmpeg combined-transform render failed for "
+                  << clip_id.toStdString() << ": "
+                  << process.readAllStandardError().toStdString() << '\n';
+        return false;
+      }
+      const QImage input_image = is_title ? QImage(input_path) : photo_sources.value(clip_id);
+      if (input_image.isNull()) return false;
+      for (auto frame_offset = 0; frame_offset < 3; ++frame_offset) {
+        const auto output_path = QDir(workspace.path()).filePath(
+            clip_id + QStringLiteral("-%1-%2.png")
+                          .arg(sample_index)
+                          .arg(frame_offset + 1, 2, 10, QLatin1Char('0')));
+        const QImage actual(output_path);
+        const auto local_seconds = sample_start + static_cast<double>(frame_offset) / fps;
+        const auto expected = transformed_reference(clip_json, input_image, local_seconds);
+        if (!alpha_geometry(expected).bounds.isEmpty()) {
+          ++visible_frames_compared;
+        }
+        const auto retain_photo_proof =
+            clip_id == QStringLiteral("32248f5d-6503-4a90-96a4-3cb6b8b3a2ce") &&
+            qAbs(local_seconds - full_opacity_time) <= 1.0e-4;
+        const auto retain_title_proof =
+            clip_id == QStringLiteral("a5f0d5ec-068e-4e1d-87c0-66fe7b2dae7d") &&
+            qAbs(local_seconds - min_scale_time) <= 1.0e-4;
+        if (!compare_pixels(actual, expected, clip_id, is_title,
+                            retain_photo_proof || retain_title_proof,
+                            local_seconds)) {
+          return false;
+        }
+      }
+    }
+    if (visible_frames_compared == 0) {
+      std::cerr << "no visible frames were compared for animated transform clip "
+                << clip_id.toStdString() << '\n';
+      return false;
+    }
+  }
+  std::cout << "animated_zoom_rotation_export_clips=" << target_clip_ids.size()
+            << " p15Sha256=" << project_sha.toStdString()
+            << " nativePixelsCompared=true documentJsonAndUndoUnchanged=true\n";
+  return true;
+}
+
+bool has_explicit_limited_range_conversion(
+    const QStringList& arguments,
+    QString* graph_text = nullptr) {
+  auto graph = QString{};
+  const auto inline_graph_index = arguments.indexOf(QStringLiteral("-filter_complex"));
+  const auto sidecar_index = arguments.indexOf(QStringLiteral("-filter_complex_script"));
+  if (inline_graph_index >= 0 && inline_graph_index + 1 < arguments.size()) {
+    graph = arguments.at(inline_graph_index + 1);
+  } else if (sidecar_index >= 0 && sidecar_index + 1 < arguments.size()) {
+    QFile graph_file(arguments.at(sidecar_index + 1));
+    if (graph_file.open(QIODevice::ReadOnly)) {
+      graph = QString::fromUtf8(graph_file.readAll());
+    }
+  }
+  if (graph_text != nullptr) {
+    *graph_text = graph;
+  }
+  return graph.contains(QStringLiteral(
+      "scale=in_range=full:out_range=limited:in_color_matrix=bt709:"
+      "out_color_matrix=bt709,setparams=range=limited"));
+}
+
 bool wait_for_persisted_job(const QString& job_id, int timeout_ms = 120000) {
   QElapsedTimer timer;
   timer.start();
@@ -133,6 +1942,56 @@ bool wait_for_persisted_job(const QString& job_id, int timeout_ms = 120000) {
   }
   std::cerr << "timeline render job timed out without a matching persisted record: "
             << job_id.toStdString() << '\n';
+  return false;
+}
+
+QString persisted_job_diagnostic(const QString& job_id) {
+  QString load_error;
+  const auto records = loadPersistedJobRecords(&load_error);
+  for (const auto& job : records) {
+    if (job.job_id != job_id) {
+      continue;
+    }
+    return QStringLiteral(
+               "jobId=%1 status=%2 progress=%3 error=%4 outputPath=%5 sourcePath=%6 updatedAt=%7")
+        .arg(job.job_id, job.status)
+        .arg(job.progress)
+        .arg(job.error_message)
+        .arg(job.output_path)
+        .arg(job.source_path)
+        .arg(job.updated_at);
+  }
+  return load_error.isEmpty()
+             ? QStringLiteral("jobId=%1 record=missing").arg(job_id)
+             : QStringLiteral("jobId=%1 record=unavailable loadError=%2")
+                   .arg(job_id, load_error);
+}
+
+bool wait_for_persisted_job_with_new_output(
+    const QString& job_id,
+    const QString& previous_output_path,
+    int timeout_ms = 120000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    for (const auto& job : loadPersistedJobRecords()) {
+      if (job.job_id != job_id) {
+        continue;
+      }
+      if (job.status == QStringLiteral("Failed")) {
+        std::cerr << "timeline render revision failed: "
+                  << persisted_job_diagnostic(job_id).toStdString() << '\n';
+        return false;
+      }
+      if (job.status == QStringLiteral("Completed") &&
+          job.output_path != previous_output_path) {
+        return true;
+      }
+    }
+  }
+  std::cerr << "timeline render revision timed out without a new completed output: "
+            << persisted_job_diagnostic(job_id).toStdString() << '\n';
   return false;
 }
 
@@ -468,6 +2327,68 @@ bool wait_for_media_queue_idle(
   return false;
 }
 
+bool run_timeline_cache_pressure_boundaries() {
+  constexpr qint64 kMiB = 1024LL * 1024LL;
+  constexpr qint64 kGiB = 1024LL * kMiB;
+  const auto classify = [](
+                          qint64 installed,
+                          qint64 available,
+                          qint64 disk_total,
+                          qint64 disk_available) {
+    return photo_editor::desktop::TimelineHistoryTestAccess::classifyCachePressureLevel(
+        installed, available, disk_total, disk_available);
+  };
+  const auto disk_has_headroom = 32LL * kGiB;
+
+  if (classify(512LL * kGiB, 23LL * kGiB, disk_has_headroom, 16LL * kGiB) !=
+      QStringLiteral("normal")) {
+    return fail_timeline_queue_path(
+        "large-memory hosts should not defer work with 23 GiB available");
+  }
+  if (classify(512LL * kGiB, 8LL * kGiB - 1, disk_has_headroom, 16LL * kGiB) !=
+          QStringLiteral("critical") ||
+      classify(512LL * kGiB, 8LL * kGiB, disk_has_headroom, 16LL * kGiB) !=
+          QStringLiteral("warning") ||
+      classify(512LL * kGiB, 16LL * kGiB - 1, disk_has_headroom, 16LL * kGiB) !=
+          QStringLiteral("warning") ||
+      classify(512LL * kGiB, 16LL * kGiB, disk_has_headroom, 16LL * kGiB) !=
+          QStringLiteral("normal")) {
+    return fail_timeline_queue_path(
+        "large-memory pressure should use the 8 GiB and 16 GiB byte caps at their boundaries");
+  }
+  if (classify(8LL * kGiB, 512LL * kMiB, disk_has_headroom, 16LL * kGiB) !=
+          QStringLiteral("critical") ||
+      classify(8LL * kGiB, 1LL * kGiB, disk_has_headroom, 16LL * kGiB) !=
+          QStringLiteral("warning") ||
+      classify(8LL * kGiB, 2LL * kGiB, disk_has_headroom, 16LL * kGiB) !=
+          QStringLiteral("normal")) {
+    return fail_timeline_queue_path(
+        "small-memory hosts should retain relative pressure thresholds");
+  }
+  if (classify(512LL * kGiB, 128LL * kGiB, 32LL * kGiB, 1536LL * kMiB) !=
+          QStringLiteral("critical") ||
+      classify(512LL * kGiB, 128LL * kGiB, 32LL * kGiB, 2LL * kGiB) !=
+          QStringLiteral("warning") ||
+      classify(512LL * kGiB, 128LL * kGiB, 32LL * kGiB, 4LL * kGiB) !=
+          QStringLiteral("warning") ||
+      classify(512LL * kGiB, 128LL * kGiB, 32LL * kGiB, 8LL * kGiB) !=
+          QStringLiteral("normal") ||
+      classify(512LL * kGiB, 128LL * kGiB, 512LL * kGiB, 4LL * kGiB - 1) !=
+          QStringLiteral("critical") ||
+      classify(512LL * kGiB, 128LL * kGiB, 512LL * kGiB, 4LL * kGiB) !=
+          QStringLiteral("warning") ||
+      classify(512LL * kGiB, 128LL * kGiB, 512LL * kGiB, 16LL * kGiB - 1) !=
+          QStringLiteral("warning") ||
+      classify(512LL * kGiB, 128LL * kGiB, 512LL * kGiB, 16LL * kGiB) !=
+          QStringLiteral("normal") ||
+      classify(512LL * kGiB, 128LL * kGiB, 1024LL * kGiB, 17LL * kGiB) !=
+          QStringLiteral("normal")) {
+    return fail_timeline_queue_path(
+        "disk floors should remain and large-volume ratio thresholds should cap at 4 GiB and 16 GiB");
+  }
+  return true;
+}
+
 bool run_timeline_media_queue_terminal_paths(const QString& workspace_path) {
   const auto isolated_cache_root = QDir(workspace_path).filePath(QStringLiteral("cache"));
   if (!QDir().mkpath(isolated_cache_root)) {
@@ -793,6 +2714,275 @@ QString create_test_video(
   }
 
   return QFileInfo::exists(output_path) ? output_path : QString{};
+}
+
+bool run_timeline_title_font_precision_workflow(const QString& workspace_path) {
+  QTemporaryDir app_data_root;
+  if (!app_data_root.isValid()) {
+    std::cerr << "small-title-font workflow needs isolated app data\n";
+    return false;
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", app_data_root.path().toUtf8());
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    std::cerr << "FFmpeg is required for small-title-font export verification\n";
+    return false;
+  }
+  const auto source_path = create_test_video(
+      ffmpeg,
+      QDir(workspace_path).filePath(QStringLiteral("title-font-precision-source.mp4")),
+      QStringLiteral("red"), false, 660, 4.0);
+  if (source_path.isEmpty()) {
+    std::cerr << "small-title-font source fixture should be writable\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.setEditAccessPolicy([] { return true; });
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Title Font Precision")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("video:title-font-precision-base"), source_path,
+      QStringLiteral("Title Font Precision Base"), 6.0, QString{});
+  const auto graphics_track = controller.createTimelineTrackForAutomation(
+      QStringLiteral("graphics"), QStringLiteral("Typography"));
+  if (!graphics_track.value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "small-title-font workflow should create a native overlay track: "
+              << graphics_track.value(QStringLiteral("error")).toString().toStdString()
+              << '\n';
+    return false;
+  }
+  const auto track_id = graphics_track.value(QStringLiteral("trackId")).toString();
+  photo_editor::desktop::AgentTaskCoordinator task_coordinator;
+  photo_editor::desktop::AgentAppCommandRegistry action_registry;
+  photo_editor::desktop::register_agent_timeline_commands(
+      action_registry, &controller, task_coordinator, [] { return QString{}; },
+      [](const QString&) { return QVariantMap{{QStringLiteral("ok"), true}}; });
+  const auto title_action_schema = action_registry.actionInputSchema(
+      QStringLiteral("timeline.action.createTimelineTitle"));
+  const auto title_input_schema = title_action_schema.value(QStringLiteral("inputSchema")).toMap();
+  const auto style_schema = title_input_schema.value(QStringLiteral("properties")).toMap()
+                                .value(QStringLiteral("values")).toMap();
+  const auto style_properties = style_schema.value(QStringLiteral("properties")).toMap();
+  const auto font_size_schema = style_properties.value(QStringLiteral("fontSize")).toMap();
+  if (!title_action_schema.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(font_size_schema.value(QStringLiteral("minimum")).toDouble(), 1.0) ||
+      !nearly_equal(font_size_schema.value(QStringLiteral("maximum")).toDouble(), 360.0)) {
+    std::cerr << "native title MCP schema should allow 1–360 px font sizes\n";
+    return false;
+  }
+  const auto title_values = [](double size) {
+    return QVariantMap{
+        {QStringLiteral("text"), QStringLiteral("PIXEL")},
+        {QStringLiteral("fontFamily"), QStringLiteral("Sans Serif")},
+        {QStringLiteral("fontSize"), size},
+        {QStringLiteral("color"), QStringLiteral("#ffffffff")},
+        {QStringLiteral("backgroundColor"), QStringLiteral("#00000000")},
+        {QStringLiteral("positionX"), 0.5},
+        {QStringLiteral("positionY"), 0.5},
+    };
+  };
+  const auto small_title = controller.createTimelineTitleForAutomation(
+      track_id, QStringLiteral("basic"), 0.0, 4.0, title_values(10.2));
+  const auto small_title_id = small_title.value(QStringLiteral("createdClipId")).toString();
+  if (!small_title.value(QStringLiteral("ok")).toBool() || small_title_id.isEmpty() ||
+      qAbs(small_title.value(QStringLiteral("clip")).toMap()
+               .value(QStringLiteral("titleFontSize")).toDouble() - 10.2) > 1.0e-9 ||
+      !controller.toggleSelectedClipKeyframe(QStringLiteral("titleFontSize"))) {
+    std::cerr << "native title creation and keyframing should preserve 10.2 px exactly\n";
+    return false;
+  }
+  controller.setSelectedTitleFontSize(10.2);
+  controller.seekSequenceSeconds(1.0);
+  if (!controller.toggleSelectedClipKeyframe(QStringLiteral("titleFontSize")) ||
+      qAbs(controller.currentClip().value(QStringLiteral("titleFontSize")).toDouble() -
+           10.2) > 1.0e-9) {
+    std::cerr << "native title workflow should insert an explicit 10.2 px hold key at 1s; current="
+              << controller.currentClip().value(QStringLiteral("titleFontSize")).toDouble()
+              << " keys="
+              << QJsonDocument::fromVariant(
+                     controller.currentClip().value(QStringLiteral("keyframes")))
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << '\n';
+    return false;
+  }
+  controller.seekSequenceSeconds(2.0);
+  controller.setSelectedTitleFontSize(11.97);
+  if (qAbs(controller.currentClip().value(QStringLiteral("titleFontSize")).toDouble() -
+           11.97) > 1.0e-9) {
+    std::cerr << "native title animation should preserve sub-12 px keyframe values\n";
+    return false;
+  }
+  const auto standard_title = controller.createTimelineTitleForAutomation(
+      track_id, QStringLiteral("basic"), 4.0, 2.0, title_values(12.0));
+  const auto standard_title_id = standard_title.value(QStringLiteral("createdClipId")).toString();
+  if (!standard_title.value(QStringLiteral("ok")).toBool() || standard_title_id.isEmpty() ||
+      qAbs(standard_title.value(QStringLiteral("clip")).toMap()
+               .value(QStringLiteral("titleFontSize")).toDouble() - 12.0) > 1.0e-9) {
+    std::cerr << "existing 12 px native title size should remain unchanged\n";
+    return false;
+  }
+
+  if (!controller.saveTimeline(false) || controller.savedDocumentPath().isEmpty() ||
+      !QFileInfo::exists(controller.savedDocumentPath())) {
+    std::cerr << "small-title-font Timeline should save a real native project\n";
+    return false;
+  }
+  TimelineDocumentController reopened;
+  if (!reopened.loadTimeline(controller.savedDocumentPath())) {
+    std::cerr << "small-title-font Timeline should reopen from its saved native project\n";
+    return false;
+  }
+  const auto select_title = [&reopened](const QString& clip_id) {
+    for (int index = 0; index < reopened.clipCount(); ++index) {
+      if (reopened.timelineClipDetails(index).value(QStringLiteral("clipId")).toString() ==
+          clip_id) {
+        reopened.selectClip(index);
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!select_title(small_title_id)) {
+    std::cerr << "reopened small title should retain its stable clip ID\n";
+    return false;
+  }
+  reopened.seekSequenceSeconds(0.0);
+  if (qAbs(reopened.currentClip().value(QStringLiteral("titleFontSize")).toDouble() -
+           10.2) > 1.0e-9) {
+    std::cerr << "saved/reopened title base size should remain exactly 10.2 px\n";
+    return false;
+  }
+  reopened.seekSequenceSeconds(1.0);
+  if (qAbs(reopened.currentClip().value(QStringLiteral("titleFontSize")).toDouble() -
+           10.2) > 1.0e-9) {
+    std::cerr << "saved/reopened hold keyframe should retain exactly 10.2 px\n";
+    return false;
+  }
+  reopened.seekSequenceSeconds(2.0);
+  if (qAbs(reopened.currentClip().value(QStringLiteral("titleFontSize")).toDouble() -
+           11.97) > 1.0e-9) {
+    std::cerr << "saved/reopened title animation should retain its 11.97 px keyframe\n";
+    return false;
+  }
+  if (!select_title(standard_title_id)) {
+    std::cerr << "reopened 12 px title should retain its stable clip ID\n";
+    return false;
+  }
+  reopened.seekSequenceSeconds(4.0);
+  if (qAbs(reopened.currentClip().value(QStringLiteral("titleFontSize")).toDouble() -
+           12.0) > 1.0e-9) {
+    std::cerr << "saved/reopened 12 px title should retain its existing size\n";
+    return false;
+  }
+
+  const auto output_path = QDir(workspace_path).filePath(
+      QStringLiteral("title-font-precision-export.mp4"));
+  if (!reopened.renderCurrentTimeline(output_path) ||
+      !QFileInfo::exists(output_path) || QFileInfo(output_path).size() <= 0) {
+    std::cerr << "small-title-font Timeline should export native media after reopening\n";
+    return false;
+  }
+  struct ExportGlyphMetric {
+    QRect bounds;
+    quint64 integrated_contrast = 0;
+  };
+  const auto glyph_metric = [&ffmpeg, &output_path](double seconds) {
+    const auto pixels = process_bytes(
+        ffmpeg,
+        {QStringLiteral("-v"), QStringLiteral("error"),
+         QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
+         QStringLiteral("-i"), output_path,
+         QStringLiteral("-frames:v"), QStringLiteral("1"),
+         QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+         QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+    ExportGlyphMetric metric;
+    constexpr auto kFrameWidth = 320;
+    constexpr auto kFrameHeight = 240;
+    if (pixels.size() < kFrameWidth * kFrameHeight * 3) return metric;
+
+    // Estimate the encoded red plate from the outer border, then integrate
+    // green/blue contrast added by white glyph coverage. This keeps partially
+    // covered edge pixels instead of applying a brittle white-pixel cutoff.
+    auto background_green_sum = quint64{0};
+    auto background_blue_sum = quint64{0};
+    auto background_samples = quint64{0};
+    for (int y = 2; y < 14; ++y) {
+      for (const auto x : {2, kFrameWidth - 14}) {
+        const auto offset = (y * kFrameWidth + x) * 3;
+        background_green_sum += static_cast<unsigned char>(pixels.at(offset + 1));
+        background_blue_sum += static_cast<unsigned char>(pixels.at(offset + 2));
+        ++background_samples;
+      }
+    }
+    for (int x = 14; x < kFrameWidth - 14; ++x) {
+      for (const auto y : {2, kFrameHeight - 14}) {
+        const auto offset = (y * kFrameWidth + x) * 3;
+        background_green_sum += static_cast<unsigned char>(pixels.at(offset + 1));
+        background_blue_sum += static_cast<unsigned char>(pixels.at(offset + 2));
+        ++background_samples;
+      }
+    }
+    const auto background_green = background_samples > 0
+        ? static_cast<int>(background_green_sum / background_samples) : 0;
+    const auto background_blue = background_samples > 0
+        ? static_cast<int>(background_blue_sum / background_samples) : 0;
+    auto left = kFrameWidth;
+    auto top = kFrameHeight;
+    auto right = -1;
+    auto bottom = -1;
+    for (int y = 0; y < kFrameHeight; ++y) {
+      for (int x = 0; x < kFrameWidth; ++x) {
+        const auto offset = (y * kFrameWidth + x) * 3;
+        const auto green = static_cast<int>(static_cast<unsigned char>(pixels.at(offset + 1)));
+        const auto blue = static_cast<int>(static_cast<unsigned char>(pixels.at(offset + 2)));
+        const auto contrast = qMax(0, qMin(green - background_green, blue - background_blue));
+        metric.integrated_contrast += static_cast<quint64>(qMax(0, contrast - 6));
+        if (contrast >= 24) {
+          left = qMin(left, x);
+          top = qMin(top, y);
+          right = qMax(right, x);
+          bottom = qMax(bottom, y);
+        }
+      }
+    }
+    if (right >= left && bottom >= top) {
+      metric.bounds = QRect(QPoint(left, top), QPoint(right, bottom));
+    }
+    return metric;
+  };
+  const auto small = glyph_metric(0.75);
+  const auto animated = glyph_metric(2.75);
+  const auto standard = glyph_metric(4.75);
+  if (small.bounds.isEmpty() || animated.bounds.isEmpty() || standard.bounds.isEmpty() ||
+      small.integrated_contrast == 0 || animated.integrated_contrast == 0 ||
+      standard.integrated_contrast == 0 ||
+      animated.bounds.width() < small.bounds.width() ||
+      animated.bounds.height() < small.bounds.height() ||
+      standard.bounds.width() < small.bounds.width() ||
+      standard.bounds.height() < small.bounds.height() ||
+      animated.integrated_contrast <= small.integrated_contrast ||
+      standard.integrated_contrast <= small.integrated_contrast) {
+    std::cerr << "exported 10.2 px, 11.97 px, and 12 px titles should produce visible, increasingly sized glyph geometry/contrast; metrics="
+              << small.bounds.width() << 'x' << small.bounds.height() << '/'
+              << small.integrated_contrast << ','
+              << animated.bounds.width() << 'x' << animated.bounds.height() << '/'
+              << animated.integrated_contrast << ','
+              << standard.bounds.width() << 'x' << standard.bounds.height() << '/'
+              << standard.integrated_contrast << '\n';
+    return false;
+  }
+  std::cout << "title_font_precision=passed size10_2=" << small.bounds.width() << 'x'
+            << small.bounds.height() << '/' << small.integrated_contrast
+            << " animated11_97=" << animated.bounds.width() << 'x'
+            << animated.bounds.height() << '/' << animated.integrated_contrast
+            << " size12=" << standard.bounds.width() << 'x'
+            << standard.bounds.height() << '/' << standard.integrated_contrast << '\n';
+  return true;
 }
 
 QString create_test_video_with_channel_layout(
@@ -1369,6 +3559,40 @@ bool run_timeline_shared_keyframe_curve_workflow() {
     }
   }
   controller.undo();
+  const auto clip_keys_before_delete = controller.currentClip().value(QStringLiteral("keyframes"));
+  controller.beginContinuousEdit();
+  const bool clip_deleted = controller.removeSelectedClipKeyframe(QStringLiteral("opacity"), 0.0) &&
+      controller.removeSelectedClipKeyframe(QStringLiteral("opacity"), 2.0);
+  controller.endContinuousEdit();
+  if (!clip_deleted || !controller.currentClip().value(QStringLiteral("keyframes")).toList().isEmpty()) {
+    std::cerr << "a clip selection deletion should remove both keys\n";
+    return false;
+  }
+  controller.undo();
+  if (controller.currentClip().value(QStringLiteral("keyframes")) != clip_keys_before_delete) {
+    std::cerr << "one Undo must restore a deleted clip selection including weighted tangents\n";
+    return false;
+  }
+  const auto track_keys_before_delete = controller.sequenceTracks().first().toMap().value(QStringLiteral("automationKeyframes"));
+  controller.beginContinuousEdit();
+  const bool track_deleted = controller.removeTrackAutomationKeyframe(0, QStringLiteral("opacity"), 0.0) &&
+      controller.removeTrackAutomationKeyframe(0, QStringLiteral("opacity"), 2.0);
+  controller.endContinuousEdit();
+  if (!track_deleted || !controller.sequenceTracks().first().toMap().value(QStringLiteral("automationKeyframes")).toList().isEmpty()) {
+    std::cerr << "a track selection deletion should remove both keys\n";
+    return false;
+  }
+  controller.undo();
+  if (controller.sequenceTracks().first().toMap().value(QStringLiteral("automationKeyframes")) != track_keys_before_delete) {
+    std::cerr << "one Undo must restore a deleted track selection including weighted tangents\n";
+    return false;
+  }
+  controller.redo();
+  if (!controller.sequenceTracks().first().toMap().value(QStringLiteral("automationKeyframes")).toList().isEmpty()) {
+    std::cerr << "one Redo must remove the restored track selection\n";
+    return false;
+  }
+  controller.undo();
   return true;
 }
 
@@ -1640,6 +3864,8 @@ bool run_timeline_title_motion_render_workflow(const QString& workspace_path) {
     const auto middle_x = white_text_centroid_x(position_render_path, 0.80);
     const auto late_x = white_text_centroid_x(position_render_path, 1.80);
     if (early_x < 0.0 || middle_x < 0.0 || late_x < 0.0 ||
+        middle_x <= early_x + format_size.width() * 0.03 ||
+        late_x <= middle_x + format_size.width() * 0.03 ||
         late_x < early_x + format_size.width() * 0.25) {
       std::cerr << "exported title position should move across the frame for "
                 << format_name.toStdString() << " (early=" << early_x
@@ -2066,6 +4292,221 @@ bool run_timeline_save_render_workflow(const QString& root) {
     if (!condition) std::cerr << message << '\n';
     return condition;
   };
+  TimelineDocumentController empty_draft;
+  empty_draft.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Empty Saved Draft")},
+      {QStringLiteral("width"), 1280},
+      {QStringLiteral("height"), 720},
+      {QStringLiteral("frameRate"), 25.0},
+      {QStringLiteral("exportPreset"), QStringLiteral("youtube")},
+      {QStringLiteral("projectBinding"), QStringLiteral("empty-draft-project")},
+      {QStringLiteral("trackLayout"), QStringLiteral("creator_social")},
+  });
+  const auto original_tracks = empty_draft.sequenceTracks();
+  const auto tracks_match = [](const QVariantList& expected, const QVariantList& actual) {
+    if (expected.size() != actual.size()) return false;
+    for (int index = 0; index < expected.size(); ++index) {
+      const auto before = expected.at(index).toMap();
+      const auto after = actual.at(index).toMap();
+      for (const auto& key : {QStringLiteral("trackId"), QStringLiteral("displayLabel"),
+                               QStringLiteral("trackKind"), QStringLiteral("trackRole"),
+                               QStringLiteral("laneIndex"), QStringLiteral("clipCount")}) {
+        if (before.value(key) != after.value(key)) return false;
+      }
+    }
+    return true;
+  };
+  if (!check(empty_draft.hasActiveTimeline() && empty_draft.clipCount() == 0 &&
+                 !original_tracks.isEmpty() && empty_draft.sequenceWidth() == 1280 &&
+                 empty_draft.sequenceHeight() == 720 &&
+                 qAbs(empty_draft.framesPerSecond() - 25.0) < 1e-9,
+             "An empty named Timeline should retain its format and initialized tracks") ||
+      !check(!empty_draft.saveTimeline(true) && !empty_draft.saveTimelineAsync(true) &&
+                 photo_editor::desktop::loadPersistedJobRecords().isEmpty(),
+             "An empty Timeline must not queue a render or publish")) {
+    return false;
+  }
+  const auto empty_render_path = QDir(root).filePath(QStringLiteral("empty-draft.mp4"));
+  if (!check(!empty_draft.renderCurrentTimeline(empty_render_path) &&
+                 !QFileInfo::exists(empty_render_path),
+             "An empty Timeline must remain ineligible for export")) {
+    return false;
+  }
+
+  const auto empty_copy_path = QDir(root).filePath(QStringLiteral("empty-draft-copy.json"));
+  const auto empty_copy = empty_draft.saveTimelineCopyForAutomation(empty_copy_path);
+  TimelineDocumentController reopened_empty_copy;
+  if (!check(empty_copy.value(QStringLiteral("ok")).toBool() &&
+                 empty_copy.value(QStringLiteral("readbackVerified")).toBool() &&
+                 empty_copy.value(QStringLiteral("clipCount")).toInt() == 0 &&
+                 reopened_empty_copy.loadTimeline(empty_copy_path),
+             "A task-owned project copy should save and reopen without a placeholder clip") ||
+      !check(reopened_empty_copy.timelineName() == QStringLiteral("Empty Saved Draft") &&
+                 reopened_empty_copy.sequenceWidth() == 1280 &&
+                 reopened_empty_copy.sequenceHeight() == 720 &&
+                 qAbs(reopened_empty_copy.framesPerSecond() - 25.0) < 1e-9 &&
+                 reopened_empty_copy.projectBinding() == QStringLiteral("empty-draft-project") &&
+                 reopened_empty_copy.clipCount() == 0 &&
+                 tracks_match(original_tracks, reopened_empty_copy.sequenceTracks()),
+             "The empty project copy should preserve its name, format, project binding, and track identities")) {
+    return false;
+  }
+  if (!check(empty_draft.saveTimeline(), "A named empty Timeline should save natively") ||
+      !check(!empty_draft.savedDocumentPath().isEmpty() &&
+                 QFileInfo::exists(empty_draft.savedDocumentPath()),
+             "Saving an empty Timeline should create its native project document")) {
+    return false;
+  }
+  TimelineDocumentController reopened_empty_draft;
+  if (!check(reopened_empty_draft.loadTimeline(empty_draft.savedDocumentPath()),
+             "The saved empty Timeline should reopen") ||
+      !check(reopened_empty_draft.hasActiveTimeline() &&
+                 reopened_empty_draft.timelineName() == QStringLiteral("Empty Saved Draft") &&
+                 reopened_empty_draft.sequenceWidth() == 1280 &&
+                 reopened_empty_draft.sequenceHeight() == 720 &&
+                 qAbs(reopened_empty_draft.framesPerSecond() - 25.0) < 1e-9 &&
+                 reopened_empty_draft.exportPreset() == QStringLiteral("youtube") &&
+                 reopened_empty_draft.projectBinding() == QStringLiteral("empty-draft-project") &&
+                 reopened_empty_draft.clipCount() == 0 &&
+                 tracks_match(original_tracks, reopened_empty_draft.sequenceTracks()),
+             "An empty Timeline should round-trip its name, format, and initialized tracks")) {
+    return false;
+  }
+  bool async_empty_save_completed = false;
+  bool async_empty_save_succeeded = false;
+  QObject::connect(&reopened_empty_draft,
+      &TimelineDocumentController::timelineSaveCompleted,
+      &reopened_empty_draft,
+      [&](bool success, const QString&, const QString&) {
+        async_empty_save_completed = true;
+        async_empty_save_succeeded = success;
+      });
+  if (!check(reopened_empty_draft.saveTimelineAsync(),
+             "Asynchronous plain save should accept an empty active Timeline")) {
+    return false;
+  }
+  QElapsedTimer empty_save_wait;
+  empty_save_wait.start();
+  while (!async_empty_save_completed && empty_save_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  if (!check(async_empty_save_completed && async_empty_save_succeeded &&
+                 !reopened_empty_draft.timelineSaveInProgress() &&
+                 !reopened_empty_draft.dirty() &&
+                 !reopened_empty_draft.timelineSaveFailed(),
+             "Asynchronous empty Timeline save should complete and settle cleanly")) {
+    return false;
+  }
+
+  const auto recovery_failure_status = QStringLiteral(
+      "Recovery checkpoint failed. Your edits remain open; retry saving before closing.");
+  TimelineDocumentController checkpoint_status;
+  checkpoint_status.createTimeline(QStringLiteral("Checkpoint Status Separation"));
+  if (!check(checkpoint_status.flushEditJournal(),
+             "Checkpoint status fixture should start with a valid journal")) {
+    return false;
+  }
+  const auto checkpoint_path = checkpoint_status.editJournalPath();
+  if (!check(QFile::remove(checkpoint_path) && QDir().mkpath(checkpoint_path),
+             "Checkpoint status fixture should block only its journal path")) {
+    return false;
+  }
+  checkpoint_status.setTimelineName(QStringLiteral("Failed Recovery Checkpoint"));
+  QElapsedTimer checkpoint_failure_wait;
+  checkpoint_failure_wait.start();
+  while (checkpoint_status.status() != recovery_failure_status &&
+         checkpoint_failure_wait.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  if (!check(checkpoint_status.status() == recovery_failure_status &&
+                 !checkpoint_status.timelineSaveFailed(),
+             "A recovery-checkpoint error must not become a canonical Save failure")) {
+    return false;
+  }
+  if (!check(QDir(checkpoint_path).removeRecursively() &&
+                 checkpoint_status.flushEditJournal() &&
+                 checkpoint_status.status().isEmpty() &&
+                 !checkpoint_status.timelineSaveFailed(),
+             "A later successful checkpoint should clear only its owned stale recovery error")) {
+    return false;
+  }
+
+  if (!check(QFile::remove(checkpoint_path) && QDir().mkpath(checkpoint_path),
+             "Second checkpoint fixture should block its journal path")) {
+    return false;
+  }
+  checkpoint_status.setTimelineName(QStringLiteral("Second Failed Recovery Checkpoint"));
+  QElapsedTimer second_checkpoint_failure_wait;
+  second_checkpoint_failure_wait.start();
+  while (checkpoint_status.status() != recovery_failure_status &&
+         second_checkpoint_failure_wait.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  if (!check(checkpoint_status.status() == recovery_failure_status,
+             "The second blocked journal write should report its own recovery error")) {
+    return false;
+  }
+  const auto unrelated_status = QStringLiteral("A newer unrelated Timeline notice.");
+  photo_editor::desktop::TimelineHistoryTestAccess::setStatusForTest(
+      checkpoint_status, unrelated_status);
+  if (!check(QDir(checkpoint_path).removeRecursively() &&
+                 checkpoint_status.flushEditJournal() &&
+                 checkpoint_status.status() == unrelated_status,
+             "Successful checkpointing must preserve a newer unrelated status")) {
+    return false;
+  }
+
+  const auto canonical_path = reopened_empty_draft.savedDocumentPath();
+  if (!check(QFile::remove(canonical_path) && QDir().mkpath(canonical_path),
+             "Canonical save failure fixture should block only its document path")) {
+    return false;
+  }
+  reopened_empty_draft.addSequenceMarker(QStringLiteral("Canonical save failure transition"));
+  async_empty_save_completed = false;
+  async_empty_save_succeeded = false;
+  if (!check(reopened_empty_draft.saveTimelineAsync(),
+             "Canonical save failure fixture should start an asynchronous save")) {
+    return false;
+  }
+  QElapsedTimer canonical_failure_wait;
+  canonical_failure_wait.start();
+  while (!async_empty_save_completed && canonical_failure_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  if (!check(async_empty_save_completed && !async_empty_save_succeeded &&
+                 reopened_empty_draft.timelineSaveFailed() && reopened_empty_draft.dirty() &&
+                 reopened_empty_draft.status().contains(
+                     QStringLiteral("Unable to save the timeline document")),
+             "A failed canonical write should set the typed save-failure state and retain edits")) {
+    return false;
+  }
+  if (!check(QDir(canonical_path).removeRecursively(),
+             "Canonical save failure fixture should remove its test-owned blocker")) {
+    return false;
+  }
+  async_empty_save_completed = false;
+  async_empty_save_succeeded = false;
+  if (!check(reopened_empty_draft.saveTimelineAsync() &&
+                 !reopened_empty_draft.timelineSaveFailed(),
+             "Retrying canonical Save should clear the prior typed failure while saving")) {
+    return false;
+  }
+  QElapsedTimer canonical_success_wait;
+  canonical_success_wait.start();
+  while (!async_empty_save_completed && canonical_success_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  if (!check(async_empty_save_completed && async_empty_save_succeeded &&
+                 !reopened_empty_draft.timelineSaveFailed() && !reopened_empty_draft.dirty(),
+             "A successful canonical retry should clear the save failure and settle the document")) {
+    return false;
+  }
+
   QImage image(64, 64, QImage::Format_RGB32);
   image.fill(Qt::red);
   const auto source = QDir(root).filePath(QStringLiteral("render-source.png"));
@@ -2093,26 +4534,158 @@ bool run_timeline_save_render_workflow(const QString& root) {
   if (!check(!marker.isEmpty() && document.saveTimeline(), "Newer edits should save while the render is queued")) return false;
   const auto latest_bytes = read_bytes(document.savedDocumentPath());
   photo_editor::desktop::JobRunner runner;
+  bool recovery_finished = false;
+  QString recovery_error;
+  QObject::connect(&runner,
+      &photo_editor::desktop::JobRunner::startupRecoveryFinished,
+      &runner,
+      [&](const QString& error) {
+        recovery_finished = true;
+        recovery_error = error;
+      });
   runner.initializeFromStore();
-  if (!check(wait_for_persisted_job(queued.first().job_id, 60000), "The immutable snapshot should render through JobRunner")) return false;
+  QElapsedTimer render_wait;
+  render_wait.start();
+  photo_editor::desktop::PersistentJobRecord completed_render;
+  while (render_wait.elapsed() < 60000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    const auto current_records = photo_editor::desktop::loadPersistedJobRecords();
+    const auto current = std::find_if(current_records.cbegin(), current_records.cend(),
+        [&](const auto& row) { return row.job_id == queued.first().job_id; });
+    if (current != current_records.cend() &&
+        (current->status == QStringLiteral("Completed") ||
+         current->status == QStringLiteral("Failed"))) {
+      completed_render = *current;
+      break;
+    }
+  }
+  if (completed_render.job_id.isEmpty()) {
+    const auto current_records = photo_editor::desktop::loadPersistedJobRecords();
+    const auto current = std::find_if(current_records.cbegin(), current_records.cend(),
+        [&](const auto& row) { return row.job_id == queued.first().job_id; });
+    const auto intent = photo_editor::desktop::WorkerQueueRegistry::userIntentSnapshot();
+    const auto priority = photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+        QStringLiteral("timeline_render"), QStringLiteral("timeline"),
+        queued.first().metadata_json.value(QStringLiteral("timelineId")).toString());
+    std::cerr << "timeline render dispatch diagnostic: recoveryFinished=" << recovery_finished
+              << " recoveryError=" << recovery_error.toStdString()
+              << " runner=" << QJsonDocument::fromVariant(
+                     photo_editor::desktop::JobRunnerTestAccess::state(runner)).toJson(
+                         QJsonDocument::Compact).toStdString()
+              << " intent=" << QJsonDocument::fromVariant(intent).toJson(QJsonDocument::Compact).toStdString()
+              << " priority=" << QJsonDocument::fromVariant(priority).toJson(QJsonDocument::Compact).toStdString();
+    if (current != current_records.cend()) {
+      std::cerr << " persistedStatus=" << current->status.toStdString()
+                << " persistedError=" << current->error_message.toStdString()
+                << " sourceExists=" << QFileInfo::exists(current->source_path)
+                << " sourcePath=" << current->source_path.toStdString()
+                << " outputExists=" << QFileInfo::exists(current->output_path)
+                << " outputPath=" << current->output_path.toStdString()
+                << " metadata=" << QJsonDocument(current->metadata_json).toJson(QJsonDocument::Compact).toStdString();
+    } else {
+      std::cerr << " persistedJob=missing";
+    }
+    std::cerr << '\n';
+    return check(false, "The immutable snapshot should render through JobRunner");
+  }
+  if (!check(completed_render.status == QStringLiteral("Completed"),
+             completed_render.error_message.isEmpty()
+                 ? "The immutable snapshot should render through JobRunner"
+                 : completed_render.error_message.toUtf8().constData())) {
+    return false;
+  }
   const auto records = photo_editor::desktop::loadTimelineAssetRecords();
   const auto record = std::find_if(records.cbegin(), records.cend(), [&](const auto& row) {
     return row.asset_id == document.timelineAssetId();
   });
   const auto backup = photo_editor::desktop::loadTimelineDocumentBackup(document.timelineAssetId().section(':', 1));
   const auto latest = QJsonDocument::fromJson(latest_bytes).object();
-  return check(QFileInfo(document.savedRenderPath()).size() > 0, "Publishing should produce actual media") &&
-         check(read_bytes(snapshot_path) == snapshot_bytes, "Render input must remain immutable after completion") &&
-         check(read_bytes(document.savedDocumentPath()) == latest_bytes, "Render completion must preserve newer saved bytes") &&
-         check(record != records.cend() && record->document_path == document.savedDocumentPath(),
-               "Library navigation should retain the editable project") &&
-         check(backup == latest, "Render completion must preserve the latest catalog backup");
+  const auto published_path = completed_render.output_path.trimmed();
+  const QFileInfo published_info(published_path);
+  if (!check(!published_path.isEmpty() && published_info.isFile() &&
+                 published_info.isReadable() && published_info.size() > 0 &&
+                 published_info.absolutePath() == QFileInfo(document.savedRenderPath()).absolutePath(),
+             "Publishing should produce a readable, nonempty job-owned render beside the timeline render target")) {
+    return false;
+  }
+  if (!check(published_path != document.savedRenderPath() &&
+                 completed_render.job_id == QStringLiteral("timeline-render-%1")
+                     .arg(document.timelineAssetId().section(':', 1)) &&
+                 completed_render.metadata_json.value(QStringLiteral("timelineId")).toString() ==
+                     document.timelineAssetId().section(':', 1) &&
+                 completed_render.metadata_json.value(QStringLiteral("renderDocumentSha256")).toString() ==
+                     QString::fromLatin1(QCryptographicHash::hash(snapshot_bytes,
+                         QCryptographicHash::Sha256).toHex()),
+             "The immutable render job should retain its timeline ID, snapshot hash, and unique output path")) {
+    return false;
+  }
+
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+  if (!check(!ffmpeg.isEmpty() && !ffprobe.isEmpty(),
+             "The published render must be decodable with FFmpeg and inspectable with ffprobe")) {
+    return false;
+  }
+  const auto probe_text = process_stdout(ffprobe, {
+      QStringLiteral("-v"), QStringLiteral("error"),
+      QStringLiteral("-show_entries"), QStringLiteral("stream=codec_type,codec_name,width,height:format=duration"),
+      QStringLiteral("-of"), QStringLiteral("json"), published_path});
+  const auto probe = QJsonDocument::fromJson(probe_text.toUtf8()).object();
+  bool has_video_stream = false;
+  for (const auto& value : probe.value(QStringLiteral("streams")).toArray()) {
+    const auto stream = value.toObject();
+    if (stream.value(QStringLiteral("codec_type")).toString() == QStringLiteral("video") &&
+        !stream.value(QStringLiteral("codec_name")).toString().isEmpty() &&
+        stream.value(QStringLiteral("width")).toInt() > 0 &&
+        stream.value(QStringLiteral("height")).toInt() > 0) {
+      has_video_stream = true;
+      break;
+    }
+  }
+  bool duration_ok = false;
+  const auto duration_seconds = probe.value(QStringLiteral("format")).toObject()
+                                    .value(QStringLiteral("duration")).toString()
+                                    .toDouble(&duration_ok);
+  const auto decoded_frame = process_bytes(ffmpeg, {
+      QStringLiteral("-v"), QStringLiteral("error"),
+      QStringLiteral("-i"), published_path,
+      QStringLiteral("-frames:v"), QStringLiteral("1"),
+      QStringLiteral("-vf"), QStringLiteral("scale=1:1"),
+      QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+      QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  if (!check(has_video_stream && duration_ok && duration_seconds > 0.0 &&
+                 decoded_frame.size() == 3,
+             "The job-owned published artifact should contain a probeable video stream and a decodable frame")) {
+    return false;
+  }
+
+  if (!check(read_bytes(snapshot_path) == snapshot_bytes,
+             "Render input must remain immutable after completion") ||
+      !check(read_bytes(document.savedDocumentPath()) == latest_bytes,
+             "Render completion must preserve newer saved bytes") ||
+      !check(record != records.cend() &&
+                 record->timeline_id == document.timelineAssetId().section(':', 1) &&
+                 record->document_path == document.savedDocumentPath() &&
+                 record->render_path == published_path,
+             "The library record should associate the verified render with its editable timeline document") ||
+      !check(backup == latest, "Render completion must preserve the latest catalog backup")) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
 
+#include "timeline_audio_delivery_workflow.inc"
+#include "timeline_bounded_h264_export_workflow.inc"
+#include "timeline_opacity_window_pruning_workflow.inc"
+#include "timeline_video_delivery_fidelity_workflow.inc"
+#include "timeline_spatial_source_grade_workflow.inc"
 #include "timeline_keyframe_coverage_workflow.inc"
 #include "timeline_effect_keyframe_render_workflow.inc"
+#include "timeline_agent_mutation_batch_workflow.inc"
+#include "timeline_export_snapshot_readiness_workflow.inc"
+#include "timeline_duration_cache_workflow.inc"
 
 bool run_timeline_creative_finishes_workflow(const QString& workspace_path) {
   const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
@@ -2381,6 +4954,5571 @@ bool run_timeline_creative_finishes_workflow(const QString& workspace_path) {
   return true;
 }
 
+bool render_timeline_image_sequence(
+    const TimelineDocumentController& controller,
+    const QString& output_pattern,
+    QString* error_message = nullptr,
+    double range_start_seconds = -1.0,
+    double range_end_seconds = -1.0,
+    const QString& graph_sidecar_path = QString{}) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    if (error_message) *error_message = QStringLiteral("FFmpeg is unavailable.");
+    return false;
+  }
+  auto arguments = photo_editor::desktop::TimelineHistoryTestAccess::renderArguments(
+      controller, output_pattern, QStringLiteral("image-sequence"),
+      range_start_seconds, range_end_seconds, error_message, graph_sidecar_path);
+  if (arguments.isEmpty()) return false;
+  if (!graph_sidecar_path.trimmed().isEmpty() &&
+      !QFileInfo::exists(graph_sidecar_path)) {
+    const auto filter_complex_index =
+        arguments.indexOf(QStringLiteral("-filter_complex"));
+    if (filter_complex_index >= 0 &&
+        filter_complex_index + 1 < arguments.size()) {
+      QSaveFile graph_file(graph_sidecar_path);
+      const auto graph = arguments.at(filter_complex_index + 1).toUtf8();
+      if (!graph_file.open(QIODevice::WriteOnly) ||
+          graph_file.write(graph) != graph.size() || !graph_file.commit()) {
+        if (error_message) {
+          *error_message = QStringLiteral("Unable to preserve the requested render filter graph.");
+        }
+        return false;
+      }
+    }
+  }
+  QProcess process;
+  process.start(ffmpeg, arguments);
+  if (!process.waitForFinished(90000) ||
+      process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    if (error_message) {
+      *error_message = QString::fromUtf8(process.readAllStandardError()).trimmed();
+    }
+    return false;
+  }
+  return true;
+}
+
+QString timeline_image_sequence_frame(const QString& pattern, int frame_number) {
+  auto frame_path = pattern;
+  frame_path.replace(QStringLiteral("%06d"),
+                     QStringLiteral("%1").arg(frame_number, 6, 10, QLatin1Char('0')));
+  return frame_path;
+}
+
+#include "timeline_graphics_track_reorder_workflow.inc"
+#include "timeline_graphics_track_compaction_workflow.inc"
+#include "timeline_geq_mask_cache_pixel_workflow.inc"
+#include "timeline_clip_frame_base_animation_workflow.inc"
+#include "timeline_animated_xy_perspective_export_workflow.inc"
+
+bool run_timeline_sequence_mask_workflow(const QString& workspace_path) {
+  QImage source(80, 48, QImage::Format_RGBA8888);
+  source.fill(QColor(22, 96, 142, 255));
+  const auto source_path =
+      QDir(workspace_path).filePath(QStringLiteral("sequence-mask-source.png"));
+  if (!source.save(source_path)) {
+    std::cerr << "sequence-mask fixture image should be writable\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Sequence mask workflow")},
+      {QStringLiteral("width"), 128},
+      {QStringLiteral("height"), 96},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("photo:sequence-mask"), source_path,
+      QStringLiteral("Sequence mask source"), 2.0, source_path);
+  const auto clip_id = controller.clips().value(0).toMap()
+                           .value(QStringLiteral("clipId")).toString();
+  const QVariantMap rectangle_mask{
+      {QStringLiteral("shape"), QStringLiteral("rectangle")},
+      {QStringLiteral("left"), 0.15},
+      {QStringLiteral("top"), 0.20},
+      {QStringLiteral("right"), 0.85},
+      {QStringLiteral("bottom"), 0.80},
+      {QStringLiteral("cornerRadius"), 0.06},
+  };
+  if (clip_id.isEmpty() ||
+      !controller.setTimelineClipMaskForAutomation(clip_id, rectangle_mask)
+           .value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "an unlocked visual clip should accept a normalized sequence-space mask\n";
+    return false;
+  }
+  const auto initial = controller.timelineClipDetails(0);
+  const auto projected_mask = initial.value(QStringLiteral("clipMask")).toMap();
+  const auto invalid_order = QVariantMap{
+      {QStringLiteral("shape"), QStringLiteral("rectangle")},
+      {QStringLiteral("left"), 0.90}, {QStringLiteral("top"), 0.20},
+      {QStringLiteral("right"), 0.85}, {QStringLiteral("bottom"), 0.80},
+      {QStringLiteral("cornerRadius"), 0.06}};
+  const auto invalid_ellipse = QVariantMap{
+      {QStringLiteral("shape"), QStringLiteral("ellipse")},
+      {QStringLiteral("left"), 0.15}, {QStringLiteral("top"), 0.20},
+      {QStringLiteral("right"), 0.85}, {QStringLiteral("bottom"), 0.80},
+      {QStringLiteral("cornerRadius"), 0.02}};
+  if (!projected_mask.value(QStringLiteral("enabled")).toBool() ||
+      !nearly_equal(projected_mask.value(QStringLiteral("cornerRadius")).toDouble(), 0.06) ||
+      controller.setTimelineClipMaskForAutomation(clip_id, invalid_order)
+          .value(QStringLiteral("ok")).toBool() ||
+      controller.setTimelineClipMaskForAutomation(clip_id, invalid_ellipse)
+          .value(QStringLiteral("ok")).toBool() ||
+      controller.timelineClipDetails(0).value(QStringLiteral("clipMask")).toMap() !=
+          projected_mask) {
+    std::cerr << "sequence masks should reject inverted bounds and ellipse corner radii without partial changes\n";
+    return false;
+  }
+
+  const auto animated = controller.setTimelineClipAnimationForAutomation(
+      clip_id,
+      QVariantList{QVariantMap{
+          {QStringLiteral("parameter"), QStringLiteral("mask:right")},
+          {QStringLiteral("keyframes"), QVariantList{
+              QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                          {QStringLiteral("value"), 0.85}},
+              QVariantMap{{QStringLiteral("localSeconds"), 1.0},
+                          {QStringLiteral("value"), 0.60}}}}}});
+  if (!animated.value(QStringLiteral("ok")).toBool() ||
+      !controller.timelineClipDetails(0).value(QStringLiteral("availableKeyframeParameters"))
+           .toStringList().contains(QStringLiteral("mask:right"))) {
+    std::cerr << "mask edges should participate in the native clip keyframe system\n";
+    return false;
+  }
+  controller.seekSequenceSeconds(1.0);
+  const auto animated_mask = controller.timelineClipDetails(0)
+                                 .value(QStringLiteral("clipMask")).toMap();
+  if (!nearly_equal(animated_mask.value(QStringLiteral("right")).toDouble(), 0.60)) {
+    std::cerr << "mask edge keyframes should be evaluated into the clip detail projection\n";
+    return false;
+  }
+  const auto invalid_animation = controller.setTimelineClipAnimationForAutomation(
+      clip_id,
+      QVariantList{QVariantMap{
+          {QStringLiteral("parameter"), QStringLiteral("mask:left")},
+          {QStringLiteral("keyframes"), QVariantList{
+              QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                          {QStringLiteral("value"), 0.90}},
+              QVariantMap{{QStringLiteral("localSeconds"), 1.0},
+                          {QStringLiteral("value"), 0.70}}}}}});
+  if (invalid_animation.value(QStringLiteral("ok")).toBool() ||
+      controller.timelineClipDetails(0).value(QStringLiteral("clipMask")).toMap() !=
+          animated_mask) {
+    std::cerr << "mask keyframes must preserve a nonempty viewport and reject atomically\n";
+    return false;
+  }
+
+  const auto original_pattern =
+      QDir(workspace_path).filePath(QStringLiteral("sequence-mask-pixels-%06d.png"));
+  QString render_error;
+  if (!render_timeline_image_sequence(controller, original_pattern, &render_error)) {
+    std::cerr << "sequence mask should render to alpha PNG frames: "
+              << render_error.toStdString() << '\n';
+    return false;
+  }
+  const QImage original_frame(timeline_image_sequence_frame(original_pattern, 1));
+  if (original_frame.isNull() || original_frame.size() != QSize(128, 96) ||
+      original_frame.pixelColor(40, 48).alpha() < 250 ||
+      original_frame.pixelColor(116, 48).alpha() != 0) {
+    std::cerr << "sequence mask export should clip pixels and preserve transparent PNG alpha\n";
+    return false;
+  }
+
+  controller.applyOutputPreset(QStringLiteral("square"));
+  const auto unrelated_animation = controller.setTimelineClipAnimationForAutomation(
+      clip_id,
+      QVariantList{
+          QVariantMap{
+              {QStringLiteral("parameter"), QStringLiteral("frameScale")},
+              {QStringLiteral("keyframes"), QVariantList{
+                  QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                              {QStringLiteral("value"), 1.10}},
+                  QVariantMap{{QStringLiteral("localSeconds"), 1.0},
+                              {QStringLiteral("value"), 1.20}}}}},
+          QVariantMap{
+              {QStringLiteral("parameter"), QStringLiteral("opacity")},
+              {QStringLiteral("keyframes"), QVariantList{
+                  QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                              {QStringLiteral("value"), 0.70}},
+                  QVariantMap{{QStringLiteral("localSeconds"), 1.0},
+                              {QStringLiteral("value"), 0.80}}}}}});
+  const auto square_mask = controller.timelineClipDetails(0)
+                               .value(QStringLiteral("clipMask")).toMap();
+  const auto cleared_square_mask =
+      controller.clearTimelineClipMaskForAutomation(clip_id);
+  const auto cleared_square_detail = controller.timelineClipDetails(0);
+  const auto cleared_square_channels =
+      cleared_square_detail.value(QStringLiteral("availableKeyframeParameters")).toStringList();
+  if (!unrelated_animation.value(QStringLiteral("ok")).toBool() ||
+      !cleared_square_mask.value(QStringLiteral("ok")).toBool() ||
+      !cleared_square_mask.value(QStringLiteral("changed")).toBool() ||
+      cleared_square_detail.value(QStringLiteral("clipMask")).toMap()
+          .value(QStringLiteral("enabled")).toBool() ||
+      cleared_square_channels.contains(QStringLiteral("mask:right")) ||
+      !cleared_square_channels.contains(QStringLiteral("frameScale")) ||
+      !cleared_square_channels.contains(QStringLiteral("opacity"))) {
+    std::cerr << "clearing a mask should remove only mask state in the active output variant\n";
+    return false;
+  }
+  const auto repeated_clear =
+      controller.clearTimelineClipMaskForAutomation(clip_id);
+  if (!repeated_clear.value(QStringLiteral("ok")).toBool() ||
+      repeated_clear.value(QStringLiteral("changed")).toBool() ||
+      !repeated_clear.value(QStringLiteral("alreadySatisfied")).toBool()) {
+    std::cerr << "repeating an already-satisfied clear should not add another undo step\n";
+    return false;
+  }
+  controller.undo();
+  const auto undone_clear_mask = controller.timelineClipDetails(0);
+  const auto undone_clear_channels =
+      undone_clear_mask.value(QStringLiteral("availableKeyframeParameters")).toStringList();
+  if (!undone_clear_mask.value(QStringLiteral("clipMask")).toMap()
+           .value(QStringLiteral("enabled")).toBool() ||
+      !undone_clear_channels.contains(QStringLiteral("mask:right")) ||
+      !undone_clear_channels.contains(QStringLiteral("frameScale")) ||
+      !undone_clear_channels.contains(QStringLiteral("opacity"))) {
+    std::cerr << "one undo should restore the mask and retain unrelated animation channels\n";
+    return false;
+  }
+  controller.redo();
+  const auto redone_clear_mask = controller.timelineClipDetails(0);
+  const auto redone_clear_channels =
+      redone_clear_mask.value(QStringLiteral("availableKeyframeParameters")).toStringList();
+  if (redone_clear_mask.value(QStringLiteral("clipMask")).toMap()
+          .value(QStringLiteral("enabled")).toBool() ||
+      redone_clear_channels.contains(QStringLiteral("mask:right")) ||
+      !redone_clear_channels.contains(QStringLiteral("frameScale")) ||
+      !redone_clear_channels.contains(QStringLiteral("opacity"))) {
+    std::cerr << "redo should clear the mask again without removing unrelated animation\n";
+    return false;
+  }
+  controller.applyOutputPreset(QStringLiteral("landscape"));
+  const auto restored_mask = controller.timelineClipDetails(0)
+                                 .value(QStringLiteral("clipMask")).toMap();
+  if (square_mask.value(QStringLiteral("shape")).toString() != QStringLiteral("rectangle") ||
+      !nearly_equal(square_mask.value(QStringLiteral("right")).toDouble(), 0.60) ||
+      !nearly_equal(restored_mask.value(QStringLiteral("right")).toDouble(), 0.60)) {
+    std::cerr << "clearing the active variant should retain masks in inactive output variants\n";
+    return false;
+  }
+
+  const auto saved_path =
+      QDir(workspace_path).filePath(QStringLiteral("sequence-mask-roundtrip.json"));
+  const auto saved = controller.saveTimelineCopyForAutomation(saved_path);
+  TimelineDocumentController reopened;
+  if (!saved.value(QStringLiteral("ok")).toBool() ||
+      !reopened.loadTimeline(saved_path)) {
+    std::cerr << "sequence mask project copy should save and reopen\n";
+    return false;
+  }
+  reopened.seekSequenceSeconds(1.0);
+  const auto reopened_mask = reopened.timelineClipDetails(0)
+                                 .value(QStringLiteral("clipMask")).toMap();
+  if (reopened_mask.value(QStringLiteral("shape")).toString() != QStringLiteral("rectangle") ||
+      !nearly_equal(reopened_mask.value(QStringLiteral("left")).toDouble(), 0.15) ||
+      !nearly_equal(reopened_mask.value(QStringLiteral("right")).toDouble(), 0.60) ||
+      !reopened.timelineClipDetails(0).value(QStringLiteral("availableKeyframeParameters"))
+           .toStringList().contains(QStringLiteral("mask:right"))) {
+    std::cerr << "sequence mask geometry and animation should persist in Timeline JSON\n";
+    return false;
+  }
+
+  controller.applyOutputPreset(QStringLiteral("square"));
+  const auto cleared_variant_detail = controller.timelineClipDetails(0);
+  const auto cleared_variant_path =
+      QDir(workspace_path).filePath(QStringLiteral("sequence-mask-cleared-roundtrip.json"));
+  const auto cleared_variant_save =
+      controller.saveTimelineCopyForAutomation(cleared_variant_path);
+  QFile cleared_variant_file(cleared_variant_path);
+  QJsonObject saved_cleared_clip;
+  bool saved_cleared_clip_found = false;
+  if (cleared_variant_file.open(QIODevice::ReadOnly)) {
+    const auto saved_document =
+        QJsonDocument::fromJson(cleared_variant_file.readAll()).object();
+    for (const auto& track_value : saved_document.value(QStringLiteral("tracks")).toArray()) {
+      for (const auto& clip_value : track_value.toObject()
+                                        .value(QStringLiteral("clips")).toArray()) {
+        const auto candidate = clip_value.toObject();
+        if (candidate.value(QStringLiteral("clipId")).toString() == clip_id) {
+          saved_cleared_clip = candidate;
+          saved_cleared_clip_found = true;
+        }
+      }
+    }
+  }
+  const auto saved_clear_overrides = saved_cleared_clip
+      .value(QStringLiteral("outputVariantOverrides")).toObject();
+  const auto saved_square_override = saved_clear_overrides
+      .value(QStringLiteral("square")).toObject();
+  const auto saved_landscape_override = saved_clear_overrides
+      .value(QStringLiteral("landscape")).toObject();
+  const auto has_keyframe_parameter = [](const QJsonArray& keyframes, const QString& parameter) {
+    return std::any_of(keyframes.cbegin(), keyframes.cend(), [&parameter](const QJsonValue& value) {
+      return value.toObject().value(QStringLiteral("parameter")).toString() == parameter;
+    });
+  };
+  const auto saved_global_keyframes =
+      saved_cleared_clip.value(QStringLiteral("keyframes")).toArray();
+  const auto saved_square_framing_keyframes =
+      saved_square_override.value(QStringLiteral("framingKeyframes")).toArray();
+  const auto saved_landscape_framing_keyframes =
+      saved_landscape_override.value(QStringLiteral("framingKeyframes")).toArray();
+  const auto serialized_clip_for_id = [&clip_id](const QJsonObject& document) {
+    for (const auto& track_value : document.value(QStringLiteral("tracks")).toArray()) {
+      for (const auto& clip_value : track_value.toObject()
+                                        .value(QStringLiteral("clips")).toArray()) {
+        const auto clip = clip_value.toObject();
+        if (clip.value(QStringLiteral("clipId")).toString() == clip_id) {
+          return clip;
+        }
+      }
+    }
+    return QJsonObject{};
+  };
+  const auto keyframe_payload_matches = [](const QJsonObject& left, const QJsonObject& right) {
+    if (left.value(QStringLiteral("keyframes")) !=
+        right.value(QStringLiteral("keyframes"))) {
+      return false;
+    }
+    const auto left_variants = left.value(QStringLiteral("outputVariantOverrides")).toObject();
+    const auto right_variants = right.value(QStringLiteral("outputVariantOverrides")).toObject();
+    if (left_variants.keys() != right_variants.keys()) {
+      return false;
+    }
+    for (const auto& variant_key : left_variants.keys()) {
+      if (left_variants.value(variant_key).toObject()
+              .value(QStringLiteral("framingKeyframes")) !=
+          right_variants.value(variant_key).toObject()
+              .value(QStringLiteral("framingKeyframes"))) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const auto live_serialized_clip = serialized_clip_for_id(
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(controller));
+  TimelineDocumentController reopened_cleared_variant;
+  if (!saved_cleared_clip_found ||
+      !saved_cleared_clip.value(QStringLiteral("clipMask")).toObject().isEmpty() ||
+      has_keyframe_parameter(saved_global_keyframes, QStringLiteral("mask:right")) ||
+      !has_keyframe_parameter(saved_global_keyframes, QStringLiteral("frameScale")) ||
+      !has_keyframe_parameter(saved_global_keyframes, QStringLiteral("opacity")) ||
+      !saved_square_override.value(QStringLiteral("clipMask")).toObject().isEmpty() ||
+      has_keyframe_parameter(saved_square_framing_keyframes, QStringLiteral("mask:right")) ||
+      !has_keyframe_parameter(saved_square_framing_keyframes, QStringLiteral("frameScale")) ||
+      saved_landscape_override.value(QStringLiteral("clipMask")).toObject().isEmpty() ||
+      !has_keyframe_parameter(saved_landscape_framing_keyframes, QStringLiteral("mask:right")) ||
+      cleared_variant_detail.value(QStringLiteral("clipMask")).toMap()
+          .value(QStringLiteral("enabled")).toBool() ||
+      cleared_variant_detail.value(QStringLiteral("availableKeyframeParameters")).toStringList()
+          .contains(QStringLiteral("mask:right")) ||
+      !cleared_variant_detail.value(QStringLiteral("availableKeyframeParameters")).toStringList()
+           .contains(QStringLiteral("frameScale")) ||
+      !cleared_variant_detail.value(QStringLiteral("availableKeyframeParameters")).toStringList()
+           .contains(QStringLiteral("opacity")) ||
+      !keyframe_payload_matches(live_serialized_clip, saved_cleared_clip) ||
+      !cleared_variant_save.value(QStringLiteral("ok")).toBool() ||
+      !reopened_cleared_variant.loadTimeline(cleared_variant_path)) {
+    std::cerr << "the cleared active variant should save and reopen without changing exact keyframe arrays\n";
+    return false;
+  }
+  reopened_cleared_variant.seekSequenceSeconds(1.0);
+  const auto reopened_cleared_detail = reopened_cleared_variant.timelineClipDetails(0);
+  const auto reopened_serialized_clip = serialized_clip_for_id(
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(reopened_cleared_variant));
+  const auto reopened_cleared_channels =
+      reopened_cleared_detail.value(QStringLiteral("availableKeyframeParameters")).toStringList();
+  if (!keyframe_payload_matches(reopened_serialized_clip, saved_cleared_clip) ||
+      reopened_cleared_detail.value(QStringLiteral("clipMask")).toMap()
+          .value(QStringLiteral("enabled")).toBool() ||
+      reopened_cleared_channels.contains(QStringLiteral("mask:right")) ||
+      !reopened_cleared_channels.contains(QStringLiteral("frameScale")) ||
+      !reopened_cleared_channels.contains(QStringLiteral("opacity"))) {
+    std::cerr << "the cleared mask and surviving animation channels should roundtrip independently\n";
+    return false;
+  }
+
+  TimelineDocumentController off_canvas;
+  off_canvas.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Off-canvas sequence mask")},
+      {QStringLiteral("width"), 128},
+      {QStringLiteral("height"), 96},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  off_canvas.addClipFromGallery(
+      QStringLiteral("photo:off-canvas-mask"), source_path,
+      QStringLiteral("Off-canvas source"), 1.0, source_path);
+  const auto off_canvas_id = off_canvas.clips().value(0).toMap()
+                                 .value(QStringLiteral("clipId")).toString();
+  const QVariantMap off_canvas_mask{
+      {QStringLiteral("shape"), QStringLiteral("rectangle")},
+      {QStringLiteral("left"), -0.25}, {QStringLiteral("top"), -0.25},
+      {QStringLiteral("right"), 0.50}, {QStringLiteral("bottom"), 1.25},
+      {QStringLiteral("cornerRadius"), 0.0},
+  };
+  if (!off_canvas.setTimelineClipMaskForAutomation(off_canvas_id, off_canvas_mask)
+           .value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "sequence masks should admit finite off-canvas bounds\n";
+    return false;
+  }
+  const auto off_canvas_pattern =
+      QDir(workspace_path).filePath(QStringLiteral("off-canvas-mask-%06d.png"));
+  if (!render_timeline_image_sequence(
+          off_canvas, off_canvas_pattern, &render_error, 0.0, 1.0 / 24.0)) {
+    std::cerr << "off-canvas sequence mask should render: "
+              << render_error.toStdString() << '\n';
+    return false;
+  }
+  const QImage off_canvas_frame(timeline_image_sequence_frame(off_canvas_pattern, 1));
+  if (off_canvas_frame.isNull() ||
+      off_canvas_frame.pixelColor(0, 48).alpha() < 250 ||
+      off_canvas_frame.pixelColor(80, 48).alpha() != 0) {
+    std::cerr << "off-canvas sequence masks should retain in-bounds pixels and clip beyond the right edge\n";
+    return false;
+  }
+
+  TimelineDocumentController collapsed;
+  collapsed.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Collapsed sequence mask")},
+      {QStringLiteral("width"), 128},
+      {QStringLiteral("height"), 96},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  collapsed.addClipFromGallery(
+      QStringLiteral("photo:collapsed-mask"), source_path,
+      QStringLiteral("Collapsed source"), 1.0, source_path);
+  const auto collapsed_id = collapsed.clips().value(0).toMap()
+                                .value(QStringLiteral("clipId")).toString();
+  const QVariantMap collapsed_mask{
+      {QStringLiteral("shape"), QStringLiteral("rectangle")},
+      {QStringLiteral("left"), 0.5}, {QStringLiteral("top"), 0.25},
+      {QStringLiteral("right"), 0.5}, {QStringLiteral("bottom"), 0.75},
+      {QStringLiteral("cornerRadius"), 0.1},
+  };
+  if (!collapsed.setTimelineClipMaskForAutomation(collapsed_id, collapsed_mask)
+           .value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "collapsed sequence masks should be accepted as transparent endpoints\n";
+    return false;
+  }
+  const auto collapsed_pattern =
+      QDir(workspace_path).filePath(QStringLiteral("collapsed-mask-%06d.png"));
+  if (!render_timeline_image_sequence(
+          collapsed, collapsed_pattern, &render_error, 0.0, 1.0 / 24.0)) {
+    std::cerr << "collapsed sequence mask should render: "
+              << render_error.toStdString() << '\n';
+    return false;
+  }
+  const QImage collapsed_frame(timeline_image_sequence_frame(collapsed_pattern, 1));
+  if (collapsed_frame.isNull()) {
+    std::cerr << "collapsed mask export should produce a PNG frame\n";
+    return false;
+  }
+  for (int y = 0; y < collapsed_frame.height(); ++y) {
+    for (int x = 0; x < collapsed_frame.width(); ++x) {
+      if (collapsed_frame.pixelColor(x, y).alpha() != 0) {
+        std::cerr << "zero-area sequence mask bounds should render fully transparent\n";
+        return false;
+      }
+    }
+  }
+  const QVariantMap ellipse_mask{
+      {QStringLiteral("shape"), QStringLiteral("ellipse")},
+      {QStringLiteral("left"), 0.1}, {QStringLiteral("top"), 0.1},
+      {QStringLiteral("right"), 0.9}, {QStringLiteral("bottom"), 0.9},
+      {QStringLiteral("cornerRadius"), 0.0},
+  };
+  const auto ellipse_set =
+      collapsed.setTimelineClipMaskForAutomation(collapsed_id, ellipse_mask);
+  const auto ellipse_animation = collapsed.setTimelineClipAnimationForAutomation(
+      collapsed_id,
+      QVariantList{QVariantMap{
+          {QStringLiteral("parameter"), QStringLiteral("mask:right")},
+          {QStringLiteral("keyframes"), QVariantList{
+              QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                          {QStringLiteral("value"), 0.9}},
+              QVariantMap{{QStringLiteral("localSeconds"), 1.0},
+                          {QStringLiteral("value"), 0.75}}}}}});
+  if (!ellipse_set.value(QStringLiteral("ok")).toBool() ||
+      !ellipse_animation.value(QStringLiteral("ok")).toBool() ||
+      !collapsed.clearTimelineClipMaskForAutomation(collapsed_id)
+           .value(QStringLiteral("changed")).toBool() ||
+      collapsed.timelineClipDetails(0).value(QStringLiteral("clipMask")).toMap()
+          .value(QStringLiteral("enabled")).toBool()) {
+    std::cerr << "the clear action should remove an ellipse mask as well as rectangle masks\n";
+    return false;
+  }
+  collapsed.undo();
+  if (collapsed.timelineClipDetails(0).value(QStringLiteral("clipMask")).toMap()
+          .value(QStringLiteral("shape")).toString() != QStringLiteral("ellipse") ||
+      !collapsed.timelineClipDetails(0).value(QStringLiteral("availableKeyframeParameters"))
+           .toStringList().contains(QStringLiteral("mask:right"))) {
+    std::cerr << "undo should restore a cleared ellipse mask\n";
+    return false;
+  }
+  collapsed.redo();
+  if (collapsed.timelineClipDetails(0).value(QStringLiteral("clipMask")).toMap()
+          .value(QStringLiteral("enabled")).toBool() ||
+      collapsed.timelineClipDetails(0).value(QStringLiteral("availableKeyframeParameters"))
+          .toStringList().contains(QStringLiteral("mask:right"))) {
+    std::cerr << "redo should clear the ellipse mask again\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_geometry_floor_workflow(const QString& workspace_path) {
+  QImage source(80, 48, QImage::Format_RGBA8888);
+  source.fill(QColor(22, 96, 142, 255));
+  const auto source_path = QDir(workspace_path).filePath(QStringLiteral("geometry-floor-source.png"));
+  if (!source.save(source_path)) {
+    std::cerr << "one-frame geometry fixture image should be writable\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("One Frame Geometry")},
+      {QStringLiteral("width"), 128},
+      {QStringLiteral("height"), 96},
+      {QStringLiteral("frameRate"), 24.0},
+      {QStringLiteral("trackLayout"), QStringLiteral("creator_social")},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("photo:geometry-floor"), source_path,
+      QStringLiteral("One Frame Photo"), 1.0, source_path);
+  const auto photo_detail = controller.clips().value(0).toMap();
+  const auto clip_id = photo_detail.value(QStringLiteral("clipId")).toString();
+  const auto track_id = photo_detail.value(QStringLiteral("trackId")).toString();
+  const auto one_frame_seconds = 1.0 / 24.0;
+  const auto frame_result = controller.setTimelineClipFrameForAutomation(
+      clip_id, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 1.0,
+      QStringLiteral("fit"), 1.0 / 128.0, 1.0 / 96.0, 0.0,
+      0.0, 0.0, 0.0, 0.0);
+  const auto timing_result = controller.setTimelineClipTimingForAutomation(
+      clip_id, track_id, 0.0, one_frame_seconds);
+
+  QString graphics_track_id;
+  for (const auto& track_value : controller.timelineTracks()) {
+    const auto track = track_value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        track.value(QStringLiteral("trackRole")).toString() == QStringLiteral("graphics")) {
+      graphics_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  const auto shape_result = controller.createTimelineGraphicForAutomation(
+      graphics_track_id, QStringLiteral("rectangle"), 0.0, one_frame_seconds,
+      QVariantMap{{QStringLiteral("backgroundColor"), QStringLiteral("#ffffffff")},
+                  {QStringLiteral("shapeWidth"), 1.0 / 128.0},
+                  {QStringLiteral("shapeHeight"), 1.0 / 96.0}});
+  const auto overscan_shape_height = 1.0185185;
+  const auto overscan_shape_width = 4.0;
+  const auto overscan_shape_result = controller.createTimelineGraphicForAutomation(
+      graphics_track_id, QStringLiteral("rectangle"), 2.0 * one_frame_seconds, one_frame_seconds,
+      QVariantMap{{QStringLiteral("backgroundColor"), QStringLiteral("#ff28aaff")},
+                  {QStringLiteral("shapeWidth"), overscan_shape_width},
+                  {QStringLiteral("shapeHeight"), overscan_shape_height},
+                  {QStringLiteral("positionX"), 1.67},
+                  {QStringLiteral("positionY"), -0.125}});
+  const auto overscan_title_result = controller.createTimelineTitleForAutomation(
+      graphics_track_id, QStringLiteral("basic"), one_frame_seconds, one_frame_seconds,
+      QVariantMap{{QStringLiteral("text"), QStringLiteral("Portrait overscan title")},
+                  {QStringLiteral("positionX"), 1.5},
+                  {QStringLiteral("positionY"), -0.25}});
+  const auto overscan_title_id =
+      overscan_title_result.value(QStringLiteral("createdClipId")).toString();
+  const auto overscan_title_animation = controller.setTimelineClipAnimationForAutomation(
+      overscan_title_id,
+      QVariantList{QVariantMap{
+          {QStringLiteral("parameter"), QStringLiteral("titlePositionX")},
+          {QStringLiteral("keyframes"), QVariantList{QVariantMap{
+              {QStringLiteral("localSeconds"), 0.0},
+              {QStringLiteral("value"), 1.75},
+              {QStringLiteral("interpolation"), QStringLiteral("linear")}}}}}});
+  const auto updated_photo = controller.inspectTimelineClipById(clip_id)
+                                .value(QStringLiteral("clip")).toMap();
+  const auto shape_detail = shape_result.value(QStringLiteral("clip")).toMap();
+  const auto overscan_shape_detail =
+      overscan_shape_result.value(QStringLiteral("clip")).toMap();
+  const auto overscan_title_detail =
+      controller.inspectTimelineClipById(overscan_title_id)
+          .value(QStringLiteral("clip")).toMap();
+  const auto overscan_title_keyframes =
+      overscan_title_detail.value(QStringLiteral("keyframes")).toList();
+  auto overscan_title_animation_value = std::numeric_limits<double>::quiet_NaN();
+  for (const auto& keyframe_value : overscan_title_keyframes) {
+    const auto keyframe = keyframe_value.toMap();
+    if (keyframe.value(QStringLiteral("parameter")).toString() ==
+        QStringLiteral("titlePositionX")) {
+      overscan_title_animation_value = keyframe.value(QStringLiteral("value")).toDouble();
+    }
+  }
+  const auto serialized_clip_value = [](
+      const QJsonObject& document, const QString& requested_id,
+      const QString& property) {
+    for (const auto& track_value : document.value(QStringLiteral("tracks")).toArray()) {
+      const auto track = track_value.toObject();
+      for (const auto& clip_value : track.value(QStringLiteral("clips")).toArray()) {
+        const auto clip = clip_value.toObject();
+        if (clip.value(QStringLiteral("clipId")).toString() == requested_id) {
+          return clip.value(property).toDouble(std::numeric_limits<double>::quiet_NaN());
+        }
+      }
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+  };
+  const auto overscan_title_base_x = serialized_clip_value(
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(controller),
+      overscan_title_id,
+      QStringLiteral("titlePositionX"));
+  const auto overscan_title_base_y = serialized_clip_value(
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(controller),
+      overscan_title_id,
+      QStringLiteral("titlePositionY"));
+  if (!frame_result.value(QStringLiteral("ok")).toBool() ||
+      !timing_result.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(timing_result.value(QStringLiteral("durationSeconds")).toDouble(),
+                    one_frame_seconds, 1.0e-6) ||
+      !shape_result.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(updated_photo.value(QStringLiteral("frameWidth")).toDouble(),
+                    1.0 / 128.0, 1.0e-6) ||
+      !nearly_equal(updated_photo.value(QStringLiteral("frameHeight")).toDouble(),
+                    1.0 / 96.0, 1.0e-6) ||
+      !nearly_equal(updated_photo.value(QStringLiteral("frameScale")).toDouble(),
+                    0.015625, 1.0e-6) ||
+      !nearly_equal(shape_detail.value(QStringLiteral("titleShapeWidth")).toDouble(),
+                    1.0 / 128.0, 1.0e-6) ||
+      !nearly_equal(shape_detail.value(QStringLiteral("titleShapeHeight")).toDouble(),
+                    1.0 / 96.0, 1.0e-6) ||
+      !overscan_shape_result.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(overscan_shape_detail.value(QStringLiteral("titleShapeWidth")).toDouble(),
+                    overscan_shape_width, 1.0e-6) ||
+      !nearly_equal(overscan_shape_detail.value(QStringLiteral("titleShapeHeight")).toDouble(),
+                    overscan_shape_height, 1.0e-6) ||
+      !nearly_equal(overscan_shape_detail.value(QStringLiteral("titlePositionX")).toDouble(),
+                    1.67, 1.0e-6) ||
+      !nearly_equal(overscan_shape_detail.value(QStringLiteral("titlePositionY")).toDouble(),
+                    -0.125, 1.0e-6) ||
+      !overscan_title_result.value(QStringLiteral("ok")).toBool() ||
+      !overscan_title_animation.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(overscan_title_detail.value(QStringLiteral("titlePositionX")).toDouble(),
+                    1.75, 1.0e-6) ||
+      !nearly_equal(overscan_title_detail.value(QStringLiteral("titlePositionY")).toDouble(),
+                    -0.25, 1.0e-6) ||
+      !nearly_equal(overscan_title_base_x, 1.5, 1.0e-6) ||
+      !nearly_equal(overscan_title_base_y, -0.25, 1.0e-6) ||
+      !nearly_equal(overscan_title_animation_value, 1.75, 1.0e-6)) {
+    const auto compact_json = [](const QVariantMap& value) {
+      return QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact).toStdString();
+    };
+    std::cerr << "one-frame timing and one-pixel viewport/graphic geometry should be accepted exactly; "
+              << "clipId=" << clip_id.toStdString()
+              << " trackId=" << track_id.toStdString()
+              << " graphicsTrackId=" << graphics_track_id.toStdString()
+              << " frame=" << compact_json(frame_result)
+              << " timing=" << compact_json(timing_result)
+              << " shape=" << compact_json(QVariantMap{
+                     {QStringLiteral("ok"), shape_result.value(QStringLiteral("ok"))},
+                     {QStringLiteral("width"), shape_detail.value(QStringLiteral("titleShapeWidth"))},
+                     {QStringLiteral("height"), shape_detail.value(QStringLiteral("titleShapeHeight"))}})
+              << " overscanShape=" << compact_json(QVariantMap{
+                     {QStringLiteral("ok"), overscan_shape_result.value(QStringLiteral("ok"))},
+                     {QStringLiteral("width"), overscan_shape_detail.value(QStringLiteral("titleShapeWidth"))},
+                     {QStringLiteral("height"), overscan_shape_detail.value(QStringLiteral("titleShapeHeight"))},
+                     {QStringLiteral("x"), overscan_shape_detail.value(QStringLiteral("titlePositionX"))},
+                     {QStringLiteral("y"), overscan_shape_detail.value(QStringLiteral("titlePositionY"))}})
+              << " overscanTitle=" << compact_json(QVariantMap{
+                     {QStringLiteral("createOk"), overscan_title_result.value(QStringLiteral("ok"))},
+                     {QStringLiteral("animationOk"), overscan_title_animation.value(QStringLiteral("ok"))},
+                     {QStringLiteral("projectedX"), overscan_title_detail.value(QStringLiteral("titlePositionX"))},
+                     {QStringLiteral("projectedY"), overscan_title_detail.value(QStringLiteral("titlePositionY"))},
+                     {QStringLiteral("baseX"), overscan_title_base_x},
+                     {QStringLiteral("baseY"), overscan_title_base_y},
+                     {QStringLiteral("animatedX"), overscan_title_animation_value},
+                     {QStringLiteral("keyframes"), overscan_title_keyframes}})
+              << " photo=" << compact_json(QVariantMap{
+                     {QStringLiteral("frameWidth"), updated_photo.value(QStringLiteral("frameWidth"))},
+                     {QStringLiteral("frameHeight"), updated_photo.value(QStringLiteral("frameHeight"))},
+                     {QStringLiteral("frameScale"), updated_photo.value(QStringLiteral("frameScale"))}})
+              << '\n';
+    return false;
+  }
+
+  const auto saved_path = QDir(workspace_path).filePath(QStringLiteral("geometry-floor-roundtrip.json"));
+  const auto saved = controller.saveTimelineCopyForAutomation(saved_path);
+  TimelineDocumentController reopened;
+  if (!saved.value(QStringLiteral("ok")).toBool() || !reopened.loadTimeline(saved_path)) {
+    std::cerr << "one-pixel geometry should save and reopen natively\n";
+    return false;
+  }
+  const auto roundtrip_photo = reopened.inspectTimelineClipById(clip_id)
+                                  .value(QStringLiteral("clip")).toMap();
+  const auto shape_id = shape_detail.value(QStringLiteral("clipId")).toString();
+  const auto overscan_shape_id =
+      overscan_shape_detail.value(QStringLiteral("clipId")).toString();
+  const auto overscan_title_roundtrip_id =
+      overscan_title_detail.value(QStringLiteral("clipId")).toString();
+  const auto roundtrip_shape = reopened.inspectTimelineClipById(shape_id)
+                                   .value(QStringLiteral("clip")).toMap();
+  const auto roundtrip_overscan_shape =
+      reopened.inspectTimelineClipById(overscan_shape_id)
+          .value(QStringLiteral("clip")).toMap();
+  const auto roundtrip_overscan_title =
+      reopened.inspectTimelineClipById(overscan_title_roundtrip_id)
+          .value(QStringLiteral("clip")).toMap();
+  auto roundtrip_title_animation_value = std::numeric_limits<double>::quiet_NaN();
+  for (const auto& keyframe_value : roundtrip_overscan_title.value(QStringLiteral("keyframes")).toList()) {
+    const auto keyframe = keyframe_value.toMap();
+    if (keyframe.value(QStringLiteral("parameter")).toString() ==
+        QStringLiteral("titlePositionX")) {
+      roundtrip_title_animation_value = keyframe.value(QStringLiteral("value")).toDouble();
+    }
+  }
+  const auto roundtrip_overscan_title_base_x = serialized_clip_value(
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(reopened),
+      overscan_title_roundtrip_id,
+      QStringLiteral("titlePositionX"));
+  const auto roundtrip_overscan_title_base_y = serialized_clip_value(
+      photo_editor::desktop::TimelineHistoryTestAccess::documentObject(reopened),
+      overscan_title_roundtrip_id,
+      QStringLiteral("titlePositionY"));
+  if (!nearly_equal(roundtrip_photo.value(QStringLiteral("frameWidth")).toDouble(),
+                    1.0 / 128.0, 1.0e-6) ||
+      !nearly_equal(roundtrip_photo.value(QStringLiteral("frameHeight")).toDouble(),
+                    1.0 / 96.0, 1.0e-6) ||
+      !nearly_equal(roundtrip_photo.value(QStringLiteral("frameScale")).toDouble(),
+                    0.015625, 1.0e-6) ||
+      !nearly_equal(roundtrip_photo.value(QStringLiteral("trimmedDurationSeconds")).toDouble(),
+                    one_frame_seconds, 1.0e-6) ||
+      !nearly_equal(roundtrip_shape.value(QStringLiteral("titleShapeWidth")).toDouble(),
+                    1.0 / 128.0, 1.0e-6) ||
+      !nearly_equal(roundtrip_shape.value(QStringLiteral("titleShapeHeight")).toDouble(),
+                    1.0 / 96.0, 1.0e-6) ||
+      !nearly_equal(
+          roundtrip_overscan_shape.value(QStringLiteral("titleShapeWidth")).toDouble(),
+          overscan_shape_width, 1.0e-6) ||
+      !nearly_equal(
+          roundtrip_overscan_shape.value(QStringLiteral("titleShapeHeight")).toDouble(),
+          overscan_shape_height, 1.0e-6) ||
+      !nearly_equal(roundtrip_overscan_shape.value(QStringLiteral("titlePositionX")).toDouble(),
+                    1.67, 1.0e-6) ||
+      !nearly_equal(roundtrip_overscan_shape.value(QStringLiteral("titlePositionY")).toDouble(),
+                    -0.125, 1.0e-6) ||
+      !nearly_equal(roundtrip_overscan_title.value(QStringLiteral("titlePositionX")).toDouble(),
+                    1.75, 1.0e-6) ||
+      !nearly_equal(roundtrip_overscan_title.value(QStringLiteral("titlePositionY")).toDouble(),
+                    -0.25, 1.0e-6) ||
+      !nearly_equal(roundtrip_overscan_title_base_x, 1.5, 1.0e-6) ||
+      !nearly_equal(roundtrip_overscan_title_base_y, -0.25, 1.0e-6) ||
+      !nearly_equal(roundtrip_title_animation_value, 1.75, 1.0e-6)) {
+    std::cerr << "one-frame timing and one-pixel geometry should survive Timeline JSON round-trip\n";
+    return false;
+  }
+
+  TimelineDocumentController overscan_export;
+  overscan_export.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Graphic shape overscan render")},
+      {QStringLiteral("width"), 128},
+      {QStringLiteral("height"), 96},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  const auto overscan_graphics_track = overscan_export.createTimelineTrackForAutomation(
+      QStringLiteral("graphics"), QStringLiteral("Overscan graphics"), QString{});
+  const auto overscan_graphics_track_id =
+      overscan_graphics_track.value(QStringLiteral("trackId")).toString();
+  const auto tall_shape_result = overscan_export.createTimelineGraphicForAutomation(
+      overscan_graphics_track_id, QStringLiteral("rectangle"), 0.0, one_frame_seconds,
+      QVariantMap{{QStringLiteral("backgroundColor"), QStringLiteral("#ffff0000")},
+                  {QStringLiteral("shapeWidth"), 0.25},
+                  {QStringLiteral("shapeHeight"), 1.5},
+                  {QStringLiteral("positionX"), 0.5},
+                  {QStringLiteral("positionY"), 0.0}});
+  const auto tall_shape_id = tall_shape_result.value(QStringLiteral("createdClipId")).toString();
+  if (!tall_shape_result.value(QStringLiteral("ok")).toBool() || tall_shape_id.isEmpty() ||
+      !nearly_equal(tall_shape_result.value(QStringLiteral("clip")).toMap()
+                        .value(QStringLiteral("titleShapeHeight")).toDouble(), 1.5, 1.0e-6)) {
+    std::cerr << "native graphic creation should preserve tall off-canvas geometry up to the four-canvas bound\n";
+    return false;
+  }
+  const auto offcanvas_title = overscan_export.createTimelineTitleForAutomation(
+      overscan_graphics_track_id, QStringLiteral("basic"), one_frame_seconds,
+      one_frame_seconds,
+      QVariantMap{{QStringLiteral("text"), QStringLiteral("OFFCANVAS TITLE POSITION TEST")},
+                  {QStringLiteral("positionX"), 1.5},
+                  {QStringLiteral("positionY"), 0.5},
+                  {QStringLiteral("backgroundColor"), QStringLiteral("#ffff0000")}});
+  const auto offcanvas_graphic = overscan_export.createTimelineGraphicForAutomation(
+      overscan_graphics_track_id, QStringLiteral("rectangle"), 2.0 * one_frame_seconds,
+      one_frame_seconds,
+      QVariantMap{{QStringLiteral("backgroundColor"), QStringLiteral("#ffff0000")},
+                  {QStringLiteral("shapeWidth"), 0.25},
+                  {QStringLiteral("shapeHeight"), 0.25},
+                  {QStringLiteral("positionX"), 1.5},
+                  {QStringLiteral("positionY"), 0.5}});
+  if (!offcanvas_title.value(QStringLiteral("ok")).toBool() ||
+      !offcanvas_graphic.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(offcanvas_title.value(QStringLiteral("clip")).toMap()
+                        .value(QStringLiteral("titlePositionX")).toDouble(), 1.5, 1.0e-6) ||
+      !nearly_equal(offcanvas_graphic.value(QStringLiteral("clip")).toMap()
+                        .value(QStringLiteral("titlePositionX")).toDouble(), 1.5, 1.0e-6)) {
+    std::cerr << "native title and graphic creation should preserve intentionally off-canvas positions\n";
+    return false;
+  }
+  const auto overscan_pattern =
+      QDir(workspace_path).filePath(QStringLiteral("overscan-shape-%06d.png"));
+  QString overscan_render_error;
+  if (!render_timeline_image_sequence(
+          overscan_export, overscan_pattern, &overscan_render_error,
+          0.0, one_frame_seconds)) {
+    std::cerr << "native export should render an off-canvas graphic shape: "
+              << overscan_render_error.toStdString() << '\n';
+    return false;
+  }
+  const QImage overscan_frame(timeline_image_sequence_frame(overscan_pattern, 1));
+  const auto overscan_pixel = overscan_frame.isNull()
+      ? QColor{} : overscan_frame.pixelColor(64, 60);
+  if (overscan_frame.size() != QSize(128, 96) || overscan_pixel.alpha() < 250 ||
+      overscan_pixel.red() < 245 || overscan_pixel.green() > 15 || overscan_pixel.blue() > 15) {
+    std::cerr << "native export should retain shape geometry beyond the normalized canvas bounds\n";
+    return false;
+  }
+  const auto offcanvas_pattern =
+      QDir(workspace_path).filePath(QStringLiteral("overscan-position-%06d.png"));
+  QString offcanvas_render_error;
+  if (!render_timeline_image_sequence(
+          overscan_export, offcanvas_pattern, &offcanvas_render_error,
+          0.0, 3.0 * one_frame_seconds)) {
+    std::cerr << "native export should render title and graphic positions without moving them back on-canvas: "
+              << offcanvas_render_error.toStdString() << '\n';
+    return false;
+  }
+  const auto contains_bright_red = [](const QImage& image) {
+    if (image.isNull()) return false;
+    for (int y = 0; y < image.height(); ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        const auto color = image.pixelColor(x, y);
+        if (color.alpha() > 180 && color.red() > 220 &&
+            color.green() < 70 && color.blue() < 70) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  const QImage offcanvas_title_frame(
+      timeline_image_sequence_frame(offcanvas_pattern, 2));
+  const QImage offcanvas_graphic_frame(
+      timeline_image_sequence_frame(offcanvas_pattern, 3));
+  if (offcanvas_title_frame.size() != QSize(128, 96) ||
+      offcanvas_graphic_frame.size() != QSize(128, 96) ||
+      contains_bright_red(offcanvas_title_frame) ||
+      contains_bright_red(offcanvas_graphic_frame)) {
+    std::cerr << "native export must leave fully off-canvas title and graphic positions outside the rendered frame\n";
+    return false;
+  }
+
+  TimelineDocumentController portrait;
+  portrait.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Portrait One Pixel Copy")},
+      {QStringLiteral("width"), 1080},
+      {QStringLiteral("height"), 1920},
+      {QStringLiteral("frameRate"), 24.0},
+      {QStringLiteral("trackLayout"), QStringLiteral("creator_social")},
+  });
+  const auto canonical_portrait_source = QFileInfo(source_path).canonicalFilePath();
+  portrait.addClipFromGallery(
+      QStringLiteral("photo:portrait-one-pixel"), canonical_portrait_source,
+      QStringLiteral("Portrait One Pixel Photo"), 1.0, canonical_portrait_source);
+  const auto portrait_photo = portrait.clips().value(0).toMap();
+  const auto portrait_photo_id = portrait_photo.value(QStringLiteral("clipId")).toString();
+  const auto portrait_photo_track_id = portrait_photo.value(QStringLiteral("trackId")).toString();
+  const auto portrait_frame = portrait.setTimelineClipFrameForAutomation(
+      portrait_photo_id, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+      QStringLiteral("fit"), 1.0 / 1080.0, 1.0 / 1920.0, 0.0,
+      0.0, 0.0, 0.0, 0.0);
+  QString portrait_graphics_track_id;
+  for (const auto& track_value : portrait.timelineTracks()) {
+    const auto track = track_value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        track.value(QStringLiteral("trackRole")).toString() == QStringLiteral("graphics")) {
+      portrait_graphics_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  const auto portrait_shape = portrait.createTimelineGraphicForAutomation(
+      portrait_graphics_track_id, QStringLiteral("rectangle"), 0.0, one_frame_seconds,
+      QVariantMap{{QStringLiteral("backgroundColor"), QStringLiteral("#ffffffff")},
+                  {QStringLiteral("shapeWidth"), 1.0 / 1080.0},
+                  {QStringLiteral("shapeHeight"), 1.0 / 1920.0}});
+  const auto portrait_shape_id = portrait_shape.value(QStringLiteral("createdClipId")).toString();
+  const auto portrait_path = QDir(workspace_path).filePath(
+      QStringLiteral("portrait-one-pixel-roundtrip.json"));
+  const auto portrait_saved = portrait.saveTimelineCopyForAutomation(portrait_path);
+  QFile portrait_file(portrait_path);
+  if (!portrait_frame.value(QStringLiteral("ok")).toBool() ||
+      !portrait_shape.value(QStringLiteral("ok")).toBool() ||
+      portrait_photo_id.isEmpty() || portrait_shape_id.isEmpty() ||
+      !portrait_saved.value(QStringLiteral("ok")).toBool() ||
+      !portrait_file.open(QIODevice::ReadOnly)) {
+    std::cerr << "1080x1920 one-pixel portrait geometry should save before copy verification\n";
+    return false;
+  }
+  const auto portrait_bytes = portrait_file.readAll();
+  portrait_file.close();
+  QJsonParseError portrait_parse_error;
+  const auto portrait_document = QJsonDocument::fromJson(portrait_bytes, &portrait_parse_error);
+  if (portrait_parse_error.error != QJsonParseError::NoError ||
+      !portrait_document.isObject()) {
+    std::cerr << "one-pixel portrait project should be valid native Timeline JSON\n";
+    return false;
+  }
+  const auto serialized_dimension = [](const QJsonObject& document,
+                                       const QString& requested_id,
+                                       const QString& property) {
+    for (const auto& track_value : document.value(QStringLiteral("tracks")).toArray()) {
+      for (const auto& clip_value : track_value.toObject()
+                                        .value(QStringLiteral("clips")).toArray()) {
+        const auto clip = clip_value.toObject();
+        if (clip.value(QStringLiteral("clipId")).toString() == requested_id) {
+          return clip.value(property).toDouble(std::numeric_limits<double>::quiet_NaN());
+        }
+      }
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+  };
+  const auto exact_portrait_geometry = [&](const QJsonObject& document) {
+    return nearly_equal(serialized_dimension(document, portrait_photo_id,
+                                              QStringLiteral("frameWidth")),
+                        1.0 / 1080.0, 1.0e-9) &&
+           nearly_equal(serialized_dimension(document, portrait_photo_id,
+                                              QStringLiteral("frameHeight")),
+                        1.0 / 1920.0, 1.0e-9) &&
+           nearly_equal(serialized_dimension(document, portrait_shape_id,
+                                              QStringLiteral("titleShapeWidth")),
+                        1.0 / 1080.0, 1.0e-9) &&
+           nearly_equal(serialized_dimension(document, portrait_shape_id,
+                                              QStringLiteral("titleShapeHeight")),
+                        1.0 / 1920.0, 1.0e-9);
+  };
+  if (!exact_portrait_geometry(portrait_document.object())) {
+    std::cerr << "portrait source project should serialize exact one-pixel frame and graphic geometry\n";
+    return false;
+  }
+  TimelineDocumentController portrait_reopened;
+  if (!portrait_reopened.loadTimeline(portrait_path) ||
+      !exact_portrait_geometry(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(portrait_reopened))) {
+    std::cerr << "loading a portrait project should use its saved dimensions for one-pixel geometry floors\n";
+    return false;
+  }
+  TimelineDocumentController portrait_imported;
+  portrait_imported.setEditAccessPolicy([] { return true; });
+  const auto portrait_copy = portrait_imported.importTimelineProjectCopyForAutomation(portrait_bytes);
+  if (!portrait_copy.value(QStringLiteral("ok")).toBool() ||
+      !portrait_copy.value(QStringLiteral("graphMatches")).toBool() ||
+      !exact_portrait_geometry(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(portrait_imported))) {
+    std::cerr << "native project-copy import should preserve exact portrait one-pixel geometry; error="
+              << portrait_copy.value(QStringLiteral("error")).toString().toStdString()
+              << " sourceGraph="
+              << portrait_copy.value(QStringLiteral("sourceGraphSha256")).toString().toStdString()
+              << " copyGraph="
+              << portrait_copy.value(QStringLiteral("copyGraphSha256")).toString().toStdString()
+              << '\n';
+    return false;
+  }
+  return true;
+}
+
+bool wait_for_task_compound(
+    TimelineDocumentController* controller,
+    const QString& compound_clip_id,
+    QVariantMap* terminal_status,
+    int timeout_ms = 30000) {
+  if (controller == nullptr || terminal_status == nullptr) return false;
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    const auto status = controller->compoundRenderStatusForAutomation(compound_clip_id);
+    if (!status.value(QStringLiteral("ok")).toBool()) {
+      *terminal_status = status;
+      return false;
+    }
+    if (status.value(QStringLiteral("terminal")).toBool()) {
+      *terminal_status = status;
+      return status.value(QStringLiteral("ready")).toBool();
+    }
+  }
+  *terminal_status = controller->compoundRenderStatusForAutomation(compound_clip_id);
+  return false;
+}
+
+bool run_timeline_task_owned_compound_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+  if (ffmpeg.isEmpty() || ffprobe.isEmpty()) {
+    std::cerr << "task-owned native compound test needs ffmpeg and ffprobe\n";
+    return false;
+  }
+  QImage source(80, 48, QImage::Format_RGBA8888);
+  source.fill(Qt::transparent);
+  for (int y = 4; y < 44; ++y) {
+    for (int x = 20; x < 60; ++x) source.setPixelColor(x, y, QColor(242, 74, 35, 255));
+  }
+  const auto source_path = QDir(workspace_path).filePath(QStringLiteral("task-compound-alpha-source.png"));
+  if (!source.save(source_path)) {
+    std::cerr << "task-owned compound alpha fixture should be writable\n";
+    return false;
+  }
+
+  const auto prepare_parent = [&](TimelineDocumentController* controller,
+                                  QStringList* child_clip_ids) {
+    if (controller == nullptr || child_clip_ids == nullptr) return false;
+    controller->createTimelineWithSettings({
+        {QStringLiteral("timelineName"), QStringLiteral("Task-Owned Transparent Compound")},
+        {QStringLiteral("width"), 128},
+        {QStringLiteral("height"), 96},
+        {QStringLiteral("frameRate"), 24.0},
+    });
+    controller->addClipFromGallery(QStringLiteral("photo:compound-a"), source_path,
+                                   QStringLiteral("Transparent A"), 1.0, source_path);
+    controller->addClipFromGallery(QStringLiteral("photo:compound-b"), source_path,
+                                   QStringLiteral("Transparent B"), 1.0, source_path);
+    for (const auto& value : controller->clips()) {
+      const auto clip = value.toMap();
+      child_clip_ids->push_back(clip.value(QStringLiteral("clipId")).toString());
+    }
+    return child_clip_ids->size() == 2 && !child_clip_ids->at(0).isEmpty() &&
+           !child_clip_ids->at(1).isEmpty();
+  };
+  const auto canonical_workspace = QFileInfo(workspace_path).canonicalFilePath();
+  const auto new_child_paths = [&](QString* child_id, QString* document_path, QString* render_path) {
+    if (child_id == nullptr || document_path == nullptr || render_path == nullptr) return false;
+    if (canonical_workspace.isEmpty()) return false;
+    *child_id = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+    *document_path = QDir(canonical_workspace).filePath(QStringLiteral("compound-%1.json").arg(*child_id));
+    *render_path = QDir(canonical_workspace).filePath(QStringLiteral("compound-%1.mov").arg(*child_id));
+    return true;
+  };
+
+  TimelineDocumentController cancelled_controller;
+  QStringList cancelled_child_ids;
+  if (!prepare_parent(&cancelled_controller, &cancelled_child_ids)) {
+    std::cerr << "the cancellation fixture should have two native source clips\n";
+    return false;
+  }
+  // First prove a deferred start retains a prepared child and exact launch
+  // spec. Reset pressure and retry through the explicit controller action.
+  cancelled_controller.setCachePressureLevelForTesting(QStringLiteral("critical"));
+  QString cancelled_child_timeline_id;
+  QString cancelled_document_path;
+  QString cancelled_render_path;
+  new_child_paths(&cancelled_child_timeline_id, &cancelled_document_path,
+                  &cancelled_render_path);
+  const auto cancellation = cancelled_controller.createCompoundClipForAutomation(
+      cancelled_child_ids, QStringLiteral("Cancelled alpha group"),
+      cancelled_child_timeline_id, cancelled_document_path, cancelled_render_path);
+  const auto cancelled_clip_id = cancellation.value(QStringLiteral("createdClipId")).toString();
+  const auto creation_status = cancelled_clip_id.isEmpty()
+                                  ? QVariantMap{}
+                                  : cancelled_controller.compoundRenderStatusForAutomation(
+                                        cancelled_clip_id);
+  const auto deferred_intent = WorkerQueueRegistry::userIntentSnapshot();
+  const auto deferred_priority = WorkerQueueRegistry::priorityDecision(
+      QStringLiteral("compound-render"), QStringLiteral("timeline"), cancelled_clip_id);
+  const auto deferred_cache = cancelled_controller.cacheBudgetState();
+  if (cancellation.value(QStringLiteral("ok")).toBool() ||
+      cancellation.value(QStringLiteral("accepted")).toBool() ||
+      !cancellation.value(QStringLiteral("prepared")).toBool() ||
+      cancellation.value(QStringLiteral("status")).toString() != QStringLiteral("prepared") ||
+      !cancellation.value(QStringLiteral("error")).toString().contains(QStringLiteral("deferred")) ||
+      cancelled_clip_id.isEmpty() ||
+      cancellation.value(QStringLiteral("producerLaunchSpec")).toMap().isEmpty() ||
+      creation_status.value(QStringLiteral("status")).toString() != QStringLiteral("prepared") ||
+      creation_status.value(QStringLiteral("processPresent")).toBool()) {
+    std::cerr << "a deferred task-owned compound should preserve its prepared child, stable ID, and sealed launch specification without claiming a running producer; "
+              << "childIds=" << QJsonDocument::fromVariant(cancelled_child_ids)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " result=" << QJsonDocument::fromVariant(cancellation)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " creationStatus=" << QJsonDocument::fromVariant(creation_status)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " controllerStatus=" << cancelled_controller.status().toStdString()
+              << " intent=" << QJsonDocument::fromVariant(deferred_intent)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " priority=" << QJsonDocument::fromVariant(deferred_priority)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " cache=" << QJsonDocument::fromVariant(deferred_cache)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " documentPath=" << cancelled_document_path.toStdString()
+              << " renderPath=" << cancelled_render_path.toStdString() << '\n';
+    return false;
+  }
+  cancelled_controller.setCachePressureLevelForTesting(QStringLiteral("normal"));
+  QElapsedTimer intent_wait;
+  intent_wait.start();
+  auto retry_intent = WorkerQueueRegistry::userIntentSnapshot();
+  auto retry_priority = WorkerQueueRegistry::priorityDecision(
+      QStringLiteral("compound-render"), QStringLiteral("timeline"), cancelled_clip_id);
+  auto retry_cache = cancelled_controller.cacheBudgetState();
+  while ((retry_priority.value(QStringLiteral("deferred")).toBool() ||
+          retry_cache.value(QStringLiteral("pressureLevel")).toString() ==
+              QStringLiteral("critical")) &&
+         intent_wait.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(10);
+    retry_intent = WorkerQueueRegistry::userIntentSnapshot();
+    retry_priority = WorkerQueueRegistry::priorityDecision(
+        QStringLiteral("compound-render"), QStringLiteral("timeline"), cancelled_clip_id);
+    retry_cache = cancelled_controller.cacheBudgetState();
+  }
+  const auto retry =
+      cancelled_controller.startCompoundRenderForAutomation(cancelled_clip_id);
+  if (!retry.value(QStringLiteral("ok")).toBool() ||
+      !retry.value(QStringLiteral("accepted")).toBool() ||
+      retry.value(QStringLiteral("producerReceipt")).toMap().isEmpty()) {
+    std::cerr << "a prepared compound should start through an explicit receipt-backed retry after the deferral clears; "
+              << "retry=" << QJsonDocument::fromVariant(retry)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " status=" << QJsonDocument::fromVariant(
+                     cancelled_controller.compoundRenderStatusForAutomation(cancelled_clip_id))
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " intent=" << QJsonDocument::fromVariant(retry_intent)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " priority=" << QJsonDocument::fromVariant(retry_priority)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " cache=" << QJsonDocument::fromVariant(retry_cache)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " waitedMs=" << intent_wait.elapsed()
+              << " controllerStatus=" << cancelled_controller.status().toStdString() << '\n';
+    return false;
+  }
+  const auto status_before_cancel =
+      cancelled_controller.compoundRenderStatusForAutomation(cancelled_clip_id);
+  const auto cancel_result =
+      cancelled_controller.cancelCompoundRenderForAutomation(cancelled_clip_id);
+  const auto cancelled_partial_path =
+      timeline_compound::partial_render_path(cancelled_render_path);
+  const auto cancelled_graph_path =
+      timeline_compound::filter_graph_sidecar_path(cancelled_render_path);
+  const auto cancelled_receipt_path =
+      timeline_compound::producer::receipt_path(cancelled_render_path);
+  QString cancelled_receipt_error;
+  const auto cancelled_receipt = timeline_compound::producer::read_receipt(
+      cancelled_receipt_path, &cancelled_receipt_error);
+  QString cancelled_identity_error;
+  const auto cancelled_identity = timeline_compound::producer::inspect_receipt(
+      cancelled_receipt, &cancelled_identity_error);
+  const auto task_output_paths = QStringList{
+      cancelled_document_path, cancelled_render_path, cancelled_partial_path,
+      cancelled_graph_path, cancelled_receipt_path};
+  const auto exact_task_siblings = std::all_of(
+      task_output_paths.cbegin(), task_output_paths.cend(),
+      [&canonical_workspace](const QString& path) {
+        const QFileInfo info(path);
+        return info.isAbsolute() && info.dir().canonicalPath() == canonical_workspace &&
+               QDir(canonical_workspace).filePath(info.fileName()) == path;
+      });
+  if (!cancel_result.value(QStringLiteral("ok")).toBool() ||
+      !cancel_result.value(QStringLiteral("processStopped")).toBool() ||
+      cancel_result.value(QStringLiteral("status")).toString() != QStringLiteral("cancelled") ||
+      !cancel_result.value(QStringLiteral("producerProofAvailable")).toBool() ||
+      cancel_result.value(QStringLiteral("outputsRemoved")).toBool() ||
+      !exact_task_siblings || task_output_paths.size() != 5 ||
+      cancel_result.value(QStringLiteral("documentPath")).toString() != cancelled_document_path ||
+      cancel_result.value(QStringLiteral("renderPath")).toString() != cancelled_render_path ||
+      cancel_result.value(QStringLiteral("partialPath")).toString() != cancelled_partial_path ||
+      cancel_result.value(QStringLiteral("filterGraphPath")).toString() != cancelled_graph_path ||
+      cancel_result.value(QStringLiteral("producerReceiptPath")).toString() != cancelled_receipt_path ||
+      !QFileInfo::exists(cancelled_document_path) ||
+      cancelled_receipt.isEmpty() ||
+      cancelled_identity != timeline_compound::producer::IdentityState::NotRunning) {
+    std::cerr << "cancelling a task-owned render should stop its receipt-verified producer and preserve its exact five owned paths for journal reconciliation: "
+              << "creation=" << QJsonDocument::fromVariant(cancellation)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " retry=" << QJsonDocument::fromVariant(retry)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " statusBeforeCancel=" << QJsonDocument::fromVariant(status_before_cancel)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << "cancel=" << QJsonDocument::fromVariant(cancel_result)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " receiptExists=" << QFileInfo::exists(cancelled_receipt_path)
+              << " receiptSize=" << QFileInfo(cancelled_receipt_path).size()
+              << " receiptCanonical=" << QFileInfo(cancelled_receipt_path)
+                     .canonicalFilePath().toStdString()
+              << " receiptPath=" << cancelled_receipt_path.toStdString()
+              << " receiptError=" << cancelled_receipt_error.toStdString()
+              << " identityError=" << cancelled_identity_error.toStdString() << '\n';
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  QStringList child_clip_ids;
+  if (!prepare_parent(&controller, &child_clip_ids)) {
+    std::cerr << "the successful compound fixture should have two native source clips\n";
+    return false;
+  }
+  controller.setCachePressureLevelForTesting(QStringLiteral("normal"));
+  QString child_timeline_id;
+  QString document_path;
+  QString render_path;
+  new_child_paths(&child_timeline_id, &document_path, &render_path);
+  const auto creation = controller.createCompoundClipForAutomation(
+      child_clip_ids, QStringLiteral("Transparent editable group"),
+      child_timeline_id, document_path, render_path);
+  const auto compound_clip_id = creation.value(QStringLiteral("createdClipId")).toString();
+  if (!creation.value(QStringLiteral("ok")).toBool() ||
+      !creation.value(QStringLiteral("accepted")).toBool() || compound_clip_id.isEmpty()) {
+    std::cerr << "a task-owned transparent compound should admit its asynchronous render: "
+              << creation.value(QStringLiteral("error")).toString().toStdString() << '\n';
+    return false;
+  }
+  const auto pending_parent_path =
+      QDir(workspace_path).filePath(QStringLiteral("compound-parent-pending.json"));
+  const auto pending_parent_save =
+      controller.saveTimelineCopyForAutomation(pending_parent_path);
+  if (!pending_parent_save.value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "the pending compound parent should be serializable before the renderer settles\n";
+    return false;
+  }
+  QVariantMap terminal_status;
+  const auto compound_ready =
+      wait_for_task_compound(&controller, compound_clip_id, &terminal_status);
+  QVariantMap timeout_cancel;
+  if (!compound_ready && !terminal_status.value(QStringLiteral("terminal")).toBool()) {
+    timeout_cancel = controller.cancelCompoundRenderForAutomation(compound_clip_id);
+  }
+  if (!compound_ready ||
+      !terminal_status.value(QStringLiteral("transparencyVerified")).toBool() ||
+      !QFileInfo(render_path).isReadable() || QFileInfo(render_path).size() <= 0) {
+    std::cerr << "compound output should complete only after alpha stream and decoded pixels are verified: "
+              << "status=" << QJsonDocument::fromVariant(terminal_status)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " timeoutCancel=" << QJsonDocument::fromVariant(timeout_cancel)
+                     .toJson(QJsonDocument::Compact).toStdString() << '\n';
+    return false;
+  }
+
+  const auto alpha_plane = process_bytes(
+      ffmpeg,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-ss"), QStringLiteral("0.1"),
+       QStringLiteral("-i"), render_path,
+       QStringLiteral("-map"), QStringLiteral("0:v:0"),
+       QStringLiteral("-vf"), QStringLiteral("alphaextract"),
+       QStringLiteral("-frames:v"), QStringLiteral("1"),
+       QStringLiteral("-pix_fmt"), QStringLiteral("gray"),
+       QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  const auto center_offset = (96 * 128 / 2) + 64;
+  if (alpha_plane.size() != 128 * 96 ||
+      static_cast<unsigned char>(alpha_plane.at(0)) > 8U ||
+      static_cast<unsigned char>(alpha_plane.at(center_offset)) < 245U) {
+    std::cerr << "decoded compound alpha pixels should retain a transparent corner and opaque center\n";
+    return false;
+  }
+
+  TimelineDocumentController child;
+  if (!child.loadTimeline(document_path) || child.clips().size() != 2) {
+    std::cerr << "the compound child should reopen as two ordinary editable native clips\n";
+    return false;
+  }
+  for (const auto& clip_value : child.clips()) {
+    if (!child_clip_ids.contains(clip_value.toMap().value(QStringLiteral("clipId")).toString())) {
+      std::cerr << "compound child IDs should remain stable and editable\n";
+      return false;
+    }
+  }
+  const auto editable_child = child.clips().first().toMap();
+  const auto child_frame_edit = child.setTimelineClipFrameForAutomation(
+      editable_child.value(QStringLiteral("clipId")).toString(),
+      0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0, QStringLiteral("fit"),
+      1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+  if (!child_frame_edit.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(child_frame_edit.value(QStringLiteral("clip")).toMap()
+                        .value(QStringLiteral("frameScale")).toDouble(), 0.5)) {
+    std::cerr << "compound child media should keep ordinary editable frame controls\n";
+    return false;
+  }
+
+  const auto parent_frame_edit = controller.setTimelineClipFrameForAutomation(
+      compound_clip_id, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.65,
+      QStringLiteral("fit"), 0.75, 0.75, 0.0,
+      0.0, 0.0, 0.0, 0.0);
+  if (!parent_frame_edit.value(QStringLiteral("ok")).toBool() ||
+      !nearly_equal(parent_frame_edit.value(QStringLiteral("clip")).toMap()
+                        .value(QStringLiteral("opacity")).toDouble(), 0.65)) {
+    std::cerr << "a compound should expose normal group transform and opacity controls on its parent clip\n";
+    return false;
+  }
+  const auto parent_saved_path = QDir(workspace_path).filePath(QStringLiteral("compound-parent-roundtrip.json"));
+  const auto parent_saved = controller.saveTimelineCopyForAutomation(parent_saved_path);
+  TimelineDocumentController reopened_parent;
+  if (!parent_saved.value(QStringLiteral("ok")).toBool() ||
+      !reopened_parent.loadTimeline(parent_saved_path) ||
+      reopened_parent.clips().size() != 1) {
+    std::cerr << "compound parent should save and reopen as one grouped clip\n";
+    return false;
+  }
+  const auto roundtrip_compound = reopened_parent.clips().first().toMap();
+  if (!roundtrip_compound.value(QStringLiteral("isCompound")).toBool() ||
+      roundtrip_compound.value(QStringLiteral("compoundStatus")).toString() != QStringLiteral("ready") ||
+      !nearly_equal(roundtrip_compound.value(QStringLiteral("frameScale")).toDouble(), 0.5) ||
+      !nearly_equal(roundtrip_compound.value(QStringLiteral("frameWidth")).toDouble(), 0.75) ||
+      !nearly_equal(roundtrip_compound.value(QStringLiteral("frameHeight")).toDouble(), 0.75) ||
+      !nearly_equal(roundtrip_compound.value(QStringLiteral("opacity")).toDouble(), 0.65)) {
+    std::cerr << "compound parent transform, opacity, and child reference should persist through reopen\n";
+    return false;
+  }
+
+  if (!QFile::remove(render_path)) {
+    std::cerr << "the test should remove its completed cache before exercising interrupted recovery\n";
+    return false;
+  }
+  const auto partial_path = timeline_compound::partial_render_path(render_path);
+  const auto graph_path = timeline_compound::filter_graph_sidecar_path(render_path);
+  const auto write_marker = [](const QString& path, const QByteArray& marker) {
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(marker) == marker.size();
+  };
+  const QByteArray partial_marker("pending-partial");
+  const QByteArray graph_marker("pending-graph");
+  if (!write_marker(partial_path, partial_marker) || !write_marker(graph_path, graph_marker)) {
+    std::cerr << "the interrupted compound test should create owned-file recovery markers\n";
+    return false;
+  }
+  TimelineDocumentController recovered_parent;
+  if (!recovered_parent.loadTimeline(parent_saved_path)) {
+    std::cerr << "the parent should reopen while its missing render is marked pending\n";
+    return false;
+  }
+  const auto recovered_clip_id = recovered_parent.clips().first().toMap()
+                                     .value(QStringLiteral("clipId")).toString();
+  const auto interrupted_status =
+      recovered_parent.compoundRenderStatusForAutomation(recovered_clip_id);
+  const auto interruption =
+      recovered_parent.cancelCompoundRenderForAutomation(recovered_clip_id);
+  if (interrupted_status.value(QStringLiteral("status")).toString() != QStringLiteral("interrupted") ||
+      !interrupted_status.value(QStringLiteral("terminal")).toBool() ||
+      !interruption.value(QStringLiteral("ok")).toBool() ||
+      !interruption.value(QStringLiteral("processStopped")).toBool() ||
+      interruption.value(QStringLiteral("producerProof")).toString() !=
+          QStringLiteral("verified-absence") ||
+      !interruption.value(QStringLiteral("producerProofAvailable")).toBool() ||
+      !interruption.value(QStringLiteral("requiresJournalReconciliation")).toBool() ||
+      interruption.value(QStringLiteral("outputsRemoved")).toBool() ||
+      !QFileInfo::exists(document_path) || !QFileInfo::exists(partial_path) ||
+      !QFileInfo::exists(graph_path) || QFileInfo::exists(render_path) ||
+      QFileInfo(partial_path).size() != partial_marker.size() ||
+      QFileInfo(graph_path).size() != graph_marker.size()) {
+    std::cerr << "orphan cancellation must remain unverified while preserving exact files for journal reconciliation; "
+              << "status=" << QJsonDocument::fromVariant(interrupted_status)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " cancel=" << QJsonDocument::fromVariant(interruption)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " docExists=" << QFileInfo::exists(document_path)
+              << " finalExists=" << QFileInfo::exists(render_path)
+              << " partialSize=" << QFileInfo(partial_path).size()
+              << " graphSize=" << QFileInfo(graph_path).size() << '\n';
+    return false;
+  }
+  const auto receipt_path = timeline_compound::producer::receipt_path(render_path);
+  if (!QFile::remove(receipt_path)) {
+    std::cerr << "the crash-recovery fixture should quarantine the durable receipt before testing unverified recovery\n";
+    return false;
+  }
+  TimelineDocumentController unverified_parent;
+  if (!unverified_parent.loadTimeline(pending_parent_path)) {
+    std::cerr << "the pending parent snapshot should reopen without a producer receipt\n";
+    return false;
+  }
+  const auto unverified_clip_id = unverified_parent.clips().first().toMap()
+                                      .value(QStringLiteral("clipId")).toString();
+  const auto unverified_status =
+      unverified_parent.compoundRenderStatusForAutomation(unverified_clip_id);
+  const auto unverified_cancel =
+      unverified_parent.cancelCompoundRenderForAutomation(unverified_clip_id);
+  if (unverified_status.value(QStringLiteral("status")).toString() != QStringLiteral("interrupted") ||
+      !unverified_status.value(QStringLiteral("terminal")).toBool() ||
+      unverified_cancel.value(QStringLiteral("ok")).toBool() ||
+      unverified_cancel.value(QStringLiteral("processStopped")).toBool() ||
+      unverified_cancel.value(QStringLiteral("producerProofAvailable")).toBool() ||
+      unverified_cancel.value(QStringLiteral("producerProof")).toString() !=
+          QStringLiteral("unverified") ||
+      !unverified_cancel.value(QStringLiteral("requiresJournalReconciliation")).toBool() ||
+      unverified_cancel.value(QStringLiteral("outputsRemoved")).toBool() ||
+      !QFileInfo::exists(document_path) || !QFileInfo::exists(partial_path) ||
+      !QFileInfo::exists(graph_path) || QFileInfo::exists(render_path) ||
+      QFileInfo::exists(receipt_path) ||
+      QFileInfo(partial_path).size() != partial_marker.size() ||
+      QFileInfo(graph_path).size() != graph_marker.size()) {
+    std::cerr << "a reopened compound without its exact producer receipt must fail closed and preserve every remaining task path; "
+              << "status=" << QJsonDocument::fromVariant(unverified_status)
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " cancel=" << QJsonDocument::fromVariant(unverified_cancel)
+                     .toJson(QJsonDocument::Compact).toStdString() << '\n';
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_matte_blend_render_workflow(const QString& workspace_path) {
+  const auto write_solid = [&](const QString& path, const QColor& color) {
+    QImage image(128, 96, QImage::Format_RGB32);
+    image.fill(color);
+    return image.save(path);
+  };
+  const auto base_path = QDir(workspace_path).filePath(QStringLiteral("blend-base.png"));
+  const auto overlay_path = QDir(workspace_path).filePath(QStringLiteral("blend-overlay.png"));
+  const auto matte_path = QDir(workspace_path).filePath(QStringLiteral("blend-matte.png"));
+  if (!write_solid(base_path, QColor(180, 20, 10)) ||
+      !write_solid(overlay_path, QColor(20, 210, 35))) {
+    std::cerr << "blend fixture source images should be writable\n";
+    return false;
+  }
+  QImage matte(128, 96, QImage::Format_RGB32);
+  matte.fill(Qt::black);
+  for (int y = 0; y < matte.height(); ++y) {
+    for (int x = 0; x < matte.width() / 2; ++x) {
+      matte.setPixelColor(x, y, Qt::white);
+    }
+  }
+  if (!matte.save(matte_path)) {
+    std::cerr << "blend fixture source matte should be writable\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Matte and blend pixels")},
+      {QStringLiteral("width"), 128},
+      {QStringLiteral("height"), 96},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("photo:blend-base"), base_path,
+      QStringLiteral("Red base"), 1.0, base_path);
+  controller.addClipFromGallery(
+      QStringLiteral("photo:blend-overlay"), overlay_path,
+      QStringLiteral("Green matte overlay"), 1.0, overlay_path);
+  controller.addVideoTrack();
+  controller.selectClip(1);
+  controller.moveSelectedClipToTrackRow(1, 0.0);
+  const auto clips = controller.clips();
+  const auto overlay_id = clips.value(1).toMap()
+                             .value(QStringLiteral("clipId")).toString();
+  const auto matte_result = controller.setTimelineClipMatteForAutomation(
+      overlay_id, QFileInfo(matte_path).canonicalFilePath(),
+      QStringLiteral("luminance"), false);
+  const auto blend_result = controller.setTimelineClipBlendModeForAutomation(
+      overlay_id, QStringLiteral("screen"));
+  const QVariantMap viewport_mask{
+      {QStringLiteral("shape"), QStringLiteral("rectangle")},
+      {QStringLiteral("left"), 0.25}, {QStringLiteral("top"), 0.25},
+      {QStringLiteral("right"), 0.75}, {QStringLiteral("bottom"), 0.75},
+      {QStringLiteral("cornerRadius"), 0.0},
+  };
+  const auto mask_result = controller.setTimelineClipMaskForAutomation(
+      overlay_id, viewport_mask);
+  const auto matte_ok = matte_result.value(QStringLiteral("ok")).toBool();
+  const auto blend_ok = blend_result.value(QStringLiteral("ok")).toBool();
+  const auto mask_ok = mask_result.value(QStringLiteral("ok")).toBool();
+  if (overlay_id.isEmpty() || !matte_ok || !blend_ok || !mask_ok) {
+    std::cerr << "matte, blend and sequence viewport settings should be admitted together; "
+              << "clipId=" << overlay_id.toStdString()
+              << " matte=" << matte_ok << " ("
+              << matte_result.value(QStringLiteral("error")).toString().toStdString()
+              << ") blend=" << blend_ok << " ("
+              << blend_result.value(QStringLiteral("error")).toString().toStdString()
+              << ") mask=" << mask_ok << " ("
+              << mask_result.value(QStringLiteral("error")).toString().toStdString()
+              << ")\n";
+    return false;
+  }
+
+  const auto screen_pattern =
+      QDir(workspace_path).filePath(QStringLiteral("screen-blend-%06d.png"));
+  QString render_error;
+  if (!render_timeline_image_sequence(controller, screen_pattern, &render_error)) {
+    std::cerr << "screen blend and source matte should render: "
+              << render_error.toStdString() << '\n';
+    return false;
+  }
+  const QImage screen_frame(timeline_image_sequence_frame(screen_pattern, 1));
+  if (screen_frame.isNull() || screen_frame.size() != QSize(128, 96)) {
+    std::cerr << "screen blend export should produce the expected RGBA frame dimensions\n";
+    return false;
+  }
+  const auto screen_pixel = screen_frame.pixelColor(48, 48);
+  const auto matte_cutout_pixel = screen_frame.pixelColor(80, 48);
+  const auto viewport_clip_pixel = screen_frame.pixelColor(16, 48);
+  const auto top_clip_pixel = screen_frame.pixelColor(48, 12);
+  if (screen_pixel.red() < 175 || screen_pixel.green() < 200 || screen_pixel.blue() < 35 ||
+      matte_cutout_pixel.red() < 175 || matte_cutout_pixel.green() > 30 ||
+      viewport_clip_pixel.red() < 175 || viewport_clip_pixel.green() > 30 ||
+      top_clip_pixel.red() < 175 || top_clip_pixel.green() > 30) {
+    std::cerr << "screen blend should combine only the luminance-matted pixels inside the fixed sequence viewport; got screen=("
+              << screen_pixel.red() << ',' << screen_pixel.green() << ',' << screen_pixel.blue()
+              << "), matte-cutout=(" << matte_cutout_pixel.red() << ','
+              << matte_cutout_pixel.green() << "), viewport=("
+              << viewport_clip_pixel.red() << ',' << viewport_clip_pixel.green()
+              << "), top=(" << top_clip_pixel.red() << ',' << top_clip_pixel.green() << ")\n";
+    return false;
+  }
+
+  if (!controller.setTimelineClipBlendModeForAutomation(
+           overlay_id, QStringLiteral("soft-light"))
+           .value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "soft-light blend mode should be switchable without changing the matte\n";
+    return false;
+  }
+  const auto softlight_pattern =
+      QDir(workspace_path).filePath(QStringLiteral("softlight-blend-%06d.png"));
+  if (!render_timeline_image_sequence(controller, softlight_pattern, &render_error)) {
+    std::cerr << "soft-light blend and source matte should render: "
+              << render_error.toStdString() << '\n';
+    return false;
+  }
+  const QImage softlight_frame(timeline_image_sequence_frame(softlight_pattern, 1));
+  if (softlight_frame.isNull() || softlight_frame.size() != QSize(128, 96)) {
+    std::cerr << "soft-light export should produce the expected RGBA frame dimensions\n";
+    return false;
+  }
+  const auto softlight_pixel = softlight_frame.pixelColor(48, 48);
+  const auto blend_difference = std::abs(screen_pixel.red() - softlight_pixel.red()) +
+                                std::abs(screen_pixel.green() - softlight_pixel.green()) +
+                                std::abs(screen_pixel.blue() - softlight_pixel.blue());
+  if (blend_difference < 20 ||
+      softlight_frame.pixelColor(80, 48).green() > 30) {
+    std::cerr << "soft-light should produce distinct blended pixels while retaining matte transparency\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_dense_keyframe_render_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    std::cerr << "dense keyframe export requires FFmpeg\n";
+    return false;
+  }
+
+  QImage source(64, 64, QImage::Format_RGBA8888);
+  source.fill(QColor(84, 145, 220));
+  const auto source_path =
+      QDir(workspace_path).filePath(QStringLiteral("dense-keyframe-source.png"));
+  if (!source.save(source_path)) {
+    std::cerr << "dense keyframe source image should be writable\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Dense keyframe render")},
+      {QStringLiteral("width"), 64},
+      {QStringLiteral("height"), 64},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("photo:dense-keyframe"), source_path,
+      QStringLiteral("Dense keyframe source"), 10.0, source_path);
+  controller.selectClip(0);
+  controller.moveSelectedClipToTrackRow(0, 2.0);
+  const auto clip_id = controller.clips().value(0).toMap()
+                           .value(QStringLiteral("clipId")).toString();
+  QVariantList keyframes;
+  keyframes.reserve(300);
+  for (int index = 0; index < 300; ++index) {
+    keyframes.push_back(QVariantMap{
+        {QStringLiteral("localSeconds"), static_cast<double>(index) / 30.0},
+        {QStringLiteral("value"), index % 2 == 0 ? 0.20 : 0.80},
+        {QStringLiteral("interpolation"), QStringLiteral("linear")},
+    });
+  }
+  const auto animation = controller.setTimelineClipAnimationForAutomation(
+      clip_id,
+      QVariantList{QVariantMap{
+          {QStringLiteral("parameter"), QStringLiteral("opacity")},
+          {QStringLiteral("keyframes"), keyframes},
+      }});
+  if (clip_id.isEmpty() || !animation.value(QStringLiteral("ok")).toBool() ||
+      animation.value(QStringLiteral("keyframeCount")).toInt() != 300) {
+    std::cerr << "the dense keyframe export fixture should admit all 300 authored keyframes: "
+              << animation.value(QStringLiteral("error")).toString().toStdString() << '\n';
+    return false;
+  }
+
+  controller.beginContinuousEdit();
+  controller.seekSequenceSeconds(2.0);
+  if (!controller.toggleTrackAutomationKeyframe(0, QStringLiteral("opacity")) ||
+      !controller.setTrackAutomationValue(0, QStringLiteral("opacity"), 0.50)) {
+    controller.endContinuousEdit();
+    std::cerr << "the dense export fixture should author the first track opacity keyframe\n";
+    return false;
+  }
+  for (int index = 1; index < 300; ++index) {
+    controller.seekSequenceSeconds(2.0 + static_cast<double>(index) / 30.0);
+    const auto track_opacity = index % 2 == 0 ? 0.50 : 1.0;
+    if (!controller.setTrackAutomationValue(0, QStringLiteral("opacity"),
+                                            track_opacity)) {
+      controller.endContinuousEdit();
+      std::cerr << "the dense export fixture should author track opacity at frame "
+                << index << '\n';
+      return false;
+    }
+  }
+  controller.endContinuousEdit();
+
+  const auto pattern =
+      QDir(workspace_path).filePath(QStringLiteral("dense-keyframe-%06d.png"));
+  QString render_error;
+  auto arguments = photo_editor::desktop::TimelineHistoryTestAccess::renderArguments(
+      controller, pattern, QStringLiteral("image-sequence"),
+      -1.0, -1.0, &render_error);
+  QString filter_graph;
+  const auto graph_index = arguments.indexOf(QStringLiteral("-filter_complex"));
+  const auto script_index = arguments.indexOf(QStringLiteral("-filter_complex_script"));
+  auto graph_loaded = false;
+  if (graph_index >= 0 && graph_index + 1 < arguments.size()) {
+    filter_graph = arguments.at(graph_index + 1);
+    graph_loaded = true;
+  } else if (script_index >= 0 && script_index + 1 < arguments.size()) {
+    QFile graph_file(arguments.at(script_index + 1));
+    if (graph_file.open(QIODevice::ReadOnly)) {
+      filter_graph = QString::fromUtf8(graph_file.readAll());
+      graph_loaded = true;
+    }
+  }
+  const auto opacity_filter_prefix =
+      QStringLiteral("colorchannelmixer@looksy_opacity_");
+  const auto has_sendcmd_opacity = filter_graph.contains(
+      QStringLiteral("sendcmd=c='0 [expr] ") + opacity_filter_prefix);
+  // The sendcmd command target and mixer option are serialized at different
+  // points in the filter graph. Verify both features independently here; the
+  // pixel samples below prove that the command targets the live alpha mixer.
+  const auto has_named_mixer = has_sendcmd_opacity &&
+      filter_graph.contains(QStringLiteral("colorchannelmixer")) &&
+      filter_graph.contains(QStringLiteral("aa="));
+  const auto has_per_pixel_geq = filter_graph.contains(QStringLiteral(
+      "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*"));
+  if (arguments.isEmpty() || filter_graph.isEmpty() ||
+      !has_sendcmd_opacity || !has_named_mixer || has_per_pixel_geq) {
+    const auto target_position = filter_graph.indexOf(opacity_filter_prefix);
+    const auto target_snippet = target_position < 0
+        ? QString{}
+        : filter_graph.mid(qMax(0, target_position - 60), 220);
+    std::cerr << "animated opacity should be sent once per frame to a named alpha mixer, not evaluated by per-pixel geq; args="
+              << arguments.size() << " inlineGraphIndex=" << graph_index
+              << " scriptIndex=" << script_index << " graphLoaded=" << graph_loaded
+              << " graphChars=" << filter_graph.size()
+              << " sendcmd=" << has_sendcmd_opacity
+              << " namedMixer=" << has_named_mixer
+              << " perPixelGeq=" << has_per_pixel_geq
+              << " graphSnippet=" << target_snippet.toStdString() << ": "
+              << render_error.toStdString() << '\n';
+    return false;
+  }
+
+  QElapsedTimer render_timer;
+  render_timer.start();
+  QProcess render;
+  render.start(ffmpeg, arguments);
+  if (!render.waitForFinished(90000) ||
+      render.exitStatus() != QProcess::NormalExit || render.exitCode() != 0) {
+    std::cerr << "the dense 300-keyframe native export should render through FFmpeg: "
+              << QString::fromUtf8(render.readAllStandardError()).toStdString() << '\n';
+    return false;
+  }
+  if (render_timer.elapsed() > 30000) {
+    std::cerr << "the 300-keyframe per-frame opacity render exceeded its 30-second bound: "
+              << render_timer.elapsed() << " ms\n";
+    return false;
+  }
+  for (int frame_number = 1; frame_number <= 360; ++frame_number) {
+    const QImage frame(timeline_image_sequence_frame(pattern, frame_number));
+    const auto alpha = frame.isNull() ? -1 : frame.pixelColor(32, 32).alpha();
+    const auto local_frame = frame_number - 61;
+    const auto expected_alpha = frame_number < 61
+                                    ? 0
+                                    : local_frame % 2 == 0 ? 26 : 204;
+    if (frame.size() != QSize(64, 64) || qAbs(alpha - expected_alpha) > 8) {
+      std::cerr << "dense clip+track opacity export should preserve combined alpha at every frame; frame="
+                << frame_number << " expectedAlpha=" << expected_alpha
+                << " actualAlpha=" << alpha << '\n';
+      return false;
+    }
+  }
+  std::cout << "Dense 300-frame clip+track opacity FFmpeg export passed in "
+            << render_timer.elapsed() << " ms with animated RGBA pixels\n";
+  return true;
+}
+
+bool run_timeline_source_crop_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    std::cerr << "source crop workflow requires ffmpeg to compare delivered pixels\n";
+    return false;
+  }
+  QImage source(128, 128, QImage::Format_RGBA8888);
+  source.fill(QColor(214, 42, 38));
+  for (auto y = 0; y < source.height(); ++y) {
+    for (auto x = 0; x < source.width(); ++x) {
+      if (x >= source.width() / 2) {
+        source.setPixelColor(x, y, y < source.height() / 2
+                                      ? QColor(34, 202, 70)
+                                      : QColor(232, 205, 36));
+      }
+    }
+  }
+  const auto source_path =
+      QDir(workspace_path).filePath(QStringLiteral("source-crop-pattern.png"));
+  if (!source.save(source_path)) {
+    std::cerr << "source crop pattern image could not be written\n";
+    return false;
+  }
+
+  QImage odd_source(127, 95, QImage::Format_RGBA8888);
+  for (auto y = 0; y < odd_source.height(); ++y) {
+    for (auto x = 0; x < odd_source.width(); ++x) {
+      odd_source.setPixelColor(
+          x, y, x < odd_source.width() / 2
+                    ? (y < odd_source.height() / 2 ? QColor(220, 38, 34)
+                                                   : QColor(38, 76, 222))
+                    : (y < odd_source.height() / 2 ? QColor(30, 204, 72)
+                                                   : QColor(232, 202, 34)));
+    }
+  }
+  const auto odd_source_path =
+      QDir(workspace_path).filePath(QStringLiteral("source-crop-odd.png"));
+  if (!odd_source.save(odd_source_path)) {
+    std::cerr << "odd-sized source crop fixture could not be written\n";
+    return false;
+  }
+  const TimelineSourceCrop odd_crop{0.1, 0.1, 0.9, 0.9};
+  const auto odd_rect = odd_crop.pixelRect(odd_source.size());
+  if (odd_rect != QRect(12, 9, 103, 77)) {
+    std::cerr << "normalized source crop edges should map to inclusive pixel boundaries consistently\n";
+    return false;
+  }
+  const auto odd_crop_pixels = process_bytes(
+      ffmpeg,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-i"), odd_source_path,
+       QStringLiteral("-frames:v"), QStringLiteral("1"),
+       QStringLiteral("-vf"), odd_crop.ffmpegFilter() + QStringLiteral(",format=rgb24"),
+       QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+       QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  const auto rgb_matches = [](const QByteArray& bytes, int width, int x, int y,
+                              const QColor& expected) {
+    const auto offset = (static_cast<qsizetype>(y) * width + x) * 3;
+    return offset >= 0 && offset + 2 < bytes.size() &&
+           static_cast<unsigned char>(bytes.at(offset)) == expected.red() &&
+           static_cast<unsigned char>(bytes.at(offset + 1)) == expected.green() &&
+           static_cast<unsigned char>(bytes.at(offset + 2)) == expected.blue();
+  };
+  if (odd_crop_pixels.size() != odd_rect.width() * odd_rect.height() * 3 ||
+      !rgb_matches(odd_crop_pixels, odd_rect.width(), 0, 0,
+                   odd_source.pixelColor(odd_rect.topLeft())) ||
+      !rgb_matches(odd_crop_pixels, odd_rect.width(), odd_rect.width() - 1,
+                   odd_rect.height() - 1,
+                   odd_source.pixelColor(odd_rect.bottomRight()))) {
+    std::cerr << "FFmpeg source crop pixels should match the QImage rectangle for odd source dimensions\n";
+    return false;
+  }
+
+  const auto oriented_source = odd_source.transformed(
+      QTransform().rotate(90), Qt::FastTransformation);
+  const TimelineSourceCrop oriented_crop{0.1, 0.2, 0.9, 0.8};
+  const auto expected_oriented_crop = oriented_crop.apply(oriented_source);
+  const auto oriented_crop_pixels = process_bytes(
+      ffmpeg,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-i"), odd_source_path,
+       QStringLiteral("-frames:v"), QStringLiteral("1"),
+       QStringLiteral("-vf"),
+       QStringLiteral("transpose=clock,") + oriented_crop.ffmpegFilter() +
+           QStringLiteral(",format=rgb24"),
+       QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+       QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  if (expected_oriented_crop.isNull() ||
+      oriented_crop_pixels.size() !=
+          expected_oriented_crop.width() * expected_oriented_crop.height() * 3 ||
+      !rgb_matches(oriented_crop_pixels, expected_oriented_crop.width(), 0, 0,
+                   expected_oriented_crop.pixelColor(0, 0)) ||
+      !rgb_matches(oriented_crop_pixels, expected_oriented_crop.width(),
+                   expected_oriented_crop.width() - 1,
+                   expected_oriented_crop.height() - 1,
+                   expected_oriented_crop.pixelColor(expected_oriented_crop.width() - 1,
+                                                     expected_oriented_crop.height() - 1))) {
+    std::cerr << "oriented-source crop pixels should match the playback orientation before crop mapping\n";
+    return false;
+  }
+
+  QImage subsampled_source(128, 96, QImage::Format_RGBA8888);
+  subsampled_source.fill(QColor(112, 84, 176));
+  const auto subsampled_source_path =
+      QDir(workspace_path).filePath(QStringLiteral("source-crop-subsampled.png"));
+  if (!subsampled_source.save(subsampled_source_path)) {
+    std::cerr << "subsampled source crop fixture could not be written\n";
+    return false;
+  }
+  const TimelineSourceCrop odd_chroma_crop{0.1, 0.1, 0.85, 0.85};
+  const auto odd_chroma_rect = odd_chroma_crop.pixelRect(subsampled_source.size());
+  const auto odd_chroma_pixels = process_bytes(
+      ffmpeg,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-i"), subsampled_source_path,
+       QStringLiteral("-frames:v"), QStringLiteral("1"),
+       QStringLiteral("-vf"),
+       QStringLiteral("format=yuv420p,") + odd_chroma_crop.ffmpegFilter() +
+           QStringLiteral(",format=rgb24"),
+       QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+       QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  if (odd_chroma_rect.size() != QSize(97, 73) ||
+      odd_chroma_pixels.size() != odd_chroma_rect.width() * odd_chroma_rect.height() * 3) {
+    std::cerr << "exact crop should preserve odd crop edges after YUV 4:2:0 conversion\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Source crop workflow")},
+      {QStringLiteral("width"), 64},
+      {QStringLiteral("height"), 64},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("photo:source-crop-pattern"), source_path,
+      QStringLiteral("Source crop pattern"), 1.0, QUrl::fromLocalFile(source_path).toString());
+  controller.selectClip(0);
+  controller.setSelectedFrameMode(QStringLiteral("stretch"));
+  const auto initial_clip = controller.currentClip();
+  const auto initial_ranges = controller.renderCacheRanges();
+  if (initial_ranges.isEmpty()) {
+    std::cerr << "source crop fixture should have a render cache range\n";
+    return false;
+  }
+  const auto initial_signature = initial_ranges.first().toMap()
+                                     .value(QStringLiteral("signature")).toString();
+  if (controller.setSelectedSourceCrop(
+          std::numeric_limits<double>::quiet_NaN(), 0.0, 1.0, 1.0) ||
+      controller.setSelectedSourceCrop(-0.01, 0.0, 1.0, 1.0) ||
+      controller.setSelectedSourceCrop(0.0, 0.0, 0.005, 1.0) ||
+      controller.setSelectedSourceCrop(0.8, 0.0, 0.2, 1.0) ||
+      controller.currentClip().value(QStringLiteral("sourceCropLeft")).toDouble() !=
+          initial_clip.value(QStringLiteral("sourceCropLeft")).toDouble()) {
+    std::cerr << "non-finite, out-of-range, inverted, or unusably narrow source crop edges must be rejected\n";
+    return false;
+  }
+  if (!controller.setSelectedSourceCrop(0.5, 0.25, 1.0, 0.75)) {
+    std::cerr << "valid source crop edges should update the selected photo clip\n";
+    return false;
+  }
+  const auto crop = controller.currentClip();
+  if (!nearly_equal(crop.value(QStringLiteral("sourceCropLeft")).toDouble(), 0.5) ||
+      !nearly_equal(crop.value(QStringLiteral("sourceCropTop")).toDouble(), 0.25) ||
+      !nearly_equal(crop.value(QStringLiteral("sourceCropRight")).toDouble(), 1.0) ||
+      !nearly_equal(crop.value(QStringLiteral("sourceCropBottom")).toDouble(), 0.75) ||
+      controller.renderCacheRanges().first().toMap()
+              .value(QStringLiteral("signature")).toString() == initial_signature) {
+    std::cerr << "source crop edges should project into Program and change the composite cache identity\n";
+    return false;
+  }
+
+  const auto output_path = QDir(workspace_path).filePath(
+      QStringLiteral("source-crop-output.mp4"));
+  if (!controller.renderCurrentTimeline(output_path)) {
+    std::cerr << "the source crop delivery fixture should render successfully: "
+              << controller.status().toStdString() << '\n';
+    return false;
+  }
+  const auto sample_pixel = [&ffmpeg, &output_path](int x, int y) {
+    return process_bytes(
+        ffmpeg,
+        {QStringLiteral("-v"), QStringLiteral("error"),
+         QStringLiteral("-ss"), QStringLiteral("0.20"),
+         QStringLiteral("-i"), output_path,
+         QStringLiteral("-frames:v"), QStringLiteral("1"),
+         QStringLiteral("-vf"),
+         QStringLiteral("crop=2:2:%1:%2,scale=1:1,format=rgb24").arg(x).arg(y),
+         QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  };
+  const auto upper_right_crop = sample_pixel(10, 10);
+  const auto lower_right_crop = sample_pixel(10, 54);
+  if (upper_right_crop.size() != 3 || lower_right_crop.size() != 3 ||
+      static_cast<unsigned char>(upper_right_crop.at(1)) < 130 ||
+      static_cast<unsigned char>(upper_right_crop.at(0)) > 100 ||
+      static_cast<unsigned char>(lower_right_crop.at(0)) < 130 ||
+      static_cast<unsigned char>(lower_right_crop.at(1)) < 120 ||
+      static_cast<unsigned char>(lower_right_crop.at(2)) > 100) {
+    std::cerr << "decoded delivery pixels should come from the selected source-crop region\n";
+    return false;
+  }
+
+  controller.undo();
+  const auto undone = controller.currentClip();
+  if (!nearly_equal(undone.value(QStringLiteral("sourceCropLeft")).toDouble(), 0.0) ||
+      !nearly_equal(undone.value(QStringLiteral("sourceCropTop")).toDouble(), 0.0) ||
+      !nearly_equal(undone.value(QStringLiteral("sourceCropRight")).toDouble(), 1.0) ||
+      !nearly_equal(undone.value(QStringLiteral("sourceCropBottom")).toDouble(), 1.0)) {
+    std::cerr << "Undo should restore the full source frame\n";
+    return false;
+  }
+  controller.redo();
+  if (!nearly_equal(controller.currentClip()
+                        .value(QStringLiteral("sourceCropLeft")).toDouble(), 0.5)) {
+    std::cerr << "Redo should restore the source crop edges\n";
+    return false;
+  }
+
+  if (!controller.duplicateSelectedClip()) {
+    std::cerr << "a cropped clip should duplicate successfully\n";
+    return false;
+  }
+  const auto duplicate_crop = controller.currentClip();
+  if (!nearly_equal(duplicate_crop.value(QStringLiteral("sourceCropLeft")).toDouble(), 0.5) ||
+      !nearly_equal(duplicate_crop.value(QStringLiteral("sourceCropBottom")).toDouble(), 0.75)) {
+    std::cerr << "duplicating a clip should preserve its source crop\n";
+    return false;
+  }
+  controller.selectClip(0);
+  if (controller.copySelectedClips() != 1) {
+    std::cerr << "the cropped source clip should copy to the timeline clipboard\n";
+    return false;
+  }
+  controller.selectClip(1);
+  controller.resetSelectedSourceCrop();
+  const auto reset_crop = controller.currentClip();
+  if (!nearly_equal(reset_crop.value(QStringLiteral("sourceCropLeft")).toDouble(), 0.0) ||
+      !nearly_equal(reset_crop.value(QStringLiteral("sourceCropTop")).toDouble(), 0.0) ||
+      !nearly_equal(reset_crop.value(QStringLiteral("sourceCropRight")).toDouble(), 1.0) ||
+      !nearly_equal(reset_crop.value(QStringLiteral("sourceCropBottom")).toDouble(), 1.0)) {
+    std::cerr << "Reset should restore all four source edges to the full frame\n";
+    return false;
+  }
+  if (controller.pasteAttributesToSelectedClips({QStringLiteral("crop")}) != 1 ||
+      !nearly_equal(controller.currentClip()
+                        .value(QStringLiteral("sourceCropLeft")).toDouble(), 0.5)) {
+    std::cerr << "pasting crop attributes should include the source crop rectangle\n";
+    return false;
+  }
+
+  if (!controller.saveTimeline()) {
+    std::cerr << "the source crop project should save\n";
+    return false;
+  }
+  TimelineDocumentController reopened;
+  if (!reopened.loadTimeline(controller.savedDocumentPath())) {
+    std::cerr << "the source crop project should reopen\n";
+    return false;
+  }
+  reopened.selectClip(1);
+  const auto reopened_crop = reopened.currentClip();
+  if (!nearly_equal(reopened_crop.value(QStringLiteral("sourceCropLeft")).toDouble(), 0.5) ||
+      !nearly_equal(reopened_crop.value(QStringLiteral("sourceCropTop")).toDouble(), 0.25) ||
+      !nearly_equal(reopened_crop.value(QStringLiteral("sourceCropRight")).toDouble(), 1.0) ||
+      !nearly_equal(reopened_crop.value(QStringLiteral("sourceCropBottom")).toDouble(), 0.75)) {
+    std::cerr << "source crop edges should survive save and reopen\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_delivery_reopen_workflow(const QString& workspace_path) {
+  const auto source_directory = QDir(workspace_path).filePath(QStringLiteral("source media café"));
+  const auto source_path = QDir(source_directory).filePath(QStringLiteral("scene numéro.png"));
+  const auto package_directory = QDir(workspace_path).filePath(QStringLiteral("delivery output café"));
+  const auto package_path = QDir(package_directory).filePath(QStringLiteral("Portable project.zip"));
+  const auto extracted_directory = QDir(workspace_path).filePath(QStringLiteral("extracted project"));
+  if (!QDir().mkpath(source_directory) || !QDir().mkpath(package_directory)) {
+    std::cerr << "portable project workflow directories could not be created\n";
+    return false;
+  }
+
+  QImage source(48, 32, QImage::Format_RGBA8888);
+  source.fill(QColor(214, 62, 38));
+  if (!source.save(source_path)) {
+    std::cerr << "portable project workflow image could not be written\n";
+    return false;
+  }
+
+  TimelineDocumentController source_controller;
+  source_controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Portable delivery workflow")},
+      {QStringLiteral("width"), 48},
+      {QStringLiteral("height"), 32},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  source_controller.addClipFromGallery(
+      QStringLiteral("photo:portable-delivery"), source_path,
+      QStringLiteral("Scene numéro"), 1.0,
+      QUrl::fromLocalFile(source_path).toString());
+  if (source_controller.clipCount() != 1) {
+    std::cerr << "portable project workflow timeline should contain its source photo\n";
+    return false;
+  }
+  if (!source_controller.saveTimeline(false)) {
+    std::cerr << "portable project source should save before packaging\n";
+    return false;
+  }
+  const auto original_timeline_asset_id = source_controller.timelineAssetId();
+  const auto original_document_path = source_controller.savedDocumentPath();
+  QFile original_document_file(original_document_path);
+  if (!original_document_file.open(QIODevice::ReadOnly)) {
+    std::cerr << "portable project source document should be readable\n";
+    return false;
+  }
+  const auto original_document_bytes = original_document_file.readAll();
+  original_document_file.close();
+
+  bool package_finished = false;
+  QVariantMap package_result;
+  const auto package_connection = QObject::connect(
+      &source_controller, &TimelineDocumentController::projectPackageCompleted,
+      &source_controller, [&](const QVariantMap& result) {
+        package_result = result;
+        package_finished = true;
+      });
+  const auto package_url = QUrl::fromLocalFile(package_path).toString();
+  if (!source_controller.createPortableProjectPackage(package_url)) {
+    QObject::disconnect(package_connection);
+    std::cerr << "controller should admit a portable project package request\n";
+    return false;
+  }
+  QElapsedTimer package_timer;
+  package_timer.start();
+  while (!package_finished && package_timer.elapsed() < 120000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  QObject::disconnect(package_connection);
+  if (!package_finished || !package_result.value(QStringLiteral("success")).toBool() ||
+      !QFileInfo::exists(package_path)) {
+    std::cerr << "controller should finish the package at a URL-encoded Unicode destination: "
+              << package_result.value(QStringLiteral("message")).toString().toStdString() << '\n';
+    return false;
+  }
+
+  const auto unzip = QStandardPaths::findExecutable(QStringLiteral("unzip"));
+  if (unzip.isEmpty() || !QDir().mkpath(extracted_directory) ||
+      QProcess::execute(unzip, {QStringLiteral("-q"), package_path,
+                                QStringLiteral("-d"), extracted_directory}) != 0) {
+    std::cerr << "portable project package should extract with the system ZIP reader\n";
+    return false;
+  }
+  const auto packaged_document = QDir(extracted_directory).filePath(QStringLiteral("Project.json"));
+  const auto expected_media_path = QDir(extracted_directory).filePath(
+      QStringLiteral("Media"));
+
+  const auto nested_extracted_directory = QDir(
+      QFileInfo(original_document_path).absolutePath()).filePath(
+          QStringLiteral("nested package extraction"));
+  if (!QDir().mkpath(nested_extracted_directory) ||
+      QProcess::execute(unzip, {QStringLiteral("-q"), package_path,
+                                QStringLiteral("-d"), nested_extracted_directory}) != 0) {
+    std::cerr << "portable project package should extract under the managed documents directory\n";
+    return false;
+  }
+  const auto nested_packaged_document = QDir(nested_extracted_directory).filePath(
+      QStringLiteral("Project.json"));
+  const auto nested_media_root = QDir(nested_extracted_directory).filePath(
+      QStringLiteral("Media"));
+  TimelineDocumentController nested_copy_controller;
+  if (!nested_copy_controller.loadTimeline(nested_packaged_document) ||
+      nested_copy_controller.timelineAssetId() == original_timeline_asset_id ||
+      QFileInfo(nested_copy_controller.savedDocumentPath()).absoluteFilePath() !=
+          QFileInfo(nested_packaged_document).absoluteFilePath()) {
+    std::cerr << "a package extracted under managed documents should open as a distinct in-place copy\n";
+    return false;
+  }
+  const auto nested_media_path = nested_copy_controller.clips().value(0).toMap()
+                                     .value(QStringLiteral("filePath")).toString();
+  if (!QFileInfo(nested_media_path).absoluteFilePath().startsWith(
+          QFileInfo(nested_media_root).absoluteFilePath() + QDir::separator()) ||
+      !QFileInfo::exists(nested_media_path)) {
+    std::cerr << "nested package copy should resolve media from its extracted Media folder\n";
+    return false;
+  }
+  nested_copy_controller.selectClip(0);
+  nested_copy_controller.setSelectedClipOpacity(0.31);
+  if (!nested_copy_controller.saveTimeline(false)) {
+    std::cerr << "nested package copy should save edits at its own Project.json path\n";
+    return false;
+  }
+  QFile nested_preserved_original_file(original_document_path);
+  if (!nested_preserved_original_file.open(QIODevice::ReadOnly) ||
+      nested_preserved_original_file.readAll() != original_document_bytes) {
+    std::cerr << "saving a package under managed documents should preserve the original project bytes\n";
+    return false;
+  }
+  const auto nested_copy_records = loadTimelineAssetRecords();
+  const auto nested_original_record = std::find_if(
+      nested_copy_records.cbegin(), nested_copy_records.cend(), [&](const auto& record) {
+        return record.asset_id == original_timeline_asset_id;
+      });
+  const auto nested_copy_record = std::find_if(
+      nested_copy_records.cbegin(), nested_copy_records.cend(), [&](const auto& record) {
+        return record.asset_id == nested_copy_controller.timelineAssetId();
+      });
+  if (nested_original_record == nested_copy_records.cend() ||
+      nested_copy_record == nested_copy_records.cend() ||
+      nested_original_record->document_path != original_document_path ||
+      QFileInfo(nested_copy_record->document_path).absoluteFilePath() !=
+          QFileInfo(nested_packaged_document).absoluteFilePath()) {
+    std::cerr << "managed-directory package save should retain separate original and copy library identities\n";
+    return false;
+  }
+  TimelineDocumentController nested_reopened_controller;
+  if (!nested_reopened_controller.loadTimeline(nested_packaged_document) ||
+      nested_reopened_controller.timelineAssetId() !=
+          nested_copy_controller.timelineAssetId() ||
+      nested_reopened_controller.savedDocumentPath() !=
+          QFileInfo(nested_packaged_document).absoluteFilePath() ||
+      !nearly_equal(nested_reopened_controller.clips().value(0).toMap()
+                        .value(QStringLiteral("opacity")).toDouble(), 0.31)) {
+    std::cerr << "nested package copy should retain its identity, path, and edit after reopening\n";
+    return false;
+  }
+
+  TimelineDocumentController reopened_controller;
+  if (!reopened_controller.loadTimeline(packaged_document) ||
+      reopened_controller.clipCount() != 1) {
+    std::cerr << "the extracted Project.json should load as an editable timeline\n";
+    return false;
+  }
+  const auto package_copy_asset_id = reopened_controller.timelineAssetId();
+  if (package_copy_asset_id == original_timeline_asset_id ||
+      QFileInfo(reopened_controller.savedDocumentPath()).absoluteFilePath() !=
+          QFileInfo(packaged_document).absoluteFilePath()) {
+    std::cerr << "a package with a colliding id should open as a distinct editable copy at Project.json\n";
+    return false;
+  }
+  const auto reopened_clip = reopened_controller.clips().value(0).toMap();
+  const auto reopened_media_path = reopened_clip.value(QStringLiteral("filePath")).toString();
+  QFile source_file(source_path);
+  QFile reopened_file(reopened_media_path);
+  if (!QFileInfo(reopened_media_path).absoluteFilePath().startsWith(
+          QFileInfo(expected_media_path).absoluteFilePath() + QDir::separator()) ||
+      !source_file.open(QIODevice::ReadOnly) || !reopened_file.open(QIODevice::ReadOnly) ||
+      source_file.readAll() != reopened_file.readAll()) {
+    std::cerr << "reopened timeline should resolve intact media relative to the extracted package\n";
+    return false;
+  }
+
+  reopened_controller.selectClip(0);
+  reopened_controller.setSelectedClipOpacity(0.42);
+  if (!reopened_controller.saveTimeline(false)) {
+    std::cerr << "the extracted package copy should save its edit in place\n";
+    return false;
+  }
+  QFile preserved_original_file(original_document_path);
+  if (!preserved_original_file.open(QIODevice::ReadOnly) ||
+      preserved_original_file.readAll() != original_document_bytes) {
+    std::cerr << "saving the extracted copy should leave the original project byte-identical\n";
+    return false;
+  }
+  const auto copy_records = loadTimelineAssetRecords();
+  const auto original_record = std::find_if(
+      copy_records.cbegin(), copy_records.cend(), [&](const auto& record) {
+        return record.asset_id == original_timeline_asset_id;
+      });
+  const auto copy_record = std::find_if(
+      copy_records.cbegin(), copy_records.cend(), [&](const auto& record) {
+        return record.asset_id == package_copy_asset_id;
+      });
+  if (original_record == copy_records.cend() || copy_record == copy_records.cend() ||
+      original_record->document_path != original_document_path ||
+      QFileInfo(copy_record->document_path).absoluteFilePath() !=
+          QFileInfo(packaged_document).absoluteFilePath()) {
+    std::cerr << "package save should retain separate original and copy library identities\n";
+    return false;
+  }
+
+  TimelineDocumentController relaunched_copy;
+  if (!relaunched_copy.loadTimeline(packaged_document)) {
+    std::cerr << "relaunch should restore the package-copy edit and its extracted media paths\n";
+    return false;
+  }
+  const auto relaunched_media_path = relaunched_copy.clips().value(0).toMap()
+                                         .value(QStringLiteral("filePath")).toString();
+  if (relaunched_copy.timelineAssetId() != package_copy_asset_id ||
+      relaunched_copy.clipCount() != 1 ||
+      !nearly_equal(relaunched_copy.clips().value(0).toMap()
+                        .value(QStringLiteral("opacity")).toDouble(), 0.42) ||
+      !QFileInfo(relaunched_media_path).absoluteFilePath()
+           .startsWith(QFileInfo(expected_media_path).absoluteFilePath() + QDir::separator()) ||
+      !QFileInfo::exists(relaunched_media_path)) {
+    std::cerr << "relaunch should restore the package-copy edit and its extracted media paths\n";
+    return false;
+  }
+  std::cout << "timeline_delivery_package_reopen="
+            << package_result.value(QStringLiteral("path")).toString().toStdString() << '\n';
+  return true;
+}
+
+bool run_timeline_publish_revision_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    std::cerr << "the Publish revision workflow requires ffmpeg\n";
+    return false;
+  }
+  const auto source_path = create_test_video(
+      ffmpeg,
+      QDir(workspace_path).filePath(QStringLiteral("publish-revision-source.mp4")),
+      QStringLiteral("red"), true, 660, 1.0);
+  if (source_path.isEmpty()) {
+    return false;
+  }
+
+  photo_editor::desktop::JobRunner runner;
+  auto recovery_finished = false;
+  auto recovery_error = QString{};
+  QObject::connect(
+      &runner,
+      &photo_editor::desktop::JobRunner::startupRecoveryFinished,
+      [&recovery_finished, &recovery_error](const QString& error) {
+        recovery_finished = true;
+        recovery_error = error;
+      });
+  runner.initializeFromStore();
+  QElapsedTimer recovery_timer;
+  recovery_timer.start();
+  while (!recovery_finished && recovery_timer.elapsed() < 30000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+  }
+  if (!recovery_finished || !recovery_error.isEmpty()) {
+    std::cerr << "job runner did not finish startup recovery: "
+              << recovery_error.toStdString() << '\n';
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Publish revision proof")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("video:publish-revision"), source_path,
+      QStringLiteral("Red with tone"), 0.0, QString{});
+  if (!wait_for_media_analysis(&controller)) {
+    std::cerr << "Publish fixture media analysis did not finish before the first render\n";
+    return false;
+  }
+  QElapsedTimer audio_pair_timer;
+  audio_pair_timer.start();
+  QVariantMap analyzed_source_clip;
+  QVariantList analyzed_tracks;
+  while (audio_pair_timer.elapsed() < 30000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    analyzed_source_clip = controller.currentClip();
+    analyzed_tracks = controller.sequenceTracks();
+    if (analyzed_source_clip.value(QStringLiteral("mediaAnalysisStatus")).toString() ==
+            QStringLiteral("ready") &&
+        controller.mediaAnalysisPendingCount() == 0) {
+      break;
+    }
+  }
+  const auto video_track_clip_count = analyzed_tracks.size() > 0
+      ? analyzed_tracks.at(0).toMap().value(QStringLiteral("clipCount")).toInt()
+      : 0;
+  const auto linked_audio_track_count = analyzed_tracks.size() > 1
+      ? analyzed_tracks.at(1).toMap().value(QStringLiteral("clipCount")).toInt()
+      : 0;
+  if (analyzed_source_clip.value(QStringLiteral("mediaAnalysisStatus")).toString() !=
+          QStringLiteral("ready") ||
+      !analyzed_source_clip.value(QStringLiteral("hasAudio")).toBool() ||
+      video_track_clip_count != 1 || linked_audio_track_count != 1) {
+    std::cerr << "Publish fixture must finish analysis with linked source audio before rendering: status="
+              << analyzed_source_clip.value(QStringLiteral("mediaAnalysisStatus")).toString().toStdString()
+              << " hasAudio="
+              << analyzed_source_clip.value(QStringLiteral("hasAudio")).toBool()
+              << " pending=" << controller.mediaAnalysisPendingCount()
+              << " videoClips=" << video_track_clip_count
+              << " linkedAudioClips=" << linked_audio_track_count << '\n';
+    return false;
+  }
+  controller.selectClip(0);
+  controller.setSelectedClipOpacity(0.70);
+  controller.setSelectedClipAudioGain(-3.0);
+  if (!controller.saveTimeline(true)) {
+    std::cerr << "first Publish should save and queue the render\n";
+    return false;
+  }
+  const auto job_id = QStringLiteral("timeline-render-%1")
+                          .arg(controller.timelineAssetId().section(':', 1));
+  if (!wait_for_persisted_job(job_id)) {
+    return false;
+  }
+  auto render_path_for_job = [&job_id]() {
+    for (const auto& job : loadPersistedJobRecords()) {
+      if (job.job_id == job_id) {
+        return job.output_path;
+      }
+    }
+    return QString{};
+  };
+  const auto revision_a_path = render_path_for_job();
+  QFile revision_a_file(revision_a_path);
+  if (revision_a_path.isEmpty() || !revision_a_file.open(QIODevice::ReadOnly)) {
+    std::cerr << "first Publish output should be readable\n";
+    return false;
+  }
+  const auto revision_a_bytes = revision_a_file.readAll();
+  revision_a_file.close();
+  const auto revision_a_audio_db = detected_mean_volume_db(ffmpeg, revision_a_path, 660);
+  const auto revision_a_pixel = process_bytes(
+      ffmpeg,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-ss"), QStringLiteral("0.20"),
+       QStringLiteral("-i"), revision_a_path,
+       QStringLiteral("-frames:v"), QStringLiteral("1"),
+       QStringLiteral("-vf"), QStringLiteral("scale=1:1"),
+       QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+       QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+
+  controller.selectClip(0);
+  controller.setSelectedClipOpacity(0.25);
+  controller.setSelectedClipAudioGain(-12.0);
+  if (revision_a_pixel.size() < 3 || revision_a_audio_db < -90.0) {
+    std::cerr << "first Publish output could not support revision comparison: pixelBytes="
+              << revision_a_pixel.size() << " audioMeanDb=" << revision_a_audio_db
+              << " outputPath=" << revision_a_path.toStdString() << '\n';
+    return false;
+  }
+  if (!controller.saveTimeline(true)) {
+    std::cerr << "second Publish save or queue admission failed: controllerStatus="
+              << controller.status().toStdString() << ' '
+              << persisted_job_diagnostic(job_id).toStdString() << '\n';
+    return false;
+  }
+  if (!wait_for_persisted_job_with_new_output(job_id, revision_a_path)) {
+    std::cerr << "second Publish did not produce a new completed output after edits: "
+              << persisted_job_diagnostic(job_id).toStdString() << '\n';
+    return false;
+  }
+  const auto revision_b_path = render_path_for_job();
+  QFile preserved_revision_a(revision_a_path);
+  if (revision_b_path.isEmpty() || revision_b_path == revision_a_path ||
+      !QFileInfo::exists(revision_b_path) ||
+      !preserved_revision_a.open(QIODevice::ReadOnly) ||
+      preserved_revision_a.readAll() != revision_a_bytes) {
+    std::cerr << "a new Publish should use a new path and preserve the last successful render: revisionA="
+              << revision_a_path.toStdString() << " revisionB="
+              << revision_b_path.toStdString() << " revisionBExists="
+              << QFileInfo::exists(revision_b_path) << " "
+              << persisted_job_diagnostic(job_id).toStdString() << '\n';
+    return false;
+  }
+  const auto revision_b_audio_db = detected_mean_volume_db(ffmpeg, revision_b_path, 660);
+  const auto revision_b_pixel = process_bytes(
+      ffmpeg,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-ss"), QStringLiteral("0.20"),
+       QStringLiteral("-i"), revision_b_path,
+       QStringLiteral("-frames:v"), QStringLiteral("1"),
+       QStringLiteral("-vf"), QStringLiteral("scale=1:1"),
+       QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+       QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  if (revision_b_pixel.size() < 3 ||
+      static_cast<unsigned char>(revision_b_pixel.at(0)) + 35 >=
+          static_cast<unsigned char>(revision_a_pixel.at(0)) ||
+      revision_b_audio_db > revision_a_audio_db - 5.0) {
+    const auto pixel_value = [](const QByteArray& bytes) {
+      return bytes.size() < 3 ? -1 : static_cast<int>(static_cast<unsigned char>(bytes.at(0)));
+    };
+    std::cerr << "second library render should contain the visible and audible edits: pixelBytesA="
+              << revision_a_pixel.size() << " pixelBytesB=" << revision_b_pixel.size()
+              << " redA=" << pixel_value(revision_a_pixel) << " redB="
+              << pixel_value(revision_b_pixel) << " audioMeanDbA="
+              << revision_a_audio_db << " audioMeanDbB=" << revision_b_audio_db
+              << " outputB=" << revision_b_path.toStdString() << '\n';
+    return false;
+  }
+  const auto records = loadTimelineAssetRecords();
+  const auto record = std::find_if(records.cbegin(), records.cend(), [&](const auto& item) {
+    return item.asset_id == controller.timelineAssetId();
+  });
+  if (record == records.cend() || record->render_path != revision_b_path) {
+    std::cerr << "library record should point to the newly published render: expected="
+              << revision_b_path.toStdString() << " actual="
+              << (record == records.cend() ? QStringLiteral("missing") : record->render_path)
+                     .toStdString() << '\n';
+    return false;
+  }
+  TimelineDocumentController reopened;
+  if (!reopened.loadTimeline(controller.savedDocumentPath()) ||
+      reopened.savedRenderPath() != revision_b_path ||
+      !QFileInfo::exists(reopened.savedRenderPath())) {
+    std::cerr << "reopening should resolve the latest successful library render: document="
+              << controller.savedDocumentPath().toStdString() << " expectedRender="
+              << revision_b_path.toStdString() << " actualRender="
+              << reopened.savedRenderPath().toStdString() << '\n';
+    return false;
+  }
+  std::cout << "timeline_publish_revision_a=" << revision_a_path.toStdString()
+            << " timeline_publish_revision_b=" << revision_b_path.toStdString() << '\n';
+  return true;
+}
+
+bool run_timeline_otio_import_reopen_workflow(const QString& workspace_path) {
+  const auto media_path = QDir(workspace_path).filePath(QStringLiteral("Référence image.png"));
+  const auto otio_path = QDir(workspace_path).filePath(QStringLiteral("Rough cut.otio"));
+  QImage media(48, 32, QImage::Format_RGBA8888);
+  media.fill(QColor(44, 118, 196));
+  if (!media.save(media_path)) {
+    std::cerr << "OTIO import media fixture could not be written\n";
+    return false;
+  }
+
+  const auto rate = 24000.0 / 1001.0;
+  const auto rational = [](double value, double time_rate) {
+    return QJsonObject{{QStringLiteral("OTIO_SCHEMA"), QStringLiteral("RationalTime.1")},
+                       {QStringLiteral("value"), value},
+                       {QStringLiteral("rate"), time_rate}};
+  };
+  const auto time_range = [&rational](double start, double duration, double time_rate) {
+    return QJsonObject{{QStringLiteral("OTIO_SCHEMA"), QStringLiteral("TimeRange.1")},
+                       {QStringLiteral("start_time"), rational(start, time_rate)},
+                       {QStringLiteral("duration"), rational(duration, time_rate)}};
+  };
+  const auto external = QJsonObject{
+      {QStringLiteral("OTIO_SCHEMA"), QStringLiteral("ExternalReference.1")},
+      {QStringLiteral("name"), QFileInfo(media_path).fileName()},
+      {QStringLiteral("target_url"), QUrl::fromLocalFile(media_path).toString(QUrl::FullyEncoded)},
+      {QStringLiteral("available_range"), QJsonValue::Null},
+      {QStringLiteral("available_image_bounds"), QJsonValue::Null},
+      {QStringLiteral("metadata"), QJsonObject{}}};
+  auto imported_clip = QJsonObject{
+      {QStringLiteral("OTIO_SCHEMA"), QStringLiteral("Clip.2")},
+      {QStringLiteral("name"), QStringLiteral("Trimmed reference")},
+      {QStringLiteral("source_range"), time_range(rate, rate * 3.0, rate)},
+      {QStringLiteral("media_references"), QJsonObject{{QStringLiteral("DEFAULT_MEDIA"), external}}},
+      {QStringLiteral("active_media_reference_key"), QStringLiteral("DEFAULT_MEDIA")},
+      {QStringLiteral("effects"), QJsonArray{QJsonObject{
+           {QStringLiteral("OTIO_SCHEMA"), QStringLiteral("Effect.1")},
+           {QStringLiteral("name"), QStringLiteral("External grade")}}}},
+      {QStringLiteral("markers"), QJsonArray{}},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("metadata"), QJsonObject{}}};
+  const auto track = QJsonObject{
+      {QStringLiteral("OTIO_SCHEMA"), QStringLiteral("Track.1")},
+      {QStringLiteral("name"), QStringLiteral("Picture")},
+      {QStringLiteral("kind"), QStringLiteral("Video")},
+      {QStringLiteral("children"), QJsonArray{imported_clip}},
+      {QStringLiteral("source_range"), QJsonValue::Null},
+      {QStringLiteral("effects"), QJsonArray{}},
+      {QStringLiteral("markers"), QJsonArray{}},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("metadata"), QJsonObject{}}};
+  const auto timeline = QJsonObject{
+      {QStringLiteral("OTIO_SCHEMA"), QStringLiteral("Timeline.1")},
+      {QStringLiteral("name"), QStringLiteral("OTIO review cut")},
+      {QStringLiteral("tracks"), QJsonObject{
+           {QStringLiteral("OTIO_SCHEMA"), QStringLiteral("Stack.1")},
+           {QStringLiteral("children"), QJsonArray{track}},
+           {QStringLiteral("source_range"), QJsonValue::Null},
+           {QStringLiteral("effects"), QJsonArray{}},
+           {QStringLiteral("markers"), QJsonArray{}},
+           {QStringLiteral("metadata"), QJsonObject{}}}},
+      {QStringLiteral("global_start_time"), QJsonValue::Null},
+      {QStringLiteral("metadata"), QJsonObject{}}};
+  const auto otio_bytes = QJsonDocument(timeline).toJson(QJsonDocument::Indented);
+  QFile otio_file(otio_path);
+  if (!otio_file.open(QIODevice::WriteOnly) ||
+      otio_file.write(otio_bytes) != otio_bytes.size()) {
+    std::cerr << "OTIO import fixture could not be written\n";
+    return false;
+  }
+  otio_file.close();
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Before OTIO import")},
+      {QStringLiteral("width"), 48},
+      {QStringLiteral("height"), 32},
+      {QStringLiteral("frameRate"), rate},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("photo:otio-source"), media_path,
+      QStringLiteral("Original clip"), 3.0, QUrl::fromLocalFile(media_path).toString());
+  const auto import_url = QUrl::fromLocalFile(otio_path).toString(QUrl::FullyEncoded);
+  const auto original_hash = controller.deterministicDocumentHash();
+  const auto first_preview = controller.previewTimelineOtioImport(import_url);
+  const auto first_losses = first_preview.value(QStringLiteral("lossyFields")).toList();
+  if (!first_preview.value(QStringLiteral("valid")).toBool() || first_losses.isEmpty() ||
+      first_preview.value(QStringLiteral("sourceSha256")).toString().isEmpty() ||
+      controller.deterministicDocumentHash() != original_hash) {
+    std::cerr << "OTIO preview should be read-only and include a source checksum and loss report\n";
+    return false;
+  }
+  QFile changed_source(otio_path);
+  if (!changed_source.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      changed_source.write(QByteArrayLiteral("changed after preview")) <= 0) {
+    std::cerr << "OTIO source should be replaceable for the stale-preview check\n";
+    return false;
+  }
+  changed_source.close();
+  const auto stale_source = controller.importTimelineOtio(
+      import_url, first_preview.value(QStringLiteral("sourcePath")).toString(),
+      first_preview.value(QStringLiteral("sourceSha256")).toString(),
+      first_preview.value(QStringLiteral("timelineId")).toString(),
+      first_preview.value(QStringLiteral("documentHash")).toString(), true);
+  if (stale_source.value(QStringLiteral("status")).toString() != QStringLiteral("stale-preview") ||
+      controller.deterministicDocumentHash() != original_hash) {
+    std::cerr << "OTIO import should reject a source file that no longer matches the preview checksum\n";
+    return false;
+  }
+  QFile restored_source(otio_path);
+  if (!restored_source.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      restored_source.write(otio_bytes) != otio_bytes.size()) {
+    std::cerr << "OTIO source should restore after the stale-preview check\n";
+    return false;
+  }
+  restored_source.close();
+
+  controller.setTimelineName(QStringLiteral("Edited after preview"));
+  const auto stale_document = controller.importTimelineOtio(
+      import_url, first_preview.value(QStringLiteral("sourcePath")).toString(),
+      first_preview.value(QStringLiteral("sourceSha256")).toString(),
+      first_preview.value(QStringLiteral("timelineId")).toString(),
+      first_preview.value(QStringLiteral("documentHash")).toString(), true);
+  if (stale_document.value(QStringLiteral("status")).toString() != QStringLiteral("stale-preview") ||
+      controller.timelineName() != QStringLiteral("Edited after preview")) {
+    std::cerr << "OTIO import should reject a document edited after the report was previewed\n";
+    return false;
+  }
+
+  const auto preview = controller.previewTimelineOtioImport(import_url);
+  const auto blocked = controller.importTimelineOtio(
+      import_url, preview.value(QStringLiteral("sourcePath")).toString(),
+      preview.value(QStringLiteral("sourceSha256")).toString(),
+      preview.value(QStringLiteral("timelineId")).toString(),
+      preview.value(QStringLiteral("documentHash")).toString(), false);
+  if (blocked.value(QStringLiteral("status")).toString() != QStringLiteral("acceptance-required") ||
+      controller.timelineName() != QStringLiteral("Edited after preview")) {
+    std::cerr << "lossy OTIO import should not mutate until its preview report is accepted\n";
+    return false;
+  }
+  const auto applied = controller.importTimelineOtio(
+      import_url, preview.value(QStringLiteral("sourcePath")).toString(),
+      preview.value(QStringLiteral("sourceSha256")).toString(),
+      preview.value(QStringLiteral("timelineId")).toString(),
+      preview.value(QStringLiteral("documentHash")).toString(), true);
+  if (!applied.value(QStringLiteral("success")).toBool() || controller.clipCount() != 1 ||
+      !controller.dirty()) {
+    std::cerr << "an explicitly accepted OTIO subset should apply as an editable timeline\n";
+    return false;
+  }
+  const auto imported = controller.clips().value(0).toMap();
+  if (imported.value(QStringLiteral("displayLabel")).toString() != QStringLiteral("Trimmed reference") ||
+      !nearly_equal(imported.value(QStringLiteral("trimStartSeconds")).toDouble(), 1.0) ||
+      !nearly_equal(imported.value(QStringLiteral("trimEndSeconds")).toDouble(), 4.0) ||
+      QFileInfo(imported.value(QStringLiteral("filePath")).toString()).absoluteFilePath() !=
+          QFileInfo(media_path).absoluteFilePath()) {
+    std::cerr << "OTIO apply should preserve its source reference and 24000/1001 trim values\n";
+    return false;
+  }
+  if (!controller.saveTimeline()) {
+    std::cerr << "imported OTIO timeline should save\n";
+    return false;
+  }
+  TimelineDocumentController reopened;
+  if (!reopened.loadTimeline(controller.savedDocumentPath()) || reopened.clipCount() != 1) {
+    std::cerr << "saved OTIO-imported timeline should reopen as editable native state\n";
+    return false;
+  }
+  const auto reopened_clip = reopened.clips().value(0).toMap();
+  if (reopened_clip.value(QStringLiteral("displayLabel")).toString() != QStringLiteral("Trimmed reference") ||
+      !nearly_equal(reopened_clip.value(QStringLiteral("trimStartSeconds")).toDouble(), 1.0) ||
+      !nearly_equal(reopened_clip.value(QStringLiteral("trimEndSeconds")).toDouble(), 4.0)) {
+    std::cerr << "OTIO cuts and trims should survive native save and reopen\n";
+    return false;
+  }
+  return true;
+}
+
+#include "timeline_generated_source_workflow.inc"
+#include "timeline_authored_project_render_probe.inc"
+#include "timeline_background_intent_probe.inc"
+#include "timeline_frame_shadow_render_workflow.inc"
+#include "timeline_task_owned_compound_command_workflow.inc"
+
+namespace {
+
+QString json_value_type_name(const QJsonValue& value) {
+  switch (value.type()) {
+    case QJsonValue::Null: return QStringLiteral("null");
+    case QJsonValue::Bool: return QStringLiteral("bool");
+    case QJsonValue::Double: return QStringLiteral("number");
+    case QJsonValue::String: return QStringLiteral("string");
+    case QJsonValue::Array: return QStringLiteral("array");
+    case QJsonValue::Object: return QStringLiteral("object");
+    case QJsonValue::Undefined: return QStringLiteral("missing");
+  }
+  return QStringLiteral("unknown");
+}
+
+QJsonObject timeline_graph_object(QJsonObject object) {
+  for (const auto& key : {QStringLiteral("timelineId"), QStringLiteral("name"),
+                          QStringLiteral("createdAt"), QStringLiteral("updatedAt"),
+                          QStringLiteral("renderPath"), QStringLiteral("posterPath")}) {
+    object.remove(key);
+  }
+  return object;
+}
+
+QString sha256_hex(const QByteArray& bytes) {
+  return QString::fromLatin1(
+      QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+
+QJsonArray first_timeline_graph_differences(
+    const QJsonObject& source,
+    const QJsonObject& copy,
+    bool* truncated) {
+  constexpr int kMaximumDifferences = 12;
+  QJsonArray differences;
+  *truncated = false;
+  const auto append_difference = [&differences, truncated](
+                                    const QString& path,
+                                    const QJsonValue& source_value,
+                                    const QJsonValue& copy_value) {
+    if (differences.size() >= kMaximumDifferences) {
+      *truncated = true;
+      return false;
+    }
+    QJsonObject difference{
+        {QStringLiteral("path"), path},
+        {QStringLiteral("sourceType"), json_value_type_name(source_value)},
+        {QStringLiteral("copyType"), json_value_type_name(copy_value)}};
+    if (source_value.isDouble()) {
+      difference.insert(QStringLiteral("sourceNumber"), source_value.toDouble());
+    }
+    if (copy_value.isDouble()) {
+      difference.insert(QStringLiteral("copyNumber"), copy_value.toDouble());
+    }
+    if (source_value.isArray() && copy_value.isArray() &&
+        source_value.toArray().size() != copy_value.toArray().size()) {
+      difference.insert(QStringLiteral("sourceLength"),
+                         static_cast<double>(source_value.toArray().size()));
+      difference.insert(QStringLiteral("copyLength"),
+                         static_cast<double>(copy_value.toArray().size()));
+    }
+    differences.append(difference);
+    return true;
+  };
+  std::function<bool(const QJsonValue&, const QJsonValue&, const QString&)> compare;
+  compare = [&](const QJsonValue& source_value,
+                const QJsonValue& copy_value,
+                const QString& path) -> bool {
+    if (source_value.type() != copy_value.type()) {
+      return append_difference(path, source_value, copy_value);
+    }
+    if (source_value.isObject()) {
+      const auto source_object = source_value.toObject();
+      const auto copy_object = copy_value.toObject();
+      auto keys = source_object.keys();
+      for (const auto& key : copy_object.keys()) {
+        if (!keys.contains(key)) keys.push_back(key);
+      }
+      std::sort(keys.begin(), keys.end());
+      for (const auto& key : keys) {
+        const auto source_has_key = source_object.contains(key);
+        const auto copy_has_key = copy_object.contains(key);
+        const auto child_path = path + QLatin1Char('/') +
+            QString(key).replace(QLatin1Char('~'), QStringLiteral("~0"))
+                .replace(QLatin1Char('/'), QStringLiteral("~1"));
+        if (!compare(source_has_key ? source_object.value(key)
+                                    : QJsonValue(QJsonValue::Undefined),
+                     copy_has_key ? copy_object.value(key)
+                                  : QJsonValue(QJsonValue::Undefined),
+                     child_path)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (source_value.isArray()) {
+      const auto source_array = source_value.toArray();
+      const auto copy_array = copy_value.toArray();
+      if (source_array.size() != copy_array.size()) {
+        if (!append_difference(path + QStringLiteral("/<length>"),
+                               QJsonValue(static_cast<double>(source_array.size())),
+                               QJsonValue(static_cast<double>(copy_array.size())))) {
+          return false;
+        }
+      }
+      const auto common_size = qMin(source_array.size(), copy_array.size());
+      for (auto index = 0; index < common_size; ++index) {
+        if (!compare(source_array.at(index), copy_array.at(index),
+                     path + QLatin1Char('/') + QString::number(index))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (source_value != copy_value) {
+      return append_difference(path, source_value, copy_value);
+    }
+    return true;
+  };
+  static_cast<void>(compare(QJsonValue(source), QJsonValue(copy), QString{}));
+  if (differences.size() >= kMaximumDifferences) *truncated = true;
+  return differences;
+}
+
+int run_native_copy_graph_probe(const QStringList& arguments) {
+  const auto option_index = arguments.indexOf(QStringLiteral("--copy-project-probe"));
+  if (option_index < 0 || option_index + 2 >= arguments.size()) {
+    return fail("copy-project probe requires a project path and expected SHA-256");
+  }
+  const auto source_path = arguments.at(option_index + 1);
+  const auto expected_sha = arguments.at(option_index + 2).toLatin1();
+  const QFileInfo source_info(source_path);
+  const auto canonical_source = source_info.canonicalFilePath();
+  if (!source_info.isFile() || !source_info.isReadable() || source_info.isSymLink() ||
+      canonical_source.isEmpty() || canonical_source != source_info.absoluteFilePath() ||
+      source_info.size() <= 0 || source_info.size() > 256LL * 1024 * 1024 ||
+      expected_sha.size() != 64) {
+    return fail("copy-project probe requires a canonical readable source <=256 MiB and 64-character SHA");
+  }
+  QFile source_file(canonical_source);
+  if (!source_file.open(QIODevice::ReadOnly)) {
+    return fail("copy-project probe could not open the verified source file");
+  }
+  const auto source_bytes = source_file.readAll();
+  if (source_file.error() != QFileDevice::NoError || sha256_hex(source_bytes).toLatin1() != expected_sha) {
+    return fail("copy-project probe source bytes do not match the expected SHA-256");
+  }
+  QJsonParseError parse_error;
+  const auto source_document = QJsonDocument::fromJson(source_bytes, &parse_error);
+  if (parse_error.error != QJsonParseError::NoError || !source_document.isObject()) {
+    return fail("copy-project probe source is not a JSON Timeline project");
+  }
+
+  TimelineDocumentController controller;
+  controller.setEditAccessPolicy([] { return true; });
+  const auto result = controller.importTimelineProjectCopyForAutomation(source_bytes);
+  const auto source_graph = timeline_graph_object(source_document.object());
+  const auto loaded_document = controller.hasActiveTimeline()
+      ? photo_editor::desktop::TimelineHistoryTestAccess::documentObject(controller)
+      : QJsonObject{};
+  const auto loaded_graph = timeline_graph_object(loaded_document);
+  const auto source_graph_sha = sha256_hex(QJsonDocument(source_graph).toJson(QJsonDocument::Compact));
+  const auto loaded_graph_sha = loaded_document.isEmpty()
+      ? QString{} : sha256_hex(QJsonDocument(loaded_graph).toJson(QJsonDocument::Compact));
+  bool differences_truncated = false;
+  const auto differences = loaded_document.isEmpty()
+      ? QJsonArray{}
+      : first_timeline_graph_differences(source_graph, loaded_graph, &differences_truncated);
+  const auto inspected = controller.inspectAgentDocument();
+  const auto graph_matches = !loaded_document.isEmpty() && source_graph == loaded_graph;
+  const QJsonObject report{
+      {QStringLiteral("probeCompleted"), true},
+      {QStringLiteral("importOk"), result.value(QStringLiteral("ok")).toBool()},
+      {QStringLiteral("importError"), result.value(QStringLiteral("error")).toString()},
+      {QStringLiteral("sourceSha256"), sha256_hex(source_bytes)},
+      {QStringLiteral("sourceByteSize"), static_cast<double>(source_bytes.size())},
+      {QStringLiteral("sourceGraphSha256"), source_graph_sha},
+      {QStringLiteral("loadedGraphSha256"), loaded_graph_sha},
+      {QStringLiteral("reportedSourceGraphSha256"), result.value(QStringLiteral("sourceGraphSha256")).toString()},
+      {QStringLiteral("reportedCopyGraphSha256"), result.value(QStringLiteral("copyGraphSha256")).toString()},
+      {QStringLiteral("graphMatches"), graph_matches},
+      {QStringLiteral("inMemoryTimelineActive"), controller.hasActiveTimeline()},
+      {QStringLiteral("resourceId"), inspected.value(QStringLiteral("resourceId")).toString()},
+      {QStringLiteral("documentHash"), inspected.value(QStringLiteral("documentHash")).toString()},
+      {QStringLiteral("clipCount"), static_cast<double>(
+          inspected.value(QStringLiteral("clips")).toList().size())},
+      {QStringLiteral("trackCount"), static_cast<double>(
+          inspected.value(QStringLiteral("tracks")).toList().size())},
+      {QStringLiteral("differencesTruncated"), differences_truncated},
+      {QStringLiteral("firstDifferences"), differences}};
+  std::cout << QJsonDocument(report).toJson(QJsonDocument::Indented).toStdString() << '\n';
+  return EXIT_SUCCESS;
+}
+
+bool document_has_exact_clip_labels(
+    const QJsonObject& document,
+    const QStringList& clip_ids,
+    const QStringList& expected_labels) {
+  if (clip_ids.size() != expected_labels.size()) return false;
+  QHash<QString, QString> labels_by_clip_id;
+  const auto tracks = document.value(QStringLiteral("tracks")).toArray();
+  for (const auto& track_value : tracks) {
+    const auto track = track_value.toObject();
+    for (const auto& clip_value : track.value(QStringLiteral("clips")).toArray()) {
+      const auto clip = clip_value.toObject();
+      const auto clip_id = clip.value(QStringLiteral("clipId")).toString();
+      if (clip_ids.contains(clip_id) &&
+          clip.value(QStringLiteral("displayLabel")).isString()) {
+        labels_by_clip_id.insert(
+            clip_id, clip.value(QStringLiteral("displayLabel")).toString());
+      }
+    }
+  }
+  for (auto index = 0; index < clip_ids.size(); ++index) {
+    if (!labels_by_clip_id.contains(clip_ids.at(index)) ||
+        labels_by_clip_id.value(clip_ids.at(index)) != expected_labels.at(index)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool document_has_exact_track_label(
+    const QJsonObject& document,
+    const QString& track_id,
+    const QString& expected_label) {
+  for (const auto& track_value : document.value(QStringLiteral("tracks")).toArray()) {
+    const auto track = track_value.toObject();
+    if (track.value(QStringLiteral("trackId")).toString() == track_id) {
+      return track.value(QStringLiteral("displayLabel")).isString() &&
+             track.value(QStringLiteral("displayLabel")).toString() == expected_label;
+    }
+  }
+  return false;
+}
+
+bool run_timeline_display_label_roundtrip_workflow() {
+  const auto expected_track_label = QStringLiteral("Graphics track  ");
+  const QStringList expected_labels{
+      QStringLiteral("Keep the exact label  "), QString{}};
+  TimelineDocumentController source;
+  source.setEditAccessPolicy([] { return true; });
+  source.createTimeline(QStringLiteral("Display Label Round Trip"));
+  const auto track = source.createTimelineTrackForAutomation(
+      QStringLiteral("graphics"), QStringLiteral("Labels"));
+  const auto track_id = track.value(QStringLiteral("trackId")).toString();
+  if (!track.value(QStringLiteral("ok")).toBool() || track_id.isEmpty()) {
+    std::cerr << "label round-trip fixture should create a native graphics track\n";
+    return false;
+  }
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::setTrackDisplayLabel(
+          source, track_id, expected_track_label)) {
+    std::cerr << "label round-trip fixture should set the exact native track label\n";
+    return false;
+  }
+
+  const auto first = source.createTimelineTitleForAutomation(
+      track_id, QStringLiteral("basic"), 0.0, 1.0,
+      {{QStringLiteral("text"), QStringLiteral("Trailing spaces")}});
+  const auto second = source.createTimelineTitleForAutomation(
+      track_id, QStringLiteral("basic"), 2.0, 1.0,
+      {{QStringLiteral("text"), QStringLiteral("Explicit empty label")}});
+  const auto clip_ids = QStringList{
+      first.value(QStringLiteral("createdClipId")).toString(),
+      second.value(QStringLiteral("createdClipId")).toString()};
+  if (!first.value(QStringLiteral("ok")).toBool() ||
+      !second.value(QStringLiteral("ok")).toBool() || clip_ids.contains(QString{})) {
+    std::cerr << "label round-trip fixture should create two editable native titles\n";
+    return false;
+  }
+  for (auto index = 0; index < clip_ids.size(); ++index) {
+    if (!photo_editor::desktop::TimelineHistoryTestAccess::setClipDisplayLabel(
+            source, clip_ids.at(index), expected_labels.at(index))) {
+      std::cerr << "label round-trip fixture should set exact native title labels\n";
+      return false;
+    }
+  }
+  if (!source.saveTimeline()) {
+    std::cerr << "label round-trip source project should save normally\n";
+    return false;
+  }
+  const auto source_path = source.savedDocumentPath();
+  QFile source_file(source_path);
+  if (source_path.isEmpty() || !source_file.open(QIODevice::ReadOnly)) {
+    std::cerr << "label round-trip source project should be readable after native save\n";
+    return false;
+  }
+  const auto source_bytes = source_file.readAll();
+  source_file.close();
+  QJsonParseError source_parse_error;
+  const auto source_document = QJsonDocument::fromJson(source_bytes, &source_parse_error);
+  if (source_parse_error.error != QJsonParseError::NoError ||
+      !source_document.isObject() ||
+      !document_has_exact_track_label(source_document.object(), track_id, expected_track_label) ||
+      !document_has_exact_clip_labels(source_document.object(), clip_ids, expected_labels)) {
+    std::cerr << "native save should preserve exact track, trailing, and explicit-empty display labels\n";
+    return false;
+  }
+
+  TimelineDocumentController reopened_source;
+  reopened_source.setEditAccessPolicy([] { return true; });
+  if (!reopened_source.loadTimeline(source_path) ||
+      !document_has_exact_track_label(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(reopened_source),
+          track_id, expected_track_label) ||
+      !document_has_exact_clip_labels(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(reopened_source),
+          clip_ids, expected_labels)) {
+    std::cerr << "native reopen should preserve exact serialized display labels\n";
+    return false;
+  }
+
+  TimelineDocumentController imported_copy;
+  imported_copy.setEditAccessPolicy([] { return true; });
+  const auto imported = imported_copy.importTimelineProjectCopyForAutomation(source_bytes);
+  if (!imported.value(QStringLiteral("ok")).toBool() ||
+      !imported.value(QStringLiteral("graphMatches")).toBool() ||
+      !document_has_exact_track_label(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(imported_copy),
+          track_id, expected_track_label) ||
+      !document_has_exact_clip_labels(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(imported_copy),
+          clip_ids, expected_labels)) {
+    std::cerr << "native project-copy import should preserve exact labels and pass graph verification; error="
+              << imported.value(QStringLiteral("error")).toString().toStdString()
+              << " sourceGraph="
+              << imported.value(QStringLiteral("sourceGraphSha256")).toString().toStdString()
+              << " copyGraph="
+              << imported.value(QStringLiteral("copyGraphSha256")).toString().toStdString()
+              << '\n';
+    return false;
+  }
+  const auto copied_path = imported.value(QStringLiteral("savedDocumentPath")).toString();
+  TimelineDocumentController reopened_copy;
+  reopened_copy.setEditAccessPolicy([] { return true; });
+  if (copied_path.isEmpty() || !reopened_copy.loadTimeline(copied_path) ||
+      !document_has_exact_track_label(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(reopened_copy),
+          track_id, expected_track_label) ||
+      !document_has_exact_clip_labels(
+          photo_editor::desktop::TimelineHistoryTestAccess::documentObject(reopened_copy),
+          clip_ids, expected_labels)) {
+    std::cerr << "reopened managed project copy should preserve exact display labels\n";
+    return false;
+  }
+  QFile source_after(source_path);
+  if (!source_after.open(QIODevice::ReadOnly) || source_after.readAll() != source_bytes) {
+    std::cerr << "project-copy import should leave the native source project bytes unchanged\n";
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+bool run_timeline_source_integrity_cancel_future_workflow(
+    const QString& workspace_path) {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << "timeline_source_integrity_cancel_future: " << message << '\n';
+    return false;
+  };
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Canceled Source Integrity Result"));
+
+  QPromise<QVariantMap> promise;
+  promise.start();
+  const auto future = promise.future();
+  photo_editor::desktop::TimelineHistoryTestAccess::attachSourceIntegrityFutureWithoutResult(
+      controller,
+      QDir(workspace_path).filePath(QStringLiteral("cancelled-integrity-source.bin")),
+      future);
+
+  const auto preparation = controller.prepareAgentTaskDocumentForAutomation();
+  if (!preparation.value(QStringLiteral("ok")).toBool() ||
+      preparation.value(QStringLiteral("ready")).toBool() ||
+      preparation.value(QStringLiteral("phase")).toString() !=
+          QStringLiteral("settling-derived-work")) {
+    return fail_workflow("task preparation should retain the pause while a canceled source-integrity result settles");
+  }
+  promise.finish();
+
+  QElapsedTimer settle_timer;
+  settle_timer.start();
+  while (!controller.agentTaskDocumentReady() && settle_timer.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  if (future.resultCount() != 0 || !future.isCanceled() ||
+      !photo_editor::desktop::TimelineHistoryTestAccess::sourceIntegrityWatcherDetached(controller) ||
+      !controller.agentTaskDocumentReady()) {
+    return fail_workflow("a finished canceled future with no result should settle without dereferencing result zero");
+  }
+  const auto accepted = controller.acceptAgentTaskDocumentPreparationForAutomation();
+  if (!accepted.value(QStringLiteral("ok")).toBool()) {
+    return fail_workflow("the prepared Timeline should become ready after the empty canceled result settles");
+  }
+  controller.releaseAgentTaskDocumentForAutomation();
+  if (!controller.agentTaskDocumentReady()) {
+    return fail_workflow("releasing the unowned prepared Timeline should restore stable readiness");
+  }
+  const auto reacquired = controller.prepareAgentTaskDocumentForAutomation();
+  if (!reacquired.value(QStringLiteral("ok")).toBool() ||
+      !reacquired.value(QStringLiteral("ready")).toBool() ||
+      !controller.acceptAgentTaskDocumentPreparationForAutomation()
+           .value(QStringLiteral("ok")).toBool()) {
+    return fail_workflow("a released preparation deadline should allow the same untouched Timeline to be prepared and accepted again");
+  }
+  controller.releaseAgentTaskDocumentForAutomation();
+  return true;
+}
+
+bool run_timeline_recovered_source_integrity_release_workflow(
+    const QString& workspace_path) {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << "timeline_recovered_source_integrity_release: " << message << '\n';
+    return false;
+  };
+  const auto exercise_case = [&](bool tamper_source, const QString& case_name) {
+    const auto source_path = QDir(workspace_path).filePath(
+        QStringLiteral("recovered-integrity-%1.png").arg(case_name));
+    QImage source_image(24, 18, QImage::Format_RGBA8888);
+    source_image.fill(QColor(23, 87, 191, 255));
+    if (!source_image.save(source_path, "PNG")) {
+      return false;
+    }
+
+    TimelineDocumentController authored;
+    authored.createTimeline(QStringLiteral("Recovered integrity %1").arg(case_name));
+    authored.addClipFromGallery(
+        QStringLiteral("asset:%1-a").arg(case_name), source_path,
+        QStringLiteral("First use"), 2.0, QString{});
+    authored.addClipFromGallery(
+        QStringLiteral("asset:%1-b").arg(case_name), source_path,
+        QStringLiteral("Second use"), 2.0, QString{});
+    const auto wait_for_statuses = [](TimelineDocumentController* controller,
+                                     const QString& expected_status,
+                                     int timeout_ms) {
+      QElapsedTimer timer;
+      timer.start();
+      while (timer.elapsed() < timeout_ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+        const auto clip_values = controller->clips();
+        auto every_clip_matches = clip_values.size() == 2;
+        for (const auto& value : clip_values) {
+          every_clip_matches = every_clip_matches &&
+              value.toMap().value(QStringLiteral("sourceIntegrityStatus")).toString() ==
+                  expected_status;
+        }
+        if (every_clip_matches) {
+          return true;
+        }
+      }
+      return false;
+    };
+    if (!wait_for_statuses(&authored, QStringLiteral("verified"), 30000)) {
+      return false;
+    }
+    const auto expected_sha256 = authored.currentClip()
+                                     .value(QStringLiteral("sourceContentSha256"))
+                                     .toString();
+    if (expected_sha256.size() != 64 || !authored.saveTimeline(false)) {
+      return false;
+    }
+    const auto saved_path = authored.savedDocumentPath();
+    const auto authored_hash = authored.deterministicDocumentHash();
+    if (saved_path.isEmpty() || authored_hash.isEmpty() || !QFile::remove(saved_path)) {
+      return false;
+    }
+
+    if (tamper_source) {
+      QFile source_file(source_path);
+      if (!source_file.open(QIODevice::ReadWrite) ||
+          !source_file.seek(source_file.size() / 2)) {
+        return false;
+      }
+      const auto original_byte = source_file.read(1);
+      if (original_byte.size() != 1 || !source_file.seek(source_file.size() / 2) ||
+          source_file.write(QByteArray(
+              1, static_cast<char>(original_byte.at(0) ^ 0x5a))) != 1 ||
+          !source_file.setFileTime(
+              QDateTime::currentDateTimeUtc().addSecs(2),
+              QFileDevice::FileModificationTime)) {
+        return false;
+      }
+    }
+
+    TimelineDocumentController recovered;
+    if (!recovered.loadTimeline(saved_path) || recovered.clips().size() != 2) {
+      return false;
+    }
+    for (const auto& value : recovered.clips()) {
+      const auto clip = value.toMap();
+      if (clip.value(QStringLiteral("sourceIntegrityStatus")).toString() !=
+              QStringLiteral("pending") ||
+          clip.value(QStringLiteral("sourceContentSha256")).toString() != expected_sha256) {
+        return false;
+      }
+    }
+    if (recovered.deterministicDocumentHash() != authored_hash) {
+      return false;
+    }
+
+    const auto prepared = recovered.prepareAgentTaskDocumentForAutomation();
+    if (!prepared.value(QStringLiteral("ok")).toBool() ||
+        !prepared.value(QStringLiteral("ready")).toBool() ||
+        !recovered.acceptAgentTaskDocumentPreparationForAutomation()
+             .value(QStringLiteral("ok")).toBool()) {
+      return false;
+    }
+    // Save while the audit is paused. Completing a runtime verification must
+    // not make an unchanged native document dirty or prevent a clean close.
+    if (!recovered.saveTimeline(false) || recovered.dirty()) {
+      return false;
+    }
+    recovered.releaseAgentTaskDocumentForAutomation();
+
+    // The two clip records share one online source revision. Releasing task
+    // ownership must enqueue one integrity audit immediately, without waiting
+    // for the broad hydration timer to rediscover the pending source.
+    if (photo_editor::desktop::TimelineHistoryTestAccess::sourceIntegrityRequestCount(
+            recovered) != 1) {
+      return false;
+    }
+    const auto final_status = tamper_source ? QStringLiteral("mismatch")
+                                            : QStringLiteral("verified");
+    if (!wait_for_statuses(&recovered, final_status, 30000)) {
+      return false;
+    }
+    for (const auto& value : recovered.clips()) {
+      if (value.toMap().value(QStringLiteral("sourceContentSha256")).toString() !=
+          expected_sha256) {
+        return false;
+      }
+    }
+    return recovered.deterministicDocumentHash() == authored_hash && !recovered.dirty();
+  };
+
+  if (!exercise_case(false, QStringLiteral("valid"))) {
+    return fail_workflow(
+        "a recovered project should resume its pending checksum at task release and retain its authored document hash");
+  }
+  if (!exercise_case(true, QStringLiteral("mismatch"))) {
+    return fail_workflow(
+        "a changed recovered source should fail closed without replacing the expected checksum or changing authored state");
+  }
+  return true;
+}
+
+bool run_timeline_project_health_integrity_domains_workflow(
+    const QString& workspace_path) {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << "timeline_project_health_integrity_domains: " << message << '\n';
+    return false;
+  };
+  const auto source_path = QDir(workspace_path).filePath(
+      QStringLiteral("health-primary-source.png"));
+  const auto preview_path = QDir(workspace_path).filePath(
+      QStringLiteral("health-generated-compound-preview.png"));
+  QImage source_image(24, 18, QImage::Format_RGBA8888);
+  source_image.fill(QColor(21, 87, 143, 255));
+  QImage preview_image(12, 9, QImage::Format_RGBA8888);
+  preview_image.fill(QColor(236, 164, 37, 255));
+  if (!source_image.save(source_path, "PNG") ||
+      !preview_image.save(preview_path, "PNG") ||
+      QFileInfo::exists(preview_path + QStringLiteral(".integrity.json"))) {
+    return fail_workflow("the integrity fixture should create a primary source and an untracked generated preview");
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Integrity Counter Domains"));
+  controller.addClipFromGallery(
+      QStringLiteral("asset:health-primary"), source_path,
+      QStringLiteral("Primary source"), 2.0, QString{});
+  if (!wait_for_source_integrity(&controller)) {
+    return fail_workflow("the primary source should finish its initial full checksum audit");
+  }
+  const auto clip_id = controller.currentClip().value(QStringLiteral("clipId")).toString();
+  const auto original_fast_signature = controller.currentClip()
+      .value(QStringLiteral("sourceIdentitySignature")).toString();
+  const auto original_full_sha256 = controller.currentClip()
+      .value(QStringLiteral("sourceContentSha256")).toString();
+  if (clip_id.isEmpty() || original_fast_signature.isEmpty() ||
+      original_full_sha256.size() != 64 ||
+      !photo_editor::desktop::TimelineHistoryTestAccess::attachCompoundRenderPreview(
+          controller, clip_id, preview_path)) {
+    return fail_workflow("the verified primary and its generated preview should be attached to the timeline");
+  }
+
+  const auto issue_present = [](const QVariantMap& health, const QString& key) {
+    for (const auto& value : health.value(QStringLiteral("issues")).toList()) {
+      if (value.toMap().value(QStringLiteral("key")).toString() == key) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const auto health_counts_are_typed = [](const QVariantMap& health) {
+    const QStringList count_fields{
+        QStringLiteral("sourceIntegrityVerifiedCount"),
+        QStringLiteral("generatedIntegrityVerifiedCount"),
+        QStringLiteral("integrityMismatchCount"),
+        QStringLiteral("integrityUntrackedCount"),
+        QStringLiteral("sourceIntegrityMismatchCount"),
+        QStringLiteral("sourceIntegrityUntrackedCount"),
+        QStringLiteral("generatedIntegrityMismatchCount"),
+        QStringLiteral("generatedIntegrityUntrackedCount"),
+    };
+    for (const auto& field : count_fields) {
+      if (!health.contains(field) ||
+          health.value(field).metaType().id() != QMetaType::Int) {
+        return false;
+      }
+    }
+    return true;
+  };
+  auto health = controller.timelineProjectHealth();
+  if (!health_counts_are_typed(health) ||
+      !health.value(QStringLiteral("ok")).toBool() ||
+      health.value(QStringLiteral("sourceIntegrityVerifiedCount")).toInt() != 1 ||
+      health.value(QStringLiteral("sourceIntegrityMismatchCount")).toInt() != 0 ||
+      health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() != 0 ||
+      health.value(QStringLiteral("generatedIntegrityVerifiedCount")).toInt() != 0 ||
+      health.value(QStringLiteral("generatedIntegrityMismatchCount")).toInt() != 0 ||
+      health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() != 1 ||
+      health.value(QStringLiteral("integrityMismatchCount")).toInt() != 0 ||
+      health.value(QStringLiteral("integrityUntrackedCount")).toInt() != 1 ||
+      !issue_present(health, QStringLiteral("generated-integrity-untracked")) ||
+      issue_present(health, QStringLiteral("source-integrity-pending"))) {
+    return fail_workflow("an untracked compound preview should affect only generated-media counters, not the verified primary source");
+  }
+
+  const auto preview_sidecar_path =
+      preview_path + QStringLiteral(".integrity.json");
+  const QByteArray mismatched_preview_sidecar = QJsonDocument(QJsonObject{
+      {QStringLiteral("schema"), QStringLiteral("generated-media-integrity:v1")},
+      {QStringLiteral("algorithm"), QStringLiteral("sha256-full-v1")},
+      {QStringLiteral("artifactFileName"), QFileInfo(preview_path).fileName()},
+      {QStringLiteral("fileBytes"), QFileInfo(preview_path).size()},
+      {QStringLiteral("sha256"), QString(64, QLatin1Char('0'))},
+  }).toJson(QJsonDocument::Compact);
+  QSaveFile preview_sidecar(preview_sidecar_path);
+  if (!preview_sidecar.open(QIODevice::WriteOnly) ||
+      preview_sidecar.write(mismatched_preview_sidecar) !=
+          mismatched_preview_sidecar.size() ||
+      !preview_sidecar.commit()) {
+    return fail_workflow("the generated-preview mismatch fixture should write a tracked sidecar");
+  }
+  health = controller.timelineProjectHealth();
+  if (!health.value(QStringLiteral("ok")).toBool() ||
+      health.value(QStringLiteral("sourceIntegrityMismatchCount")).toInt() != 0 ||
+      health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() != 0 ||
+      health.value(QStringLiteral("generatedIntegrityMismatchCount")).toInt() != 1 ||
+      health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() != 0 ||
+      health.value(QStringLiteral("integrityMismatchCount")).toInt() != 1 ||
+      health.value(QStringLiteral("integrityUntrackedCount")).toInt() != 0 ||
+      !issue_present(health, QStringLiteral("generated-integrity-mismatch"))) {
+    return fail_workflow("a tracked generated-preview checksum mismatch should stay in the generated counter domain");
+  }
+  if (!QFile::remove(preview_sidecar_path)) {
+    return fail_workflow("the generated-preview fixture should return to its untracked state");
+  }
+
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::setSourceIntegrityEvidence(
+          controller, clip_id, QStringLiteral("pending"), QString{}, QString{})) {
+    return fail_workflow("the source-integrity fixture should expose a legacy primary without checksum evidence");
+  }
+  health = controller.timelineProjectHealth();
+  if (health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() != 1 ||
+      health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() != 1 ||
+      health.value(QStringLiteral("integrityUntrackedCount")).toInt() != 2 ||
+      health.value(QStringLiteral("blockingCount")).toInt() != 0 ||
+      !issue_present(health, QStringLiteral("source-integrity-pending"))) {
+    return fail_workflow("a genuinely untracked primary should be counted separately while preserving aggregate warnings");
+  }
+
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::setSourceIntegrityEvidence(
+          controller, clip_id, QStringLiteral("verified"), original_fast_signature,
+          original_full_sha256)) {
+    return fail_workflow("the original primary-source evidence should be restorable for tamper proof");
+  }
+  QFile tampered_source(source_path);
+  if (!tampered_source.open(QIODevice::ReadWrite) || !tampered_source.seek(12)) {
+    return fail_workflow("the primary source should open for a content-change proof");
+  }
+  const auto original_byte = tampered_source.read(1);
+  if (original_byte.size() != 1 || !tampered_source.seek(12) ||
+      tampered_source.write(QByteArray(
+          1, static_cast<char>(original_byte.at(0) ^ 0x5a))) != 1 ||
+      !tampered_source.setFileTime(
+          QDateTime::currentDateTimeUtc().addSecs(2),
+          QFileDevice::FileModificationTime)) {
+    return fail_workflow("the source-change proof should update bytes and revision time");
+  }
+  tampered_source.close();
+  health = controller.timelineProjectHealth();
+  if (health.value(QStringLiteral("ok")).toBool() ||
+      health.value(QStringLiteral("sourceIntegrityMismatchCount")).toInt() != 1 ||
+      health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() != 0 ||
+      health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() != 1 ||
+      health.value(QStringLiteral("integrityMismatchCount")).toInt() != 1 ||
+      health.value(QStringLiteral("integrityUntrackedCount")).toInt() != 1 ||
+      health.value(QStringLiteral("blockingCount")).toInt() < 1 ||
+      !issue_present(health, QStringLiteral("source-integrity-mismatch"))) {
+    return fail_workflow("a changed primary must remain blocking while its untracked generated preview stays in the generated domain");
+  }
+
+  if (!QFile::remove(source_path)) {
+    return fail_workflow("the primary source should become offline for the missing-media proof");
+  }
+  health = controller.timelineProjectHealth();
+  if (health.value(QStringLiteral("ok")).toBool() ||
+      health.value(QStringLiteral("blockingCount")).toInt() < 1 ||
+      !issue_present(health, QStringLiteral("missing-media")) ||
+      health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() != 1) {
+    return fail_workflow("a missing primary must remain blocking independently of generated-preview checksum warnings");
+  }
+  return true;
+}
+
+bool run_timeline_sequence_track_snapshot_workflow() {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << "timeline_sequence_track_snapshot: " << message << '\n';
+    return false;
+  };
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Sequence Track Snapshot"));
+  if (controller.snapshotSequenceTracks() != controller.sequenceTracks()) {
+    return fail_workflow("the snapshot invokable should match the native sequence track projection");
+  }
+  if (controller.snapshotTimelineTracks() != controller.timelineTracks()) {
+    return fail_workflow("the owned compact snapshot should match the timeline track projection");
+  }
+
+  const auto created = controller.createTimelineTrackForAutomation(
+      QStringLiteral("graphics"), QStringLiteral("Snapshot Graphics"));
+  if (!created.value(QStringLiteral("ok")).toBool()) {
+    return fail_workflow("a native graphics row should be creatable for the projection comparison");
+  }
+  const auto native_projection = controller.sequenceTracks();
+  const auto owned_snapshot = controller.snapshotSequenceTracks();
+  if (owned_snapshot != native_projection ||
+      owned_snapshot.size() != controller.timelineTracks().size()) {
+    return fail_workflow("the owned snapshot should preserve current native track order and row count");
+  }
+  const auto compact_snapshot = controller.snapshotTimelineTracks();
+  if (compact_snapshot != controller.timelineTracks()) {
+    return fail_workflow("the owned compact snapshot should match the current cached timeline projection");
+  }
+  const auto created_track_id = created.value(QStringLiteral("trackId")).toString();
+  auto found_created_track = false;
+  for (const auto& row : owned_snapshot) {
+    if (row.toMap().value(QStringLiteral("trackId")).toString() == created_track_id) {
+      found_created_track = true;
+      break;
+    }
+  }
+  if (created_track_id.isEmpty() || !found_created_track) {
+    return fail_workflow("the owned snapshot should retain the new track's stable native ID");
+  }
+
+  const auto title = controller.createTimelineTitleForAutomation(
+      created_track_id, QStringLiteral("basic"), 0.0, 2.0,
+      {{QStringLiteral("text"), QStringLiteral("Projection update proof")},
+       {QStringLiteral("positionX"), 0.5},
+       {QStringLiteral("positionY"), 0.5}});
+  const auto title_id = title.value(QStringLiteral("createdClipId")).toString();
+  if (!title.value(QStringLiteral("ok")).toBool() || title_id.isEmpty()) {
+    return fail_workflow("a native title should be creatable for compact projection refresh coverage");
+  }
+  const auto second_title = controller.createTimelineTitleForAutomation(
+      created_track_id, QStringLiteral("basic"), 2.0, 2.0,
+      {{QStringLiteral("text"), QStringLiteral("Second selection proof")},
+       {QStringLiteral("positionX"), 0.5},
+       {QStringLiteral("positionY"), 0.6}});
+  const auto second_title_id = second_title.value(QStringLiteral("createdClipId")).toString();
+  if (!second_title.value(QStringLiteral("ok")).toBool() || second_title_id.isEmpty()) {
+    return fail_workflow("a second title should be creatable for single and multi-selection coverage");
+  }
+  for (int update = 0; update < 8; ++update) {
+    const auto animation = controller.setTimelineClipAnimationForAutomation(
+        title_id,
+        QVariantList{QVariantMap{
+            {QStringLiteral("parameter"), QStringLiteral("titlePositionX")},
+            {QStringLiteral("keyframes"), QVariantList{
+                QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                            {QStringLiteral("value"), 0.2 + 0.05 * update},
+                            {QStringLiteral("interpolation"), QStringLiteral("linear")}},
+                QVariantMap{{QStringLiteral("localSeconds"), 1.0},
+                            {QStringLiteral("value"), 0.8 - 0.025 * update},
+                            {QStringLiteral("interpolation"), QStringLiteral("linear")}}}}}});
+    if (!animation.value(QStringLiteral("ok")).toBool()) {
+      return fail_workflow("repeated native clip updates should remain valid for projection coverage");
+    }
+    const auto update_snapshot = controller.snapshotTimelineTracks();
+    if (update_snapshot != controller.timelineTracks()) {
+      return fail_workflow("each sequence update should publish the fresh compact timeline projection");
+    }
+    auto found_title = false;
+    for (const auto& row_value : update_snapshot) {
+      const auto row = row_value.toMap();
+      const auto clips = row.value(QStringLiteral("clips")).toList();
+      for (const auto& clip_value : clips) {
+        const auto clip = clip_value.toMap();
+        if (clip.value(QStringLiteral("clipId")).toString() == title_id) {
+          found_title = clip.value(QStringLiteral("timelineAnimationSummary")).toString()
+                            .contains(QStringLiteral("titlePositionX")) &&
+              row.value(QStringLiteral("clipCount")).toInt() > 0 &&
+              row.value(QStringLiteral("clipRangeIndex")).toMap()
+                  .value(QStringLiteral("entries")).toList().size() > 0;
+          break;
+        }
+      }
+    }
+    if (!found_title) {
+      return fail_workflow("the compact snapshot should preserve stable clip IDs and timeline summaries after animation edits");
+    }
+  }
+
+  const auto flattened_index_for = [](const QVariantList& tracks, const QString& clip_id) {
+    for (const auto& row_value : tracks) {
+      for (const auto& clip_value : row_value.toMap().value(QStringLiteral("clips")).toList()) {
+        const auto clip = clip_value.toMap();
+        if (clip.value(QStringLiteral("clipId")).toString() == clip_id)
+          return clip.value(QStringLiteral("index"), -1).toInt();
+      }
+    }
+    return -1;
+  };
+  const auto current_track_snapshot = controller.snapshotTimelineTracks();
+  const auto title_index = flattened_index_for(current_track_snapshot, title_id);
+  const auto second_title_index = flattened_index_for(current_track_snapshot, second_title_id);
+  if (title_index < 0 || second_title_index < 0) {
+    return fail_workflow("the compact projection should expose clip indexes for selection-only coverage");
+  }
+  auto scalar_timeline_notifications = 0;
+  auto scalar_sequence_notifications = 0;
+  auto scalar_playback_notifications = 0;
+  QObject::connect(&controller, &TimelineDocumentController::timelineStateChanged,
+                   &controller, [&scalar_timeline_notifications]() {
+                     ++scalar_timeline_notifications;
+                   });
+  QObject::connect(&controller, &TimelineDocumentController::sequenceChanged,
+                   &controller, [&scalar_sequence_notifications]() {
+                     ++scalar_sequence_notifications;
+                   });
+  QObject::connect(&controller, &TimelineDocumentController::playbackStateChanged,
+                   &controller, [&scalar_playback_notifications]() {
+                     ++scalar_playback_notifications;
+                   });
+  controller.seekSequenceSeconds(0.25);
+  controller.stepSequenceFrames(1);
+  if (scalar_timeline_notifications != 0 || scalar_sequence_notifications != 0 ||
+      scalar_playback_notifications != 2) {
+    return fail_workflow("paused seek and frame-step should publish playback scalars without a full track snapshot notification");
+  }
+  auto selection_change_count = 0;
+  auto sequence_change_count = 0;
+  QObject::connect(&controller, &TimelineDocumentController::selectionChanged,
+                   &controller, [&selection_change_count]() { ++selection_change_count; });
+  QObject::connect(&controller, &TimelineDocumentController::sequenceChanged,
+                   &controller, [&sequence_change_count]() { ++sequence_change_count; });
+  controller.selectClip(-1);
+  selection_change_count = 0;
+  sequence_change_count = 0;
+  controller.selectClip(title_index);
+  if (selection_change_count != 1 || sequence_change_count != 0) {
+    return fail_workflow("selectClip(index) should publish a selection-only change without sequenceChanged");
+  }
+  const auto single_selection_snapshot = controller.snapshotTimelineTracks();
+  auto first_selected = false;
+  auto second_selected = false;
+  for (const auto& row_value : single_selection_snapshot) {
+    for (const auto& clip_value : row_value.toMap().value(QStringLiteral("clips")).toList()) {
+      const auto clip = clip_value.toMap();
+      if (clip.value(QStringLiteral("clipId")).toString() == title_id)
+        first_selected = clip.value(QStringLiteral("selected")).toBool();
+      if (clip.value(QStringLiteral("clipId")).toString() == second_title_id)
+        second_selected = clip.value(QStringLiteral("selected")).toBool();
+    }
+  }
+  if (!first_selected || second_selected) {
+    return fail_workflow("the owned compact snapshot should expose current single-selection flags");
+  }
+  controller.toggleClipSelection(second_title_index);
+  if (selection_change_count != 2 || sequence_change_count != 1) {
+    return fail_workflow("multi-selection should publish one selection and sequence update");
+  }
+  const auto multi_selection_snapshot = controller.snapshotTimelineTracks();
+  first_selected = false;
+  second_selected = false;
+  for (const auto& row_value : multi_selection_snapshot) {
+    for (const auto& clip_value : row_value.toMap().value(QStringLiteral("clips")).toList()) {
+      const auto clip = clip_value.toMap();
+      if (clip.value(QStringLiteral("clipId")).toString() == title_id)
+        first_selected = clip.value(QStringLiteral("selected")).toBool();
+      if (clip.value(QStringLiteral("clipId")).toString() == second_title_id)
+        second_selected = clip.value(QStringLiteral("selected")).toBool();
+    }
+  }
+  if (!first_selected || !second_selected) {
+    return fail_workflow("the owned compact snapshot should expose current multi-selection flags");
+  }
+
+  const auto helper_path = QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/components/TimelineSelectionRefresh.js");
+  const auto helper_url = QUrl::fromLocalFile(helper_path).toString(QUrl::FullyEncoded);
+  const auto playback_intent_path = QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/components/TimelineBackgroundWorkIntent.qml");
+  while (controller.trackCount() < 196) {
+    if (!controller.addGraphicsTrack())
+      return fail_workflow("the native controller should admit a 196-track projection fixture");
+  }
+  if (controller.trackCount() != 196)
+    return fail_workflow("the native controller should expose exactly 196 fixture tracks");
+
+  QQmlEngine engine;
+  QQmlComponent playback_intent_component(&engine, QUrl::fromLocalFile(playback_intent_path));
+  QElapsedTimer playback_component_timer;
+  playback_component_timer.start();
+  while (playback_intent_component.status() == QQmlComponent::Loading &&
+         playback_component_timer.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  std::unique_ptr<QObject> playback_intent(playback_intent_component.create());
+  if (!playback_intent) {
+    for (const auto& error : playback_intent_component.errors())
+      std::cerr << "Timeline background work intent component error: "
+                << error.toString().toStdString() << '\n';
+    return fail_workflow("the production active-playback-row collector should load in QML");
+  }
+  engine.rootContext()->setContextProperty(QStringLiteral("playbackWorkIntentForSnapshotTest"),
+                                           playback_intent.get());
+  const auto virtual_rows_path = QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/components/TimelineVirtualTrackRows.qml");
+  QQmlComponent virtual_rows_component(&engine, QUrl::fromLocalFile(virtual_rows_path));
+  QElapsedTimer virtual_rows_timer;
+  virtual_rows_timer.start();
+  while (virtual_rows_component.status() == QQmlComponent::Loading &&
+         virtual_rows_timer.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  std::unique_ptr<QObject> virtual_rows_model(virtual_rows_component.create());
+  if (!virtual_rows_model) {
+    for (const auto& error : virtual_rows_component.errors())
+      std::cerr << "Timeline virtual rows component error: "
+                << error.toString().toStdString() << '\n';
+    return fail_workflow("the production virtual track-row model should load in QML");
+  }
+  engine.rootContext()->setContextProperty(QStringLiteral("nativeVirtualRowsModel"),
+                                           virtual_rows_model.get());
+  const auto qml = QStringLiteral(R"qml(
+import QtQml
+import "%1" as TimelineSnapshots
+QtObject {
+    id: root
+    property var rawNativeSnapshot: nativeTimelineDocument.snapshotTimelineTracks()
+    property bool rawNativeSnapshotIsArray: Array.isArray(rawNativeSnapshot)
+    property string rawNativeSnapshotTag: Object.prototype.toString.call(rawNativeSnapshot)
+    property int rawNativeSnapshotLength:
+        rawNativeSnapshot && typeof rawNativeSnapshot.length === "number"
+        ? rawNativeSnapshot.length : -1
+    property var nativeOwnedSnapshot: TimelineSnapshots.timelineTrackSnapshot(nativeTimelineDocument)
+    property bool nativeOwnedSnapshotIsArray: Array.isArray(nativeOwnedSnapshot)
+    property int nativeOwnedTrackCount: nativeOwnedSnapshot.length
+    property var nativeTargetTitle: findNativeClip(nativeExpectedTitleId)
+    property var nativeTargetTitleTrack: findNativeClipTrack(nativeExpectedTitleId)
+    property int nativeTargetTitleKeyframeCount:
+        nativeTargetTitle && nativeTargetTitle.keyframes
+        && typeof nativeTargetTitle.keyframes.length === "number"
+        ? nativeTargetTitle.keyframes.length : -1
+    property bool nativeTargetKeyframesHasFilter:
+        !!(nativeTargetTitle && nativeTargetTitle.keyframes
+        && typeof nativeTargetTitle.keyframes.filter === "function")
+    property bool nativeTargetKeyframesHasMap:
+        !!(nativeTargetTitle && nativeTargetTitle.keyframes
+        && typeof nativeTargetTitle.keyframes.map === "function")
+    property bool nativeTargetKeyframesIsArray:
+        !!(nativeTargetTitle && Array.isArray(nativeTargetTitle.keyframes))
+    property bool nativeTargetClipsIsArray:
+        !!(nativeTargetTitleTrack && Array.isArray(nativeTargetTitleTrack.clips))
+    property int nativeTargetTrackClipCount:
+        nativeTargetTitleTrack && nativeTargetTitleTrack.clips
+        && typeof nativeTargetTitleTrack.clips.length === "number"
+        ? nativeTargetTitleTrack.clips.length : -1
+    property bool nativeTargetRangeEntriesIsArray:
+        !!(nativeTargetTitleTrack && nativeTargetTitleTrack.clipRangeIndex
+        && Array.isArray(nativeTargetTitleTrack.clipRangeIndex.entries))
+    property int nativeTargetRangeEntryCount:
+        nativeTargetTitleTrack && nativeTargetTitleTrack.clipRangeIndex
+        && nativeTargetTitleTrack.clipRangeIndex.entries
+        && typeof nativeTargetTitleTrack.clipRangeIndex.entries.length === "number"
+        ? nativeTargetTitleTrack.clipRangeIndex.entries.length : -1
+    property var nativeCurrentClipSnapshot: nativeTimelineDocument.snapshotCurrentClip()
+    property var nativeProgramClipSnapshot: nativeTimelineDocument.snapshotProgramClip()
+    property int currentSnapshotKeyframeCount:
+        nativeCurrentClipSnapshot && nativeCurrentClipSnapshot.keyframes
+        && typeof nativeCurrentClipSnapshot.keyframes.length === "number"
+        ? nativeCurrentClipSnapshot.keyframes.length : -1
+    property int programSnapshotKeyframeCount:
+        nativeProgramClipSnapshot && nativeProgramClipSnapshot.keyframes
+        && typeof nativeProgramClipSnapshot.keyframes.length === "number"
+        ? nativeProgramClipSnapshot.keyframes.length : -1
+    property int currentSnapshotEffectCount:
+        nativeCurrentClipSnapshot && nativeCurrentClipSnapshot.effectStack
+        && typeof nativeCurrentClipSnapshot.effectStack.length === "number"
+        ? nativeCurrentClipSnapshot.effectStack.length : -1
+    property int programSnapshotEffectCount:
+        nativeProgramClipSnapshot && nativeProgramClipSnapshot.effectStack
+        && typeof nativeProgramClipSnapshot.effectStack.length === "number"
+        ? nativeProgramClipSnapshot.effectStack.length : -1
+    property bool currentSnapshotKeyframesHaveFilter:
+        !nativeCurrentClipSnapshot || !nativeCurrentClipSnapshot.keyframes
+        || nativeCurrentClipSnapshot.keyframes.length === 0
+        || typeof nativeCurrentClipSnapshot.keyframes.filter === "function"
+    property bool currentSnapshotEffectsHaveFind:
+        !!(nativeCurrentClipSnapshot && nativeCurrentClipSnapshot.effectStack
+        && typeof nativeCurrentClipSnapshot.effectStack.find === "function")
+    property bool programSnapshotKeyframesHaveFilter:
+        !nativeProgramClipSnapshot || !nativeProgramClipSnapshot.keyframes
+        || nativeProgramClipSnapshot.keyframes.length === 0
+        || typeof nativeProgramClipSnapshot.keyframes.filter === "function"
+    property bool programSnapshotEffectsHaveFind:
+        !!(nativeProgramClipSnapshot && nativeProgramClipSnapshot.effectStack
+        && typeof nativeProgramClipSnapshot.effectStack.find === "function")
+    property var nativePlaybackRows:
+        playbackWorkIntentForSnapshotTest.collectActivePlaybackRows(nativeOwnedSnapshot, 0.25).rows
+    property string nativeActiveTitleId:
+        nativePlaybackRows.length > 0 && nativePlaybackRows[0].activeClips.length > 0
+        ? String(nativePlaybackRows[0].activeClips[0].clipId || "") : ""
+    function findNativeClip(clipId) {
+        const tracks = nativeOwnedSnapshot || []
+        for (let trackIndex = 0; trackIndex < tracks.length; ++trackIndex) {
+            const clips = tracks[trackIndex] && tracks[trackIndex].clips
+                    ? tracks[trackIndex].clips : []
+            for (let clipIndex = 0; clipIndex < clips.length; ++clipIndex) {
+                const clip = clips[clipIndex]
+                if (String(clip && clip.clipId || "") === String(clipId || ""))
+                    return clip
+            }
+        }
+        return null
+    }
+    function findNativeClipTrack(clipId) {
+        const tracks = nativeOwnedSnapshot || []
+        for (let trackIndex = 0; trackIndex < tracks.length; ++trackIndex) {
+            const track = tracks[trackIndex]
+            const clips = track && track.clips ? track.clips : []
+            for (let clipIndex = 0; clipIndex < clips.length; ++clipIndex) {
+                if (String(clips[clipIndex] && clips[clipIndex].clipId || "")
+                        === String(clipId || ""))
+                    return track
+            }
+        }
+        return null
+    }
+    function synchronizeNativeVisibleRows() {
+        const rows = []
+        for (let index = 0; index < nativeOwnedSnapshot.length; ++index) {
+            const track = nativeOwnedSnapshot[index]
+            rows.push({trackId: String(track.trackId || ""), trackIndex: index})
+        }
+        return nativeVirtualRowsModel.synchronizeRows(rows, true)
+    }
+    property QtObject document: QtObject {
+        objectName: "snapshotTestDocument"
+        property int snapshotCallCount: 0
+        property var selectedClipIds: []
+        property var nextSnapshot: [{trackId: "video-1", clips: [{clipId: "photo-initial"}]}]
+        property string nextSnapshotJson: ""
+        signal sequenceChanged()
+        signal selectionChanged()
+        signal timelineStateChanged()
+        function snapshotTimelineTracks() {
+            snapshotCallCount += 1
+            return nextSnapshot
+        }
+        function loadSnapshotFromJson() {
+            nextSnapshot = JSON.parse(nextSnapshotJson)
+        }
+        function publishSequenceSnapshot(snapshot, selectedIds) {
+            nextSnapshot = snapshot
+            selectedClipIds = selectedIds
+            sequenceChanged()
+        }
+        function publishSelectionSnapshot(snapshot, selectedIds) {
+            nextSnapshot = snapshot
+            selectedClipIds = selectedIds
+            selectionChanged()
+        }
+        function publishTimelineState() {
+            timelineStateChanged()
+            sequenceChanged()
+        }
+    }
+    property var sequenceTrackModel: []
+    property var timelineSelectionRefreshLifetime: ({alive: true})
+    property string sequenceTrackSnapshotSelectionSignature:
+        TimelineSnapshots.selectionSignature(root.document.selectedClipIds)
+    property int snapshotRevision: 0
+    property bool timelineStateSnapshotRefreshPendingSequence: false
+    property int timelineStateSnapshotPublicationToken: 0
+    property string programClipId: "primary-photo"
+    property real activePlayheadSeconds: 148.5
+    property var programBackgroundLayerModel: []
+    property int programOverlayRefreshCount: 0
+    function refreshSequenceTrackSnapshot() {
+        sequenceTrackModel = TimelineSnapshots.timelineTrackSnapshot(root.document)
+        sequenceTrackSnapshotSelectionSignature =
+                TimelineSnapshots.selectionSignature(root.document.selectedClipIds)
+        snapshotRevision += 1
+    }
+    function refreshProgramPlaybackLayerModels() {
+        const activeSnapshot = playbackWorkIntentForSnapshotTest.collectActivePlaybackRows(
+                    sequenceTrackModel, activePlayheadSeconds)
+        const nextLayers = []
+        const rows = activeSnapshot.rows || []
+        for (let rowIndex = 0; rowIndex < rows.length; ++rowIndex) {
+            const row = rows[rowIndex]
+            const track = row.track
+            if (!track || track.trackKind !== "video" || track.effectiveVisible === false)
+                continue
+            const clips = row.activeClips || []
+            for (let clipIndex = 0; clipIndex < clips.length; ++clipIndex) {
+                const clip = clips[clipIndex]
+                if (!clip || clip.mediaType === "adjustment"
+                        || (String(clip.clipId || "") === root.programClipId
+                            && (clip.mediaType === "video" || clip.mediaType === "photo"))
+                        || clip.videoVisible === false || clip.multicamActive === false)
+                    continue
+                const start = Number(clip.startSeconds || 0)
+                const end = Number(clip.endSeconds || 0)
+                if (activePlayheadSeconds >= start && activePlayheadSeconds < end)
+                    nextLayers.push(String(clip.clipId || ""))
+            }
+        }
+        programBackgroundLayerModel = nextLayers
+        programOverlayRefreshCount += 1
+    }
+    onSequenceTrackModelChanged: root.refreshProgramPlaybackLayerModels()
+    function refreshSelectionSnapshotIfNeeded() {
+        TimelineSnapshots.refreshTrackSnapshotForSelectionChange(
+                    root, TimelineSnapshots.selectionSignature(root.document.selectedClipIds))
+    }
+    property Connections sequenceConnection: Connections {
+        target: root.document
+        function onSequenceChanged() {
+            TimelineSnapshots.refreshSequenceTrackSnapshotForSequenceChange(root)
+        }
+    }
+    property Connections timelineStateConnection: Connections {
+        target: root.document
+        function onTimelineStateChanged() {
+            TimelineSnapshots.refreshSequenceTrackSnapshotForTimelineState(root)
+        }
+    }
+    property Connections selectionConnection: Connections {
+        target: root.document
+        function onSelectionChanged() { root.refreshSelectionSnapshotIfNeeded() }
+    }
+    Component.onCompleted: root.refreshSequenceTrackSnapshot()
+}
+)qml").arg(helper_url);
+  engine.rootContext()->setContextProperty(QStringLiteral("nativeTimelineDocument"), &controller);
+  engine.rootContext()->setContextProperty(QStringLiteral("nativeExpectedTitleId"), title_id);
+  QQmlComponent component(&engine);
+  component.setData(qml.toUtf8(), QUrl(QStringLiteral("inmemory:TimelineTrackSnapshot.qml")));
+  QElapsedTimer component_timer;
+  component_timer.start();
+  while (component.status() == QQmlComponent::Loading && component_timer.elapsed() < 5000)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  std::unique_ptr<QObject> root(component.create());
+  if (!root) {
+    for (const auto& error : component.errors())
+      std::cerr << "Timeline track snapshot component error: "
+                << error.toString().toStdString() << '\n';
+    return fail_workflow("the production compact-snapshot helper should load in QML");
+  }
+  auto* document = root->findChild<QObject*>(QStringLiteral("snapshotTestDocument"));
+  if (!document || root->property("sequenceTrackModel").toList().size() != 1 ||
+      document->property("snapshotCallCount").toInt() != 1 ||
+      !root->property("nativeOwnedSnapshotIsArray").toBool() ||
+      root->property("rawNativeSnapshotLength").toInt() != 196 ||
+      root->property("nativeOwnedTrackCount").toInt() != 196 ||
+      root->property("nativeTargetTitleKeyframeCount").toInt() < 2 ||
+      root->property("nativeTargetTrackClipCount").toInt() < 1 ||
+      root->property("nativeTargetRangeEntryCount").toInt() < 1 ||
+      root->property("programSnapshotKeyframeCount").toInt() < 0 ||
+      root->property("currentSnapshotEffectCount").toInt() < 0 ||
+      root->property("programSnapshotEffectCount").toInt() < 0 ||
+      root->property("nativeActiveTitleId").toString() != title_id ||
+      !root->property("nativeTargetKeyframesHasFilter").toBool() ||
+      !root->property("nativeTargetKeyframesHasMap").toBool() ||
+      !root->property("currentSnapshotKeyframesHaveFilter").toBool() ||
+      !root->property("currentSnapshotEffectsHaveFind").toBool() ||
+      !root->property("programSnapshotKeyframesHaveFilter").toBool() ||
+      !root->property("programSnapshotEffectsHaveFind").toBool()) {
+    std::cerr << "native snapshot rawTag="
+              << root->property("rawNativeSnapshotTag").toString().toStdString()
+              << " rawIsArray=" << root->property("rawNativeSnapshotIsArray").toBool()
+              << " rawLength=" << root->property("rawNativeSnapshotLength").toInt()
+              << " ownedLength=" << root->property("nativeOwnedTrackCount").toInt()
+              << " keyframes=" << root->property("nativeTargetTitleKeyframeCount").toInt()
+              << " keyframesArray=" << root->property("nativeTargetKeyframesIsArray").toBool()
+              << " clipsArray=" << root->property("nativeTargetClipsIsArray").toBool()
+              << " trackClips=" << root->property("nativeTargetTrackClipCount").toInt()
+              << " rangeArray=" << root->property("nativeTargetRangeEntriesIsArray").toBool()
+              << " rangeEntries=" << root->property("nativeTargetRangeEntryCount").toInt()
+              << " keyframesFilter=" << root->property("nativeTargetKeyframesHasFilter").toBool()
+              << " keyframesMap=" << root->property("nativeTargetKeyframesHasMap").toBool()
+              << " currentKeyframes=" << root->property("currentSnapshotKeyframeCount").toInt()
+              << " currentEffects=" << root->property("currentSnapshotEffectCount").toInt()
+              << " programKeyframes=" << root->property("programSnapshotKeyframeCount").toInt()
+              << " programEffects=" << root->property("programSnapshotEffectCount").toInt()
+              << " currentKeyframesFilter=" << root->property("currentSnapshotKeyframesHaveFilter").toBool()
+              << " currentEffectsFind=" << root->property("currentSnapshotEffectsHaveFind").toBool()
+              << " programKeyframesFilter=" << root->property("programSnapshotKeyframesHaveFilter").toBool()
+              << " programEffectsFind=" << root->property("programSnapshotEffectsHaveFind").toBool()
+              << " activeTitle=" << root->property("nativeActiveTitleId").toString().toStdString()
+              << '\n';
+    return fail_workflow("initial QML model adoption should request one owned compact snapshot");
+  }
+  QVariant native_virtual_row_result;
+  const auto virtual_row_invoked = QMetaObject::invokeMethod(
+      root.get(), "synchronizeNativeVisibleRows", Qt::DirectConnection,
+      Q_RETURN_ARG(QVariant, native_virtual_row_result));
+  if (!virtual_row_invoked ||
+      !native_virtual_row_result.toMap().value(QStringLiteral("ok")).toBool() ||
+      native_virtual_row_result.toMap().value(QStringLiteral("rowCount")).toInt() != 196 ||
+      virtual_rows_model->property("count").toInt() != 196) {
+    std::cerr << "virtual rows invoked=" << virtual_row_invoked
+              << " result=" << native_virtual_row_result.toMap().value(QStringLiteral("ok")).toBool()
+              << " count=" << native_virtual_row_result.toMap().value(QStringLiteral("rowCount")).toInt()
+              << " modelCount=" << virtual_rows_model->property("count").toInt()
+              << " error=" << native_virtual_row_result.toMap().value(QStringLiteral("error")).toString().toStdString()
+              << '\n';
+    return fail_workflow("the production virtual-row projection should accept all 196 normalized native tracks");
+  }
+  std::cout << "native-sequence-snapshot rawType="
+            << root->property("rawNativeSnapshotTag").toString().toStdString()
+            << " rawIsArray=" << root->property("rawNativeSnapshotIsArray").toBool()
+            << " rawLength=" << root->property("rawNativeSnapshotLength").toInt()
+            << " ownedLength=" << root->property("nativeOwnedTrackCount").toInt()
+            << " clips=" << root->property("nativeTargetTrackClipCount").toInt()
+            << " rangeEntries=" << root->property("nativeTargetRangeEntryCount").toInt()
+            << " keyframes=" << root->property("nativeTargetTitleKeyframeCount").toInt()
+            << " keyframesArray=" << root->property("nativeTargetKeyframesIsArray").toBool()
+            << " keyframesFilter=" << root->property("nativeTargetKeyframesHasFilter").toBool()
+            << " keyframesMap=" << root->property("nativeTargetKeyframesHasMap").toBool()
+            << " activeTitle=" << root->property("nativeActiveTitleId").toString().toStdString()
+            << " virtualRows=" << virtual_rows_model->property("count").toInt()
+            << " currentKeyframes=" << root->property("currentSnapshotKeyframeCount").toInt()
+            << " programKeyframes=" << root->property("programSnapshotKeyframeCount").toInt()
+            << " currentEffectsFind=" << root->property("currentSnapshotEffectsHaveFind").toBool()
+            << " programEffectsFind=" << root->property("programSnapshotEffectsHaveFind").toBool()
+            << '\n';
+  const auto set_mock_snapshot = [&document](const QVariantList& snapshot) {
+    const auto json = QJsonDocument::fromVariant(snapshot).toJson(QJsonDocument::Compact);
+    document->setProperty("nextSnapshotJson", QString::fromUtf8(json));
+    return QMetaObject::invokeMethod(document, "loadSnapshotFromJson", Qt::DirectConnection);
+  };
+  QVariantList dense_tracks;
+  QVariantList dense_clips;
+  QVariantList dense_keyframes;
+  for (int keyframe = 0; keyframe < 256; ++keyframe) {
+    dense_keyframes.push_back(QVariantMap{
+        {QStringLiteral("parameter"), QStringLiteral("frameScale")},
+        {QStringLiteral("value"), 0.5 + static_cast<double>(keyframe) / 512.0}});
+  }
+  dense_clips.push_back(QVariantMap{
+      {QStringLiteral("clipId"), QStringLiteral("photo-dense")},
+      {QStringLiteral("keyframes"), dense_keyframes},
+      {QStringLiteral("effectStack"), QStringList{QStringLiteral("clarity")}},
+      {QStringLiteral("clipMask"), QVariantMap{{QStringLiteral("shape"), QStringLiteral("rectangle")}}},
+      {QStringLiteral("colorGradeRecipe"), QVariantMap{{QStringLiteral("photoLayers"),
+          QVariantList{QVariantMap{{QStringLiteral("id"), QStringLiteral("layer-dense")}}}}}}});
+  dense_tracks.push_back(QVariantMap{{QStringLiteral("trackId"), QStringLiteral("video-1")},
+                                     {QStringLiteral("clips"), dense_clips}});
+  for (int update = 0; update < 16; ++update) {
+    if (!set_mock_snapshot(dense_tracks) ||
+        !QMetaObject::invokeMethod(document, "sequenceChanged", Qt::DirectConnection))
+      return fail_workflow("the test document should publish each sequence notification");
+    const auto model = root->property("sequenceTrackModel").toList();
+    const auto model_clip = model.size() == 1
+        ? model.front().toMap().value(QStringLiteral("clips")).toList().front().toMap()
+        : QVariantMap{};
+    if (document->property("snapshotCallCount").toInt() != update + 2 ||
+        root->property("snapshotRevision").toInt() != update + 2 || model.size() != 1 ||
+        model_clip.value(QStringLiteral("keyframes")).toList().size() != 256 ||
+        model_clip.value(QStringLiteral("effectStack")).toStringList().size() != 1 ||
+        model_clip.value(QStringLiteral("clipMask")).toMap()
+            .value(QStringLiteral("shape")).toString() != QStringLiteral("rectangle") ||
+        model_clip.value(QStringLiteral("colorGradeRecipe")).toMap()
+            .value(QStringLiteral("photoLayers")).toList().size() != 1) {
+      std::cerr << "sequence snapshot update=" << update
+                << " calls=" << document->property("snapshotCallCount").toInt()
+                << " expectedCalls=" << update + 2
+                << " revision=" << root->property("snapshotRevision").toInt()
+                << " expectedRevision=" << update + 2
+                << " tracks=" << model.size()
+                << " keyframes=" << model_clip.value(QStringLiteral("keyframes")).toList().size()
+                << " effects=" << model_clip.value(QStringLiteral("effectStack")).toStringList().size()
+                << " mask=" << model_clip.value(QStringLiteral("clipMask")).toMap()
+                       .value(QStringLiteral("shape")).toString().toStdString()
+                << " gradeLayers=" << model_clip.value(QStringLiteral("colorGradeRecipe")).toMap()
+                       .value(QStringLiteral("photoLayers")).toList().size()
+                << '\n';
+      return fail_workflow("each sequence notification should adopt exactly one fresh rich snapshot without dropping nested data");
+    }
+  }
+  const auto make_selection_snapshot = [&](bool first_selected, bool second_selected) {
+    auto first_clip = dense_clips.front().toMap();
+    first_clip.insert(QStringLiteral("selected"), first_selected);
+    const QVariantMap second_clip{
+        {QStringLiteral("clipId"), QStringLiteral("photo-second")},
+        {QStringLiteral("selected"), second_selected},
+        {QStringLiteral("keyframes"), QVariantList{QVariantMap{
+             {QStringLiteral("parameter"), QStringLiteral("opacity")},
+             {QStringLiteral("value"), 0.75}}}},
+        {QStringLiteral("effectStack"), QStringList{QStringLiteral("grain")}},
+        {QStringLiteral("clipMask"), QVariantMap{{QStringLiteral("shape"), QStringLiteral("ellipse")}}},
+        {QStringLiteral("colorGradeRecipe"), QVariantMap{{QStringLiteral("photoLayers"), QVariantList{}}}}};
+    const QVariantList clips{first_clip, second_clip};
+    return QVariantList{QVariantMap{
+        {QStringLiteral("trackId"), QStringLiteral("video-1")},
+        {QStringLiteral("clips"), clips}}};
+  };
+  const auto selection_snapshot = make_selection_snapshot(true, false);
+  if (!set_mock_snapshot(selection_snapshot))
+    return fail_workflow("the test document should adopt its sequence selection snapshot");
+  document->setProperty("selectedClipIds", QStringList{QStringLiteral("photo-dense")});
+  if (!QMetaObject::invokeMethod(document, "sequenceChanged", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 18 ||
+      root->property("snapshotRevision").toInt() != 18 ||
+      root->property("sequenceTrackSnapshotSelectionSignature").toString() !=
+          QStringLiteral("photo-dense\x1f")) {
+    return fail_workflow("a sequence refresh should bind its owned snapshot to the current single-selection signature");
+  }
+  if (!QMetaObject::invokeMethod(document, "selectionChanged", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 18) {
+    return fail_workflow("a deferred selection notification should reuse the sequence snapshot for the same selection");
+  }
+  if (!set_mock_snapshot(make_selection_snapshot(false, true)))
+    return fail_workflow("the test document should adopt its single-selection snapshot");
+  document->setProperty("selectedClipIds", QStringList{QStringLiteral("photo-second")});
+  if (!QMetaObject::invokeMethod(document, "selectionChanged", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 19 ||
+      root->property("snapshotRevision").toInt() != 19) {
+    return fail_workflow("a selection-only single-select event should refresh the compact track snapshot exactly once");
+  }
+  if (!set_mock_snapshot(make_selection_snapshot(true, true)))
+    return fail_workflow("the test document should adopt its multi-selection snapshot");
+  document->setProperty("selectedClipIds",
+                        QStringList{QStringLiteral("photo-dense"), QStringLiteral("photo-second")});
+  if (!QMetaObject::invokeMethod(document, "selectionChanged", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 20 ||
+      root->property("snapshotRevision").toInt() != 20) {
+    return fail_workflow("a selection-only multi-select event should refresh the compact track snapshot exactly once");
+  }
+  if (!QMetaObject::invokeMethod(document, "selectionChanged", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 20) {
+    return fail_workflow("repeated notifications for an unchanged selection should not fetch a redundant snapshot");
+  }
+  const auto selected_model = root->property("sequenceTrackModel").toList();
+  const auto selected_clips = selected_model.size() == 1
+      ? selected_model.front().toMap().value(QStringLiteral("clips")).toList()
+      : QVariantList{};
+  if (selected_clips.size() != 2 ||
+      selected_clips.front().toMap().value(QStringLiteral("keyframes")).toList().size() != 256 ||
+      !selected_clips.front().toMap().value(QStringLiteral("selected")).toBool() ||
+      !selected_clips.back().toMap().value(QStringLiteral("selected")).toBool()) {
+    return fail_workflow("multi-selection refresh should preserve rich per-clip data and both selected flags");
+  }
+
+  const auto make_track = [](const QString& track_id, const QString& kind, int lane,
+                             const QString& clip_id, const QString& media_type) {
+    QVariantList clips;
+    QVariantList entries;
+    QVariantMap track{
+        {QStringLiteral("trackId"), track_id},
+        {QStringLiteral("trackKind"), kind},
+        {QStringLiteral("laneIndex"), lane},
+        {QStringLiteral("effectiveVisible"), true},
+        {QStringLiteral("visible"), true},
+        {QStringLiteral("clips"), clips},
+        {QStringLiteral("clipCount"), 0},
+        {QStringLiteral("clipRangeIndex"), QVariantMap{{QStringLiteral("entries"), entries}}}};
+    if (!clip_id.isEmpty()) {
+      const QVariantMap clip{
+          {QStringLiteral("clipId"), clip_id},
+          {QStringLiteral("mediaType"), media_type},
+          {QStringLiteral("startSeconds"), 145.0},
+          {QStringLiteral("endSeconds"), 151.0},
+          {QStringLiteral("videoVisible"), true},
+          {QStringLiteral("multicamActive"), true},
+          {QStringLiteral("laneIndex"), lane}};
+      clips.push_back(clip);
+      entries.push_back(QVariantMap{
+          {QStringLiteral("clipIndex"), 0},
+          {QStringLiteral("startSeconds"), 145.0},
+          {QStringLiteral("endSeconds"), 151.0},
+          {QStringLiteral("prefixMaximumEndSeconds"), 151.0}});
+      track.insert(QStringLiteral("clips"), clips);
+      track.insert(QStringLiteral("clipCount"), 1);
+      track.insert(QStringLiteral("clipRangeIndex"),
+                   QVariantMap{{QStringLiteral("entries"), entries}});
+    }
+    return track;
+  };
+  QVariantList opened_tracks;
+  for (int index = 0; index < 31; ++index) {
+    opened_tracks.push_back(make_track(QStringLiteral("title-track-%1").arg(index),
+                                       QStringLiteral("video"), index,
+                                       QStringLiteral("title-%1").arg(index),
+                                       QStringLiteral("title")));
+  }
+  for (int index = 0; index < 3; ++index) {
+    opened_tracks.push_back(make_track(QStringLiteral("generator-track-%1").arg(index),
+                                       QStringLiteral("video"), 31 + index,
+                                       QStringLiteral("generator-%1").arg(index),
+                                       QStringLiteral("generator")));
+  }
+  opened_tracks.push_back(make_track(QStringLiteral("primary-photo-track"),
+                                     QStringLiteral("video"), 34,
+                                     QStringLiteral("primary-photo"), QStringLiteral("photo")));
+  for (int index = 0; index < 2; ++index) {
+    opened_tracks.push_back(make_track(QStringLiteral("audio-track-%1").arg(index),
+                                       QStringLiteral("audio"), 35 + index,
+                                       QStringLiteral("audio-%1").arg(index),
+                                       QStringLiteral("audio")));
+  }
+  for (int index = 0; index < 159; ++index) {
+    opened_tracks.push_back(make_track(QStringLiteral("empty-track-%1").arg(index),
+                                       QStringLiteral("video"), 37 + index, {}, {}));
+  }
+  if (opened_tracks.size() != 196 || !set_mock_snapshot({})) {
+    return fail_workflow("the lifecycle fixture should start from an empty closed-timeline projection");
+  }
+  if (!QMetaObject::invokeMethod(document, "publishTimelineState", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 21 ||
+      root->property("snapshotRevision").toInt() != 21 ||
+      root->property("sequenceTrackModel").toList().size() != 0 ||
+      root->property("programBackgroundLayerModel").toList().size() != 0 ||
+      root->property("timelineStateSnapshotRefreshPendingSequence").toBool()) {
+    return fail_workflow("closing a populated timeline should publish one empty track and Program snapshot");
+  }
+  if (!set_mock_snapshot(opened_tracks) ||
+      !QMetaObject::invokeMethod(document, "publishTimelineState", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 22 ||
+      root->property("snapshotRevision").toInt() != 22 ||
+      root->property("sequenceTrackModel").toList().size() != 196) {
+    return fail_workflow("opening a timeline after an empty startup projection should fetch all 196 authored tracks once");
+  }
+  const auto opened_program_layers = root->property("programBackgroundLayerModel").toList();
+  if (opened_program_layers.size() != 34 ||
+      root->property("programOverlayRefreshCount").toInt() < 2) {
+    return fail_workflow("the newly adopted 196-track snapshot should refresh 31 title and 3 generator Program overlays");
+  }
+  for (int index = 0; index < 31; ++index) {
+    if (opened_program_layers[index].toString() != QStringLiteral("title-%1").arg(index))
+      return fail_workflow("the Program overlay projection should preserve every active title clip ID");
+  }
+  for (int index = 0; index < 3; ++index) {
+    if (opened_program_layers[31 + index].toString() !=
+        QStringLiteral("generator-%1").arg(index)) {
+      return fail_workflow("the Program overlay projection should preserve every active generated clip ID");
+    }
+  }
+  for (int turn = 0; turn < 3; ++turn)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  auto edited_tracks = opened_tracks;
+  auto hidden_title_track = edited_tracks.front().toMap();
+  hidden_title_track.insert(QStringLiteral("effectiveVisible"), false);
+  edited_tracks.front() = hidden_title_track;
+  if (!set_mock_snapshot(edited_tracks) ||
+      !QMetaObject::invokeMethod(document, "sequenceChanged", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 23 ||
+      root->property("snapshotRevision").toInt() != 23 ||
+      root->property("programBackgroundLayerModel").toList().size() != 33) {
+    return fail_workflow("a separate authored sequence edit after the paired-signal turn should fetch and refresh Program rows");
+  }
+  if (!set_mock_snapshot({}) ||
+      !QMetaObject::invokeMethod(document, "timelineStateChanged", Qt::DirectConnection) ||
+      !root->property("timelineStateSnapshotRefreshPendingSequence").toBool()) {
+    return fail_workflow("a timeline-state publication without its paired sequence signal should refresh immediately");
+  }
+  for (int turn = 0; turn < 3; ++turn)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (root->property("timelineStateSnapshotRefreshPendingSequence").toBool())
+    return fail_workflow("the one-turn paired-signal guard should expire when no sequence notification follows");
+  if (!set_mock_snapshot(opened_tracks) ||
+      !QMetaObject::invokeMethod(document, "sequenceChanged", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 25 ||
+      root->property("sequenceTrackModel").toList().size() != 196) {
+    return fail_workflow("an unpaired timeline-state signal must expire so the next sequence edit is not swallowed");
+  }
+  if (!set_mock_snapshot({}) ||
+      !QMetaObject::invokeMethod(document, "publishTimelineState", Qt::DirectConnection) ||
+      document->property("snapshotCallCount").toInt() != 26 ||
+      root->property("sequenceTrackModel").toList().size() != 0 ||
+      root->property("programBackgroundLayerModel").toList().size() != 0) {
+    return fail_workflow("the final paired close should clear both the sequence and Program overlay projections");
+  }
+
+  QFile timeline_view_file(QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/workspaces/TimelineView.qml"));
+  if (!timeline_view_file.open(QIODevice::ReadOnly | QIODevice::Text))
+    return fail_workflow("TimelineView should be readable for its sequence-snapshot wiring assertion");
+  const auto timeline_view_source = QString::fromUtf8(timeline_view_file.readAll());
+  if (!timeline_view_source.contains(QStringLiteral(
+          "property var sequenceTrackModel: TimelineSelectionRefresh.timelineTrackSnapshot(timelineDocument)")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "TimelineSelectionRefresh.refreshSequenceTrackSnapshotForTimelineState(root)")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "TimelineSelectionRefresh.refreshSequenceTrackSnapshotForSequenceChange(root)")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "onSequenceTrackModelChanged: {\n        clearProgramPlaybackDetailCache()")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "root.refreshProgramPlaybackLayerModels(true)")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "TimelineSelectionRefresh.refreshTrackSnapshotForSelectionChange(root, selectedSignature)")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "readonly property var timelineProjectionDiagnostics")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "sequenceTrackCount: tracks.length")) ||
+      !timeline_view_source.contains(QStringLiteral(
+          "virtualizedRowModelCount: timelineVirtualizedTrackRowsModel.count"))) {
+    return fail_workflow("TimelineView should refresh owned track snapshots and expose only bounded QML projection counts");
+  }
+  return true;
+}
+
+bool run_timeline_selection_refresh_coalescing_workflow() {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << "timeline_selection_refresh_coalescing: " << message << '\n';
+    return false;
+  };
+  const auto helper_path = QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/components/TimelineSelectionRefresh.js");
+  const auto helper_url = QUrl::fromLocalFile(helper_path).toString(QUrl::FullyEncoded);
+  const auto qml = QStringLiteral(R"qml(
+import QtQml
+import "%1" as SelectionRefresh
+QtObject {
+    property var timelineSelectionRefreshLifetime: ({alive: true})
+    property bool timelineSelectionRefreshPending: false
+    property int currentSelectionRevision: 0
+    property int publishedSelectionRevision: -1
+    property int refreshCount: 0
+    function requestSelectionRefresh() { SelectionRefresh.schedule(root) }
+    function refreshTimelineSelectionState() {
+        refreshCount += 1
+        publishedSelectionRevision = currentSelectionRevision
+        refreshObserver.refreshCount = Number(refreshObserver.refreshCount) + 1
+    }
+    Component.onDestruction: timelineSelectionRefreshLifetime.alive = false
+    id: root
+}
+)qml").arg(helper_url);
+
+  QQmlEngine engine;
+  QQmlPropertyMap refresh_observer;
+  refresh_observer.insert(QStringLiteral("refreshCount"), 0);
+  engine.rootContext()->setContextProperty(QStringLiteral("refreshObserver"),
+                                           &refresh_observer);
+  QQmlComponent component(&engine);
+  component.setData(qml.toUtf8(), QUrl(QStringLiteral("inmemory:TimelineSelectionRefresh.qml")));
+  QElapsedTimer component_timer;
+  component_timer.start();
+  while (component.status() == QQmlComponent::Loading && component_timer.elapsed() < 5000)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  std::unique_ptr<QObject> root(component.create());
+  if (!root) {
+    for (const auto& error : component.errors())
+      std::cerr << "Timeline selection refresh component error: "
+                << error.toString().toStdString() << '\n';
+    return fail_workflow("the production scheduling helper should load in a Qt QML engine");
+  }
+
+  auto qml_warning_count = 0;
+  QObject::connect(&engine, &QQmlEngine::warnings, &engine,
+                   [&qml_warning_count](const QList<QQmlError>& warnings) {
+                     qml_warning_count += warnings.size();
+                   });
+
+  const auto request_refresh = [root_ptr = root.get()]() {
+    return QMetaObject::invokeMethod(root_ptr, "requestSelectionRefresh", Qt::DirectConnection);
+  };
+  if (!request_refresh())
+    return fail_workflow("the QML refresh request should be invokable");
+  root->setProperty("currentSelectionRevision", 1);
+  if (!request_refresh())
+    return fail_workflow("a second notification should be accepted while one refresh is pending");
+  root->setProperty("currentSelectionRevision", 2);
+  if (!request_refresh())
+    return fail_workflow("a later notification should still be accepted while the refresh is pending");
+  root->setProperty("currentSelectionRevision", 3);
+  if (!root->property("timelineSelectionRefreshPending").toBool() ||
+      root->property("refreshCount").toInt() != 0) {
+    return fail_workflow("native signal callbacks should only enqueue one deferred refresh");
+  }
+
+  QElapsedTimer refresh_timer;
+  refresh_timer.start();
+  while (root->property("refreshCount").toInt() == 0 && refresh_timer.elapsed() < 1000)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (root->property("refreshCount").toInt() != 1 ||
+      root->property("publishedSelectionRevision").toInt() != 3 ||
+      root->property("timelineSelectionRefreshPending").toBool() ||
+      refresh_observer.value(QStringLiteral("refreshCount")).toInt() != 1) {
+    return fail_workflow("one queued refresh should publish the latest selection and clear its pending gate");
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (root->property("refreshCount").toInt() != 1)
+    return fail_workflow("coalesced notifications should not leave stale refresh callbacks queued");
+
+  if (!request_refresh())
+    return fail_workflow("a later independent notification should schedule another refresh");
+  root->setProperty("currentSelectionRevision", 4);
+  refresh_timer.restart();
+  while (root->property("refreshCount").toInt() == 1 && refresh_timer.elapsed() < 1000)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (root->property("refreshCount").toInt() != 2 ||
+      root->property("publishedSelectionRevision").toInt() != 4 ||
+      root->property("timelineSelectionRefreshPending").toBool() ||
+      refresh_observer.value(QStringLiteral("refreshCount")).toInt() != 2) {
+    return fail_workflow("the pending gate should reopen for a subsequent latest-state refresh");
+  }
+
+  if (!request_refresh() || !root->property("timelineSelectionRefreshPending").toBool())
+    return fail_workflow("a pending callback should exist before destroying its owning component");
+  root.reset();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (refresh_observer.value(QStringLiteral("refreshCount")).toInt() != 2 ||
+      qml_warning_count != 0) {
+    return fail_workflow("destroying the owning component should cancel its queued refresh without touching stale QML state");
+  }
+
+  const auto snapshot_qml = QStringLiteral(R"qml(
+import QtQml
+import "%1" as SelectionRefresh
+QtObject {
+    id: root
+    property int nativeCurrentIndex: 5
+    property int nativeContentRevision: 1
+    property int nativeSnapshotCallCount: 0
+    property int currentClipSnapshotRevision: 0
+    property int selectionRefreshObservedClipSnapshotRevision: 0
+    property var currentClip: ({index: 5, clipId: "clip-5", contentRevision: 0})
+    property var snapshotResult: ({})
+    property int snapshotResultIndex: 0
+    property string snapshotResultClipId: ""
+    property int snapshotResultContentRevision: 0
+    property bool returnedMapIsCurrent: false
+    property bool richFieldsReadable: false
+    property var documentController: ({
+        currentIndex: root.nativeCurrentIndex,
+        snapshotCurrentClip: function() {
+            root.nativeSnapshotCallCount += 1
+            const index = Number(root.nativeCurrentIndex)
+            if (!isFinite(index) || index < 0)
+                return ({index: -1, clipId: "", contentRevision: root.nativeContentRevision})
+            const clipId = "clip-" + String(index)
+            return ({
+                index: index,
+                clipId: clipId,
+                contentRevision: root.nativeContentRevision,
+                availableKeyframeParameters: ["opacity"],
+                keyframes: [
+                    {frame: 0, value: 0.125, interpolation: "linear"},
+                    {frame: 5, value: 0.875, interpolation: "hold"}
+                ],
+                effectStack: [{
+                    effectId: "grade-" + String(index),
+                    mask: {maskId: "mask-" + clipId, featherPx: 7},
+                    colorGrade: {lift: {red: 11}, gain: {blue: 103}}
+                }],
+                effectDetails: [{
+                    effectId: "detail-" + String(index),
+                    mask: {mode: "luma", invert: false},
+                    colorGrade: {gamma: {green: 97}}
+                }]
+            })
+        }
+    })
+    onNativeCurrentIndexChanged: documentController.currentIndex = nativeCurrentIndex
+    function refreshSelectionSnapshot() {
+        snapshotResult = SelectionRefresh.currentClipSnapshotForSelectionRefresh(
+                    root, selectionRefreshObservedClipSnapshotRevision)
+        snapshotResultIndex = Number(snapshotResult.index)
+        snapshotResultClipId = String(snapshotResult.clipId || "")
+        snapshotResultContentRevision = Number(snapshotResult.contentRevision || 0)
+    }
+    function adoptNativeSnapshotSynchronously() {
+        const next = documentController.snapshotCurrentClip()
+        if (next !== currentClip) {
+            currentClip = next
+            currentClipSnapshotRevision += 1
+        }
+    }
+    function adoptReturnedSnapshot() {
+        if (snapshotResult !== currentClip) {
+            currentClip = snapshotResult
+            currentClipSnapshotRevision += 1
+        }
+    }
+    function updateReturnedMapIdentity() { returnedMapIsCurrent = snapshotResult === currentClip }
+    function updateRichFieldsReadable() {
+        const clip = snapshotResult || ({})
+        richFieldsReadable = clip.keyframes && clip.keyframes.length === 2
+                && Number(clip.keyframes[1].value) === 0.875
+                && clip.effectStack && clip.effectStack[0].mask.maskId === "mask-" + clip.clipId
+                && Number(clip.effectStack[0].mask.featherPx) === 7
+                && Number(clip.effectStack[0].colorGrade.lift.red) === 11
+                && Number(clip.effectStack[0].colorGrade.gain.blue) === 103
+                && clip.effectDetails && clip.effectDetails[0].mask.mode === "luma"
+                && Number(clip.effectDetails[0].colorGrade.gamma.green) === 97
+    }
+}
+)qml").arg(helper_url);
+  QQmlComponent snapshot_component(&engine);
+  snapshot_component.setData(snapshot_qml.toUtf8(),
+                             QUrl(QStringLiteral("inmemory:TimelineSelectionSnapshot.qml")));
+  QElapsedTimer snapshot_component_timer;
+  snapshot_component_timer.start();
+  while (snapshot_component.status() == QQmlComponent::Loading &&
+         snapshot_component_timer.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  std::unique_ptr<QObject> snapshot_root(snapshot_component.create());
+  if (!snapshot_root) {
+    for (const auto& error : snapshot_component.errors())
+      std::cerr << "Timeline selection snapshot component error: "
+                << error.toString().toStdString() << '\n';
+    return fail_workflow("the production selection snapshot helper should load with a native controller-shaped object");
+  }
+  const auto snapshot_refresh = [root_ptr = snapshot_root.get()]() {
+    return QMetaObject::invokeMethod(root_ptr, "refreshSelectionSnapshot", Qt::DirectConnection);
+  };
+  const auto snapshot_adopt_native = [root_ptr = snapshot_root.get()]() {
+    return QMetaObject::invokeMethod(root_ptr, "adoptNativeSnapshotSynchronously",
+                                     Qt::DirectConnection);
+  };
+  const auto snapshot_adopt_result = [root_ptr = snapshot_root.get()]() {
+    return QMetaObject::invokeMethod(root_ptr, "adoptReturnedSnapshot", Qt::DirectConnection);
+  };
+  const auto snapshot_calls = [&snapshot_root]() {
+    return snapshot_root->property("nativeSnapshotCallCount").toInt();
+  };
+  const auto snapshot_index = [&snapshot_root]() {
+    return snapshot_root->property("snapshotResultIndex").toInt();
+  };
+  const auto snapshot_clip_id = [&snapshot_root]() {
+    return snapshot_root->property("snapshotResultClipId").toString();
+  };
+  if (!snapshot_refresh() || snapshot_calls() != 1 || snapshot_index() != 5) {
+    return fail_workflow("an unchanged snapshot revision should fetch a same-index clip so later content edits remain visible");
+  }
+  if (!QMetaObject::invokeMethod(snapshot_root.get(), "updateRichFieldsReadable",
+                                 Qt::DirectConnection)) {
+    return fail_workflow("the rich nested selection snapshot should be inspectable from QML");
+  }
+  if (!snapshot_root->property("richFieldsReadable").toBool()) {
+    return fail_workflow("keyframes, effect stack, mask and color-grade detail should remain readable after the snapshot helper");
+  }
+
+  if (!snapshot_adopt_native() || snapshot_calls() != 2 ||
+      snapshot_root->property("currentClipSnapshotRevision").toInt() != 1) {
+    return fail_workflow("a synchronous selected-state refresh should adopt one new native clip snapshot");
+  }
+  if (!snapshot_refresh() || snapshot_calls() != 2 ||
+      !QMetaObject::invokeMethod(snapshot_root.get(), "updateReturnedMapIdentity",
+                                 Qt::DirectConnection) ||
+      !snapshot_root->property("returnedMapIsCurrent").toBool()) {
+    return fail_workflow("the deferred refresh should reuse the exact rich map published synchronously at the same index");
+  }
+
+  snapshot_root->setProperty("selectionRefreshObservedClipSnapshotRevision", 1);
+  snapshot_root->setProperty("nativeContentRevision", 2);
+  if (!snapshot_refresh() || snapshot_calls() != 3 ||
+      snapshot_root->property("snapshotResultContentRevision").toInt() != 2) {
+    return fail_workflow("a later same-index edit with no newer adopted snapshot should still request fresh native data");
+  }
+  if (!snapshot_adopt_result())
+    return fail_workflow("the latest deferred snapshot should be adoptable");
+
+  const auto current_revision = snapshot_root->property("currentClipSnapshotRevision").toInt();
+  snapshot_root->setProperty("selectionRefreshObservedClipSnapshotRevision", current_revision);
+  snapshot_root->setProperty("nativeCurrentIndex", 6);
+  if (!snapshot_refresh() || snapshot_calls() != 4 || snapshot_index() != 6 ||
+      snapshot_clip_id() != QStringLiteral("clip-6")) {
+    return fail_workflow("changing the selected index should always fetch the new native clip");
+  }
+  if (!snapshot_adopt_result())
+    return fail_workflow("the newly selected clip snapshot should be adoptable");
+
+  const auto selected_revision = snapshot_root->property("currentClipSnapshotRevision").toInt();
+  snapshot_root->setProperty("selectionRefreshObservedClipSnapshotRevision", selected_revision);
+  snapshot_root->setProperty("nativeCurrentIndex", -1);
+  if (!snapshot_refresh() || snapshot_calls() != 5 || snapshot_index() != -1 ||
+      !snapshot_clip_id().isEmpty()) {
+    return fail_workflow("clearing selection should fetch and publish the empty native clip map");
+  }
+  if (!snapshot_adopt_result())
+    return fail_workflow("the empty selection snapshot should be adoptable");
+
+  const auto cleared_revision = snapshot_root->property("currentClipSnapshotRevision").toInt();
+  snapshot_root->setProperty("selectionRefreshObservedClipSnapshotRevision", cleared_revision);
+  snapshot_root->setProperty("nativeCurrentIndex", 7);
+  if (!snapshot_refresh() || snapshot_calls() != 6 || snapshot_index() != 7 ||
+      snapshot_clip_id() != QStringLiteral("clip-7")) {
+    return fail_workflow("selecting a clip after an empty state should fetch the new rich native map");
+  }
+  if (!QMetaObject::invokeMethod(snapshot_root.get(), "updateRichFieldsReadable",
+                                 Qt::DirectConnection) ||
+      !snapshot_root->property("richFieldsReadable").toBool()) {
+    return fail_workflow("rich nested fields should remain readable after selection changes and clearing");
+  }
+  return true;
+}
+
+bool run_timeline_used_media_snapshot_workflow() {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << "timeline_used_media_snapshot: " << message << '\n';
+    return false;
+  };
+  QTemporaryDir source_directory;
+  if (!source_directory.isValid())
+    return fail_workflow("a temporary source directory should be available");
+
+  QImage photo(16, 12, QImage::Format_RGBA8888);
+  photo.fill(QColor(40, 120, 220, 255));
+  const auto photo_path = QDir(source_directory.path()).filePath(QStringLiteral("used-photo.png"));
+  if (!photo.save(photo_path))
+    return fail_workflow("a real image fixture should be writable");
+
+  const auto write_source_stub = [](const QString& path, const QByteArray& contents) {
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly | QIODevice::NewOnly) &&
+           file.write(contents) == contents.size();
+  };
+  const auto video_path = QDir(source_directory.path()).filePath(QStringLiteral("used-video.mp4"));
+  const auto audio_path = QDir(source_directory.path()).filePath(QStringLiteral("used-audio.wav"));
+  if (!write_source_stub(video_path, QByteArray("native video source fixture\n")) ||
+      !write_source_stub(audio_path, QByteArray("native audio source fixture\n"))) {
+    return fail_workflow("video and audio source paths should be readable files for the native DTO");
+  }
+
+  TimelineDocumentController controller;
+  controller.setEditAccessPolicy([] { return true; });
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Used Media Snapshot")},
+      {QStringLiteral("width"), 1280},
+      {QStringLiteral("height"), 720},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+
+  QString video_track_id;
+  QString audio_track_id;
+  for (const auto& value : controller.timelineTracks()) {
+    const auto track = value.toMap();
+    if (video_track_id.isEmpty() &&
+        track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        track.value(QStringLiteral("trackRole")).toString() == QStringLiteral("media")) {
+      video_track_id = track.value(QStringLiteral("trackId")).toString();
+    }
+    if (audio_track_id.isEmpty() &&
+        track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("audio")) {
+      audio_track_id = track.value(QStringLiteral("trackId")).toString();
+    }
+  }
+  if (video_track_id.isEmpty())
+    return fail_workflow("the native Timeline should provide its ordinary video source lane");
+  if (audio_track_id.isEmpty()) {
+    const auto audio_track = controller.createTimelineTrackForAutomation(
+        QStringLiteral("audio"), QStringLiteral("Audio Sources"));
+    audio_track_id = audio_track.value(QStringLiteral("trackId")).toString();
+    if (!audio_track.value(QStringLiteral("ok")).toBool() || audio_track_id.isEmpty())
+      return fail_workflow("a native audio lane should be available for source coverage");
+  }
+  const auto duplicate_photo_track = controller.createTimelineTrackForAutomation(
+      QStringLiteral("video"), QStringLiteral("Repeated Photo Source"));
+  const auto duplicate_photo_track_id =
+      duplicate_photo_track.value(QStringLiteral("trackId")).toString();
+  if (!duplicate_photo_track.value(QStringLiteral("ok")).toBool() ||
+      duplicate_photo_track_id.isEmpty()) {
+    return fail_workflow("a second native video lane should be available to verify duplicate provenance");
+  }
+
+  const auto photo_first = controller.createTimelineClipForAutomation(
+      video_track_id, QStringLiteral("asset-used-photo"), photo_path,
+      QStringLiteral("Used photo"), 1.0, 0.0, 1.0, 0.0, photo_path);
+  const auto photo_repeat = controller.createTimelineClipForAutomation(
+      duplicate_photo_track_id, QStringLiteral("asset-used-photo"), photo_path,
+      QStringLiteral("Used photo again"), 1.0, 0.0, 1.0, 0.0, photo_path);
+  const auto video = controller.createTimelineClipForAutomation(
+      video_track_id, QStringLiteral("asset-used-video"), video_path,
+      QStringLiteral("Used video"), 1.0, 0.0, 1.0, 2.0);
+  const auto audio = controller.createTimelineClipForAutomation(
+      audio_track_id, QStringLiteral("asset-used-audio"), audio_path,
+      QStringLiteral("Used audio"), 1.0, 0.0, 1.0, 0.0);
+  const auto graphics_track = controller.createTimelineTrackForAutomation(
+      QStringLiteral("graphics"), QStringLiteral("Procedural Source Exclusion"));
+  const auto graphics_track_id = graphics_track.value(QStringLiteral("trackId")).toString();
+  const auto generator = graphics_track.value(QStringLiteral("ok")).toBool()
+      ? controller.createTimelineGeneratorForAutomation(
+            graphics_track_id, QStringLiteral("transition-veil"), 0.0, 1.0,
+            {{QStringLiteral("opacity"), 1.0}})
+      : QVariantMap{};
+  if (!photo_first.value(QStringLiteral("ok")).toBool() ||
+      !photo_repeat.value(QStringLiteral("ok")).toBool() ||
+      !video.value(QStringLiteral("ok")).toBool() ||
+      !audio.value(QStringLiteral("ok")).toBool() ||
+      !graphics_track.value(QStringLiteral("ok")).toBool() ||
+      !generator.value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "timeline_used_media_snapshot: source fixture creation failed: photo="
+              << photo_first.value(QStringLiteral("error")).toString().toStdString()
+              << " repeat=" << photo_repeat.value(QStringLiteral("error")).toString().toStdString()
+              << " video=" << video.value(QStringLiteral("error")).toString().toStdString()
+              << " audio=" << audio.value(QStringLiteral("error")).toString().toStdString()
+              << " generator=" << generator.value(QStringLiteral("error")).toString().toStdString()
+              << '\n';
+    return false;
+  }
+
+  const auto expected_hash = controller.deterministicDocumentHash();
+  const auto expected_clip_count = controller.clips().size();
+  QVariantList rows;
+  if (!QMetaObject::invokeMethod(&controller, "snapshotTimelineUsedMedia",
+                                 Qt::DirectConnection,
+                                 Q_RETURN_ARG(QVariantList, rows))) {
+    return fail_workflow("snapshotTimelineUsedMedia should be invokable as a native DTO read");
+  }
+  if (rows.size() != 3)
+    return fail_workflow("the DTO should deduplicate the repeated photo and exclude the procedural generator");
+
+  QSet<QString> asset_ids;
+  QSet<QString> media_types;
+  QHash<QString, QString> paths_by_id;
+  bool duplicate_photo_tracks_preserved = false;
+  const auto expected_photo_path = QFileInfo(photo_path).canonicalFilePath();
+  const auto expected_video_path = QFileInfo(video_path).canonicalFilePath();
+  const auto expected_audio_path = QFileInfo(audio_path).canonicalFilePath();
+  for (const auto& value : rows) {
+    const auto row = value.toMap();
+    const auto asset_id = row.value(QStringLiteral("assetId")).toString();
+    const auto media_type = row.value(QStringLiteral("mediaType")).toString();
+    const auto file_path = QFileInfo(row.value(QStringLiteral("filePath")).toString())
+                              .canonicalFilePath();
+    if (asset_id.isEmpty() || file_path.isEmpty() || asset_ids.contains(asset_id) ||
+        row.value(QStringLiteral("timelineReferenced")).toBool() != true ||
+        row.value(QStringLiteral("assetIndex")).toInt() != -1 ||
+        row.value(QStringLiteral("catalogAssetIndex")).toInt() != -1 ||
+        row.value(QStringLiteral("online")).toBool() != true) {
+      return fail_workflow("each native DTO row should be a unique online timeline reference with no catalog index");
+    }
+    asset_ids.insert(asset_id);
+    media_types.insert(media_type);
+    paths_by_id.insert(asset_id, file_path);
+    if (asset_id == QStringLiteral("asset-used-photo")) {
+      const auto tracks = row.value(QStringLiteral("trackIds")).toStringList();
+      duplicate_photo_tracks_preserved = tracks.size() == 2 &&
+          tracks.contains(video_track_id) && tracks.contains(duplicate_photo_track_id);
+    }
+  }
+  if (asset_ids != QSet<QString>{QStringLiteral("asset-used-photo"),
+                                 QStringLiteral("asset-used-video"),
+                                 QStringLiteral("asset-used-audio")} ||
+      media_types != QSet<QString>{QStringLiteral("photo"), QStringLiteral("video"),
+                                   QStringLiteral("audio")} ||
+      paths_by_id.value(QStringLiteral("asset-used-photo")) != expected_photo_path ||
+      paths_by_id.value(QStringLiteral("asset-used-video")) != expected_video_path ||
+      paths_by_id.value(QStringLiteral("asset-used-audio")) != expected_audio_path ||
+      !duplicate_photo_tracks_preserved) {
+    return fail_workflow("the snapshot should retain exact source paths, all three media types, and repeated-reference track provenance");
+  }
+  if (controller.deterministicDocumentHash() != expected_hash ||
+      controller.clips().size() != expected_clip_count) {
+    return fail_workflow("reading the used-media DTO must not alter project hash or clip count");
+  }
+  return true;
+}
+
+bool run_timeline_owned_clip_map_snapshot_metacall_workflow() {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << "timeline_owned_clip_map_snapshot_metacall: " << message << '\n';
+    return false;
+  };
+  QTemporaryDir source_directory;
+  if (!source_directory.isValid()) {
+    return fail_workflow("a temporary image-source directory should be available");
+  }
+  const auto image_path = QDir(source_directory.path()).filePath(
+      QStringLiteral("snapshot-program-source.png"));
+  QImage source_image(16, 16, QImage::Format_RGBA8888);
+  source_image.fill(QColor(40, 120, 220, 255));
+  if (!source_image.save(image_path)) {
+    return fail_workflow("a small native image source should be writable for Program coverage");
+  }
+
+  TimelineDocumentController controller;
+  controller.setEditAccessPolicy([] { return true; });
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Owned Clip Map Snapshots")},
+      {QStringLiteral("width"), 1920},
+      {QStringLiteral("height"), 1080},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  QString media_track_id;
+  for (const auto& value : controller.timelineTracks()) {
+    const auto track = value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        track.value(QStringLiteral("trackRole")).toString() == QStringLiteral("media")) {
+      media_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (media_track_id.isEmpty()) {
+    return fail_workflow("the new Timeline should expose a native video media track");
+  }
+
+  const auto first_result = controller.createTimelineClipForAutomation(
+      media_track_id, QStringLiteral("snapshot-asset-first"), image_path,
+      QStringLiteral("Snapshot first image"), 3.0, 0.0, 3.0, 0.0, image_path);
+  const auto second_result = controller.createTimelineClipForAutomation(
+      media_track_id, QStringLiteral("snapshot-asset-second"), image_path,
+      QStringLiteral("Snapshot second image"), 3.0, 0.0, 3.0, 3.0, image_path);
+  if (!first_result.value(QStringLiteral("ok")).toBool() ||
+      !second_result.value(QStringLiteral("ok")).toBool()) {
+    const auto first_error = first_result.value(QStringLiteral("error")).toString();
+    const auto second_error = second_result.value(QStringLiteral("error")).toString();
+    std::cerr << "timeline_owned_clip_map_snapshot_metacall: image fixture creation failed: first='"
+              << first_error.toStdString() << "' second='" << second_error.toStdString() << "'\n";
+    return false;
+  }
+  const auto first_clip_id = first_result.value(QStringLiteral("createdClipId")).toString();
+  const auto second_clip_id = second_result.value(QStringLiteral("createdClipId")).toString();
+  if (first_clip_id.isEmpty() || second_clip_id.isEmpty() ||
+      first_clip_id == second_clip_id) {
+    return fail_workflow("the controller should retain distinct stable IDs for both clips");
+  }
+
+  const auto first_inspection = controller.inspectTimelineClipById(first_clip_id);
+  const auto second_inspection = controller.inspectTimelineClipById(second_clip_id);
+  bool first_index_ok = false;
+  bool second_index_ok = false;
+  const auto first_index = first_inspection.value(QStringLiteral("clip")).toMap()
+                               .value(QStringLiteral("index")).toInt(&first_index_ok);
+  const auto second_index = second_inspection.value(QStringLiteral("clip")).toMap()
+                                .value(QStringLiteral("index")).toInt(&second_index_ok);
+  if (!first_inspection.value(QStringLiteral("ok")).toBool() ||
+      !second_inspection.value(QStringLiteral("ok")).toBool() ||
+      !first_index_ok || !second_index_ok || first_index == second_index) {
+    return fail_workflow("both native photo clips should have distinct selectable flattened indexes");
+  }
+  controller.selectClip(first_index);
+  controller.seekSequenceSeconds(0.25);
+
+  const auto invoke_map_snapshot = [&controller](const char* method,
+                                                  QVariantMap* result) {
+    return result != nullptr &&
+           QMetaObject::invokeMethod(
+               &controller, method, Qt::DirectConnection,
+               Q_RETURN_ARG(QVariantMap, *result));
+  };
+  const auto initial_hash = controller.deterministicDocumentHash();
+  QVariantMap current_snapshot;
+  QVariantMap program_snapshot;
+  QVariantMap settings_snapshot;
+  if (!invoke_map_snapshot("snapshotCurrentClip", &current_snapshot) ||
+      !invoke_map_snapshot("snapshotProgramClip", &program_snapshot) ||
+      !invoke_map_snapshot("snapshotSequenceSettings", &settings_snapshot)) {
+    return fail_workflow("all three snapshot methods should be invokable through QObject meta-call reflection");
+  }
+  const auto initial_current = controller.currentClip();
+  const auto initial_program = controller.programClip();
+  const auto initial_settings = controller.sequenceSettings();
+  if (current_snapshot != initial_current || program_snapshot != initial_program ||
+      settings_snapshot != initial_settings ||
+      current_snapshot.value(QStringLiteral("clipId")).toString() != first_clip_id ||
+      program_snapshot.value(QStringLiteral("clipId")).toString() != first_clip_id ||
+      current_snapshot.value(QStringLiteral("mediaType")).toString() != QStringLiteral("photo") ||
+      program_snapshot.value(QStringLiteral("mediaType")).toString() != QStringLiteral("photo") ||
+      settings_snapshot.value(QStringLiteral("width")).toInt() != 1920 ||
+      settings_snapshot.value(QStringLiteral("height")).toInt() != 1080) {
+    return fail_workflow("meta-invoked snapshots should preserve every native getter key and selected/Program/settings value");
+  }
+  const auto captured_current_id = current_snapshot.value(QStringLiteral("clipId")).toString();
+  const auto captured_program_id = program_snapshot.value(QStringLiteral("clipId")).toString();
+  const auto captured_current_title = current_snapshot.value(QStringLiteral("titleText")).toString();
+  const auto captured_settings_width = settings_snapshot.value(QStringLiteral("width")).toInt();
+  if (controller.deterministicDocumentHash() != initial_hash) {
+    return fail_workflow("reading and meta-invoking snapshot getters must not change the authored document hash");
+  }
+
+  controller.selectClip(second_index);
+  controller.seekSequenceSeconds(4.25);
+  QVariantMap changed_current_snapshot;
+  QVariantMap changed_program_snapshot;
+  if (!invoke_map_snapshot("snapshotCurrentClip", &changed_current_snapshot) ||
+      !invoke_map_snapshot("snapshotProgramClip", &changed_program_snapshot) ||
+      changed_current_snapshot != controller.currentClip() ||
+      changed_program_snapshot != controller.programClip() ||
+      changed_current_snapshot.value(QStringLiteral("clipId")).toString() != second_clip_id ||
+      changed_program_snapshot.value(QStringLiteral("clipId")).toString() != second_clip_id) {
+    return fail_workflow("selection and playhead changes should expose the latest clip maps through meta-invoked snapshots");
+  }
+  if (current_snapshot.value(QStringLiteral("clipId")).toString() != captured_current_id ||
+      program_snapshot.value(QStringLiteral("clipId")).toString() != captured_program_id ||
+      current_snapshot.value(QStringLiteral("titleText")).toString() != captured_current_title ||
+      settings_snapshot.value(QStringLiteral("width")).toInt() != captured_settings_width ||
+      current_snapshot != initial_current || program_snapshot != initial_program ||
+      settings_snapshot != initial_settings ||
+      controller.deterministicDocumentHash() != initial_hash) {
+    return fail_workflow("previously returned owned maps should retain their captured values after controller state changes");
+  }
+
+  controller.applyOutputPreset(QStringLiteral("square"));
+  QVariantMap changed_settings_snapshot;
+  const auto changed_hash = controller.deterministicDocumentHash();
+  if (!invoke_map_snapshot("snapshotSequenceSettings", &changed_settings_snapshot) ||
+      changed_settings_snapshot != controller.sequenceSettings() ||
+      changed_settings_snapshot.value(QStringLiteral("width")).toInt() == captured_settings_width ||
+      changed_settings_snapshot.value(QStringLiteral("activeOutputVariant")).toString() !=
+          QStringLiteral("square") ||
+      settings_snapshot.value(QStringLiteral("width")).toInt() != captured_settings_width ||
+      changed_hash == initial_hash || controller.deterministicDocumentHash() != changed_hash) {
+    return fail_workflow("a real sequence-settings change should refresh its snapshot, preserve old copies, and leave snapshot reads hash-neutral");
+  }
+
+  QFile timeline_view_source(QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/workspaces/TimelineView.qml"));
+  if (!timeline_view_source.open(QIODevice::ReadOnly)) {
+    return fail_workflow("the production TimelineView source should be available for the snapshot-route contract");
+  }
+  const auto timeline_view_qml = QString::fromUtf8(timeline_view_source.readAll());
+  const auto property_uses_snapshot = [&timeline_view_qml](const QString& property,
+                                                           const QString& method) {
+    const auto start = timeline_view_qml.indexOf(
+        QStringLiteral("property var ") + property + QLatin1Char(':'));
+    if (start < 0) return false;
+    const auto end = timeline_view_qml.indexOf(
+        QStringLiteral("\n    property "), start + 1);
+    const auto block = timeline_view_qml.mid(
+        start, end < 0 ? -1 : end - start);
+    return block.contains(QStringLiteral("timelineDocument.") + method +
+                          QStringLiteral("()"));
+  };
+  if (!property_uses_snapshot(QStringLiteral("currentClip"),
+                              QStringLiteral("snapshotCurrentClip")) ||
+      !property_uses_snapshot(QStringLiteral("programClip"),
+                              QStringLiteral("snapshotProgramClip")) ||
+      !property_uses_snapshot(QStringLiteral("sequenceSettings"),
+                              QStringLiteral("snapshotSequenceSettings")) ||
+      timeline_view_qml.contains(QStringLiteral("property var currentClip: timelineDocument.currentClip")) ||
+      timeline_view_qml.contains(QStringLiteral("property var programClip: timelineDocument.programClip")) ||
+      timeline_view_qml.contains(QStringLiteral("property var sequenceSettings: timelineDocument.sequenceSettings"))) {
+    return fail_workflow("the production TimelineView should initialize all three owned maps through their invokable snapshot methods");
+  }
+  const auto root_handler_start = timeline_view_qml.indexOf(
+      QStringLiteral("function onTrackingChanged()"));
+  if (root_handler_start < 0) {
+    return fail_workflow("the production TimelineView controller notification group should be discoverable");
+  }
+  const auto handler_body = [&timeline_view_qml, root_handler_start](const QString& start_marker,
+                                                const QString& end_marker) {
+    const auto start = timeline_view_qml.indexOf(start_marker, root_handler_start);
+    if (start < 0) return QString{};
+    const auto end = timeline_view_qml.indexOf(end_marker, start + start_marker.size());
+    return end < 0 ? QString{} : timeline_view_qml.mid(start, end - start);
+  };
+  const auto selection_handler = handler_body(
+      QStringLiteral("function onSelectionChanged() {"),
+      QStringLiteral("function onPlaybackStateChanged() {"));
+  const auto selection_refresh_start = timeline_view_qml.indexOf(
+      QStringLiteral("function refreshTimelineSelectionState() {"));
+  const auto selection_refresh_end = timeline_view_qml.indexOf(
+      QStringLiteral("\n    Connections {"), selection_refresh_start);
+  const auto selection_refresh = selection_refresh_start < 0 || selection_refresh_end < 0
+      ? QString{}
+      : timeline_view_qml.mid(selection_refresh_start,
+                              selection_refresh_end - selection_refresh_start);
+  const auto playback_handler = handler_body(
+      QStringLiteral("function onPlaybackStateChanged() {"),
+      QStringLiteral("function onEditorStateChanged() {"));
+  const auto sequence_handler = handler_body(
+      QStringLiteral("function onSequenceChanged() {"),
+      QStringLiteral("function onTrackAutomationStateChanged("));
+  const auto timeline_handler = handler_body(
+      QStringLiteral("function onTimelineStateChanged() {"),
+      QStringLiteral("function onRecentTimelinesChanged() {"));
+  const auto selected_state_handler = handler_body(
+      QStringLiteral("function onSelectedClipStateChanged() {"),
+      QStringLiteral("function onSequenceVersionsChanged() {"));
+  const auto program_identity_helper_start = timeline_view_qml.indexOf(
+      QStringLiteral("function refreshProgramClipSnapshotIfIdentityChanged()"));
+  const auto program_identity_helper_end = timeline_view_qml.indexOf(
+      QStringLiteral("function refreshSequenceSettingsSnapshot()"),
+      program_identity_helper_start);
+  const auto program_identity_helper = program_identity_helper_start < 0 ||
+          program_identity_helper_end < 0
+      ? QString{}
+      : timeline_view_qml.mid(
+            program_identity_helper_start,
+            program_identity_helper_end - program_identity_helper_start);
+  const auto playback_avoids_full_maps =
+      playback_handler.contains(QStringLiteral("refreshProgramClipSnapshotIfIdentityChanged()")) &&
+      !playback_handler.contains(QStringLiteral("snapshotCurrentClip()")) &&
+      !playback_handler.contains(QStringLiteral("snapshotProgramClip()"));
+  const auto selected_state_refreshes_both_maps =
+      selected_state_handler.contains(QStringLiteral("snapshotCurrentClip()")) &&
+      selected_state_handler.contains(QStringLiteral("snapshotProgramClip()"));
+  if (!selection_handler.contains(QStringLiteral("TimelineSelectionRefresh.schedule(root)")) ||
+      selection_handler.contains(QStringLiteral("snapshotCurrentClip()")) ||
+      !selection_refresh.contains(QStringLiteral("snapshotCurrentClip()")) ||
+      !selection_refresh.contains(QStringLiteral("refreshProgramClipSnapshotIfIdentityChanged()")) ||
+      !playback_avoids_full_maps ||
+      playback_handler.contains(QStringLiteral("refreshSequenceTrackSnapshot")) ||
+      !program_identity_helper.contains(QStringLiteral("programClipId")) ||
+      !program_identity_helper.contains(QStringLiteral("expectedClipId === cachedClipId")) ||
+      !program_identity_helper.contains(QStringLiteral("snapshotProgramClip()")) ||
+      !program_identity_helper.contains(QStringLiteral("programClip = nextClip")) ||
+      !sequence_handler.contains(QStringLiteral("refreshSequenceSettingsSnapshot()")) ||
+      !sequence_handler.contains(QStringLiteral(
+          "TimelineSelectionRefresh.refreshSequenceTrackSnapshotForSequenceChange(root)")) ||
+      !timeline_handler.contains(QStringLiteral(
+          "TimelineSelectionRefresh.refreshSequenceTrackSnapshotForTimelineState(root)")) ||
+      sequence_handler.contains(QStringLiteral("snapshotCurrentClip()")) ||
+      sequence_handler.contains(QStringLiteral("snapshotProgramClip()")) ||
+      !timeline_handler.contains(QStringLiteral("refreshTimelineDocumentSnapshots()")) ||
+      !selected_state_refreshes_both_maps ||
+      selected_state_handler.contains(QStringLiteral("snapshotSequenceSettings()"))) {
+    return fail_workflow("TimelineView should defer selection publication through the coalescing gate, refresh full maps from the latest state, use the Program ID guard on scalar playback ticks, and keep sequence/settings refresh groups scoped");
+  }
+  return true;
+}
+
+#include "timeline_anchored_review_notes_workflow.inc"
+#include "timeline_keyframe_json_cache_checkpoint_workflow.inc"
+#include "timeline_frame_quad_workflow.inc"
+#include "timeline_gap_playback_notification_workflow.inc"
+
+bool run_timeline_sparse_title_filter_workflow() {
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Sparse title filter probe"));
+  const auto sparse =
+      photo_editor::desktop::TimelineHistoryTestAccess::sparseTitleFilterProbe(
+          controller, false);
+  const auto sparse_graph = sparse.value(QStringLiteral("filterGraph")).toString();
+  const auto roi_width = sparse.value(QStringLiteral("roiWidth")).toInt();
+  const auto roi_height = sparse.value(QStringLiteral("roiHeight")).toInt();
+  const auto sparse_crop = QStringLiteral("crop=%1:%2:").arg(roi_width).arg(roi_height);
+  if (!sparse.value(QStringLiteral("sparse")).toBool() ||
+      roi_width <= 0 || roi_width >= 1920 ||
+      roi_height <= 0 || roi_height >= 1080 ||
+      !sparse_graph.contains(sparse_crop) ||
+      !sparse_graph.contains(QStringLiteral(
+          "pad='iw+%1':'ih+%2':0:0:color=black@0:eval=frame,")
+                                 .arg(roi_width)
+                                 .arg(roi_height)) ||
+      sparse.value(QStringLiteral("overlayX")).toString().isEmpty() ||
+      sparse.value(QStringLiteral("overlayY")).toString().isEmpty()) {
+    std::cerr << "eligible title affine curves should select the production post-scale ROI filter graph"
+              << " (sparse=" << sparse.value(QStringLiteral("sparse")).toBool()
+              << ", roi=" << roi_width << 'x' << roi_height
+              << ", graph=" << sparse_graph.toStdString() << ")\n";
+    return false;
+  }
+  const auto expected_loop = QStringLiteral(
+      "loop=loop=14:size=1:start=0,settb=expr=1/30,setpts=N,");
+  if (sparse.value(QStringLiteral("finiteTitleFrameCount")).toInt() != 15 ||
+      !sparse_graph.contains(QStringLiteral("[0:v]") + expected_loop)) {
+    std::cerr << "bounded animated title sources should be looped once before their live geometry filters"
+              << " (count="
+              << sparse.value(QStringLiteral("finiteTitleFrameCount")).toInt()
+              << ", graph=" << sparse_graph.toStdString() << ")\n";
+    return false;
+  }
+
+  const auto static_sparse =
+      photo_editor::desktop::TimelineHistoryTestAccess::sparseTitleFilterProbe(
+          controller, false, true);
+  if (static_sparse.value(QStringLiteral("finiteTitleFrameCount")).toInt() != 15 ||
+      !static_sparse.value(QStringLiteral("filterGraph")).toString().contains(expected_loop)) {
+    std::cerr << "the static title source should use the same finite exact-clock loop path\n";
+    return false;
+  }
+
+  const auto fallback =
+      photo_editor::desktop::TimelineHistoryTestAccess::sparseTitleFilterProbe(
+          controller, true);
+  const auto fallback_graph =
+      fallback.value(QStringLiteral("filterGraph")).toString();
+  if (fallback.value(QStringLiteral("sparse")).toBool() ||
+      fallback.value(QStringLiteral("roiWidth")).toInt() > 0 ||
+      fallback.value(QStringLiteral("roiHeight")).toInt() > 0 ||
+      !fallback_graph.contains(QStringLiteral("crop=1920:1080:"))) {
+    std::cerr << "a title with an authored but disabled effect stack should retain the full-canvas fallback\n";
+    return false;
+  }
+
+  TimelineDocumentController input_controller;
+  const auto input_probe =
+      photo_editor::desktop::TimelineHistoryTestAccess::
+          boundedTitleInputArgumentsProbe(input_controller);
+  const auto input_arguments =
+      input_probe.value(QStringLiteral("arguments")).toStringList();
+  const auto input_graph =
+      input_probe.value(QStringLiteral("filterGraph")).toString();
+  if (!input_probe.value(QStringLiteral("error")).toString().isEmpty() ||
+      input_arguments.isEmpty() ||
+      input_arguments.contains(QStringLiteral("-loop")) ||
+      !input_graph.contains(QStringLiteral("[1:v]") + expected_loop)) {
+    std::cerr << "the bounded title exporter should use a single PNG input and finite graph loop"
+              << " (error=" << input_probe.value(QStringLiteral("error")).toString().toStdString()
+              << ", args=" << input_arguments.join(QLatin1Char(' ')).toStdString()
+              << ", graph=" << input_graph.toStdString() << ")\n";
+    return false;
+  }
+
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    std::cerr << "finite title loop parity requires ffmpeg\n";
+    return false;
+  }
+  QTemporaryDir workspace;
+  if (!workspace.isValid()) {
+    std::cerr << "finite title loop parity fixture could not create a temporary workspace\n";
+    return false;
+  }
+  QImage title_frame(QSize(1920, 1080), QImage::Format_RGBA8888);
+  title_frame.fill(Qt::transparent);
+  {
+    QPainter painter(&title_frame);
+    QLinearGradient gradient(QPointF(400.0, 300.0), QPointF(900.0, 600.0));
+    gradient.setColorAt(0.0, QColor(235, 35, 112, 240));
+    gradient.setColorAt(1.0, QColor(25, 180, 235, 160));
+    painter.fillRect(QRect(400, 300, 500, 300), gradient);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(245, 236, 170, 220));
+    painter.drawEllipse(QRectF(615.0, 374.0, 81.0, 57.0));
+  }
+  const auto title_path = QDir(workspace.path()).filePath(QStringLiteral("loop-title.png"));
+  if (!title_frame.save(title_path, "PNG")) {
+    std::cerr << "finite title loop parity fixture could not write its RGBA source\n";
+    return false;
+  }
+  const auto uncached_alpha_bounds =
+      photo_editor::desktop::timeline_motion::sparse_title_roi::
+          nonzero_alpha_bounds(title_frame);
+  const auto cached_alpha_support =
+      photo_editor::desktop::timeline_motion::sparse_title_roi::
+          png_alpha_support_for_path(title_path);
+  const auto repeated_alpha_support =
+      photo_editor::desktop::timeline_motion::sparse_title_roi::
+          png_alpha_support_for_path(title_path);
+  const auto cached_sparse =
+      photo_editor::desktop::TimelineHistoryTestAccess::sparseTitleFilterProbe(
+          controller, false, false, cached_alpha_support.bounds);
+  if (!cached_alpha_support.valid || !cached_alpha_support.decoded ||
+      !repeated_alpha_support.valid || !repeated_alpha_support.cache_hit ||
+      cached_alpha_support.bounds != uncached_alpha_bounds ||
+      cached_alpha_support.image_size != title_frame.size() ||
+      cached_sparse.value(QStringLiteral("filterGraph")).toString() != sparse_graph ||
+      cached_sparse.value(QStringLiteral("roiWidth")).toInt() != roi_width ||
+      cached_sparse.value(QStringLiteral("roiHeight")).toInt() != roi_height ||
+      cached_sparse.value(QStringLiteral("overlayX")).toString() !=
+          sparse.value(QStringLiteral("overlayX")).toString() ||
+      cached_sparse.value(QStringLiteral("overlayY")).toString() !=
+          sparse.value(QStringLiteral("overlayY")).toString()) {
+    std::cerr << "content-cached PNG bounds must select the identical production ROI graph\n";
+    return false;
+  }
+
+  auto animated_graph = sparse_graph;
+  const auto baseline_title_input_loop =
+      QStringLiteral("loop=loop=14:size=1:start=0,settb=expr=1/30,setpts=N,");
+  if (!animated_graph.startsWith(QStringLiteral("[0:v]") + baseline_title_input_loop)) {
+    std::cerr << "the finite source loop must remain immediately after its decoded title input\n";
+    return false;
+  }
+  animated_graph.remove(QStringLiteral("[0:v]") + baseline_title_input_loop);
+  animated_graph.prepend(QStringLiteral("[0:v]"));
+  const auto optimized_output_graph = QStringLiteral(
+      "%1;[1:v][v0]overlay=x='%2':y='%3':eval=frame:shortest=1:format=auto[out]")
+                                .arg(cached_sparse.value(QStringLiteral("filterGraph")).toString(),
+                                     cached_sparse.value(QStringLiteral("overlayX")).toString(),
+                                     cached_sparse.value(QStringLiteral("overlayY")).toString());
+  const auto original_output_graph = QStringLiteral(
+      "%1;[1:v][v0]overlay=x='%2':y='%3':eval=frame:shortest=1:format=auto[out]")
+                                .arg(animated_graph,
+                                     sparse.value(QStringLiteral("overlayX")).toString(),
+                                     sparse.value(QStringLiteral("overlayY")).toString());
+  const auto render_hashes = [&](bool finite_source_loop) {
+    QStringList arguments{
+        QStringLiteral("-hide_banner"), QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-filter_complex_threads"), QStringLiteral("1")};
+    if (finite_source_loop) {
+      arguments << QStringLiteral("-framerate") << QStringLiteral("30")
+                << QStringLiteral("-i") << title_path
+                << QStringLiteral("-filter_complex") << optimized_output_graph;
+    } else {
+      arguments << QStringLiteral("-loop") << QStringLiteral("1")
+                << QStringLiteral("-framerate") << QStringLiteral("30")
+                << QStringLiteral("-t") << QStringLiteral("0.5")
+                << QStringLiteral("-i") << title_path
+                << QStringLiteral("-filter_complex") << original_output_graph;
+    }
+    arguments << QStringLiteral("-f") << QStringLiteral("lavfi")
+              << QStringLiteral("-i")
+              << QStringLiteral("color=c=black:s=1920x1080:r=30:d=0.5")
+              << QStringLiteral("-map") << QStringLiteral("[out]")
+              << QStringLiteral("-frames:v") << QStringLiteral("15")
+              << QStringLiteral("-an") << QStringLiteral("-f")
+              << QStringLiteral("framemd5") << QStringLiteral("-");
+    QString error;
+    return process_stdout(ffmpeg, arguments, &error);
+  };
+  const auto optimized_frame_hashes = render_hashes(true);
+  const auto original_frame_hashes = render_hashes(false);
+  const auto count_frames = [](const QString& frame_hashes) {
+    auto count = 0;
+    for (const auto& line : frame_hashes.split(QLatin1Char('\n'))) {
+      if (!line.startsWith(QLatin1Char('#')) && line.contains(QLatin1Char(','))) {
+        ++count;
+      }
+    }
+    return count;
+  };
+  if (optimized_frame_hashes.isEmpty() ||
+      optimized_frame_hashes != original_frame_hashes ||
+      count_frames(optimized_frame_hashes) != 15) {
+    std::cerr << "the bounded source loop must preserve all 15 rendered RGBA frame hashes and PTS"
+              << " (optimized=" << count_frames(optimized_frame_hashes)
+              << ", original=" << count_frames(original_frame_hashes) << ")\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_review_excerpt_export_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+  if (ffmpeg.isEmpty() || ffprobe.isEmpty()) {
+    std::cerr << "review excerpt export requires ffmpeg and ffprobe\n";
+    return false;
+  }
+  const auto audio_path = QDir(workspace_path).filePath(QStringLiteral("excerpt-tone.wav"));
+  QString audio_error;
+  if (!run_process(ffmpeg,
+                   {QStringLiteral("-y"), QStringLiteral("-f"), QStringLiteral("lavfi"),
+                    QStringLiteral("-i"), QStringLiteral("sine=frequency=440:sample_rate=48000:duration=4"),
+                    QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"), audio_path},
+                   &audio_error)) {
+    std::cerr << "review excerpt audio fixture failed: " << audio_error.toStdString() << '\n';
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.setEditAccessPolicy([] { return true; });
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Review Excerpt Range Proof")},
+      {QStringLiteral("width"), 3840},
+      {QStringLiteral("height"), 2160},
+      {QStringLiteral("frameRate"), 30.0},
+      {QStringLiteral("audioSampleRate"), 48000},
+      {QStringLiteral("exportPreset"), QStringLiteral("youtube")},
+  });
+  const auto graphics = controller.createTimelineTrackForAutomation(
+      QStringLiteral("graphics"), QStringLiteral("Animated generated picture"));
+  const auto audio_track = controller.createTimelineTrackForAutomation(
+      QStringLiteral("audio"), QStringLiteral("Excerpt soundtrack"));
+  if (!graphics.value(QStringLiteral("ok")).toBool() ||
+      !audio_track.value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "review excerpt fixture could not create graphics/audio tracks\n";
+    return false;
+  }
+  const QVariantList stops{
+      QVariantMap{{QStringLiteral("position"), 0.0},
+                  {QStringLiteral("color"), QStringLiteral("#ff292c55")}},
+      QVariantMap{{QStringLiteral("position"), 1.0},
+                  {QStringLiteral("color"), QStringLiteral("#ffff7b32")}},
+  };
+  const auto generator = controller.createTimelineGeneratorForAutomation(
+      graphics.value(QStringLiteral("trackId")).toString(),
+      QStringLiteral("linear-gradient"), 0.0, 4.0,
+      {{QStringLiteral("angleDegrees"), 32.0},
+       {QStringLiteral("stops"), stops},
+       {QStringLiteral("opacity"), 0.15}});
+  const auto audio = controller.createTimelineClipForAutomation(
+      audio_track.value(QStringLiteral("trackId")).toString(),
+      QStringLiteral("asset:review-excerpt-tone"), audio_path,
+      QStringLiteral("Range soundtrack"), 4.0, 0.0, 4.0, 0.0);
+  if (!generator.value(QStringLiteral("ok")).toBool() ||
+      !audio.value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "review excerpt fixture could not create native generator/audio: generator="
+              << generator.value(QStringLiteral("error")).toString().toStdString()
+              << " audio=" << audio.value(QStringLiteral("error")).toString().toStdString() << '\n';
+    return false;
+  }
+  const auto generated_clip_id = generator.value(QStringLiteral("createdClipId")).toString();
+  auto generated_clip_index = -1;
+  const auto clip_rows = controller.clips();
+  for (auto index = 0; index < clip_rows.size(); ++index) {
+    if (clip_rows.at(index).toMap().value(QStringLiteral("clipId")).toString() ==
+        generated_clip_id) {
+      generated_clip_index = index;
+      break;
+    }
+  }
+  if (generated_clip_index < 0) {
+    std::cerr << "review excerpt fixture lost its generated clip selection identity\n";
+    return false;
+  }
+  controller.selectClip(generated_clip_index);
+  controller.seekSequenceSeconds(1.0);
+  if (!controller.toggleSelectedClipKeyframe(QStringLiteral("opacity"))) {
+    std::cerr << "review excerpt fixture could not keyframe generated content opacity\n";
+    return false;
+  }
+  controller.setSelectedClipOpacity(0.15);
+  controller.seekSequenceSeconds(3.0);
+  controller.setSelectedClipOpacity(0.95);
+  if (controller.sequenceWidth() != 3840 || controller.sequenceHeight() != 2160 ||
+      controller.totalDurationSecondsValue() < 3.99 ||
+      !wait_for_media_analysis(&controller)) {
+    std::cerr << "review excerpt fixture did not retain its 4K, four-second sequence\n";
+    return false;
+  }
+
+  // Stress the same native range route with dense clip boundaries and
+  // animated titles. Two title layers begin on every frame in the first
+  // 16-frame window, yielding more than 256 segment-local FFmpeg inputs before
+  // the bounded renderer bisects that window. Each title has dense affine and
+  // opacity curves, exercising sparse title placement on the global clock.
+  constexpr int dense_title_count = 32;
+  constexpr int dense_title_key_count = 16;
+  constexpr double dense_title_start_seconds = 1.0;
+  constexpr double dense_title_frame_rate = 30.0;
+  QVariantList dense_scale_keyframes;
+  QVariantList dense_offset_x_keyframes;
+  QVariantList dense_offset_y_keyframes;
+  QVariantList dense_opacity_keyframes;
+  dense_scale_keyframes.reserve(dense_title_key_count);
+  dense_offset_x_keyframes.reserve(dense_title_key_count);
+  dense_offset_y_keyframes.reserve(dense_title_key_count);
+  dense_opacity_keyframes.reserve(dense_title_key_count);
+  for (auto key_index = 0; key_index < dense_title_key_count; ++key_index) {
+    const auto progress = static_cast<double>(key_index) /
+                          static_cast<double>(dense_title_key_count - 1);
+    const auto local_seconds =
+        static_cast<double>(key_index) / dense_title_frame_rate;
+    dense_scale_keyframes.push_back(QVariantMap{
+        {QStringLiteral("localSeconds"), local_seconds},
+        {QStringLiteral("value"), 0.65 + 0.45 * progress}});
+    dense_offset_x_keyframes.push_back(QVariantMap{
+        {QStringLiteral("localSeconds"), local_seconds},
+        {QStringLiteral("value"), -0.30 + 0.60 * progress}});
+    dense_offset_y_keyframes.push_back(QVariantMap{
+        {QStringLiteral("localSeconds"), local_seconds},
+        {QStringLiteral("value"), 0.24 - 0.48 * progress}});
+    dense_opacity_keyframes.push_back(QVariantMap{
+        {QStringLiteral("localSeconds"), local_seconds},
+        {QStringLiteral("value"), 0.25 + 0.70 * progress}});
+  }
+  for (auto title_index = 0; title_index < dense_title_count; ++title_index) {
+    const auto track = controller.createTimelineTrackForAutomation(
+        QStringLiteral("video"),
+        QStringLiteral("Dense title layer %1").arg(title_index));
+    const auto track_id = track.value(QStringLiteral("trackId")).toString();
+    if (!track.value(QStringLiteral("ok")).toBool() || track_id.isEmpty()) {
+      std::cerr << "dense excerpt fixture could not create its title track "
+                << title_index << '\n';
+      return false;
+    }
+    const auto sequence_start = dense_title_start_seconds +
+        static_cast<double>(title_index / 2) / dense_title_frame_rate;
+    const auto title = controller.createTimelineTitleForAutomation(
+        track_id, QStringLiteral("basic"), sequence_start, 4.0,
+        {{QStringLiteral("text"), QStringLiteral("LAYER %1").arg(title_index + 1)},
+         {QStringLiteral("fontFamily"), QStringLiteral("Sans Serif")},
+         {QStringLiteral("fontSize"), 28.0},
+         {QStringLiteral("color"), QStringLiteral("#ffffffff")},
+         {QStringLiteral("backgroundColor"), QStringLiteral("#00000000")},
+         {QStringLiteral("positionX"), 0.5},
+         {QStringLiteral("positionY"),
+          0.08 + 0.075 * static_cast<double>(title_index % 10)}});
+    const auto title_id = title.value(QStringLiteral("createdClipId")).toString();
+    if (!title.value(QStringLiteral("ok")).toBool() || title_id.isEmpty()) {
+      std::cerr << "dense excerpt fixture could not create title " << title_index << ": "
+                << title.value(QStringLiteral("error")).toString().toStdString() << '\n';
+      return false;
+    }
+    const auto animation = controller.setTimelineClipAnimationForAutomation(
+        title_id,
+        QVariantList{
+            QVariantMap{{QStringLiteral("parameter"), QStringLiteral("frameScale")},
+                        {QStringLiteral("keyframes"), dense_scale_keyframes}},
+            QVariantMap{{QStringLiteral("parameter"), QStringLiteral("frameOffsetX")},
+                        {QStringLiteral("keyframes"), dense_offset_x_keyframes}},
+            QVariantMap{{QStringLiteral("parameter"), QStringLiteral("frameOffsetY")},
+                        {QStringLiteral("keyframes"), dense_offset_y_keyframes}},
+            QVariantMap{{QStringLiteral("parameter"), QStringLiteral("opacity")},
+                        {QStringLiteral("keyframes"), dense_opacity_keyframes}},
+        });
+    if (!animation.value(QStringLiteral("ok")).toBool()) {
+      std::cerr << "dense excerpt fixture could not set title animation "
+                << title_index << ": "
+                << animation.value(QStringLiteral("error")).toString().toStdString() << '\n';
+      return false;
+    }
+  }
+
+  constexpr qint64 start_frame = 30;
+  constexpr qint64 end_frame_exclusive = 90;
+  const auto canonical_workspace = QFileInfo(workspace_path).canonicalFilePath();
+  const auto output_path =
+      QDir(canonical_workspace).filePath(QStringLiteral("review-excerpt.mp4"));
+  QString render_error;
+  if (!controller.renderTimelineReviewExcerpt(
+          output_path, start_frame, end_frame_exclusive, &render_error)) {
+    std::cerr << "native review excerpt failed: " << render_error.toStdString() << '\n';
+    return false;
+  }
+  QString probe_error;
+  const auto probe_text = process_stdout(
+      ffprobe,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-count_frames"), QStringLiteral("-show_format"),
+       QStringLiteral("-show_streams"), QStringLiteral("-of"), QStringLiteral("json"),
+       output_path},
+      &probe_error);
+  QJsonParseError probe_parse_error;
+  const auto probe = QJsonDocument::fromJson(probe_text.toUtf8(), &probe_parse_error);
+  if (!probe_error.isEmpty() || probe_parse_error.error != QJsonParseError::NoError ||
+      !probe.isObject()) {
+    std::cerr << "native review excerpt could not be probed: " << probe_error.toStdString() << '\n';
+    return false;
+  }
+  auto video = QJsonObject{};
+  auto audio_stream = QJsonObject{};
+  for (const auto& value : probe.object().value(QStringLiteral("streams")).toArray()) {
+    const auto stream = value.toObject();
+    if (stream.value(QStringLiteral("codec_type")).toString() == QStringLiteral("video")) video = stream;
+    if (stream.value(QStringLiteral("codec_type")).toString() == QStringLiteral("audio")) audio_stream = stream;
+  }
+  bool frame_count_ok = false;
+  const auto decoded_frames = video.value(QStringLiteral("nb_read_frames")).toString()
+                                 .toLongLong(&frame_count_ok);
+  bool audio_start_ok = false;
+  bool audio_duration_ok = false;
+  const auto audio_start_seconds = audio_stream.value(QStringLiteral("start_time"))
+                                      .toString().toDouble(&audio_start_ok);
+  const auto audio_duration_seconds = audio_stream.value(QStringLiteral("duration"))
+                                          .toString().toDouble(&audio_duration_ok);
+  if (video.value(QStringLiteral("codec_name")).toString() != QStringLiteral("h264") ||
+      video.value(QStringLiteral("width")).toInt() != 3840 ||
+      video.value(QStringLiteral("height")).toInt() != 2160 ||
+      !frame_count_ok || decoded_frames != end_frame_exclusive - start_frame ||
+      audio_stream.value(QStringLiteral("codec_name")).toString() != QStringLiteral("aac") ||
+      audio_stream.value(QStringLiteral("channels")).toInt() != 2 ||
+      !audio_start_ok || qAbs(audio_start_seconds) > 0.001 ||
+      !audio_duration_ok || audio_duration_seconds < 2.0 - 0.001 ||
+      audio_duration_seconds > 2.1) {
+    std::cerr << "review excerpt metadata must be full-size H.264/AAC with exact 60 global-range frames and a zero-based 2s audio range\n";
+    return false;
+  }
+  const auto audio_level = detected_channel_mean_volume_db(ffmpeg, output_path, 0, 0.0, 1.5);
+  if (!std::isfinite(audio_level) || audio_level < -35.0) {
+    std::cerr << "review excerpt should retain non-silent mixed audio; measured "
+              << audio_level << " dB\n";
+    return false;
+  }
+  const auto sample_frame = [&ffmpeg, &output_path](const QString& seek) {
+    return process_bytes(
+        ffmpeg,
+        {QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-ss"), seek,
+         QStringLiteral("-i"), output_path, QStringLiteral("-vf"),
+         QStringLiteral("select=eq(n\\,0),scale=16:16,format=rgb24"),
+         QStringLiteral("-frames:v"), QStringLiteral("1"),
+         QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+  };
+  const auto first_frame = sample_frame(QStringLiteral("0.000"));
+  const auto last_frame = sample_frame(QStringLiteral("1.950"));
+  if (first_frame.isEmpty() || last_frame.isEmpty() || first_frame == last_frame) {
+    std::cerr << "global-time generated opacity animation should be visible across the excerpt samples\n";
+    return false;
+  }
+  const auto continuity_bytes = process_bytes(
+      ffmpeg,
+      {QStringLiteral("-v"), QStringLiteral("error"),
+       QStringLiteral("-i"), output_path,
+       QStringLiteral("-vf"),
+       QStringLiteral("scale=64:36:flags=neighbor,format=rgb24"),
+       QStringLiteral("-fps_mode"), QStringLiteral("passthrough"),
+       QStringLiteral("-f"), QStringLiteral("rawvideo"),
+       QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+       QStringLiteral("pipe:1")});
+  constexpr qsizetype continuity_frame_bytes = 64 * 36 * 3;
+  if (continuity_bytes.size() != decoded_frames * continuity_frame_bytes) {
+    std::cerr << "the 4K review excerpt should decode all 60 frames for seam inspection; got "
+              << continuity_bytes.size() << " RGB bytes\n";
+    return false;
+  }
+  auto minimum_adjacent_mean_delta = std::numeric_limits<double>::infinity();
+  auto minimum_frame_mean = std::numeric_limits<double>::infinity();
+  for (qint64 frame_index = 0; frame_index < decoded_frames; ++frame_index) {
+    const auto frame_offset = static_cast<qsizetype>(frame_index) * continuity_frame_bytes;
+    quint64 frame_sum = 0;
+    for (qsizetype byte_index = 0; byte_index < continuity_frame_bytes; ++byte_index) {
+      frame_sum += static_cast<quint64>(static_cast<unsigned char>(
+          continuity_bytes.at(frame_offset + byte_index)));
+    }
+    minimum_frame_mean = qMin(
+        minimum_frame_mean,
+        static_cast<double>(frame_sum) /
+            static_cast<double>(continuity_frame_bytes));
+    if (frame_index == 0) continue;
+    const auto previous_offset = frame_offset - continuity_frame_bytes;
+    quint64 absolute_delta = 0;
+    for (qsizetype byte_index = 0; byte_index < continuity_frame_bytes; ++byte_index) {
+      absolute_delta += static_cast<quint64>(std::abs(
+          static_cast<int>(static_cast<unsigned char>(
+              continuity_bytes.at(previous_offset + byte_index))) -
+          static_cast<int>(static_cast<unsigned char>(
+              continuity_bytes.at(frame_offset + byte_index)))));
+    }
+    const auto mean_delta = static_cast<double>(absolute_delta) /
+                            static_cast<double>(continuity_frame_bytes);
+    minimum_adjacent_mean_delta = qMin(minimum_adjacent_mean_delta, mean_delta);
+  }
+  if (minimum_adjacent_mean_delta < 0.25 || minimum_frame_mean < 5.0) {
+    std::cerr << "the dense range excerpt should have distinct, visible consecutive frames across all chunk seams; minimumAdjacentRgbDelta="
+              << minimum_adjacent_mean_delta << " minimumFrameMean="
+              << minimum_frame_mean << '\n';
+    return false;
+  }
+  const auto proof_directory = qEnvironmentVariable(
+      "LOOKSY_REVIEW_EXCERPT_PROOF_DIR");
+  if (!proof_directory.isEmpty()) {
+    if (!QDir().mkpath(proof_directory)) {
+      std::cerr << "review excerpt proof directory could not be created\n";
+      return false;
+    }
+    const auto proof_basename = QStringLiteral("review-excerpt-4k-%1")
+                                    .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const auto proof_video = QDir(proof_directory).filePath(
+        proof_basename + QStringLiteral(".mp4"));
+    QFile rendered_file(output_path);
+    if (!rendered_file.open(QIODevice::ReadOnly)) {
+      std::cerr << "review excerpt proof render could not be reopened\n";
+      return false;
+    }
+    QSaveFile retained_video(proof_video);
+    if (!retained_video.open(QIODevice::WriteOnly) ||
+        retained_video.write(rendered_file.readAll()) != QFileInfo(output_path).size() ||
+        !retained_video.commit()) {
+      std::cerr << "review excerpt proof video could not be retained\n";
+      return false;
+    }
+    QSaveFile retained_probe(QDir(proof_directory).filePath(
+        proof_basename + QStringLiteral("-ffprobe.json")));
+    if (!retained_probe.open(QIODevice::WriteOnly) ||
+        retained_probe.write(probe_text.toUtf8()) != probe_text.toUtf8().size() ||
+        !retained_probe.commit()) {
+      std::cerr << "review excerpt ffprobe evidence could not be retained\n";
+      return false;
+    }
+    const QJsonObject proof_summary{
+        {QStringLiteral("result"), QStringLiteral("passed")},
+        {QStringLiteral("startFrame"), start_frame},
+        {QStringLiteral("endFrameExclusive"), end_frame_exclusive},
+        {QStringLiteral("frameRate"), 30.0},
+        {QStringLiteral("decodedVideoFrames"), decoded_frames},
+        {QStringLiteral("videoCodec"), video.value(QStringLiteral("codec_name"))},
+        {QStringLiteral("audioCodec"), audio_stream.value(QStringLiteral("codec_name"))},
+        {QStringLiteral("width"), video.value(QStringLiteral("width"))},
+        {QStringLiteral("height"), video.value(QStringLiteral("height"))},
+        {QStringLiteral("audioChannels"), audio_stream.value(QStringLiteral("channels"))},
+        {QStringLiteral("audioMeanVolumeDb"), audio_level},
+        {QStringLiteral("animatedGeneratedContentSamplesDiffer"), true},
+        {QStringLiteral("allAdjacentFramesDistinct"), true},
+        {QStringLiteral("minimumAdjacentMeanRgbDelta"), minimum_adjacent_mean_delta},
+        {QStringLiteral("minimumFrameMeanRgb"), minimum_frame_mean},
+        {QStringLiteral("output"), QFileInfo(proof_video).fileName()},
+    };
+    QSaveFile retained_summary(QDir(proof_directory).filePath(
+        proof_basename + QStringLiteral("-verification.json")));
+    const auto summary_bytes = QJsonDocument(proof_summary).toJson(QJsonDocument::Indented);
+    if (!retained_summary.open(QIODevice::WriteOnly) ||
+        retained_summary.write(summary_bytes) != summary_bytes.size() ||
+        !retained_summary.commit()) {
+      std::cerr << "review excerpt verification summary could not be retained\n";
+      return false;
+    }
+    std::cout << "REVIEW_EXCERPT_PROOF " << proof_video.toStdString() << '\n';
+  }
+  return true;
+}
+
+bool run_timeline_presentation_url_projection_workflow(
+    const QString& workspace_path) {
+  const auto fail_workflow = [](const char* message) {
+    std::cerr << message << '\n';
+    return false;
+  };
+  const auto poster_path = QDir(workspace_path).filePath(
+      QStringLiteral("absolute poster path.png"));
+  QImage poster(8, 8, QImage::Format_RGBA8888);
+  poster.fill(QColor(24, 130, 220));
+  if (!poster.save(poster_path)) {
+    return fail_workflow("the raw poster source fixture should be written");
+  }
+
+  const auto expected_url = QUrl::fromLocalFile(poster_path).toString();
+  if (photo_editor::desktop::timeline_presentation_source_url(poster_path) !=
+      expected_url) {
+    return fail_workflow("a raw absolute poster path should project as a local file URL");
+  }
+  const QStringList valid_urls{
+      QStringLiteral("image://timeline-source/asset/123"),
+      QStringLiteral("file:///tmp/poster%20with%20spaces.png"),
+      QStringLiteral("qrc:/media/poster.png"),
+      QStringLiteral("poster://timeline/123"),
+  };
+  for (const auto& url : valid_urls) {
+    if (photo_editor::desktop::timeline_presentation_source_url(url) != url) {
+      return fail_workflow("an already-schemed image source should pass through unchanged");
+    }
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Presentation URL Projection"));
+  controller.addClipFromGallery(
+      QStringLiteral("photo:presentation-url-projection"), poster_path,
+      QStringLiteral("Raw Poster Source"), 1.0, poster_path);
+  controller.selectClip(0);
+  const auto authored_hash = controller.deterministicDocumentHash();
+  const auto expected_clip = controller.currentClip()
+                                 .value(QStringLiteral("clipId"))
+                                 .toString();
+  const auto full_clip = controller.timelineClipDetails(0);
+  const auto program_clip = controller.programClip();
+  auto compact_poster_source = QString{};
+  for (const auto& track_value : controller.sequenceTracks()) {
+    const auto clips = track_value.toMap().value(QStringLiteral("clips")).toList();
+    for (const auto& clip_value : clips) {
+      const auto clip = clip_value.toMap();
+      if (clip.value(QStringLiteral("clipId")).toString() == expected_clip) {
+        compact_poster_source =
+            clip.value(QStringLiteral("posterSource")).toString();
+      }
+    }
+  }
+  const auto projected_sources = QStringList{
+      controller.currentClip().value(QStringLiteral("posterSource")).toString(),
+      full_clip.value(QStringLiteral("posterSource")).toString(),
+      program_clip.value(QStringLiteral("posterSource")).toString(),
+      compact_poster_source,
+  };
+  for (const auto& source : projected_sources) {
+    if (source != expected_url || QUrl(source).toLocalFile() != poster_path) {
+      return fail_workflow("full, Program, and compact clip projections should expose the poster as a local file URL");
+    }
+  }
+  if (controller.deterministicDocumentHash() != authored_hash) {
+    return fail_workflow("normalizing presentation URLs must not mutate native clip metadata");
+  }
+  if (!controller.saveTimeline()) {
+    return fail_workflow("the raw poster source project should save for serialization verification");
+  }
+  QFile saved_document(controller.savedDocumentPath());
+  if (!saved_document.open(QIODevice::ReadOnly)) {
+    return fail_workflow("the presentation URL project snapshot should be readable");
+  }
+  const auto snapshot = QJsonDocument::fromJson(saved_document.readAll()).object();
+  const auto serialized_clips = snapshot.value(QStringLiteral("clips")).toArray();
+  if (serialized_clips.isEmpty() ||
+      serialized_clips.first().toObject()
+              .value(QStringLiteral("posterSource")).toString() != poster_path) {
+    return fail_workflow("native serialization should retain the authored raw poster path unchanged");
+  }
+  return true;
+}
+
+bool run_empty_preview_cache_counts_workflow(const QString& workspace_path) {
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Empty preview cache counts"));
+  const auto source_path = QDir(workspace_path).filePath(QStringLiteral("cache-counts.png"));
+  QImage image(24, 18, QImage::Format_RGBA8888);
+  image.fill(Qt::blue);
+  if (!image.save(source_path, "PNG")) return false;
+  controller.addClipFromGallery(
+      QStringLiteral("asset:cache-counts"), source_path,
+      QStringLiteral("Eight seconds"), 8.0, QString{});
+  // The first analysis learns persisted dimensions; subsequent identical
+  // cached facts are the no-change case under test.
+  photo_editor::desktop::TimelineHistoryTestAccess::replayCachedImageMetadata(
+      controller, source_path, QSize(24, 18), false);
+  if (!controller.saveTimeline(false)) return false;
+  const auto saved_hash = controller.deterministicDocumentHash();
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::finishRuntimeHydrationPublication(controller) ||
+      controller.dirty() || controller.deterministicDocumentHash() != saved_hash) {
+    std::cerr << "net-identical hydration must leave a canonical Library document clean\n";
+    return false;
+  }
+  if (photo_editor::desktop::TimelineHistoryTestAccess::updateUneditedSourceMonitor(controller) ||
+      controller.dirty() || controller.deterministicDocumentHash() != saved_hash) {
+    std::cerr << "Source Monitor analysis must not dirty the separate saved Timeline\n";
+    return false;
+  }
+  for (const auto bulk : {false, true}) {
+    if (photo_editor::desktop::TimelineHistoryTestAccess::replayCachedImageMetadata(
+            controller, source_path, QSize(24, 18), bulk) ||
+        controller.dirty() || controller.deterministicDocumentHash() != saved_hash) {
+      std::cerr << "cached metadata replay must leave an unchanged saved project clean\n";
+      return false;
+    }
+  }
+  for (int index = 0; index < 100; ++index) {
+    if (controller.renderCacheRangeCount() != 2 ||
+        controller.renderCacheReadyRangeCount() != 0 ||
+        !controller.renderCachePlaybackSourceUrl().isEmpty() ||
+        controller.renderCachePlaybackStartSeconds() != 0.0 ||
+        !photo_editor::desktop::TimelineHistoryTestAccess::renderCacheTasksDirty(controller)) {
+      std::cerr << "empty preview counts must not build range signatures\n";
+      return false;
+    }
+  }
+  (void)controller.playbackPrefetchCandidates(0.0, 1.0, -1.0, -1.0, -1.0, 4);
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::renderCacheTasksDirty(controller)) {
+    std::cerr << "zero-cache playback prefetch must not build range signatures\n";
+    return false;
+  }
+  // An unrelated project's files must not trigger this project's hashing.
+  const auto cache_root = QDir(AppBootstrap::cacheLocation())
+                              .filePath(QStringLiteral("timeline-render-cache"));
+  QDir().mkpath(cache_root);
+  QFile unrelated(QDir(cache_root).filePath(QStringLiteral("another-project-stale.mp4")));
+  if (!unrelated.open(QIODevice::WriteOnly) || unrelated.write("stale") != 5) return false;
+  unrelated.close();
+  if (controller.renderCacheReadyRangeCount() != 0 ||
+      !photo_editor::desktop::TimelineHistoryTestAccess::renderCacheTasksDirty(controller)) return false;
+  // Explicit generation/inspection still constructs the exact signed tasks.
+  const auto ranges = controller.renderCacheRanges();
+  const auto counts_valid = ranges.size() == 2 &&
+      !photo_editor::desktop::TimelineHistoryTestAccess::renderCacheTasksDirty(controller) &&
+      ranges.first().toMap().value(QStringLiteral("signature")).toString().size() == 64 &&
+      controller.renderCacheReadyRangeCount() == 0;
+  if (!counts_valid) return false;
+  const auto signature = ranges.first().toMap().value(QStringLiteral("signature")).toString();
+  const auto cached_path = QDir(cache_root).filePath(
+      controller.agentTaskDocumentId().mid(9) + QLatin1Char('-') + signature + QStringLiteral(".mp4"));
+  QFile cached(cached_path);
+  if (!cached.open(QIODevice::WriteOnly) || cached.write("fixture") != 7) return false;
+  cached.close();
+  if (controller.renderCacheReadyRangeCount() != 1 ||
+      controller.renderCachePlaybackSourceUrl() != QUrl::fromLocalFile(cached_path).toString()) return false;
+  controller.setSelectedFrameScale(1.1);
+  if (controller.renderCacheReadyRangeCount() != 0 ||
+      !controller.renderCachePlaybackSourceUrl().isEmpty()) {
+    std::cerr << "an existing stale cache must still fail the exact range signature check\n";
+    return false;
+  }
+  controller.setSelectedFrameScale(1.0);
+  if (!controller.saveTimeline(false) || controller.dirty() ||
+      controller.deterministicDocumentHash() != saved_hash) return false;
+  photo_editor::desktop::TimelineHistoryTestAccess::replayCachedImageMetadata(
+      controller, source_path, QSize(48, 36), false);
+  return photo_editor::desktop::TimelineHistoryTestAccess::finishRuntimeHydrationPublication(controller) &&
+      controller.dirty() &&
+      controller.deterministicDocumentHash() != saved_hash;
+}
+
 int main(int argc, char** argv) {
   qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
   QTemporaryDir workspace;
@@ -2405,9 +10543,219 @@ int main(int argc, char** argv) {
 
   QApplication app(argc, argv);
   QStandardPaths::setTestModeEnabled(true);
+  const auto preview_counts_probe_index = QCoreApplication::arguments().indexOf(
+      QStringLiteral("--timeline-preview-counts-probe"));
+  if (preview_counts_probe_index >= 0) {
+    const auto arguments = QCoreApplication::arguments();
+    if (preview_counts_probe_index + 1 >= arguments.size()) return EXIT_FAILURE;
+    TimelineDocumentController controller;
+    if (!controller.loadTimeline(arguments.at(preview_counts_probe_index + 1))) return EXIT_FAILURE;
+    QElapsedTimer timer;
+    timer.start();
+    const auto actual = controller.renderCacheRangeCount();
+    const auto ready = controller.renderCacheReadyRangeCount();
+    const auto fast_ns = timer.nsecsElapsed();
+    timer.restart();
+    const auto legacy = photo_editor::desktop::TimelineHistoryTestAccess::
+        materializeRenderCacheTaskCount(controller);
+    const auto legacy_ns = timer.nsecsElapsed();
+    const QJsonObject result{{QStringLiteral("rangeCount"), actual},
+                             {QStringLiteral("legacyRangeCount"), legacy},
+                             {QStringLiteral("readyCount"), ready},
+                             {QStringLiteral("fastNanoseconds"), fast_ns},
+                             {QStringLiteral("legacyNanoseconds"), legacy_ns},
+                             {QStringLiteral("durationSeconds"), controller.totalDurationSecondsValue()}};
+    std::cout << QJsonDocument(result).toJson(QJsonDocument::Compact).constData() << '\n';
+    return actual == legacy && ready == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--timeline-empty-preview-cache-counts"))) {
+    return run_empty_preview_cache_counts_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--copy-project-probe"))) {
+    return run_native_copy_graph_probe(QCoreApplication::arguments());
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-keyframe-json-cache-checkpoint"))) {
+    return run_timeline_keyframe_json_cache_checkpoint_probe(
+               QCoreApplication::arguments())
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-display-label-roundtrip"))) {
+    return run_timeline_display_label_roundtrip_workflow() ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-source-integrity-cancel-future"))) {
+    return run_timeline_source_integrity_cancel_future_workflow(workspace.path())
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-recovered-source-integrity-release"))) {
+    return run_timeline_recovered_source_integrity_release_workflow(workspace.path())
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-project-health-integrity-domains"))) {
+    return run_timeline_project_health_integrity_domains_workflow(workspace.path())
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-anchored-review-notes-workflow"))) {
+    return run_timeline_anchored_review_notes_workflow(workspace.path())
+               ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-gap-playback-notification-workflow"))) {
+    return run_timeline_gap_playback_notification_workflow(workspace.path())
+               ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-presentation-url-projection"))) {
+    return run_timeline_presentation_url_projection_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-sequence-track-snapshot-workflow"))) {
+    return run_timeline_sequence_track_snapshot_workflow()
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-selection-refresh-coalescing"))) {
+    return run_timeline_selection_refresh_coalescing_workflow()
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-used-media-snapshot-workflow"))) {
+    return run_timeline_used_media_snapshot_workflow()
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-owned-clip-map-snapshot-metacall-workflow"))) {
+    return run_timeline_owned_clip_map_snapshot_metacall_workflow()
+        ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--authored-project"))) {
+    return run_authored_project_render_probe(QCoreApplication::arguments(), workspace.path())
+               ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-authored-range-probe-test"))) {
+    return run_authored_project_range_probe_fixture_test(workspace.path())
+               ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-background-intent-probe"))) {
+    return run_timeline_background_intent_probe(QCoreApplication::arguments())
+               ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--timeline-generated-source-workflow")))
+    return run_timeline_generated_source_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-native-generator-frame-png-contract"))) {
+    return run_native_generator_frame_png_contract(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--timeline-audio-delivery-workflow")))
+    return run_timeline_audio_delivery_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-bounded-h264-export-workflow"))) {
+    return run_timeline_bounded_h264_export_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-sparse-title-filter"))) {
+    return run_timeline_sparse_title_filter_workflow()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-review-excerpt-export-workflow"))) {
+    return run_timeline_review_excerpt_export_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-opacity-window-pruning"))) {
+    return run_timeline_opacity_window_pruning_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-duration-cache-workflow"))) {
+    return run_timeline_duration_cache_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-graphics-track-reorder-workflow"))) {
+    return run_timeline_graphics_track_reorder_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-graphics-track-compaction-workflow"))) {
+    return run_timeline_graphics_track_compaction_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-mask-cache-pixel-workflow"))) {
+    return run_timeline_mask_cache_pixel_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-mask-frame-cache-unit"))) {
+    return run_timeline_mask_frame_cache_pixel_test()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-spatial-source-grade-workflow"))) {
+    return run_timeline_spatial_source_grade_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-video-delivery-fidelity"))) {
+    return run_timeline_video_delivery_fidelity_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-delivery-package-reopen-workflow"))) {
+    return run_timeline_delivery_reopen_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-publish-revision-workflow"))) {
+    const auto passed = run_timeline_publish_revision_workflow(workspace.path());
+    if (!passed) {
+      workspace.setAutoRemove(false);
+      std::cerr << "timeline_publish_revision_artifacts="
+                << workspace.path().toStdString() << '\n';
+    }
+    return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-otio-import-reopen-workflow"))) {
+    return run_timeline_otio_import_reopen_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
   if (QCoreApplication::arguments().contains(
           QStringLiteral("--timeline-media-queue-terminal-paths"))) {
     return run_timeline_media_queue_terminal_paths(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-cache-pressure-boundaries"))) {
+    return run_timeline_cache_pressure_boundaries()
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
   }
@@ -2453,6 +10801,129 @@ int main(int argc, char** argv) {
   if (QCoreApplication::arguments().contains(
           QStringLiteral("--timeline-title-motion-render-workflow"))) {
     return run_timeline_title_motion_render_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-title-export-layout-workflow"))) {
+    return run_timeline_title_export_layout_workflow()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-title-preview-export-geometry-probe"))) {
+    return run_timeline_title_preview_export_geometry_probe()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-animated-zoom-rotation-export-workflow"))) {
+    return run_timeline_animated_zoom_rotation_export_workflow()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-title-font-precision-workflow"))) {
+    return run_timeline_title_preview_export_geometry_probe() &&
+                   run_timeline_title_font_precision_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-sequence-mask-workflow"))) {
+    return run_timeline_sequence_mask_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-clip-frame-base-animation-workflow"))) {
+    return run_timeline_clip_frame_base_animation_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-animated-xy-perspective-export-workflow"))) {
+    return run_timeline_animated_xy_perspective_export_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-geometry-floor-workflow"))) {
+    return run_timeline_geometry_floor_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-frame-quad-workflow"))) {
+    return run_timeline_frame_quad_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-frame-shadow-render-workflow"))) {
+    return run_timeline_frame_shadow_render_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-task-owned-compound-workflow"))) {
+#if !defined(Q_OS_MACOS)
+    std::cerr << "task-owned compound workflow skipped: durable native producer identity requires macOS\n";
+    return 77;
+#else
+    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty() ||
+        QStandardPaths::findExecutable(QStringLiteral("ffprobe")).isEmpty()) {
+      std::cerr << "task-owned compound workflow skipped: ffmpeg/ffprobe unavailable\n";
+      return 77;
+    }
+    return run_timeline_task_owned_compound_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+#endif
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-task-owned-compound-command-workflow"))) {
+#if !defined(Q_OS_MACOS)
+    std::cerr << "task-owned compound command workflow skipped: durable native producer identity requires macOS\n";
+    return 77;
+#else
+    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty() ||
+        QStandardPaths::findExecutable(QStringLiteral("ffprobe")).isEmpty()) {
+      std::cerr << "task-owned compound command workflow skipped: ffmpeg/ffprobe unavailable\n";
+      return 77;
+    }
+    return run_timeline_task_owned_compound_command_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+#endif
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-matte-blend-render-workflow"))) {
+    return run_timeline_matte_blend_render_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-dense-keyframe-render-workflow"))) {
+    return run_timeline_dense_keyframe_render_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-agent-mutation-batch-workflow"))) {
+    return run_timeline_agent_mutation_batch_workflow()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-export-snapshot-readiness-workflow"))) {
+    return run_timeline_export_snapshot_readiness_workflow()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-source-crop-workflow"))) {
+    return run_timeline_source_crop_workflow(workspace.path())
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
   }
@@ -2621,10 +11092,26 @@ int main(int argc, char** argv) {
       version_controller.programScopeData().value(QStringLiteral("revision")).toInt() != 13) {
     return fail("Program scope analysis should publish the latest queued revision and reject stale completion");
   }
+  version_controller.requestProgramScopeImageAnalysis(comparison_current, 14);
+  version_controller.requestProgramScopeImageAnalysis(comparison_reference, 15);
+  if (!wait_for_program_scope(&version_controller, 15) ||
+      version_controller.programScopeData().value(QStringLiteral("histogramRed")) !=
+          scope_data.value(QStringLiteral("histogramRed")) ||
+      version_controller.programScopeData().value(QStringLiteral("histogramLuma")) !=
+          scope_data.value(QStringLiteral("histogramLuma")) ||
+      version_controller.programScopeData().value(QStringLiteral("densityLuma")) !=
+          scope_data.value(QStringLiteral("densityLuma"))) {
+    return fail("In-memory Program grabs should match file-backed scopes and preserve latest-frame queuing without PNG encoding");
+  }
   version_controller.clearProgramScopeAnalysis();
   if (!version_controller.programScopeData().isEmpty() ||
       version_controller.programScopePublishedRevision() != -1) {
     return fail("closing Program scopes should release their derived analysis state");
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-program-scope-workflow"))) {
+    std::cout << "Program scope file/image parity, latest-frame queuing and cleanup passed\n";
+    return EXIT_SUCCESS;
   }
   const auto named_version = initial_versions.first().toMap();
   const auto named_version_id = named_version.value(QStringLiteral("versionId")).toString();
@@ -3697,6 +12184,9 @@ int main(int argc, char** argv) {
 
   TimelineDocumentController source_controller;
   source_controller.createTimeline(QStringLiteral("Source Timeline"));
+  // This fixture checks ffprobe completion, not the host's memory-pressure
+  // policy; keep its dispatch deterministic on high-memory machines.
+  source_controller.setCachePressureLevelForTesting(QStringLiteral("normal"));
   source_controller.loadSourceClipFromGallery(
       QStringLiteral("video:src"),
       first_video,
@@ -3704,6 +12194,13 @@ int main(int argc, char** argv) {
       5.0,
       QStringLiteral("poster://src"));
   if (!wait_for_media_analysis(&source_controller)) {
+    std::cerr << "source media analysis timeout: "
+              << media_queue_diagnostic(source_controller).toStdString()
+              << " mediaProcessActive="
+              << photo_editor::desktop::TimelineHistoryTestAccess::mediaAnalysisProcessActive(source_controller)
+              << " posterProcessActive="
+              << photo_editor::desktop::TimelineHistoryTestAccess::videoPosterProcessActive(source_controller)
+              << '\n';
     return fail("source media analysis should finish without blocking the controller");
   }
   source_controller.setSourceInSeconds(1.0);
@@ -4024,6 +12521,8 @@ int main(int argc, char** argv) {
       !mismatched_review_controller.status().contains(QStringLiteral("frame rate"))) {
     return fail("review exchange should reject frame-rate drift instead of silently moving notes");
   }
+
+
 
   const auto color_source_path = workspace.filePath(QStringLiteral("color-source.png"));
   const auto color_reference_path = workspace.filePath(QStringLiteral("color-reference.png"));
@@ -5611,6 +14110,303 @@ int main(int argc, char** argv) {
     return fail("Bezier handle and linkage edits should each undo atomically");
   }
 
+  TimelineDocumentController pinned_keyframe_controller;
+  pinned_keyframe_controller.createTimeline(QStringLiteral("Pinned Curve Target"));
+  pinned_keyframe_controller.addClipFromGallery(
+      QStringLiteral("video:pinned-keyframe-a"), first_video,
+      QStringLiteral("Pinned Curve Target A"), 4.0,
+      QStringLiteral("poster://pinned-keyframe-a"));
+  pinned_keyframe_controller.addClipFromGallery(
+      QStringLiteral("video:pinned-keyframe-b"), second_video,
+      QStringLiteral("Selected Clip B"), 4.0,
+      QStringLiteral("poster://pinned-keyframe-b"));
+  pinned_keyframe_controller.selectClip(0);
+  if (!pinned_keyframe_controller.toggleSelectedClipKeyframe(QStringLiteral("opacity"))) {
+    return fail("the pinned-target fixture should create its first opacity keyframe");
+  }
+  pinned_keyframe_controller.setSelectedClipOpacity(0.2);
+  pinned_keyframe_controller.seekSequenceSeconds(2.0);
+  pinned_keyframe_controller.setSelectedClipOpacity(0.8);
+  const auto pinned_target_id = pinned_keyframe_controller.timelineClipDetails(0)
+                                    .value(QStringLiteral("clipId")).toString();
+  const auto selected_clip_id = pinned_keyframe_controller.timelineClipDetails(1)
+                                    .value(QStringLiteral("clipId")).toString();
+  pinned_keyframe_controller.selectClip(1);
+  const auto selected_clip_start = pinned_keyframe_controller.currentClip()
+                                      .value(QStringLiteral("startSeconds")).toDouble();
+  pinned_keyframe_controller.seekSequenceSeconds(selected_clip_start + 1.0);
+  const auto pinned_edit_playhead = pinned_keyframe_controller.sequencePlayheadSeconds();
+  const auto pinned_edit_selection = pinned_keyframe_controller.selectedClipIds();
+  const auto pinned_point_value = [](const QVariantMap& clip, double seconds) {
+    for (const auto& item : clip.value(QStringLiteral("keyframes")).toList()) {
+      const auto keyframe = item.toMap();
+      if (keyframe.value(QStringLiteral("parameter")).toString() ==
+              QStringLiteral("opacity") &&
+          nearly_equal(keyframe.value(QStringLiteral("seconds")).toDouble(), seconds)) {
+        return keyframe.value(QStringLiteral("value")).toDouble();
+      }
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+  };
+  if (pinned_target_id.isEmpty() || selected_clip_id.isEmpty() ||
+      pinned_target_id == selected_clip_id ||
+      !pinned_keyframe_controller.beginClipKeyframeEditTarget(pinned_target_id)) {
+    return fail("a curve target should pin a valid clip independently of the current selection");
+  }
+  pinned_keyframe_controller.beginContinuousEdit();
+  const auto moved_pinned_keyframe = pinned_keyframe_controller.moveSelectedClipKeyframe(
+      QStringLiteral("opacity"), 2.0, 3.0);
+  const auto changed_pinned_value = pinned_keyframe_controller.setSelectedClipKeyframeValue(
+      QStringLiteral("opacity"), 3.0, 0.65);
+  pinned_keyframe_controller.endContinuousEdit();
+  pinned_keyframe_controller.endClipKeyframeEditTarget();
+  const auto edited_pinned_clip = pinned_keyframe_controller.timelineClipDetails(0);
+  const auto unchanged_selected_clip = pinned_keyframe_controller.timelineClipDetails(1);
+  if (!moved_pinned_keyframe || !changed_pinned_value ||
+      !std::isnan(pinned_point_value(edited_pinned_clip, 2.0)) ||
+      !nearly_equal(pinned_point_value(edited_pinned_clip, 3.0), 0.65) ||
+      !std::isnan(pinned_point_value(unchanged_selected_clip, 3.0)) ||
+      pinned_keyframe_controller.currentClip().value(QStringLiteral("clipId")).toString() !=
+          selected_clip_id ||
+      pinned_keyframe_controller.selectedClipIds() != pinned_edit_selection ||
+      !nearly_equal(pinned_keyframe_controller.sequencePlayheadSeconds(), pinned_edit_playhead)) {
+    return fail("editing a pinned curve should change only its target and preserve selection and playhead");
+  }
+  pinned_keyframe_controller.undo();
+  if (!nearly_equal(pinned_point_value(
+                        pinned_keyframe_controller.timelineClipDetails(0), 2.0), 0.8) ||
+      !std::isnan(pinned_point_value(
+          pinned_keyframe_controller.timelineClipDetails(0), 3.0)) ||
+      pinned_keyframe_controller.currentClip().value(QStringLiteral("clipId")).toString() !=
+          selected_clip_id ||
+      !nearly_equal(pinned_keyframe_controller.sequencePlayheadSeconds(), pinned_edit_playhead)) {
+    return fail("one undo should restore a pinned curve edit without changing the selected clip or playhead");
+  }
+  pinned_keyframe_controller.redo();
+  if (!nearly_equal(pinned_point_value(
+                        pinned_keyframe_controller.timelineClipDetails(0), 3.0), 0.65) ||
+      !nearly_equal(pinned_keyframe_controller.sequencePlayheadSeconds(), pinned_edit_playhead)) {
+    return fail("redo should restore the pinned target edit while preserving sequence position");
+  }
+  pinned_keyframe_controller.seekSequenceSeconds(selected_clip_start + 1.0);
+  if (!pinned_keyframe_controller.toggleSelectedClipKeyframe(QStringLiteral("opacity"))) {
+    return fail("the callback guard fixture should add an opacity keyframe to selected clip B");
+  }
+  pinned_keyframe_controller.setSelectedClipOpacity(0.25);
+  pinned_keyframe_controller.selectClip(0);
+  auto same_selected_callback_attempted = false;
+  auto same_selected_callback_succeeded = false;
+  const auto same_selected_callback_connection = QObject::connect(
+      &pinned_keyframe_controller,
+      &TimelineDocumentController::selectionChanged,
+      &pinned_keyframe_controller,
+      [&]() {
+        if (same_selected_callback_attempted) {
+          return;
+        }
+        same_selected_callback_attempted = true;
+        pinned_keyframe_controller.selectClip(1);
+        same_selected_callback_succeeded =
+            pinned_keyframe_controller.setSelectedClipKeyframeValue(
+                QStringLiteral("opacity"), 1.0, 0.55);
+      },
+      Qt::DirectConnection);
+  const auto same_selected_outer_scope =
+      pinned_keyframe_controller.beginClipKeyframeEditTarget(pinned_target_id);
+  const auto same_selected_nested_scope = same_selected_outer_scope &&
+      pinned_keyframe_controller.beginClipKeyframeEditTarget(pinned_target_id);
+  const auto same_selected_outer_edit = same_selected_nested_scope &&
+      pinned_keyframe_controller.setSelectedClipKeyframeValue(
+          QStringLiteral("opacity"), 3.0, 0.68);
+  if (!same_selected_outer_edit) {
+    if (same_selected_nested_scope) {
+      pinned_keyframe_controller.endClipKeyframeEditTarget();
+    }
+    if (same_selected_outer_scope) {
+      pinned_keyframe_controller.endClipKeyframeEditTarget();
+    }
+    QObject::disconnect(same_selected_callback_connection);
+    return fail("a selected pinned clip should publish its direct signals inside a nested target scope");
+  }
+  pinned_keyframe_controller.endClipKeyframeEditTarget();
+  const auto nested_scope_kept_target =
+      pinned_keyframe_controller.setSelectedClipKeyframeValue(
+          QStringLiteral("opacity"), 3.0, 0.69);
+  pinned_keyframe_controller.endClipKeyframeEditTarget();
+  const auto cleared_scope_restored_selection =
+      pinned_keyframe_controller.setSelectedClipKeyframeValue(
+          QStringLiteral("opacity"), 1.0, 0.56);
+  QObject::disconnect(same_selected_callback_connection);
+  if (!same_selected_callback_attempted || !same_selected_callback_succeeded ||
+      !nested_scope_kept_target || !cleared_scope_restored_selection ||
+      !nearly_equal(pinned_point_value(
+                        pinned_keyframe_controller.timelineClipDetails(0), 3.0), 0.69) ||
+      !nearly_equal(pinned_point_value(
+                        pinned_keyframe_controller.timelineClipDetails(1), 1.0), 0.56) ||
+      pinned_keyframe_controller.currentClip().value(QStringLiteral("clipId")).toString() !=
+          selected_clip_id ||
+      !nearly_equal(
+          pinned_keyframe_controller.sequencePlayheadSeconds(),
+          selected_clip_start)) {
+    return fail("direct Inspector callbacks should edit the newly selected clip while nested target cleanup preserves the pinned clip");
+  }
+  // Selecting B in the callback intentionally moves the playhead to B's start.
+  // Restore the original callback-guard fixture's B+1s playhead before it runs.
+  pinned_keyframe_controller.seekSequenceSeconds(pinned_edit_playhead);
+  auto reentrant_edit_attempted = false;
+  auto reentrant_edit_succeeded = false;
+  const auto reentrant_selection_connection = QObject::connect(
+      &pinned_keyframe_controller,
+      &TimelineDocumentController::selectionChanged,
+      &pinned_keyframe_controller,
+      [&]() {
+        if (reentrant_edit_attempted) {
+          return;
+        }
+        reentrant_edit_attempted = true;
+        reentrant_edit_succeeded = pinned_keyframe_controller.setSelectedClipKeyframeValue(
+            QStringLiteral("opacity"), 1.0, 0.55);
+      },
+      Qt::DirectConnection);
+  if (!pinned_keyframe_controller.beginClipKeyframeEditTarget(pinned_target_id) ||
+      !pinned_keyframe_controller.setSelectedClipKeyframeValue(
+          QStringLiteral("opacity"), 3.0, 0.72)) {
+    QObject::disconnect(reentrant_selection_connection);
+    return fail("the callback guard fixture should update the pinned target");
+  }
+  pinned_keyframe_controller.endClipKeyframeEditTarget();
+  QObject::disconnect(reentrant_selection_connection);
+  if (!reentrant_edit_attempted || !reentrant_edit_succeeded ||
+      !nearly_equal(pinned_point_value(
+                        pinned_keyframe_controller.timelineClipDetails(0), 3.0), 0.72) ||
+      !nearly_equal(pinned_point_value(
+                        pinned_keyframe_controller.timelineClipDetails(1), 1.0), 0.55) ||
+      pinned_keyframe_controller.currentClip().value(QStringLiteral("clipId")).toString() !=
+          selected_clip_id ||
+      !nearly_equal(pinned_keyframe_controller.sequencePlayheadSeconds(), pinned_edit_playhead)) {
+    return fail("synchronous Inspector callbacks during a pinned edit must still target the selected clip");
+  }
+  if (!pinned_keyframe_controller.beginClipKeyframeEditTarget(pinned_target_id)) {
+    return fail("an unlocked pinned clip should remain editable after redo");
+  }
+  pinned_keyframe_controller.toggleTrackLocked(0);
+  const auto locked_target_edit = pinned_keyframe_controller.setSelectedClipKeyframeValue(
+      QStringLiteral("opacity"), 3.0, 0.9);
+  pinned_keyframe_controller.endClipKeyframeEditTarget();
+  if (locked_target_edit || !pinned_keyframe_controller.timelineTracks().at(0).toMap()
+                                  .value(QStringLiteral("locked")).toBool() ||
+      !nearly_equal(pinned_point_value(
+                        pinned_keyframe_controller.timelineClipDetails(0), 3.0), 0.72) ||
+      pinned_keyframe_controller.beginClipKeyframeEditTarget(pinned_target_id)) {
+    return fail("a locked pinned target should reject edits and refuse a new curve scope");
+  }
+  pinned_keyframe_controller.toggleTrackLocked(0);
+  if (!pinned_keyframe_controller.beginClipKeyframeEditTarget(pinned_target_id)) {
+    return fail("unlocking the track should restore the pinned target's editability");
+  }
+  pinned_keyframe_controller.selectClip(0);
+  pinned_keyframe_controller.removeSelectedClip();
+  const auto deleted_target_edit = pinned_keyframe_controller.setSelectedClipKeyframeValue(
+      QStringLiteral("opacity"), 3.0, 0.9);
+  pinned_keyframe_controller.endClipKeyframeEditTarget();
+  if (deleted_target_edit || pinned_keyframe_controller.clipCount() != 1 ||
+      pinned_keyframe_controller.currentClip().value(QStringLiteral("clipId")).toString() !=
+          selected_clip_id) {
+    return fail("a deleted pinned target should reject edits instead of falling through to another selection");
+  }
+  const auto remaining_clip_start = pinned_keyframe_controller.currentClip()
+                                        .value(QStringLiteral("startSeconds")).toDouble();
+  pinned_keyframe_controller.seekSequenceSeconds(remaining_clip_start + 2.0);
+  if (!pinned_keyframe_controller.toggleSelectedClipKeyframe(QStringLiteral("opacity")) ||
+      pinned_keyframe_controller.currentClip().value(QStringLiteral("keyframes")).toList()
+          .size() != 2) {
+    return fail("ending a deleted-target scope should restore ordinary selected-clip keyframe editing");
+  }
+
+  QTemporaryDir replaced_session_workspace;
+  TimelineDocumentController replaced_session_keyframe_controller;
+  replaced_session_keyframe_controller.createTimeline(
+      QStringLiteral("Keyframe Target Session Replacement"));
+  replaced_session_keyframe_controller.addClipFromGallery(
+      QStringLiteral("video:keyframe-target-session-replacement"),
+      first_video,
+      QStringLiteral("Session Replacement Clip"),
+      4.0,
+      QStringLiteral("poster://keyframe-target-session-replacement"));
+  if (!replaced_session_keyframe_controller.toggleSelectedClipKeyframe(
+          QStringLiteral("opacity"))) {
+    return fail("the session replacement fixture should add its opacity keyframe");
+  }
+  replaced_session_keyframe_controller.setSelectedClipOpacity(0.4);
+  const auto replaced_session_clip_id =
+      replaced_session_keyframe_controller.timelineClipDetails(0)
+          .value(QStringLiteral("clipId")).toString();
+  if (replaced_session_clip_id.isEmpty() ||
+      !replaced_session_keyframe_controller.saveTimeline()) {
+    return fail("the session replacement fixture should save a reusable clip id");
+  }
+  QFile saved_session_document(
+      replaced_session_keyframe_controller.savedDocumentPath());
+  if (!replaced_session_workspace.isValid() ||
+      !saved_session_document.open(QIODevice::ReadOnly)) {
+    return fail("the session replacement fixture should read its saved document");
+  }
+  QJsonParseError replaced_session_parse_error;
+  auto replaced_session_object = QJsonDocument::fromJson(
+      saved_session_document.readAll(), &replaced_session_parse_error).object();
+  saved_session_document.close();
+  if (replaced_session_parse_error.error != QJsonParseError::NoError ||
+      replaced_session_object.isEmpty()) {
+    return fail("the session replacement fixture should parse its saved document");
+  }
+  replaced_session_object.insert(
+      QStringLiteral("timelineId"),
+      QStringLiteral("keyframe-target-replacement-%1")
+          .arg(QDateTime::currentMSecsSinceEpoch()));
+  replaced_session_object.insert(
+      QStringLiteral("name"), QStringLiteral("Replacement Keyframe Session"));
+  const auto replacement_session_path =
+      replaced_session_workspace.filePath(QStringLiteral("replacement.json"));
+  QSaveFile replacement_session_document(replacement_session_path);
+  const auto replacement_session_bytes =
+      QJsonDocument(replaced_session_object).toJson(QJsonDocument::Compact);
+  if (!replacement_session_document.open(QIODevice::WriteOnly) ||
+      replacement_session_document.write(replacement_session_bytes) !=
+          replacement_session_bytes.size() ||
+      !replacement_session_document.commit()) {
+    return fail("the session replacement fixture should write a distinct timeline with the same clip id");
+  }
+  const auto replacement_scope_started =
+      replaced_session_keyframe_controller.beginClipKeyframeEditTarget(
+          replaced_session_clip_id);
+  if (!replacement_scope_started ||
+      !replaced_session_keyframe_controller.loadTimeline(replacement_session_path)) {
+    if (replacement_scope_started) {
+      replaced_session_keyframe_controller.endClipKeyframeEditTarget();
+    }
+    return fail("loading a second timeline should leave the original keyframe target scope active for validation");
+  }
+  const auto replacement_clip_id =
+      replaced_session_keyframe_controller.timelineClipDetails(0)
+          .value(QStringLiteral("clipId")).toString();
+  const auto stale_session_edit =
+      replaced_session_keyframe_controller.setSelectedClipKeyframeValue(
+          QStringLiteral("opacity"), 0.0, 0.9);
+  replaced_session_keyframe_controller.endClipKeyframeEditTarget();
+  const auto replacement_clip_value_before_normal_edit = pinned_point_value(
+      replaced_session_keyframe_controller.timelineClipDetails(0), 0.0);
+  const auto replacement_normal_edit =
+      replaced_session_keyframe_controller.setSelectedClipKeyframeValue(
+          QStringLiteral("opacity"), 0.0, 0.7);
+  if (replacement_clip_id != replaced_session_clip_id || stale_session_edit ||
+      !nearly_equal(replacement_clip_value_before_normal_edit, 0.4) ||
+      !replacement_normal_edit ||
+      !nearly_equal(pinned_point_value(
+                        replaced_session_keyframe_controller.timelineClipDetails(0), 0.0),
+                    0.7)) {
+    return fail("a replaced document with a matching clip id should invalidate the old scope and restore selected-clip edits after cleanup");
+  }
+
   TimelineDocumentController keyframe_speed_controller;
   keyframe_speed_controller.createTimeline(QStringLiteral("Per-Keyframe Speed"));
   keyframe_speed_controller.addClipFromGallery(
@@ -6871,13 +15667,38 @@ int main(int argc, char** argv) {
         QString{});
     const auto intent_proxy_clip_id =
         proxy_controller.currentClip().value(QStringLiteral("clipId")).toString();
-    proxy_controller.setBackgroundWorkIntent(
-        true, true, {intent_proxy_clip_id});
+    proxy_controller.setForegroundWorkspaceIntent(
+        QStringLiteral("library"), true, true, false);
+    proxy_controller.setBackgroundWorkIntent(false, false, {});
+    proxy_controller.setPhotoWorkIntent(
+        true, true, QStringLiteral("photo:stale-edit-callback"));
+    const auto library_transition_priority =
+        proxy_controller.backgroundWorkPriorityState();
+    if (library_transition_priority.value(QStringLiteral("foregroundSurface")).toString() !=
+            QStringLiteral("library") ||
+        !library_transition_priority.value(QStringLiteral("transitioning")).toBool() ||
+        !library_transition_priority.value(QStringLiteral("yielding")).toBool()) {
+      return fail("a route transition should keep Library foreground when hidden Timeline and stale Edit callbacks arrive");
+    }
+    proxy_controller.setForegroundWorkspaceIntent(
+        QStringLiteral("library"), true, false, false);
     QElapsedTimer proxy_request_timer;
     proxy_request_timer.start();
-    if (!proxy_controller.generateSelectedClipProxy() || proxy_request_timer.elapsed() > 500) {
-      return fail("proxy generation should enqueue without blocking timeline interaction");
+    const auto proxy_request_accepted = proxy_controller.generateSelectedClipProxy();
+    if (!proxy_request_accepted || proxy_request_timer.elapsed() > 500 ||
+        proxy_controller.currentClip().value(QStringLiteral("proxyStatus")).toString() !=
+            QStringLiteral("queued") ||
+        !proxy_controller.backgroundWorkPriorityState()
+             .value(QStringLiteral("yielding")).toBool() ||
+        proxy_controller.backgroundWorkPriorityState()
+                .value(QStringLiteral("foregroundSurface")).toString() !=
+            QStringLiteral("library")) {
+      return fail("inactive Timeline proxy generation should enqueue without blocking, and remain queued while the Library owns foreground priority");
     }
+    proxy_controller.setForegroundWorkspaceIntent(
+        QStringLiteral("timeline"), true, false, false);
+    proxy_controller.setBackgroundWorkIntent(
+        true, true, {intent_proxy_clip_id});
     const auto latency_sensitive_priority =
         proxy_controller.backgroundWorkPriorityState();
     if (!latency_sensitive_priority.value(QStringLiteral("yielding")).toBool() ||
@@ -7459,6 +16280,7 @@ int main(int argc, char** argv) {
         {QStringLiteral("height"), 240},
         {QStringLiteral("frameRate"), 30.0},
     });
+    compound_controller.setCachePressureLevelForTesting(QStringLiteral("normal"));
     compound_controller.addClipFromGallery(
         QStringLiteral("video:compound-one"), render_video_two,
         QStringLiteral("Compound One"), 0.0, QString{});

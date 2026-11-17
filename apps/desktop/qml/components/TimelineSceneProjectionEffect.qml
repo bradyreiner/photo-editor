@@ -24,6 +24,15 @@ ShaderEffect {
     property real itemHeight: height
     property color fadeColor: "black"
     property real fadeAmount: 0
+    property real frameCornerRadius: 0
+    property real clipMaskEnabled: 0
+    property real clipMaskShape: 0
+    property vector4d clipMaskRect: Qt.vector4d(0, 0, 1, 1)
+    property real clipMaskCornerRadius: 0
+    property size clipMaskCanvasSize: Qt.size(width, height)
+    property point clipMaskFrameCenter: Qt.point(width * 0.5, height * 0.5)
+    property real clipMaskFrameScale: 1
+    property real clipMaskFrameRotationDegrees: 0
 
     readonly property vector4d topLeft: pointVector(0)
     readonly property vector4d topRight: pointVector(1)

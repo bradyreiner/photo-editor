@@ -79,6 +79,54 @@ struct CarouselHistoryTestAccess {
     require(controller.loadDocumentObject(controller.documentObject()), "Fixture normalization failed");
     controller.clearHistory();
   }
+  static QJsonObject measureSelectionRefresh() {
+    CarouselDocumentController controller;
+    constexpr int board_count = 64;
+    constexpr int items_per_board = 100;
+    constexpr int selected_count = 128;
+    controller.slides_.resize(board_count);
+    controller.has_active_carousel_ = true;
+    controller.repeated_element_links_.push_back({QStringLiteral("repeat"), QStringLiteral("Fixture repeat")});
+    const auto board_size = controller.exportPixelSize();
+    QStringList selected;
+    QSet<QString> expected_items;
+    for (int board = 0; board < board_count; ++board) {
+      for (int offset = 0; offset < items_per_board; ++offset) {
+        CarouselDocumentController::CanvasItem item;
+        item.id = QStringLiteral("repeat-item-%1-%2").arg(board).arg(offset);
+        item.component_link_id = QStringLiteral("repeat:component");
+        item.kind = CarouselDocumentController::ItemKind::Text;
+        item.bounds = QRectF(board * board_size.width() + 20 + (offset % 20) * 30,
+                             20 + (offset / 20) * 30, 24, 24);
+        expected_items.insert(item.id);
+        if (selected.size() < selected_count) selected.append(item.id);
+        controller.items_.push_back(std::move(item));
+      }
+    }
+    controller.current_index_ = 0;
+    controller.selected_item_id_ = selected.first();
+    controller.selected_item_ids_ = selected;
+    controller.preview_debounce_timer_->stop();
+    std::vector<double> samples;
+    samples.reserve(11);
+    for (int iteration = 0; iteration < 11; ++iteration) {
+      QElapsedTimer timer;
+      timer.start();
+      controller.refreshCurrentSelectionPreviews();
+      samples.push_back(static_cast<double>(timer.nsecsElapsed()) / 1e6);
+      if (controller.pending_preview_items_ != expected_items ||
+          controller.pending_preview_boards_.size() != board_count) {
+        throw std::runtime_error("Selection refresh changed its affected items or boards");
+      }
+      controller.pending_preview_items_.clear();
+      controller.pending_preview_boards_.clear();
+    }
+    controller.preview_debounce_timer_->stop();
+    return {{"selection_refresh_p95_ms", p95(samples)},
+            {"selection_refresh_selected_items", selected_count},
+            {"selection_refresh_component_items", expected_items.size()},
+            {"selection_refresh_affected_boards", board_count}};
+  }
   static QJsonObject read(const QString& path) {
     QFile file(path);
     require(file.open(QIODevice::ReadOnly), "Recovery fixture read failed");
@@ -909,6 +957,8 @@ int main(int argc, char** argv) {
     }
     auto comparisons = photo_editor::desktop::CarouselHistoryTestAccess::measureComparisons(controller);
     auto report = photo_editor::desktop::CarouselHistoryTestAccess::measure(controller,workspace.path());
+    const auto selection_refresh = photo_editor::desktop::CarouselHistoryTestAccess::measureSelectionRefresh();
+    for (auto it = selection_refresh.constBegin(); it != selection_refresh.constEnd(); ++it) report.insert(it.key(),it.value());
     for (auto it = comparisons.constBegin(); it != comparisons.constEnd(); ++it) report.insert(it.key(),it.value());
     report.insert("boards",boards);
 #if !defined(_WIN32)

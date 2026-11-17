@@ -19,6 +19,16 @@ struct SourceDecodeTelemetry final {
 };
 [[nodiscard]] bool source_image_supported(const QString& file_path);
 [[nodiscard]] QSize source_image_size(const QString& file_path);
+// Source-aware brush analysis uses characterized, unclipped linear sRGB rather
+// than interpreting untagged camera samples or wide-gamut bytes as display RGB.
+[[nodiscard]] QImage prepare_brush_color_source_image(
+    const QImage& decoded, const EditRecipeState& state,
+    const photo_editor::pipeline::DecodedImageMetadata& metadata,
+    photo_editor::pipeline::CancellationToken cancellation = {});
+[[nodiscard]] bool decode_brush_color_source_image(
+    const QString& file_path, QImage* image, int max_edge,
+    const EditRecipeState& state,
+    photo_editor::pipeline::CancellationToken cancellation = {});
 [[nodiscard]] bool decode_source_image(
     const QString& file_path,
     QImage* image,

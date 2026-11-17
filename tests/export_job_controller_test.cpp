@@ -998,17 +998,18 @@ int main(int argc, char** argv) {
       0,
       0);
   const auto stale_mask_issues = stale_mask_preflight.value(QStringLiteral("issues")).toList();
-  if (!stale_mask_preflight.value(QStringLiteral("ok")).toBool()) {
-    return fail("stale generated mask/final inpaint warnings should not block export preflight");
+  if (stale_mask_preflight.value(QStringLiteral("ok")).toBool()) {
+    return fail("preview-only inpaint must block a rendered export");
   }
   if (!issue_code_present(stale_mask_issues, QStringLiteral("stale-generated-mask"))) {
     return fail("export preflight should warn about stale generated masks");
   }
   if (!issue_code_present(stale_mask_issues, QStringLiteral("final-inpaint-required"))) {
-    return fail("export preflight should warn about preview-only final inpaint patches");
+    return fail("export preflight should identify unfinished inpaint patches");
   }
-  if (stale_mask_preflight.value(QStringLiteral("warningCount")).toInt() < 2) {
-    return fail("export preflight should count stale generated mask and final inpaint warnings");
+  if (stale_mask_preflight.value(QStringLiteral("warningCount")).toInt() < 1 ||
+      stale_mask_preflight.value(QStringLiteral("errorCount")).toInt() < 1) {
+    return fail("export preflight should distinguish the stale mask warning from the unfinished repair blocker");
   }
 
   photo_editor::desktop::EditRecipeState missing_retouch_state;

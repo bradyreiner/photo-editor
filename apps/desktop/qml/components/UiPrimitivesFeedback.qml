@@ -308,7 +308,8 @@ ColumnLayout {
                         Layout.fillWidth: true
                         text: root.sampleFailed ? "Failure" : root.sampleBusy ? Math.round(root.sampleProgress * 100) + "%" : "Indeterminate / paused"
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: theme.typeCaption
                     }
                 }

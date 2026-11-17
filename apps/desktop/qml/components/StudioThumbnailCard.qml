@@ -34,14 +34,15 @@ Rectangle {
 
     radius: 0
     color: filmstrip ? (selected ? theme.alpha(workspace.mint, 0.08) : "transparent") : "transparent"
-    border.width: filmstrip && selected ? 1 : 0
-    border.color: filmstrip && selected ? workspace.mint : "transparent"
+    border.width: selected ? theme.scaled(2) : 0
+    border.color: selected ? "#E3BD6B" : "transparent"
     clip: true
 
-    Image {
+    ColorManagedImage {
         id: thumbnailImage
         anchors.fill: parent
-        source: card.thumbnailSource
+        imageSource: card.thumbnailSource
+        displayController: workspace.editorPreviewController || null
         fillMode: Image.PreserveAspectFit
         asynchronous: true
         cache: card.thumbnailSource.length > 0
@@ -71,12 +72,13 @@ Rectangle {
             border.color: "transparent"
             clip: true
 
-            Image {
+            ColorManagedImage {
                 id: filmstripImage
                 objectName: "filmstripImage"
                 anchors.fill: parent
                 anchors.margins: card.filmstripImageMargin + (card.filmstrip ? 2 : 0)
-                source: card.thumbnailSource
+                imageSource: card.thumbnailSource
+                displayController: workspace.editorPreviewController || null
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 cache: card.thumbnailSource.length > 0
@@ -91,28 +93,7 @@ Rectangle {
                 visible: filmstripImage.source.toString().length === 0
             }
 
-            Rectangle {
-                objectName: "filmstripSelectionIndicator"
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: 4
-                width: 14
-                height: 14
-                radius: 7
-                visible: card.selected
-                color: workspace.mint
-                border.width: 0
-                border.color: "transparent"
 
-                AppIcon {
-                    anchors.centerIn: parent
-                    width: 9
-                    height: 9
-                    name: "check"
-                    color: theme.ink950
-                    visible: card.selected
-                }
-            }
 
             Label {
                 objectName: "filmstripAspectBadge"
@@ -126,7 +107,7 @@ Rectangle {
                 text: workspace.aspectRatioText(filmstripImage.sourceSize.width,
                                                 filmstripImage.sourceSize.height)
                 color: "#C8D0D6"
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: 8
                 padding: 3
                 background: Rectangle {
@@ -139,27 +120,15 @@ Rectangle {
         }
     }
 
-    Rectangle {
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 6
-        width: 18
-        height: 18
-        radius: 2
-        visible: card.selectionBadgeVisible && !card.filmstrip &&
-                 (workspace.selectionMode || card.selected)
-        color: card.selected ? workspace.mint : theme.alpha(theme.ink950, 0.72)
-        border.width: theme.chromeBorderWidth
-        border.color: card.selected ? workspace.mintSoft : workspace.hairlineStrong
 
-        AppIcon {
-            anchors.centerIn: parent
-            width: 11
-            height: 11
-            name: "check"
-            color: theme.ink950
-            visible: card.selected
-        }
+
+    Rectangle {
+        objectName: "thumbnailSelectionEdge"
+        anchors.fill: parent
+        color: "transparent"
+        visible: card.selected && (card.filmstrip || card.selectionBadgeVisible)
+        border.width: theme.scaled(2)
+        border.color: "#E3BD6B"
     }
 
     Rectangle {
@@ -169,7 +138,7 @@ Rectangle {
         anchors.margins: 6
         width: 18
         height: 18
-        radius: 9
+        radius: 3
         color: card.assetRejected ? theme.alpha(theme.error, 0.88)
                                   : theme.alpha(workspace.mint, 0.88)
         border.width: theme.chromeBorderWidth
@@ -179,7 +148,7 @@ Rectangle {
             anchors.centerIn: parent
             width: 10
             height: 10
-            name: card.assetRejected ? "close" : "check"
+            name: card.assetRejected ? "close" : "flag"
             color: theme.ink950
         }
     }
@@ -194,9 +163,9 @@ Rectangle {
         Repeater {
             model: card.assetRating
             AppIcon {
-                width: 10
-                height: 10
-                name: "star"
+                width: theme.scaled(16)
+                height: theme.scaled(16)
+                name: "star-gold"
                 color: workspace.mint
             }
         }

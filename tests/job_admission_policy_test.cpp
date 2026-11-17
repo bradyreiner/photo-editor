@@ -8,6 +8,22 @@
 using namespace photo_editor::desktop;
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
+  QJsonObject replay{{"duplicatePolicy", "skip"}, {"resumeCount", 1}, {"selectionCount", 1},
+                    {"selectedPaths", QJsonArray{"/fixture/photo.jpg"}},
+                    {"importPreflight", QJsonObject{{"ok", true}, {"importableCount", 1},
+                                                   {"eligiblePaths", QJsonArray{"/fixture/photo.jpg"}}}}};
+  if (import_worker_duplicate_policy(replay) != "reuse-identical") return 1;
+  replay.insert("resumeCount", 0);
+  if (import_worker_duplicate_policy(replay) != "skip") return 1;
+  replay.insert("retryCount", 1);
+  if (import_worker_duplicate_policy(replay) != "reuse-identical") return 1;
+  auto changed_manifest = replay;
+  changed_manifest.insert("selectedPaths", QJsonArray{"/fixture/different.jpg"});
+  if (import_worker_duplicate_policy(changed_manifest) != "skip") return 1;
+  replay.insert("duplicatePolicy", "replace");
+  if (import_worker_duplicate_policy(replay) != "replace") return 1;
+  replay.insert("duplicatePolicy", "skip"); replay.insert("selectedPaths", QJsonArray{});
+  if (import_worker_duplicate_policy(replay) != "skip") return 1;
   QTemporaryDir root;
   int checks = 0;
   const auto check = [&](bool value, const char* reason) {

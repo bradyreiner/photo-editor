@@ -1,0 +1,10 @@
+{
+  "scope": "JSON field/type/source preflight only, not native admission or execution",
+  "passed": true,
+  "native_import_executed": false,
+  "history_contract": "object:activeBranchId+snapshots, not array",
+  "expected_layer_count": 4,
+  "contains_flattened_campaign_raster": false,
+  "clipboard_bytes": 13648,
+  "clipboard_sha256": "c59dfdcebec7804a8e71c4c67818aaf497b0ab987a932e4df427b848ce1f97e3"
+}

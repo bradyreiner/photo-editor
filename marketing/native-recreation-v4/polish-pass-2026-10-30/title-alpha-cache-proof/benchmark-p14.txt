@@ -1,0 +1,1 @@
+actual_png_benchmark directory=/private/tmp/looksy-dense-timeline-v7iaxqgh/cache/timeline-titles pngs=22 windows=5 baseline_decodes=110 cached_decodes=22 cached_hits=88 baseline_ms=583 cached_ms=131

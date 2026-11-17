@@ -1,5 +1,6 @@
 #include "timeline_video_grade_runtime.h"
 
+#include "app_bootstrap.h"
 #include "desktop_pipeline_state_compiler.h"
 #include "edit_recipe_v13_adapter.h"
 #include "edit_recipe_pipeline_bridge.h"
@@ -15,7 +16,6 @@
 #include <QFileInfo>
 #include <qrgbafloat.h>
 #include <QSaveFile>
-#include <QStandardPaths>
 #include <QStringList>
 
 #include <algorithm>
@@ -375,7 +375,7 @@ void insert_grade_state_cache(
 }
 
 QString video_grade_cache_root() {
-  const auto root = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+  const auto root = AppBootstrap::cacheLocation();
   return root.isEmpty()
              ? QString{}
              : QDir(root).filePath(QStringLiteral("timeline-video-grade-luts-v2"));

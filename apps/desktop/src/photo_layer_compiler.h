@@ -1,6 +1,7 @@
 #pragma once
 
 #include "local_mask_compiler.h"
+#include "desktop_source_geometry.h"
 
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_pipeline.h"
@@ -8,12 +9,24 @@
 #include <QSize>
 #include <QVariantList>
 
+#include <functional>
 #include <span>
 #include <vector>
 
 namespace photo_editor::desktop {
 
 enum class DesktopRenderPurpose;
+
+struct PhotoLayerSelectionSamplingSource final {
+  std::span<const photo_editor::pipeline::ColorPixel> range_pixels;
+  std::span<const photo_editor::pipeline::ColorPixel> edge_pixels;
+};
+
+using PhotoLayerSelectionSourceProvider = std::function<
+    PhotoLayerSelectionSamplingSource(
+        const QString& mask_set_id,
+        const QString& mask_set_name,
+        const QSize& raster_size)>;
 
 inline QString compiled_photo_layer_source_error(
     const std::vector<photo_editor::pipeline::PhotoLayer>& layers) {
@@ -23,6 +36,8 @@ inline QString compiled_photo_layer_source_error(
           .arg(QString::fromStdString(layer.name), QString::fromStdString(layer.content_error));
     if (layer.enabled && layer.opacity > 0.0 && !layer.effect_error.empty())
       return QString::fromStdString(layer.effect_error);
+    if (layer.enabled && layer.opacity > 0.0 && !layer.style_error.empty())
+      return QString::fromStdString(layer.style_error);
     if (layer.kind == "text" && layer.enabled && layer.opacity > 0.0 &&
         (layer.pixels.empty() || layer.pixel_width <= 0 || layer.pixel_height <= 0))
       return QStringLiteral("Could not render text layer '%1'. Text content could not be prepared.")
@@ -44,6 +59,9 @@ compile_pipeline_photo_layers(
     const QSize& output_size,
     std::span<const photo_editor::pipeline::ColorPixel> source_pixels,
     const photo_editor::pipeline::ColorPipelineConfig& color_pipeline,
-    DesktopRenderPurpose purpose);
+    DesktopRenderPurpose purpose,
+    const DesktopSourceGeometry& source_geometry = {},
+    const PhotoLayerSelectionSourceProvider& selection_source_provider = {},
+    double document_layer_style_light_angle = -45.0);
 
 }  // namespace photo_editor::desktop

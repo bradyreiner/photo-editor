@@ -4,7 +4,9 @@
 #include "desktop_recipe_persistence_service.h"
 #include "editor_recipe_persistence_launcher.h"
 #include "photo_layer_effect_codec.h"
+#include "photo_layer_style_codec.h"
 #include "photo_pixel_stroke.h"
+#include "photo_text_style.h"
 
 #include "photo_editor/pipeline/edit_recipe_v13.h"
 
@@ -17,8 +19,12 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <string>
+#include <utility>
 
 namespace {
 
@@ -133,8 +139,195 @@ bool prepared_recipe_payload_contracts(
 
 }  // namespace
 
+// These cases use the production desktop serializer. The PostgreSQL contract
+// runner must consume these bytes, rather than maintain a second set of JSON
+// examples that can silently drift from what the app actually writes.
+int write_catalog_contract_cases(const QString& directory) {
+  using namespace photo_editor::desktop;
+  if (!QDir().mkpath(directory)) return fail("cannot create catalog contract directory");
+  EditRecipeState state;
+  state.exposure = 1.25;
+  state.active_history_branch = QStringLiteral("review");
+  state.recipe_snapshots = {QVariantMap{{"id", "review-1"}, {"label", "Before selection"},
+      {"sampleY", 0.44707475915184125}}};
+  state.preset_applications = {QVariantMap{{"presetId", "portrait"}}};
+  const DecoderProvenanceResult provenance{
+      .provenance = QStringLiteral("raster:catalog-contract-v1"), .raw_source = false};
+  photo_editor::desktop::layer_style_codec::LayerStyleOperation operation;
+  QString style_error;
+  if (!photo_editor::desktop::layer_style_codec::create_default_operation(
+          QStringLiteral("drop_shadow"), QStringLiteral("contract-shadow"),
+          &operation, &style_error)) {
+    std::cerr << style_error.toStdString() << '\n';
+    return fail("catalog contract style operation could not be created");
+  }
+  photo_editor::desktop::layer_style_codec::LayerStyleStack stack;
+  stack.operations.push_back(std::move(operation));
+  std::string serialized_error;
+  const auto serialized = photo_editor::pipeline::serialize_layer_style_stack(
+      stack, &serialized_error);
+  if (!serialized) return fail("catalog contract style stack could not be serialized");
+
+  for (const auto* name : {"history", "selection", "component", "layer-styles", "document-light"}) {
+    if (QString::fromLatin1(name) == "selection") {
+      // This is also the initialized empty-selection state from the reported
+      // failure: merely opening the selection tools must not break saving.
+      state.selection_state = {{"initialized", true}, {"currentSetId", ""}, {"previousSetId", ""}};
+    }
+    if (QString::fromLatin1(name) == "component") {
+      state.layers = {QVariantMap{
+          {"id", "component"}, {"kind", "group"},
+          {"smartObjectInstanceId", "00000000-0000-4000-8000-000000000001"},
+          {"smartObjectDocument", QVariantMap{
+              {"schema", "looksy.smart-object.document"}, {"version", 1},
+              {"contentId", "00000000-0000-4000-8000-000000000002"}, {"revision", 1},
+              {"canvasWidth", 64}, {"canvasHeight", 48}, {"maskStack", QVariantList{}},
+              {"layers", QVariantList{QVariantMap{{"id", "fill"}, {"kind", "fill"},
+                  {"fillColor", "#a05030"}}}}}}}};
+    }
+    if (QString::fromLatin1(name) == "layer-styles") {
+      state.layers = {QVariantMap{
+          {"id", "local-light-shadow"}, {"kind", "fill"},
+          {"enabled", true}, {"opacity", 1.0}, {"fillColor", "#a05030"},
+          {"layerStyleStack", QString::fromStdString(*serialized)},
+          {"layerStyleGlobalLightAngle", 37.0}}};
+    }
+    if (QString::fromLatin1(name) == "document-light") {
+      state.document_layer_style_light_angle = 123.5;
+      state.layers = {QVariantMap{
+          {"id", "document-light-shadow"}, {"kind", "fill"},
+          {"enabled", true}, {"opacity", 1.0}, {"fillColor", "#a05030"},
+          {"layerStyleStack", QString::fromStdString(*serialized)},
+          {"layerStyleGlobalLightAngle", -12.0},
+          {"layerStyleLightLinked", true}}};
+    }
+    const auto prepared = prepare_editor_recipe_persistence_payload(
+        QStringLiteral("contract-%1").arg(QString::fromLatin1(name)), state, provenance,
+        {}, directory, false);
+    if (!prepared.ok()) {
+      std::cerr << prepared.error.toStdString() << '\n';
+      return fail("production desktop save preparation failed");
+    }
+    QFile file(QDir(directory).filePath(QString::fromLatin1(name) + ".json"));
+    if (!file.open(QIODevice::WriteOnly) || file.write(prepared.payload) != prepared.payload.size())
+      return fail("cannot write catalog contract case");
+  }
+  const auto write_unlinked_light_case = [&](const QString& name, double angle) {
+    EditRecipeState unlinked_state;
+    unlinked_state.document_layer_style_light_angle = angle;
+    const auto prepared = prepare_editor_recipe_persistence_payload(
+        QStringLiteral("contract-document-light-unlinked"), unlinked_state,
+        provenance, {}, directory, false);
+    if (!prepared.ok()) {
+      std::cerr << prepared.error.toStdString() << '\n';
+      return false;
+    }
+    QFile file(QDir(directory).filePath(name + QStringLiteral(".json")));
+    return file.open(QIODevice::WriteOnly) &&
+        file.write(prepared.payload) == prepared.payload.size();
+  };
+  if (!write_unlinked_light_case(QStringLiteral("document-light-unlinked"), 123.5) ||
+      !write_unlinked_light_case(QStringLiteral("z-document-light-unlinked-updated"), 222.0))
+    return fail("cannot write sequential unlinked-light catalog cases");
+
+  PhotoTextDimensionSettings dimension;
+  dimension.enabled = true;
+  dimension.depth = 64.0;
+  dimension.bevel_width = 4.0;
+  dimension.bevel_segments = 5;
+  dimension.corner_pin_enabled = true;
+  dimension.corner_pins = {QPointF(0.05, 0.04), QPointF(0.95, 0.1),
+                           QPointF(0.84, 0.92), QPointF(0.12, 0.82)};
+  const QVariantMap dimension_text{
+      {QStringLiteral("id"), QStringLiteral("dimension-text")},
+      {QStringLiteral("kind"), QStringLiteral("text")},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("opacity"), 1.0},
+      {QStringLiteral("x"), 8.0}, {QStringLiteral("y"), 7.0},
+      {QStringLiteral("width"), 80.0}, {QStringLiteral("height"), 28.0},
+      {QStringLiteral("text"), QStringLiteral("Catalog v8")},
+      {QStringLiteral("textTypography"),
+       encode_photo_text_style(PhotoTextStyle{}).toVariantMap()},
+      {QStringLiteral("textDimension"),
+       encode_photo_text_dimension_variant_map(dimension)}};
+  const auto write_dimension_case = [&](const QString& name,
+                                        const EditRecipeState& dimension_state) {
+    const auto prepared = prepare_editor_recipe_persistence_payload(
+        QStringLiteral("contract-%1").arg(name), dimension_state,
+        provenance, {}, directory, false);
+    if (!prepared.ok()) {
+      std::cerr << prepared.error.toStdString() << '\n';
+      return false;
+    }
+    QFile file(QDir(directory).filePath(name + QStringLiteral(".json")));
+    return file.open(QIODevice::WriteOnly) &&
+        file.write(prepared.payload) == prepared.payload.size();
+  };
+  EditRecipeState dimension_state;
+  dimension_state.layers = {dimension_text};
+  if (!write_dimension_case(QStringLiteral("text-dimension"), dimension_state))
+    return fail("cannot write dimensional-text catalog case");
+
+  auto linked_dimension_state = dimension_state;
+  linked_dimension_state.document_layer_style_light_angle = 123.5;
+  linked_dimension_state.layers.push_back(QVariantMap{
+      {QStringLiteral("id"), QStringLiteral("dimension-linked-shadow")},
+      {QStringLiteral("kind"), QStringLiteral("fill")},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("opacity"), 1.0},
+      {QStringLiteral("fillColor"), QStringLiteral("#a05030")},
+      {QStringLiteral("layerStyleStack"), QString::fromStdString(*serialized)},
+      {QStringLiteral("layerStyleGlobalLightAngle"), -12.0},
+      {QStringLiteral("layerStyleLightLinked"), true}});
+  if (!write_dimension_case(QStringLiteral("text-dimension-linked-light"),
+                            linked_dimension_state))
+    return fail("cannot write combined dimensional-text and document-light catalog case");
+  return EXIT_SUCCESS;
+}
+
+int verify_catalog_contract_case(const QString& directory, const QString& name, const QString& snapshot_path) {
+  using namespace photo_editor::desktop;
+  QFile input(QDir(directory).filePath(name + ".json")), snapshot(snapshot_path);
+  if (!input.open(QIODevice::ReadOnly) || !snapshot.open(QIODevice::ReadOnly))
+    return fail("cannot read catalog contract case or saved snapshot");
+  const auto arguments = QJsonDocument::fromJson(input.readAll()).object().value("arguments").toArray();
+  const auto stored = QJsonDocument::fromJson(snapshot.readAll()).object();
+  const auto projection = project_catalog_adjustments_for_desktop(
+      stored.value("edit_recipe"), stored.value("canonical_edit_recipe_v13"),
+      QDir(directory).filePath("recipe-assets"));
+  if (!projection.ok()) {
+    std::cerr << projection.error.toStdString() << '\n';
+    return fail("saved recipe failed desktop reopen");
+  }
+  const auto expected = parse_edit_recipe_json(arguments.at(1).toString());
+  const auto decoded = parse_adjustment_patch_json(projection.adjustment_patch_json);
+  if (!decoded.ok() || !decoded.state) return fail("reopened catalog adjustment payload is invalid");
+  const auto& restored = *decoded.state;
+  if (restored.exposure != expected.exposure || restored.selection_state != expected.selection_state ||
+      restored.layers != expected.layers || restored.active_history_branch != expected.active_history_branch ||
+      restored.recipe_snapshots != expected.recipe_snapshots || restored.preset_applications != expected.preset_applications ||
+      std::abs(restored.document_layer_style_light_angle -
+               expected.document_layer_style_light_angle) > 1e-9) {
+    std::cerr << "case=" << name.toStdString() << " exposure=" << (restored.exposure == expected.exposure)
+              << " selection=" << (restored.selection_state == expected.selection_state)
+              << " layers=" << (restored.layers == expected.layers)
+              << " branch=" << (restored.active_history_branch == expected.active_history_branch)
+              << " snapshots=" << (restored.recipe_snapshots == expected.recipe_snapshots)
+              << " presets=" << (restored.preset_applications == expected.preset_applications)
+              << " document-light=" << (std::abs(restored.document_layer_style_light_angle -
+                   expected.document_layer_style_light_angle) <= 1e-9) << '\n';
+    return fail("catalog reopen changed edits, linked lighting, selection, components, history or presets");
+  }
+  return EXIT_SUCCESS;
+}
+
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
+
+  if (app.arguments().size() == 3 && app.arguments().at(1) == "--write-catalog-contract")
+    return write_catalog_contract_cases(app.arguments().at(2));
+  if (app.arguments().size() == 5 && app.arguments().at(1) == "--verify-catalog-contract")
+    return verify_catalog_contract_case(app.arguments().at(2), app.arguments().at(3), app.arguments().at(4));
 
   if (app.arguments().size() == 3 && app.arguments().at(1) == "--checkpoint") {
     QFile file(app.arguments().at(2));
@@ -196,6 +389,69 @@ int main(int argc, char** argv) {
               context);
   if (!written.ok()) {
     return fail("representable desktop state should produce a canonical v13 document");
+  }
+  for (const auto& exposure :
+       {std::array{1.9, 0.5}, std::array{1.9, -1.9}, std::array{-4.0, -5.0},
+        std::array{4.0, 5.0}}) {
+    auto combined = state;
+    combined.raw_exposure = exposure[0];
+    combined.exposure = exposure[1];
+    auto raw_context = context;
+    raw_context.raw_source = true;
+    raw_context.decoder_provenance = QStringLiteral("LibRaw:unexposed-float-boundary");
+    for (const auto input_transform : {false, true}) {
+      combined.raw_input_transform_enabled = input_transform;
+      const auto saved = photo_editor::desktop::serialize_desktop_recipe_as_canonical_v13(
+          combined, raw_context);
+      const auto parsed = photo_editor::pipeline::deserialize_edit_recipe_v13(
+          saved.document.recipe_payload.toStdString());
+      if (!saved.ok() || !parsed ||
+          std::abs(parsed->scene.exposure_ev - (exposure[0] + exposure[1])) > 1.0e-12) {
+        return fail("canonical persistence must store combined RAW and Light EV exactly once");
+      }
+      const auto restored = photo_editor::desktop::project_canonical_v13_to_desktop_state(*parsed);
+      if (!restored.ok() || std::abs(restored.state->raw_exposure) > 4.0 ||
+          std::abs(restored.state->exposure) > 5.0 ||
+          std::abs(restored.state->exposure + restored.state->raw_exposure -
+                   (exposure[0] + exposure[1])) > 1.0e-12 ||
+          restored.state->raw_input_transform_enabled != input_transform) {
+        return fail("canonical RAW exposure must reopen as the same total scene gain for either decoder boundary");
+      }
+      const auto resaved = photo_editor::desktop::serialize_desktop_recipe_as_canonical_v13(
+          *restored.state, raw_context);
+      if (!resaved.ok() || resaved.document.recipe_payload != saved.document.recipe_payload ||
+          resaved.document.cache_key != saved.document.cache_key) {
+        return fail("combined exposure save/reopen must retain canonical payload and cache identity");
+      }
+      auto reset = *restored.state;
+      reset.exposure = 0.0;
+      reset.raw_exposure = 0.0;
+      const auto reset_saved = photo_editor::desktop::serialize_desktop_recipe_as_canonical_v13(
+          reset, raw_context);
+      const auto reset_recipe = photo_editor::pipeline::deserialize_edit_recipe_v13(
+          reset_saved.document.recipe_payload.toStdString());
+      if (!reset_saved.ok() || !reset_recipe || reset_recipe->scene.exposure_ev != 0.0) {
+        return fail("reset after reopening combined exposure must restore neutral scene gain");
+      }
+    }
+  }
+  {
+    auto external_raw = photo_editor::pipeline::deserialize_edit_recipe_v13(
+        written.document.recipe_payload.toStdString());
+    if (!external_raw) return fail("canonical projection-limit fixture must decode");
+    external_raw->input.decoder = photo_editor::pipeline::RawDecoder::LibRaw;
+    external_raw->scene.exposure_ev = 9.25;
+    const auto rejected = photo_editor::desktop::project_canonical_v13_to_desktop_state(*external_raw);
+    if (rejected.ok() || rejected.state || rejected.errors.empty() ||
+        rejected.errors.front().path != "scene.exposure_ev") {
+      return fail("uneditable external RAW exposure must fail projection clearly without silently clamping pixels");
+    }
+    external_raw->input.decoder = photo_editor::pipeline::RawDecoder::Raster;
+    external_raw->scene.exposure_ev = 4.75;
+    const auto raster = photo_editor::desktop::project_canonical_v13_to_desktop_state(*external_raw);
+    if (!raster.ok() || raster.state->raw_exposure != 0.0 || raster.state->exposure != 4.75) {
+      return fail("raster canonical projection must not acquire hidden RAW exposure");
+    }
   }
   photo_editor::pipeline::RecipeError decode_error;
   const auto decoded =

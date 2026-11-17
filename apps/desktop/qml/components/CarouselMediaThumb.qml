@@ -66,7 +66,8 @@ Rectangle {
         anchors.margins: theme.space4
         text: root.mediaLabel
         color: theme.textMuted
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 8
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere

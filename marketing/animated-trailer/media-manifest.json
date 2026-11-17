@@ -1,0 +1,116 @@
+[
+  {
+    "source": "marketing/renders/nepal-review/4k/clips/IMG_1268-2-7.mp4",
+    "destination": "public/media/IMG_1268-2-7.mp4",
+    "sha256": "f6322408fd52f5bc374a109375bd3d2904894de7cf21d5d0eed0731518f871a6",
+    "provenance": "Silent 1280px review excerpt from 3840x2160 source; not a Looksy export"
+  },
+  {
+    "source": "marketing/renders/nepal-review/clips/MVI_5051-2.3-5.9.mp4",
+    "destination": "public/media/MVI_5051-2.3-5.9.mp4",
+    "sha256": "7d1e8a9285e725b877d26c7e380102347ff33ba05e0a8f2619feb31b185cc24f",
+    "provenance": "Silent 1280px review excerpt from original Nepal camera footage; not a Looksy export"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5103.jpg",
+    "destination": "public/media/IMG_5103.jpg",
+    "sha256": "fe0fa6b458d315552d64ab26e5adfe4fe8f556ed508187d5e292873d48c51952",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5111.jpg",
+    "destination": "public/media/IMG_5111.jpg",
+    "sha256": "741c42e2dc9b3c208e0298e1c3b8a48410b9fea73662dd7a197e3de5d42aaca0",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5125.jpg",
+    "destination": "public/media/IMG_5125.jpg",
+    "sha256": "b3a3c418a4e142ba0a8d2456729ddcb959a75aff20969b4e125f34960b931e4c",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_4856.jpg",
+    "destination": "public/media/IMG_4856.jpg",
+    "sha256": "498e58d2151d0cc4b572a170c85105166afc5d4f244f1f97f669a1fd7141677e",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_4744.jpg",
+    "destination": "public/media/IMG_4744.jpg",
+    "sha256": "6048258a1904b99609cd361421b57d7bf7c252d25329d57b72cc73479d7fa66c",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5053.jpg",
+    "destination": "public/media/IMG_5053.jpg",
+    "sha256": "07085a0796f9359a1f8e669023158ca5e9f8b1d5e99d0cf6d8717d35cc121962",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5124.jpg",
+    "destination": "public/media/IMG_5124.jpg",
+    "sha256": "6a7f55638be8449de24bc09d51269ad77949835c514d9dc0b1b5c550298208df",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5077.jpg",
+    "destination": "public/media/IMG_5077.jpg",
+    "sha256": "52a29d8d0bdc748f71b5e25bea35c59794db67dbf118b9b69ac5128ec5045c3b",
+    "provenance": "Embedded camera JPEG preview for illustrated library; not a Looksy edit or search result"
+  },
+  {
+    "source": "marketing/renders/nepal-review/4k/clips/IMG_1207-2-7.mp4",
+    "destination": "public/media/IMG_1207-2-7.mp4",
+    "sha256": "90b96db96aaa05032dec3dfdcc9d931a54882b089df4c91f39acc166092dfcb4",
+    "provenance": "Silent 1280px review excerpt from the 3840x2160 source; illustrative footage, not a Looksy export"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5071.jpg",
+    "destination": "public/media/IMG_5071.jpg",
+    "sha256": "646ff307414c0aab62c67c57425618fc865a562ee4deadc1a4aa42e6d33a8b67",
+    "provenance": "Embedded camera JPEG preview; not a Looksy RAW render"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_5106.jpg",
+    "destination": "public/media/IMG_5106.jpg",
+    "sha256": "a44db91ba80914c76ae9e927d78200918ef378add56795f2b5a71f78d6f2dafb",
+    "provenance": "Embedded camera JPEG preview; vector mask is art direction only"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_4870.jpg",
+    "destination": "public/media/IMG_4870.jpg",
+    "sha256": "7663700d19882d407aebf12ac86765942c106d3a8600b3dd56b7fe449525eca4",
+    "provenance": "Embedded camera JPEG preview"
+  },
+  {
+    "source": "marketing/renders/nepal-review/detail/IMG_4969.jpg",
+    "destination": "public/media/IMG_4969.jpg",
+    "sha256": "73f1dfaf468aa80e27a70b5e1616233032ab338c0b36408ecc05aedeac230271",
+    "provenance": "Embedded camera JPEG preview"
+  },
+  {
+    "source": "marketing/renders/nepal-review/4k/clips/IMG_1207-2-7.jpg",
+    "destination": "public/media/IMG_1207-2-7.jpg",
+    "sha256": "c2b79491125b3a5bf70bff3a820e5e9e8e17a2c2bc63a37d81c10ff9a0eecf10",
+    "provenance": "Review poster from 3840x2160 Downloads/IMG_1207.mov; not an app export"
+  },
+  {
+    "source": "marketing/renders/nepal-review/4k/clips/IMG_1268-2-7.jpg",
+    "destination": "public/media/IMG_1268-2-7.jpg",
+    "sha256": "8a2e122d48b916b7abb69ac4645af76202b4673326d4388061e496bc4be9b33b",
+    "provenance": "Review poster from 3840x2160 Downloads/IMG_1268.mov; not an app export"
+  },
+  {
+    "source": "apps/desktop/assets/brand/looksy-wordmark-light.png",
+    "destination": "public/media/looksy-wordmark-light.png",
+    "sha256": "635dc36c9dbb4796a29c3044f572eb77213a19ce2d0b15ff00acdb0663b95595",
+    "provenance": "Existing Looksy wordmark for light backgrounds"
+  },
+  {
+    "source": "apps/desktop/assets/brand/looksy-wordmark-dark.png",
+    "destination": "public/media/looksy-wordmark-dark.png",
+    "sha256": "ddd6ae697d460525ef8164f021563fec6b79418408ac349ea93c6fb29b492de5",
+    "provenance": "Existing Looksy wordmark for dark backgrounds"
+  }
+]

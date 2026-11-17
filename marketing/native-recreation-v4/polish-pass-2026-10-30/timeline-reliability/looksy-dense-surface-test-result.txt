@@ -1,0 +1,2 @@
+Dense track filtering, compact clip readability and marker hit areas passed
+qt.qpa.fonts: Populating font family aliases took 26 ms. Replace uses of missing font family "Sans Serif" with one that exists to avoid this cost. 

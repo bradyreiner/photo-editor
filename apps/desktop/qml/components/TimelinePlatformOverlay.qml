@@ -191,7 +191,8 @@ Item {
                           : index === (root.showProfile ? 2 : 1) ? "248"
                           : index === (root.showProfile ? 3 : 2) ? "Share" : ""
                     color: theme.alpha(theme.textStrong, 0.82)
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: Math.max(8, Math.min(theme.typeCaption, root.height * 0.026))
                 }
             }

@@ -1193,6 +1193,10 @@ struct MetalPipelineBackend::Impl {
   std::vector<Aces2OutputLutBufferEntry> aces2_output_lut_buffers;
   std::uint64_t aces2_output_lut_use_counter = 0U;
   std::mutex aces2_output_lut_mutex;
+  static constexpr std::size_t kMaximumAces2CpuReadbackBufferBytes =
+      16U * 1024U * 1024U;
+  id<MTLBuffer> aces2_cpu_readback_pixel_buffer = nil;
+  std::mutex aces2_cpu_readback_pixel_buffer_mutex;
 
   [[nodiscard]] id<MTLBuffer> aces2_output_lut_buffer(
       const Aces2OutputLut3D& lut,
@@ -1975,6 +1979,65 @@ MetalPipelineBackend::curve_lut_cache_stats() const {
   };
 }
 
+std::shared_ptr<const MetalWorkingSurface>
+MetalPipelineBackend::upload_working_surface(
+    std::span<const ColorPixel> pixels,
+    const RenderSurfaceDescriptor& descriptor,
+    ColorAdjustmentTelemetry* telemetry,
+    CancellationToken cancellation) {
+  const auto fail = [&](std::string reason) {
+    if (telemetry != nullptr) telemetry->gpu_fallback_reason = std::move(reason);
+    return std::shared_ptr<const MetalWorkingSurface>{};
+  };
+  if (!available()) return fail(unavailable_reason());
+  if (cancellation.cancelled()) return fail("working_surface_upload_cancelled");
+  const auto pixel_count = static_cast<std::uint64_t>(descriptor.width) * descriptor.height;
+  if (descriptor.width == 0U || descriptor.height == 0U ||
+      pixel_count != pixels.size() ||
+      pixel_count > std::numeric_limits<std::size_t>::max() / sizeof(ColorPixel)) {
+    return fail("working_surface_upload_invalid_dimensions");
+  }
+  for (auto index = std::size_t{0}; index < pixels.size(); ++index) {
+    if ((index & 4095U) == 0U && cancellation.cancelled())
+      return fail("working_surface_upload_cancelled");
+    const auto& pixel = pixels[index];
+    if (!std::isfinite(pixel.red) || !std::isfinite(pixel.green) ||
+        !std::isfinite(pixel.blue) || !std::isfinite(pixel.alpha))
+      return fail("working_surface_upload_non_finite");
+  }
+  const auto buffer_size = pixels.size_bytes();
+  @autoreleasepool {
+    id<MTLBuffer> buffer = [impl_->device newBufferWithLength:buffer_size
+                                                   options:MTLResourceStorageModeShared];
+    id<MTLSharedEvent> ready_event = [impl_->device newSharedEvent];
+    id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
+    if (buffer == nil || ready_event == nil || command_buffer == nil)
+      return fail("working_surface_upload_allocation_failed");
+    std::memcpy([buffer contents], pixels.data(), buffer_size);
+    [command_buffer encodeSignalEvent:ready_event value:1U];
+    [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+      if (completed.status != MTLCommandBufferStatusCompleted && ready_event.signaledValue < 1U)
+        ready_event.signaledValue = 1U;
+    }];
+    if (cancellation.cancelled()) return fail("working_surface_upload_cancelled");
+    [command_buffer commit];
+    auto surface_impl = std::make_shared<MetalWorkingSurface::Impl>();
+    surface_impl->pixel_buffer = buffer;
+    surface_impl->producer_command_buffer = command_buffer;
+    surface_impl->ready_event = ready_event;
+    surface_impl->descriptor = descriptor;
+    surface_impl->device_registry_id = static_cast<std::uint64_t>(impl_->device.registryID);
+    surface_impl->ready_event_value = 1U;
+    surface_impl->byte_size = static_cast<std::uint64_t>(buffer_size);
+    if (telemetry != nullptr) {
+      telemetry->gpu_fallback_reason.clear();
+      telemetry->gpu_cpu_to_gpu_bytes += static_cast<std::int64_t>(buffer_size);
+      telemetry->gpu_command_buffer_count += 1;
+    }
+    return std::shared_ptr<const MetalWorkingSurface>(new MetalWorkingSurface(std::move(surface_impl)));
+  }
+}
+
 bool MetalPipelineBackend::apply_aces2_output_lut_target(
     std::vector<ColorPixel>* pixels,
     int width,
@@ -2028,11 +2091,41 @@ bool MetalPipelineBackend::apply_aces2_output_lut_target(
     }
 
     const auto pixel_buffer_size = pixel_count * sizeof(ColorPixel);
-    id<MTLBuffer> pixel_buffer = [impl_->device
-        newBufferWithLength:pixel_buffer_size
-                    options:MTLResourceStorageModeShared];
+    std::unique_lock<std::mutex> pixel_buffer_lease(
+        impl_->aces2_cpu_readback_pixel_buffer_mutex,
+        std::try_to_lock);
+    auto reused_pixel_buffer = false;
+    id<MTLBuffer> pixel_buffer = nil;
+    if (pixel_buffer_lease.owns_lock() &&
+        pixel_buffer_size <= Impl::kMaximumAces2CpuReadbackBufferBytes) {
+      const auto cached_buffer = impl_->aces2_cpu_readback_pixel_buffer;
+      if (cached_buffer != nil && cached_buffer.length >= pixel_buffer_size) {
+        pixel_buffer = cached_buffer;
+        reused_pixel_buffer = true;
+      } else {
+        id<MTLBuffer> replacement_buffer = [impl_->device
+            newBufferWithLength:pixel_buffer_size
+                        options:MTLResourceStorageModeShared];
+        if (replacement_buffer != nil) {
+          impl_->aces2_cpu_readback_pixel_buffer = replacement_buffer;
+          pixel_buffer = replacement_buffer;
+        }
+      }
+    }
+    if (pixel_buffer == nil) {
+      pixel_buffer = [impl_->device
+          newBufferWithLength:pixel_buffer_size
+                      options:MTLResourceStorageModeShared];
+    }
     if (!pixel_buffer) {
       return fail("aces2_output_pixel_buffer_allocation_failed");
+    }
+    if (telemetry != nullptr) {
+      if (reused_pixel_buffer) {
+        telemetry->gpu_cpu_readback_buffer_pool_hit_count += 1;
+      } else {
+        telemetry->gpu_cpu_readback_buffer_pool_miss_count += 1;
+      }
     }
     std::memcpy([pixel_buffer contents], pixels->data(), pixel_buffer_size);
 

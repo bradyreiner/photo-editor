@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--app-data-dir", type=Path, default=DEFAULT_APP_DATA_DIR)
     parser.add_argument("--model-id", default="ollama-qwen3-vl-32b")
     parser.add_argument("--ollama-model", default="qwen3-vl:32b")
+    parser.add_argument("--source-image", type=Path,
+                        help="Optional real-photo input, shared by all compared models; its hash is recorded in receipts.")
     parser.add_argument(
         "--aggregate-only",
         action="store_true",
@@ -100,6 +102,10 @@ def run_live_sample(args: argparse.Namespace, condition: str, index: int) -> Pat
             "PHOTO_EDITOR_LIVE_OLLAMA_RECEIPT_PATH": str(receipt_path),
         }
     )
+    if args.source_image is not None:
+        env["PHOTO_EDITOR_LIVE_OLLAMA_SOURCE_PATH"] = str(args.source_image.expanduser().resolve())
+    else:
+        env.pop("PHOTO_EDITOR_LIVE_OLLAMA_SOURCE_PATH", None)
     run_command([str(args.test_binary)], env=env)
     return receipt_path
 
@@ -211,6 +217,12 @@ def build_aggregate(
     cold_receipts = [load_receipt(path) for path in cold_paths]
     warm_receipts = [load_receipt(path) for path in warm_paths]
     representative = (cold_receipts or warm_receipts)[0]
+    source_hash = representative.get("sourceSha256")
+    for receipt in cold_receipts + warm_receipts:
+        if (receipt.get("sourceSha256") != source_hash
+                or receipt.get("modelId") != representative.get("modelId")
+                or receipt.get("ollamaModel") != representative.get("ollamaModel")):
+            raise SystemExit("cannot aggregate receipts from different models or source images")
     memory_bytes = installed_memory_bytes()
     detected_tier = hardware_tier_for_memory(memory_bytes)
     deadline_ms = DEADLINE_BY_TIER_MS[args.hardware_tier]
@@ -244,6 +256,7 @@ def build_aggregate(
             ),
             "currentRequestAuthoritative": True,
         },
+        "input": {"sourceSha256": source_hash, "fixtureKind": representative.get("fixtureKind", "legacy-unspecified")},
         "method": {
             "sampleCountPerCondition": args.samples,
             "percentileMethod": "nearest-rank",
@@ -319,6 +332,8 @@ def main() -> int:
     args.output_dir = args.output_dir.expanduser().resolve()
     args.test_binary = args.test_binary.expanduser().resolve()
     args.app_data_dir = args.app_data_dir.expanduser().resolve()
+    if args.source_image is not None and not args.source_image.expanduser().is_file():
+        raise SystemExit(f"missing source image: {args.source_image}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     memory_bytes = installed_memory_bytes()

@@ -201,7 +201,8 @@ ColumnLayout {
             Layout.fillWidth: true
             text: "Boards · " + ((content.root.boardRangePreview.boardNumbers || []).join(" · "))
             color: content.theme.textMuted
-            font.family: content.theme.fontMono
+            font.family: content.theme.fontNumeric
+            font.features: content.theme.numericFontFeatures
             font.pixelSize: content.theme.typeCaption
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             elide: Text.ElideNone

@@ -100,7 +100,7 @@ Item {
             anchors.topMargin: 4
             text: "Patch source"
             color: theme.textStrong
-            font.family: theme.fontMono
+            font.family: theme.fontUi
             font.pixelSize: 10
             padding: 4
             background: Rectangle {
@@ -189,7 +189,7 @@ Item {
                   previewController.activeMaskCloneScale.toFixed(2) + "x / " +
                   Math.round(previewController.activeMaskCloneRotation).toString() + " deg"
             color: theme.textStrong
-            font.family: theme.fontMono
+            font.family: theme.fontUi
             font.pixelSize: 10
             padding: 4
             background: Rectangle {
@@ -258,7 +258,7 @@ Item {
             anchors.topMargin: 4
             text: "Clone source"
             color: theme.textStrong
-            font.family: theme.fontMono
+            font.family: theme.fontUi
             font.pixelSize: 10
             padding: 4
             background: Rectangle {

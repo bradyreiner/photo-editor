@@ -6,6 +6,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSet>
 #include <QThread>
 #include <iostream>
 #include <memory>
@@ -33,6 +34,16 @@ bool do_action(QObject* object, const QString& action_name) {
   return actions != nullptr && actions->actionNames().contains(action_name) &&
       (actions->doAction(action_name), true);
 }
+
+bool reachable(QAccessibleInterface* interface, QObject* target, QSet<QObject*>& visited) {
+  if (interface == nullptr || visited.contains(interface->object())) return false;
+  if (interface->object() == target) return true;
+  visited.insert(interface->object());
+  for (int index = 0; index < interface->childCount(); ++index) {
+    if (reachable(interface->child(index), target, visited)) return true;
+  }
+  return false;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -47,11 +58,12 @@ import "../apps/desktop/qml/components"
 Item {
     id: harness
     width: 360
-    height: 220
+    height: 520
     property int toggleActivations: 0
     property int swatchActivations: 0
     property int actionActivations: 0
     property int miniActivations: 0
+    property int recentActivations: 0
 
     ToolOptionToggle {
         objectName: "accessibleOption"
@@ -78,6 +90,33 @@ Item {
         text: "Reset"
         onClicked: harness.miniActivations++
     }
+    InspectorSection {
+        objectName: "accessibleSection"
+        x: 8; y: 110; width: 344
+        title: "Delivery settings"
+        InspectorSlider {
+            objectName: "accessibleExposure"
+            width: 320
+            label: "Exposure"
+            from: -5; to: 5; value: 0.5; valueText: "0.50 EV"
+        }
+        ToneComboBox {
+            objectName: "accessibleFormat"
+            accessibleLabel: "Output format"
+            model: ["PNG", "JPEG"]
+        }
+    }
+    RecentDocumentRow {
+        objectName: "accessibleRecent"
+        x: 8; y: 350; width: 344
+        title: "Saved project"
+        onActivated: harness.recentActivations++
+    }
+    StudioTinyInput {
+        objectName: "accessibleSearch"
+        x: 8; y: 440; width: 344; height: 34
+        placeholder: "Search images"
+    }
 }
 )QML", QUrl::fromLocalFile(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/tests/shared-control-accessibility-harness.qml")));
 
@@ -88,7 +127,7 @@ Item {
   }
 
   QQuickWindow window;
-  window.resize(360, 220);
+  window.resize(360, 520);
   qobject_cast<QQuickItem*>(harness.get())->setParentItem(window.contentItem());
   window.show();
   settle();
@@ -133,6 +172,32 @@ Item {
   static_cast<void>(do_action(swatch, QAccessibleActionInterface::pressAction()));
   if (harness->property("swatchActivations").toInt() != 1)
     return fail("A disabled color swatch must ignore accessible activation");
+
+  auto* section = find("accessibleSection");
+  auto* exposure = find("accessibleExposure");
+  auto* format = find("accessibleFormat");
+  auto* recent = find("accessibleRecent");
+  auto* search = find("accessibleSearch");
+  if (!section || !exposure || !format || !recent || !search)
+    return fail("Inspector and search accessibility fixtures should instantiate");
+  if (!expect_role_and_name(section, QAccessible::Grouping, QStringLiteral("Delivery settings")))
+    return fail("An inspector containing controls must expose a group, not a static text leaf");
+  auto* exposure_field = exposure->findChild<QObject*>(QStringLiteral("accessibleExposureValueField"));
+  for (auto* child : {exposure, exposure_field, format}) {
+    QSet<QObject*> visited;
+    if (!child || !reachable(accessible(section), child, visited))
+      return fail("Inspector sliders, typed values and format choices must be reachable from their accessible parent");
+  }
+  if (!do_action(recent, QAccessibleActionInterface::pressAction()) ||
+      harness->property("recentActivations").toInt() != 1)
+    return fail("A Recent document must open through accessibility activation");
+  recent->setProperty("actionable", false);
+  static_cast<void>(do_action(recent, QAccessibleActionInterface::pressAction()));
+  if (harness->property("recentActivations").toInt() != 1)
+    return fail("An unavailable Recent document must ignore accessibility activation");
+  auto* search_input = search->findChild<QObject*>(QStringLiteral("accessibleSearchInput"));
+  if (!expect_role_and_name(search_input, QAccessible::EditableText, QStringLiteral("Search images")))
+    return fail("Library search must expose a named editable text field");
 
   std::cout << "Shared controls expose working accessible press and toggle actions\n";
   return 0;

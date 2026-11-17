@@ -1,5 +1,9 @@
 #include "catalog_asset_model.h"
 #include "edit_recipe_state.h"
+#include "photo_paint_surface.h"
+#include "photo_render_utils.h"
+#include "working_image.h"
+#include <QImageReader>
 #include <QGuiApplication>
 #include <QElapsedTimer>
 #include <QFile>
@@ -13,6 +17,8 @@
 #include <QThread>
 #include <QUrl>
 #include <functional>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 
 namespace photo_editor::desktop {
@@ -80,6 +86,142 @@ bool photo(const QString& path, const QColor& color) {
 }
 QString thumbnail(const CatalogAssetModel& model, const QString& id) {
   return model.assetById(id).value("thumbnailSource").toString();
+}
+
+bool verify_composite_alpha(CatalogAssetModel& model, const QString& root) {
+  const auto path = QDir(root).filePath("transparent-wide-gamut.png");
+  QImage source(1600, 1600, QImage::Format_ARGB32);
+  source.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+  for (int y = 0; y < source.height(); ++y)
+    for (int x = 0; x < source.width(); ++x)
+      source.setPixelColor(x, y, QColor(160, 55, 95, y < 800 ? 170 : 0));
+  if (!source.save(path)) return false;
+  QVariantMap paint{{"id", "hdr-paint"}, {"kind", "pixel"}, {"enabled", true},
+      {"pixelWidth", 1600}, {"pixelHeight", 1600}, {"canvasWidth", 1600}, {"canvasHeight", 1600},
+      {"opacity", 0.82}, {"scale", 1.0},
+      {"paintTiles", empty_photo_paint_tiles(working_color_space("Linear Display P3"))}};
+  PhotoPaintSurface surface;
+  if (!surface.load(paint)) return false;
+  for (int ty = 0; ty * kPhotoPaintTileEdge < 1600; ++ty)
+    for (int tx = 0; tx * kPhotoPaintTileEdge < 1600; ++tx) {
+      auto tile = surface.tile(tx, ty);
+      for (int y = 0; y < tile.height(); ++y) {
+        auto* row = reinterpret_cast<QRgbaFloat32*>(tile.scanLine(y));
+        for (int x = 0; x < tile.width(); ++x) {
+          const int gy = ty * kPhotoPaintTileEdge + y;
+          // A broad, partially erased stripe survives both decode scales.
+          const float alpha = gy >= 800 && gy < 1200 ? 0.04F : 0.35F;
+          row[x] = QRgbaFloat32{1.8F * alpha, -0.02F * alpha, 0.3F * alpha, alpha};
+        }
+      }
+      surface.store(tx, ty, tile);
+    }
+  paint.insert("paintTiles", surface.snapshot());
+  EditRecipeState edited;
+  edited.exposure = 0.7;
+  edited.saturation = 12;
+  edited.crop_rect_x = 0.125;
+  edited.crop_rect_y = 0.125;
+  edited.crop_rect_width = 0.75;
+  edited.crop_rect_height = 0.75;
+  edited.layers = {paint};
+  const auto compare = [&](const QString& source_path, const EditRecipeState& state, const char* label) {
+    auto items = CatalogThumbnailReuseTestAccess::items(model);
+    const auto id = items[0].asset_id;
+    const auto prior_url = thumbnail(model, id);
+    items[0].file_path = source_path;
+    items[0].online = true;
+    items[0].adjustment_patch_json = serialize_edit_recipe_json(state);
+    model.replaceAssetsForTesting(items);
+    model.setVisibleAssetRange(0, model.rowCount() - 1);
+    if (!wait([&] { return CatalogThumbnailReuseTestAccess::idle(model) &&
+            !thumbnail(model, id).isEmpty() && thumbnail(model, id) != prior_url; })) {
+      std::cerr << label << " publication failed id=" << id.toStdString()
+                << " source=" << source_path.toStdString() << " url=" << thumbnail(model, id).toStdString()
+                << " idle=" << CatalogThumbnailReuseTestAccess::idle(model) << '\n';
+      return false;
+    }
+    const auto cache_path = QUrl(thumbnail(model, id)).toLocalFile();
+    QImageReader reader(cache_path);
+    const auto encoded_format = reader.format().toLower();
+    const auto actual = reader.read();
+    if (encoded_format != "png" || actual.isNull() || !actual.hasAlphaChannel() ||
+        actual.colorSpace() != QColorSpace(QColorSpace::SRgb)) {
+      std::cerr << label << " invalid cache path=" << cache_path.toStdString()
+                << " format=" << encoded_format.constData() << " size=" << actual.width() << 'x'
+                << actual.height() << " alpha=" << actual.hasAlphaChannel()
+                << " srgb=" << (actual.colorSpace() == QColorSpace(QColorSpace::SRgb))
+                << " error=" << reader.errorString().toStdString() << '\n';
+      return false;
+    }
+    auto reference = render_flattened_output_file("catalog-alpha-reference", source_path, state,
+        QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32);
+    if (reference.isNull()) {
+      std::cerr << label << " full flattened reference failed\n";
+      return false;
+    }
+    reference = reference.scaled(768, 768, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    if (reference.size() != actual.size()) {
+      std::cerr << label << " size actual=" << actual.width() << 'x' << actual.height()
+                << " expected=" << reference.width() << 'x' << reference.height() << '\n';
+      return false;
+    }
+    int maximum_visible = 0, maximum_alpha = 0, maximum_interior = 0, partial = 0, interior = 0;
+    QPoint worst;
+    for (int y = 0; y < actual.height(); ++y) for (int x = 0; x < actual.width(); ++x) {
+      const auto left = actual.pixelColor(x, y), right = reference.pixelColor(x, y);
+      int visible = 0;
+      for (int channel = 0; channel < 3; ++channel) {
+        const int a = channel == 0 ? left.red() : channel == 1 ? left.green() : left.blue();
+        const int b = channel == 0 ? right.red() : channel == 1 ? right.green() : right.blue();
+        const int black_a = qRound(a * left.alphaF()), black_b = qRound(b * right.alphaF());
+        const int white_a = black_a + 255 - left.alpha(), white_b = black_b + 255 - right.alpha();
+        visible = std::max(visible, std::max(std::abs(black_a - black_b), std::abs(white_a - white_b)));
+      }
+      if (visible > maximum_visible) { maximum_visible = visible; worst = QPoint(x, y); }
+      maximum_alpha = std::max(maximum_alpha, std::abs(left.alpha() - right.alpha()));
+      partial += left.alpha() > 0 && left.alpha() < 255;
+      // Hidden RGB at alpha zero is undefined. Retain a separate straight-RGB
+      // check in visible, uniform-alpha interior patches.
+      if (left.alpha() >= 128 && right.alpha() >= 128 && x > 1 && y > 1 &&
+          x + 2 < actual.width() && y + 2 < actual.height() &&
+          actual.pixelColor(x - 2, y).alpha() == left.alpha() &&
+          actual.pixelColor(x + 2, y).alpha() == left.alpha() &&
+          actual.pixelColor(x, y - 2).alpha() == left.alpha() &&
+          actual.pixelColor(x, y + 2).alpha() == left.alpha()) {
+        ++interior;
+        maximum_interior = std::max(maximum_interior, std::max({std::abs(left.red() - right.red()),
+            std::abs(left.green() - right.green()), std::abs(left.blue() - right.blue())}));
+      }
+    }
+    std::cout << label << " max black/white composite RGB8=" << maximum_visible
+              << " alpha8=" << maximum_alpha << " interior straight RGB8=" << maximum_interior
+              << " partial=" << partial << " interior=" << interior
+              << " worst=" << worst.x() << ',' << worst.y() << '\n';
+    return maximum_visible <= 2 && maximum_alpha <= 1 && maximum_interior <= 2 &&
+        partial > 0 && interior > 0;
+  };
+  if (!compare(path, edited, "Catalog cross-resolution graded paint/erase")) return false;
+  const auto prior_pixels = QImage(QUrl(thumbnail(model,
+      CatalogThumbnailReuseTestAccess::items(model)[0].asset_id)).toLocalFile());
+  edited.exposure = -0.7;
+  if (!compare(path, edited, "Catalog changed grade")) return false;
+  const auto changed_pixels = QImage(QUrl(thumbnail(model,
+      CatalogThumbnailReuseTestAccess::items(model)[0].asset_id)).toLocalFile());
+  if (changed_pixels == prior_pixels) return false;
+
+  // At the bounded decode resolution the oracle is the actual full flattened
+  // output, so every transformed edge can be checked without conflating two
+  // different interpolation footprints at different physical resolutions.
+  const auto bounded_path = QDir(root).filePath("bounded-transform-source.png");
+  if (!source.scaled(1024, 1024, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).save(bounded_path)) return false;
+  edited.transform_rotation = 11.0;
+  edited.transform_scale = 0.91;
+  edited.transform_skew_x = 0.08;
+  edited.transform_skew_y = -0.04;
+  edited.perspective_vertical = 5.0;
+  edited.perspective_horizontal = -3.0;
+  return compare(bounded_path, edited, "Catalog crop before transformed geometry");
 }
 }
 
@@ -240,6 +382,8 @@ int main(int argc, char** argv) {
   CatalogThumbnailReuseTestAccess::snapshot(model, snapshot_path);
   if (!wait(all_ready) || publications != before + 1 || model.assetById("2").value("filePath").toString() != relink_path)
     return fail("Relink did not isolate thumbnail invalidation");
+  if (!verify_composite_alpha(model, root.path()))
+    return fail("Catalog thumbnail must preserve edited composite color and paint/erase alpha");
   std::cout << "10 real snapshot refreshes: 0 workers/publications; forced control: 3; recipe/source/cache/linked/relink changes: 1 publication each; original and linked pixels changed; offline restoration, virtual copies, and stale-result rejection passed\n";
   return 0;
 }

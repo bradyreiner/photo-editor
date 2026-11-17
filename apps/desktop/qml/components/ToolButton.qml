@@ -20,8 +20,10 @@ Button {
     property bool commandEnabled: true
     property bool compact: true
     property bool showLabel: false
+    property bool showLeadingIcon: false
+    readonly property bool commandIconVisible: (!showLabel || label.length === 0 || showLeadingIcon) && (iconName.length > 0 || iconText.length > 0)
     property bool showMenuIndicator: false
-    property int toolIconSize: compact ? 16 : 18
+    property int toolIconSize: theme.scaled(compact ? 16 : 18)
 
     signal menuRequested()
 
@@ -59,7 +61,7 @@ Button {
         return parts.join("  ")
     }
 
-    implicitWidth: showLabel ? Math.max(compact ? 48 : 54, toolContent.implicitWidth + theme.space12)
+    implicitWidth: showLabel ? Math.max(theme.scaled(compact ? 48 : 54), toolContent.implicitWidth + theme.space12)
                              : (compact ? theme.iconButtonSizeCompact : theme.railButtonSize)
     implicitHeight: compact ? theme.iconButtonSizeCompact : theme.railButtonSize
     hoverEnabled: true
@@ -104,23 +106,23 @@ Button {
         interactiveEnabled: root.enabled && root.commandEnabled
         fillColor: theme.commandFill("secondary", root.active, root.hovered, root.down,
                                      root.enabled && root.commandEnabled, true)
-        borderWidth: theme.commandBorderWidth(root.visualFocus)
-        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
+        focused: root.visualFocus
     }
 
     contentItem: Item {
         id: toolContent
 
-        implicitWidth: root.showLabel ? contentRow.implicitWidth : 16
-        implicitHeight: root.showLabel ? contentRow.implicitHeight : 16
+        implicitWidth: root.showLabel ? contentRow.implicitWidth : theme.scaled(16)
+        implicitHeight: root.showLabel ? contentRow.implicitHeight : theme.scaled(16)
 
         RowLayout {
             id: contentRow
             anchors.centerIn: parent
-            spacing: root.showLabel ? theme.space6 : 0
+            spacing: root.showLabel && root.commandIconVisible ? theme.space6 : 0
 
             AppIcon {
-                visible: root.iconName.length > 0
+                objectName: "sharedCommandIcon"
+                visible: root.commandIconVisible && root.iconName.length > 0
                 Layout.preferredWidth: root.toolIconSize
                 Layout.preferredHeight: root.toolIconSize
                 Layout.alignment: Qt.AlignCenter
@@ -130,11 +132,11 @@ Button {
             }
 
             Text {
-                visible: root.iconName.length === 0 && root.iconText.length > 0
+                visible: root.commandIconVisible && root.iconName.length === 0 && root.iconText.length > 0
                 text: root.iconText
                 color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.82)
                                       : (root.active || root.pending || root.warning ? root.stateColor : theme.textMain)
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: root.compact ? theme.typeLabel : theme.typeControl
                 font.weight: theme.weightControl
                 horizontalAlignment: Text.AlignHCenter
@@ -142,6 +144,7 @@ Button {
             }
 
             Text {
+                objectName: "sharedCommandLabel"
                 visible: root.showLabel
                 text: root.label
                 color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.84)
@@ -152,8 +155,7 @@ Button {
                 font.letterSpacing: 0
                 maximumLineCount: 1
                 elide: Text.ElideNone
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 10
+                fontSizeMode: Text.FixedSize
                 verticalAlignment: Text.AlignVCenter
             }
         }
@@ -171,6 +173,7 @@ Button {
         }
 
         AppIcon {
+            objectName: "toolMenuIndicator"
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             anchors.rightMargin: 2

@@ -1,4 +1,9 @@
 #include "editor_recipe_save_journal.h"
+#include "editor_recipe_journal_delta.h"
+#if defined(Q_OS_UNIX)
+#include <unistd.h>
+#include <fcntl.h>
+#endif
 #include <QAnyStringView>
 
 #include <QCryptographicHash>
@@ -6,12 +11,14 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QUuid>
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -24,9 +31,6 @@ namespace photo_editor::desktop {
 namespace {
 constexpr qint64 kMaxJournalBytes = 256LL * 1024 * 1024;
 constexpr qsizetype kMaxPendingAssets = 512;
-// Bound serialized cache bytes separately from the journal's on-disk limit.
-// QJsonValue comparison data also stays alive for these entries.
-constexpr qsizetype kMaxCachedSerializationBytes = 64LL * 1024 * 1024;
 const QString kSchema = QStringLiteral("photo-editor-recipe-outbox:v3");
 const QString kPreviousSchema = QStringLiteral("photo-editor-recipe-outbox:v2");
 const QString kLegacySchema = QStringLiteral("photo-editor-recipe-outbox:v1");
@@ -196,10 +200,15 @@ bool fail(QString* error, const QString& detail) {
 }
 
 QJsonValue encode(const std::optional<EditorRecipeSaveSnapshot>& snapshot,
-                  EditRecipeMaskEncodingCache* cache) {
+                  EditRecipeMaskEncodingCache* cache, QString* error) {
   if (!snapshot) return QJsonValue(QJsonValue::Null);
+  const auto recipe = build_edit_recipe_object_with_mask_cache(snapshot->state, cache);
+  if (recipe.contains(QStringLiteral("componentObjectTableError"))) {
+    if (error) *error = recipe.value(QStringLiteral("componentObjectTableError")).toString();
+    return QJsonValue(QJsonValue::Undefined);
+  }
   return QJsonObject{{"assetId", snapshot->asset_id}, {"filePath", snapshot->file_path},
-      {"recipe", build_edit_recipe_object_with_mask_cache(snapshot->state, cache)},
+      {"recipe", recipe},
       {"migrationEvidence", QJsonObject::fromVariantMap(snapshot->migration_evidence)},
       {"agentTaskId", snapshot->agent_task_id.isEmpty() ? QStringLiteral("") : snapshot->agent_task_id}};
 }
@@ -222,13 +231,14 @@ bool decode(const QJsonValue& value, bool legacy, std::optional<EditorRecipeSave
   const auto version = recipe.value("recipeVersion").toInt();
   // The writer selects a desktop format according to the layer content.
   // Recovery must accept every version that build_edit_recipe_object emits.
-  if (version != kCurrentEditRecipeVersion && version != kPhotoEffectsEditRecipeVersion &&
-      version != kPhotoTypographyEditRecipeVersion && version != kPhotoPaintEditRecipeVersion)
-    return false;
+  if (!is_supported_structured_edit_recipe_version(version)) return false;
   auto state = parse_edit_recipe_json(QString::fromUtf8(
       QJsonDocument(recipe).toJson(QJsonDocument::Compact)));
   // Do not silently normalize/drop fields from an unsupported recovery format.
-  if (build_edit_recipe_object(state) != recipe) return false;
+  auto rebuilt = version < kPhotoComponentObjectTableEditRecipeVersion
+      ? build_edit_adjustment_state_object(state) : build_edit_recipe_object(state);
+  rebuilt.insert(QStringLiteral("recipeVersion"), version);
+  if (rebuilt != recipe) return false;
   *result = EditorRecipeSaveSnapshot{.asset_id = object.value("assetId").toString(),
       .file_path = object.value("filePath").toString(), .state = std::move(state),
       .migration_evidence = object.value("migrationEvidence").toObject().toVariantMap(),
@@ -258,7 +268,21 @@ bool EditorRecipeSaveJournal::open(const QString& app_data_root, const QString& 
   path_ = QDir(directory).filePath(namespace_hash + QStringLiteral(".json"));
   lock_ = std::make_unique<QLockFile>(path_ + QStringLiteral(".lock"));
   lock_->setStaleLockTime(0); // Do not expire a live editor's lock by age.
-  if (!lock_->tryLock(0)) return fail(error, QStringLiteral("another editor owns this catalog's pending saves"));
+  retryable_lock_conflict_ = false;
+  if (!lock_->tryLock(0)) {
+    const auto lock_error = lock_->error();
+    qint64 owner_pid = 0;
+    QString owner_host, owner_application;
+    const auto owner_known = lock_->getLockInfo(&owner_pid, &owner_host, &owner_application);
+    retryable_lock_conflict_ = lock_error == QLockFile::LockFailedError;
+    lock_.reset(); // A failed acquisition must not make this object permanently unusable.
+    if (retryable_lock_conflict_) {
+      return fail(error, owner_known && owner_pid > 0
+          ? QStringLiteral("Another Looksy window is using this catalog (process %1). Close that window normally, then choose Retry close. Your edits are still in this window.").arg(owner_pid)
+          : QStringLiteral("Another Looksy window is using this catalog. Close that window normally, then choose Retry close. Your edits are still in this window."));
+    }
+    return fail(error, QStringLiteral("cannot acquire the local recovery lock; check the recovery folder's permissions and available storage"));
+  }
   QFile input(path_);
   if (!input.exists()) { *recovered = {}; valid_ = true; return true; }
   if (!input.open(QIODevice::ReadOnly) || input.size() > kMaxJournalBytes)
@@ -266,9 +290,21 @@ bool EditorRecipeSaveJournal::open(const QString& app_data_root, const QString& 
   const auto bytes = input.read(kMaxJournalBytes + 1);
   if (input.error() != QFileDevice::NoError || bytes.size() > kMaxJournalBytes)
     return fail(error, QStringLiteral("checkpoint read failed; original retained"));
-  const auto document = QJsonDocument::fromJson(bytes);
+  // Legacy files remain a single JSON envelope. New files append newline-
+  // terminated checksummed edits; a torn last record was never acknowledged.
+  auto document = QJsonDocument::fromJson(bytes);
+  qint64 valid_bytes = bytes.size();
+  int record_count = 0;
+  QByteArray base_bytes = bytes;
+  if (document.isNull()) {
+    const auto first_newline = bytes.indexOf('\n');
+    if (first_newline < 0) return fail(error, QStringLiteral("invalid checkpoint; original retained"));
+    base_bytes = bytes.first(first_newline);
+    document = QJsonDocument::fromJson(base_bytes);
+    valid_bytes = first_newline + 1;
+  }
   const auto envelope = document.object();
-  const auto payload = envelope.value("payload").toObject();
+  auto payload = envelope.value("payload").toObject();
   const bool legacy = payload.value("schema") == kLegacySchema;
   const bool previous_schema = payload.value("schema") == kPreviousSchema;
   const bool current_schema = payload.value("schema") == kSchema;
@@ -279,6 +315,47 @@ bool EditorRecipeSaveJournal::open(const QString& app_data_root, const QString& 
       (!legacy && !previous_schema && !current_schema) || payload.value("authority") != authority_ ||
       !payload.value("pending").isArray() || payload.value("pending").toArray().size() > kMaxPendingAssets)
     return fail(error, QStringLiteral("invalid checkpoint; original retained"));
+  auto chain_digest = envelope.value("sha256").toString().toLatin1();
+  if (base_bytes.size() != bytes.size()) {
+    auto cursor = base_bytes.size() + 1;
+    while (cursor < bytes.size()) {
+      const auto end = bytes.indexOf('\n', cursor);
+      if (end < 0) break;  // Ignore only an incomplete final record.
+      const auto commit_end = bytes.indexOf('\n', end + 1);
+      if (commit_end < 0) break;
+      const auto record_document = QJsonDocument::fromJson(bytes.mid(cursor, end - cursor));
+      const auto record = record_document.object();
+      const auto body = record.value("record").toObject();
+      const auto body_bytes = QJsonDocument(body).toJson(QJsonDocument::Compact);
+      const auto digest = checkpoint_sha256_hex(body_bytes);
+      QJsonValue next(payload);
+      if (!record_document.isObject() || record.size() != 2 || body.size() != 3 ||
+          body.value("schema") != QStringLiteral("photo-editor-recipe-delta:v1") ||
+          body.value("previous").toString().toLatin1() != chain_digest ||
+          record.value("sha256").toString().toLatin1() != digest ||
+          !body.value("edit").isObject() ||
+          !recipe_journal_delta::apply(&next, body.value("edit").toObject()) || !next.isObject())
+        return fail(error, QStringLiteral("invalid edit record; original retained"));
+      if (bytes.mid(end + 1, commit_end - end - 1) != QByteArray("commit:") + digest) {
+        // The body was flushed before its fence was issued. A power loss can
+        // tear that final fence even when its newline reaches storage. Keep
+        // the preceding committed head; a damaged fence in the middle of a
+        // chain is corruption and must remain a visible recovery failure.
+        if (commit_end + 1 == bytes.size()) break;
+        return fail(error, QStringLiteral("invalid edit commit fence; original retained"));
+      }
+      payload = next.toObject();
+      chain_digest = digest;
+      if (++record_count > 128)
+        return fail(error, QStringLiteral("too many edit records; original retained"));
+      cursor = commit_end + 1;
+      valid_bytes = cursor;
+    }
+    if (!current_schema || payload.size() != 6 || payload.value("schema") != kSchema ||
+        payload.value("authority") != authority_ || !payload.value("pending").isArray() ||
+        payload.value("pending").toArray().size() > kMaxPendingAssets)
+      return fail(error, QStringLiteral("invalid edited checkpoint; original retained"));
+  }
   if (current_schema && (!payload.value("rejected").isArray() ||
       payload.value("rejected").toArray().size() > kMaxPendingAssets))
     return fail(error, QStringLiteral("invalid rejected recovery entries; original retained"));
@@ -308,12 +385,49 @@ bool EditorRecipeSaveJournal::open(const QString& app_data_root, const QString& 
     }
   }
   *recovered = std::move(candidate);
+  // Recovery already materialized the queue. Do not retain a second full JSON
+  // tree beside its decoded raster state. The first write compacts this head;
+  // subsequent writes can append edits to the writer-owned shared JSON tree.
+  // This also normalizes legacy human-formatted (multi-line) envelopes before
+  // introducing newline-delimited records.
+  durable_payload_ = {};
+  durable_digest_ = chain_digest;
+  durable_bytes_ = valid_bytes;
+  delta_records_ = record_count;
   valid_ = true;
+  return true;
+}
+
+bool EditorRecipeSaveJournal::archiveRecoverySnapshot(
+    const EditorRecipeSaveSnapshot& snapshot, QString* archive_path, QString* error) const {
+  if (archive_path) archive_path->clear();
+  if (!isOpen()) return fail(error, QStringLiteral("recovery journal is not writable"));
+  const auto parent = QFileInfo(path_).absolutePath();
+  const auto root = QDir(parent).filePath(
+      QStringLiteral("archive-") + QUuid::createUuid().toString(QUuid::WithoutBraces));
+  EditorRecipeSaveJournal archive;
+  EditorRecipeSaveCheckpoint checkpoint;
+  if (!archive.open(root, authority_, &checkpoint, error)) return false;
+  checkpoint.rejected.append(snapshot);
+  if (!archive.write(checkpoint, error)) return false;
+#if defined(Q_OS_UNIX)
+  // write() synced the archive file's directory. Persist both newly created
+  // ancestor entries before the caller removes the live recovery record.
+  for (const auto& directory_path : {root, parent}) {
+    const auto bytes = QFile::encodeName(directory_path);
+    const int directory = ::open(bytes.constData(), O_RDONLY);
+    const bool synced = directory >= 0 && ::fsync(directory) == 0;
+    if (directory >= 0) ::close(directory);
+    if (!synced) return fail(error, QStringLiteral("archive directory sync failed; live recovery retained"));
+  }
+#endif
+  if (archive_path) *archive_path = archive.path();
   return true;
 }
 
 bool EditorRecipeSaveJournal::write(const EditorRecipeSaveCheckpoint& checkpoint, QString* error) {
   JournalWriteProfile profile;
+  QString encoding_error;
   if (error) error->clear();
   if (!isOpen()) return fail(error, QStringLiteral("checkpoint is not writable; existing recovery data retained"));
   if (checkpoint.pending.size() > kMaxPendingAssets) return fail(error, QStringLiteral("too many pending assets"));
@@ -337,155 +451,126 @@ bool EditorRecipeSaveJournal::write(const EditorRecipeSaveCheckpoint& checkpoint
     if (*snapshot && ((*snapshot)->asset_id.isEmpty() || (*snapshot)->file_path.isEmpty()))
       return fail(error, QStringLiteral("invalid active asset identity"));
   }
-  QHash<QString, QList<SerializedSnapshot>> next_cache;
-  qsizetype cached_bytes = 0;
-  qsizetype cache_hits = 0;
-  qsizetype cache_misses = 0;
-  const auto json_bytes = [](const QJsonValue& value) {
-    return compact_json_bytes(value, std::numeric_limits<qsizetype>::max());
+  const auto make_payload = [&]() {
+    QJsonArray pending, rejected;
+    for (const auto& snapshot : checkpoint.pending)
+      pending.append(encode(snapshot, &mask_encoding_cache_, &encoding_error));
+    for (const auto& snapshot : checkpoint.rejected)
+      rejected.append(encode(snapshot, &mask_encoding_cache_, &encoding_error));
+    return QJsonObject{{"schema", kSchema}, {"authority", authority_}, {"pending", pending},
+        {"rejected", rejected}, {"active", encode(checkpoint.active, &mask_encoding_cache_, &encoding_error)},
+        {"retryMigration", encode(checkpoint.retry_migration, &mask_encoding_cache_, &encoding_error)}};
   };
-  const auto remember = [&](const QString& id, const QJsonValue& value, const QByteArray& bytes) {
-    if (bytes.size() > kMaxCachedSerializationBytes - cached_bytes) return;
-    auto& entries = next_cache[id];
-    const auto duplicate = std::any_of(entries.cbegin(), entries.cend(), [&](const auto& entry) {
-      return entry.value == value;
-    });
-    if (!duplicate) {
-      entries.append({value, bytes});
-      cached_bytes += bytes.size();
+  // A changed raster already needs a full compaction. Drop the old decoded
+  // tree before encoding its replacement instead of retaining two generations
+  // and constructing an edit that would be rejected for its large payload.
+  const auto masks_reusable = [&](const EditorRecipeSaveSnapshot& snapshot) {
+    return snapshot.state.mask_stack.isEmpty() || mask_encoding_cache_.find(snapshot.state.mask_stack);
+  };
+  const bool reusable_masks =
+      (!checkpoint.active || masks_reusable(*checkpoint.active)) &&
+      (!checkpoint.retry_migration || masks_reusable(*checkpoint.retry_migration)) &&
+      std::all_of(checkpoint.pending.cbegin(), checkpoint.pending.cend(), masks_reusable) &&
+      std::all_of(checkpoint.rejected.cbegin(), checkpoint.rejected.cend(), masks_reusable);
+  if (!reusable_masks) durable_payload_ = {};
+  QJsonObject candidate_payload;
+  const bool empty = checkpoint.pending.isEmpty() && checkpoint.rejected.isEmpty() &&
+      !checkpoint.active && !checkpoint.retry_migration;
+#if defined(Q_OS_UNIX)
+  constexpr bool durable_append_supported = true;
+#else
+  constexpr bool durable_append_supported = false;
+#endif
+  if (durable_append_supported && !durable_payload_.isEmpty() && !empty && delta_records_ < 128) {
+    candidate_payload = make_payload();
+    if (!encoding_error.isEmpty()) return fail(error, encoding_error);
+    bool large_edit = false;
+    const auto edit = recipe_journal_delta::between(durable_payload_, candidate_payload, 0, &large_edit);
+    if (!large_edit && edit.isEmpty()) {
+      if (QFileInfo(path_).size() < durable_bytes_)
+        return fail(error, QStringLiteral("durable checkpoint is missing; recovery data retained in memory"));
+      return true;  // This exact revision is already durable.
     }
-  };
-  const auto cached = [&](const QString& id, const QJsonValue& value) {
-    for (const auto* cache : {&next_cache, &serialization_cache_}) {
-      const auto found = cache->constFind(id);
-      if (found == cache->cend()) continue;
-      for (const auto& entry : found.value()) if (entry.value == value) return entry.bytes;
-    }
-    return QByteArray{};
-  };
-  const auto serialize_record = [&](const QString& id, const QJsonObject& object) {
-    QByteArray record("{");
-    bool first_field = true;
-    for (auto field = object.constBegin(); field != object.constEnd(); ++field) {
-      if (!first_field) record.append(',');
-      first_field = false;
-      record.append(json_bytes(field.key()));
-      record.append(':');
-      if (field.key() != QStringLiteral("recipe")) {
-        record.append(json_bytes(field.value()));
-        continue;
-      }
-      record.append('{');
-      const auto recipe = field.value().toObject();
-      bool first_recipe_field = true;
-      for (auto part = recipe.constBegin(); part != recipe.constEnd(); ++part) {
-        if (!first_recipe_field) record.append(',');
-        first_recipe_field = false;
-        record.append(json_bytes(part.key()));
-        record.append(':');
-        const auto reusable = part.key() == QStringLiteral("maskStack") ||
-            part.key() == QStringLiteral("maskSets") || part.key() == QStringLiteral("retouchStack") ||
-            part.key() == QStringLiteral("layers") || part.key() == QStringLiteral("photoLayers");
-        auto bytes = reusable ? cached(id, part.value()) : QByteArray{};
-        if (bytes.isEmpty()) bytes = json_bytes(part.value());
-        // Exact encoded values protect tiny scalar changes and imported data.
-        // Retain only large fragments; the shared budget includes whole records.
-        if (reusable && bytes.size() >= 64 * 1024) remember(id, part.value(), bytes);
-        record.append(bytes);
-      }
-      record.append('}');
-    }
-    record.append('}');
-    return record;
-  };
-  const auto serialized = [&](const std::optional<EditorRecipeSaveSnapshot>& snapshot, bool retain) {
-    if (!snapshot) return QByteArray("null");
-    const auto value = encode(snapshot, &mask_encoding_cache_);
-    // Compare exact encoded values: EditRecipeState::operator== is approximate.
-    auto bytes = cached(snapshot->asset_id, value);
-    if (bytes.isEmpty()) {
-      bytes = compact_json_bytes(
-          QJsonValue(value.toObject()), std::numeric_limits<qsizetype>::max());
-      ++cache_misses;
-    } else {
-      ++cache_hits;
-    }
-    if (retain) remember(snapshot->asset_id, value, bytes);
-    return bytes;
-  };
-
-  // Emit the same compact, alphabetically ordered object as QJsonDocument.
-  // Each inserted record is complete JSON, never an unescaped recipe string.
-  QByteArray payload_bytes;
-  const auto append = [&](const QByteArray& bytes) {
-    if (bytes.size() > kMaxJournalBytes - 90 - payload_bytes.size()) return false;
-    payload_bytes.append(bytes);
-    return true;
-  };
-  const auto append_string = [&](const QString& value) {
-    const auto array = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);
-    return append(array.mid(1, array.size() - 2));
-  };
-  const auto append_snapshots = [&](const QList<EditorRecipeSaveSnapshot>& snapshots, bool retain) {
-    if (!append("[")) return false;
-    bool first = true;
-    for (const auto& snapshot : snapshots) {
-      if ((!first && !append(",")) || !append(serialized(snapshot, retain))) return false;
-      first = false;
-    }
-    return append("]");
-  };
-  bool encoded = false;
-  if (!checkpoint.active && !checkpoint.retry_migration && checkpoint.rejected.isEmpty()) {
-    // Fragment reuse helps repeated layer/filter or tone edits with an unchanged
-    // matte. Changing geometry keeps the original single-buffer writer: retaining
-    // both raster generations would inflate full-resolution brush memory.
-    const auto reusable = !checkpoint.pending.isEmpty() &&
-        std::all_of(checkpoint.pending.cbegin(), checkpoint.pending.cend(), [&](const auto& snapshot) {
-          return !snapshot.state.mask_stack.isEmpty() && mask_encoding_cache_.find(snapshot.state.mask_stack);
-        });
-    if (!reusable) {
-      for (auto it = serialization_cache_.begin(); it != serialization_cache_.end();) {
-        auto& entries = it.value();
-        entries.removeIf([](const auto& entry) { return entry.value.isArray(); });
-        if (entries.isEmpty()) it = serialization_cache_.erase(it);
-        else ++it;
+    if (!large_edit) {
+      const QJsonObject body{{"schema", "photo-editor-recipe-delta:v1"},
+          {"previous", QString::fromLatin1(durable_digest_)}, {"edit", edit}};
+      const auto body_bytes = compact_json_bytes(body, kMaxJournalBytes);
+      const auto digest = checkpoint_sha256_hex(body_bytes);
+      const auto record = compact_json_bytes(QJsonObject{{"record", body},
+          {"sha256", QString::fromLatin1(digest)}}, kMaxJournalBytes);
+      // Compact large edits rather than keeping multiple raster generations.
+      // Typed edit paths add nesting: fall back if an otherwise valid deep
+      // evidence object would exceed the recovery parser's depth limit.
+      if (!record.isEmpty() && record.size() < durable_bytes_ / 4 &&
+          record.size() + durable_bytes_ + 74 <= kMaxJournalBytes &&
+          QJsonDocument::fromJson(record).isObject()) {
+        QFile output(path_);
+        if (!output.open(QIODevice::ReadWrite))
+          return fail(error, QStringLiteral("edit append failed; previous checkpoint retained"));
+        const auto existing_bytes = output.size();
+        if (existing_bytes < durable_bytes_ || !output.resize(durable_bytes_) ||
+            !output.seek(durable_bytes_))
+          return fail(error, QStringLiteral("edit append failed; previous checkpoint retained"));
+#if defined(Q_OS_UNIX)
+        // A failed earlier append can leave a complete but unacknowledged tail.
+        // Persist its truncation before overwriting any bytes of that tail, so
+        // a power loss cannot pair a partial new body with an old commit fence.
+        if (existing_bytes > durable_bytes_ &&
+            (!output.flush() || ::fsync(output.handle()) != 0))
+          return fail(error, QStringLiteral("edit tail cleanup failed; previous committed head retained"));
+#endif
+        const auto separator = delta_records_ == 0 && durable_bytes_ > 0 &&
+            output.seek(durable_bytes_ - 1) && output.read(1) != QByteArray("\n")
+                ? QByteArray("\n") : QByteArray{};
+        const auto body_record = separator + record + '\n';
+        const auto commit_record = QByteArray("commit:") + digest + '\n';
+        const auto bytes = body_record + commit_record;
+        bool saved = output.seek(durable_bytes_) && output.write(body_record) == body_record.size() && output.flush();
+#if defined(Q_OS_UNIX)
+        // Persist the body before issuing its commit fence. An unsuccessful
+        // body write may leave any suffix; without a committed fence recovery
+        // can still use the preceding acknowledged head.
+        if (saved) saved = ::fsync(output.handle()) == 0;
+        if (saved) saved = output.write(commit_record) == commit_record.size() && output.flush();
+        if (saved) saved = ::fsync(output.handle()) == 0;
+#else
+        // Platforms without a native durable append use atomic compaction below.
+        saved = false;
+#endif
+        if (!saved) {
+          const bool rolled_back = output.resize(durable_bytes_) && output.flush();
+#if defined(Q_OS_UNIX)
+          const bool rollback_durable = rolled_back && ::fsync(output.handle()) == 0;
+#else
+          const bool rollback_durable = rolled_back;
+#endif
+          return fail(error, rollback_durable
+              ? QStringLiteral("durable edit append failed; previous checkpoint retained")
+              : QStringLiteral("durable edit append failed; incomplete tail retained after the previous committed head"));
+        }
+        durable_payload_ = std::move(candidate_payload);
+        durable_digest_ = digest;
+        durable_bytes_ += bytes.size();
+        ++delta_records_;
+        if (profile.enabled) profile.stages.insert("edit_record_bytes", bytes.size());
+        profile.stage(QStringLiteral("durable_edit_us"));
+        return true;
       }
     }
-    QJsonArray pending;
-    for (const auto& snapshot : checkpoint.pending) pending.append(encode(snapshot, &mask_encoding_cache_));
-    if (reusable) {
-      encoded = append("{\"active\":null,\"authority\":") && append_string(authority_) && append(",\"pending\":[");
-      for (qsizetype i = 0; encoded && i < pending.size(); ++i) {
-        encoded = (i == 0 || append(",")) &&
-            append(serialize_record(checkpoint.pending.at(i).asset_id, pending.at(i).toObject()));
-      }
-      encoded = encoded && append("],\"rejected\":[],\"retryMigration\":null,\"schema\":") &&
-          append_string(kSchema) && append("}");
-    } else {
-      const QJsonObject payload{{"schema", kSchema}, {"authority", authority_}, {"pending", pending},
-          {"active", QJsonValue(QJsonValue::Null)}, {"retryMigration", QJsonValue(QJsonValue::Null)},
-          {"rejected", QJsonArray{}}};
-      payload_bytes = compact_json_bytes(
-          QJsonValue(payload), kMaxJournalBytes - 90);
-      encoded = !payload_bytes.isEmpty() &&
-          payload_bytes.size() <= kMaxJournalBytes - 90;
-    }
-    cache_misses = checkpoint.pending.size();
-  } else {
-    encoded = append("{\"active\":") && append(serialized(checkpoint.active, true)) &&
-      append(",\"authority\":") && append_string(authority_) &&
-      append(",\"pending\":") && append_snapshots(checkpoint.pending, false) &&
-      append(",\"rejected\":") && append_snapshots(checkpoint.rejected, true) &&
-      append(",\"retryMigration\":") && append(serialized(checkpoint.retry_migration, true)) &&
-      append(",\"schema\":") && append_string(kSchema) && append("}");
   }
+  if (candidate_payload.isEmpty()) candidate_payload = make_payload();
+  // Compaction no longer needs the previous decoded head. Release it before
+  // allocating the full serialized checkpoint, especially for a new raster.
+  // A write failure still leaves the old durable file available for recovery;
+  // the next write simply performs another atomic compaction.
+  durable_payload_ = {};
+  const auto payload_bytes = compact_json_bytes(candidate_payload, kMaxJournalBytes - 90);
+  const bool encoded = !payload_bytes.isEmpty();
   profile.stage(QStringLiteral("records_and_payload_us"));
+  if (!encoding_error.isEmpty())
+    return fail(error, QStringLiteral("%1; previous checkpoint retained").arg(encoding_error));
   if (!encoded) return fail(error, QStringLiteral("pending recipes exceed the 256 MiB checkpoint limit"));
   if (profile.enabled) {
-    profile.stages.insert(QStringLiteral("serialized_cache_hits"), static_cast<qint64>(cache_hits));
-    profile.stages.insert(QStringLiteral("serialized_cache_misses"), static_cast<qint64>(cache_misses));
-    profile.stages.insert(QStringLiteral("serialized_cache_bytes"), static_cast<qint64>(cached_bytes));
     profile.stages.insert(QStringLiteral("payload_bytes"), static_cast<qint64>(payload_bytes.size()));
   }
   const auto digest = checkpoint_sha256_hex(payload_bytes);
@@ -502,10 +587,21 @@ bool EditorRecipeSaveJournal::write(const EditorRecipeSaveCheckpoint& checkpoint
       output.write(payload_bytes) != payload_bytes.size() ||
       output.write(suffix) != suffix.size() || !output.commit())
     return fail(error, QStringLiteral("atomic write failed; previous checkpoint retained"));
-  // Publish retained record bytes only after a successful checkpoint. The mask
-  // encoding cache is pure derived data and may warm even if the write fails.
-  // A successful empty checkpoint releases both caches.
-  serialization_cache_ = std::move(next_cache);
+#if defined(Q_OS_UNIX)
+  const auto directory_bytes = QFile::encodeName(QFileInfo(path_).absolutePath());
+  const int directory = ::open(directory_bytes.constData(), O_RDONLY);
+  const bool directory_synced = directory >= 0 && ::fsync(directory) == 0;
+  if (directory >= 0) ::close(directory);
+  if (!directory_synced) {
+    durable_payload_ = {};
+    return fail(error, QStringLiteral("checkpoint directory sync failed; retry saving"));
+  }
+#endif
+  durable_payload_ = std::move(candidate_payload);
+  durable_digest_ = digest;
+  durable_bytes_ = prefix.size() + payload_bytes.size() + suffix.size();
+  delta_records_ = 0;
+  // Publish the new recovery head only after atomic replacement succeeds.
   if (!checkpoint.active && !checkpoint.retry_migration && checkpoint.pending.isEmpty() &&
       checkpoint.rejected.isEmpty()) mask_encoding_cache_.clear();
   profile.stage(QStringLiteral("atomic_write_us"));

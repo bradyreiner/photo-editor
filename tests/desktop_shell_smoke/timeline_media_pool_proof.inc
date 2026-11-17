@@ -14,9 +14,13 @@
       process_layout_events(6);
 
       const auto media_row_visible = [&](const QString& asset_id) {
-        for (auto* row : find_named_items(studio_root, QStringLiteral("timelineMediaAssetRow"))) {
-          if (row->property("assetId").toString() == asset_id && item_visible(row))
-            return true;
+        const QString delegate_names[] = {QStringLiteral("timelineMediaAssetCard"),
+                                          QStringLiteral("timelineMediaAssetRow")};
+        for (const auto& delegate_name : delegate_names) {
+          for (auto* item : find_named_items(studio_root, delegate_name)) {
+            if (item->property("assetId").toString() == asset_id && item_visible(item))
+              return true;
+          }
         }
         return false;
       };
@@ -70,9 +74,11 @@
           }, 3000) ||
           !choose_media_menu_item(QStringLiteral("timelineActiveMediaBinFilter"),
                                   collection_filter_key) ||
-          timeline_document.activeMediaBinId() != workflow_bin_id ||
-          !timeline_document.activeSmartCollectionId().isEmpty() ||
-          !media_row_visible(QStringLiteral("workflow-video"))) {
+          !wait_for_condition([&] {
+            return timeline_document.activeMediaBinId() == workflow_bin_id &&
+                   timeline_document.activeSmartCollectionId().isEmpty() &&
+                   media_row_visible(QStringLiteral("workflow-video"));
+          }, 3000)) {
         return fail("Pointer-selected bins and smart collections should filter and compose in the media pool");
       }
       if (!choose_media_menu_item(QStringLiteral("timelineActiveMediaBinFilter"),

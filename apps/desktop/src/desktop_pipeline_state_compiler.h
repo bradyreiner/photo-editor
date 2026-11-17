@@ -1,11 +1,13 @@
 #pragma once
 
 #include "edit_recipe_state.h"
+#include "desktop_source_geometry.h"
 #include "local_mask_compiler.h"
 
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_pipeline.h"
 
+#include <QImage>
 #include <QSize>
 #include <QStringList>
 #include <QVariantList>
@@ -19,6 +21,13 @@ enum class DesktopRenderPurpose {
   Preview,
   Output,
 };
+
+// Decode/analysis-only clients share the same input compiler without preparing
+// unrelated photo layers, retouch operations, or display publication.
+[[nodiscard]] photo_editor::pipeline::ColorAdjustmentState
+compile_desktop_source_prefix_state(
+    const EditRecipeState& state,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr);
 
 struct DisplayReferredTextPolicySnapshot final {
   QString render_color_domain = QStringLiteral("working-scene-linear");
@@ -43,14 +52,19 @@ compile_pipeline_local_mask_sets(
     DesktopRenderPurpose purpose,
     LocalMaskRasterPolicy raster_policy =
         LocalMaskRasterPolicy::UseStoredRaster,
-    const QSize& output_size = {});
+    const QSize& output_size = {},
+    const QRectF& source_area = QRectF(0.0,0.0,1.0,1.0),
+    const QSizeF& original_basis_pixel_extent = {});
 
 [[nodiscard]] std::vector<photo_editor::pipeline::LocalMask>
 compile_pipeline_retouch_masks(
     const QVariantList& masks,
     LocalMaskRasterPolicy raster_policy =
         LocalMaskRasterPolicy::UseStoredRaster,
-    const QSize& output_size = {});
+    const QSize& output_size = {},
+    const QRectF& source_area = QRectF(0.0,0.0,1.0,1.0),
+    const QSizeF& original_basis_pixel_extent = {},
+    std::vector<photo_editor::pipeline::LocalMask>* post_composite_masks = nullptr);
 
 [[nodiscard]] photo_editor::pipeline::ColorAdjustmentState
 compile_desktop_pipeline_state(
@@ -61,6 +75,9 @@ compile_desktop_pipeline_state(
     LocalMaskRasterPolicy raster_policy =
         LocalMaskRasterPolicy::UseStoredRaster,
     const QSize& output_size = {},
-    std::span<const photo_editor::pipeline::ColorPixel> source_pixels = {});
+    std::span<const photo_editor::pipeline::ColorPixel> source_pixels = {},
+    const DesktopSourceGeometry& source_geometry = {},
+    const QImage* full_source = nullptr,
+    photo_editor::pipeline::CancellationToken cancellation = {});
 
 }  // namespace photo_editor::desktop

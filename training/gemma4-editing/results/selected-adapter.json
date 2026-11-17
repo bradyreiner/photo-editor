@@ -1,0 +1,7 @@
+{
+  "selectedBy": "minimum validation loss before response evaluation",
+  "iteration": 100,
+  "validationLoss": 0.02812656989464393,
+  "validationBatchesPerCheck": 4,
+  "adapterSha256": "a8e3f5822ef031c2dfe8bbbf10a9b9369915dc88bb69553ad8d12d49fb0fd84b"
+}

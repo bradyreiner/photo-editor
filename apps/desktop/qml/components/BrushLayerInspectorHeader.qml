@@ -7,6 +7,7 @@ Rectangle {
     id: root
 
     property string totalLayersText: "1 layer"
+    property bool showContextDetails: true
     property bool isolationActive: false
     property bool canIsolate: true
     property string targetIconName: "adjust"
@@ -92,6 +93,7 @@ Rectangle {
 
         Rectangle {
             objectName: "brushLayerInspectorTargetCard"
+            visible: root.showContextDetails
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(48, targetSummary.implicitHeight + 16)
             radius: 3
@@ -145,6 +147,7 @@ Rectangle {
 
         Rectangle {
             objectName: "brushLayerInspectorMaskCard"
+            visible: root.showContextDetails
             Layout.fillWidth: true
             Layout.preferredHeight: Math.max(48, maskSummary.implicitHeight + 16)
             radius: 3

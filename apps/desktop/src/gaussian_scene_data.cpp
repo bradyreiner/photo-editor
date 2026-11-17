@@ -1,4 +1,5 @@
 #include "gaussian_scene_data.h"
+#include "gaussian_camera_navigation.h"
 #include "gaussian_ply_validation.h"
 #include <QDataStream>
 #include <QDir>
@@ -38,15 +39,11 @@ QVariantMap GaussianCamera::description() const {
 }
 GaussianCamera navigate_gaussian_camera(const GaussianCamera& base, float focus, float yaw,
     float pitch, float dolly, float pan_x, float pan_y) {
-  auto camera = base;
-  const auto rotation = QQuaternion::fromAxisAndAngle(-base.down, yaw) *
-      QQuaternion::fromAxisAndAngle(base.right, pitch);
-  const auto target = base.position + base.forward * focus + base.right * pan_x * focus + base.down * pan_y * focus;
-  camera.position = target - rotation.rotatedVector(base.forward) * focus * std::exp(-dolly);
-  camera.right = rotation.rotatedVector(base.right);
-  camera.down = rotation.rotatedVector(base.down);
-  camera.forward = rotation.rotatedVector(base.forward);
-  return camera;
+  const auto direction = base.forward.normalized();
+  if (direction.isNull()) return base;
+  const float safe_focus = std::isfinite(focus) ? std::clamp(focus, 0.01F, 1.0e6F) : 1.0F;
+  const auto pivot = base.position + direction * safe_focus;
+  return navigate_gaussian_camera_around(base, pivot, yaw, pitch, dolly, pan_x, pan_y);
 }
 
 namespace {
@@ -125,11 +122,13 @@ GaussianSceneLoad load_gaussian_scene(const QString& artifact, const QString& ca
   if (expected_sha256.isEmpty() || validation.value("artifactSha256").toString() != expected_sha256)
     return {{}, "The artifact does not match the verified scene receipt."};
   const auto count = validation.value("vertexCount").toULongLong();
-  if (count > 2000000) return {{}, "This viewport currently supports at most two million Gaussians."};
+  if (count > gaussian_static_point_limit) return {{}, "This viewport currently supports at most four million static Gaussians."};
   auto scene = std::make_shared<GaussianSceneData>();
   scene->artifact_sha256 = expected_sha256;
-  const auto error = read_cameras(camera_directory, &scene->cameras);
-  if (!error.isEmpty()) return {{}, error};
+  if (!camera_directory.isEmpty()) {
+    const auto error = read_cameras(camera_directory, &scene->cameras);
+    if (!error.isEmpty()) return {{}, error};
+  }
   QFile file(artifact);
   if (!file.open(QIODevice::ReadOnly)) return {{}, "Cannot reopen the verified artifact."};
   QStringList properties;
@@ -160,6 +159,7 @@ GaussianSceneLoad load_gaussian_scene(const QString& artifact, const QString& ca
   QCryptographicHash hash(QCryptographicHash::Sha256);
   hash.addData(header);
   scene->points.reserve(static_cast<size_t>(count));
+  scene->spatial_factors.reserve(static_cast<size_t>(count));
   const auto row_bytes = properties.size() * 4;
   for (quint64 first = 0; first < count; first += 4096) {
     if (canceled && canceled->load()) return {{}, "Scene loading canceled."};
@@ -177,9 +177,11 @@ GaussianSceneLoad load_gaussian_scene(const QString& artifact, const QString& ca
       QQuaternion rotation(value(required[7]), value(required[8]), value(required[9]), value(required[10]));
       const auto matrix = rotation.normalized().toRotationMatrix();
       double covariance[3][3]{};
+      std::array<float,12> factor{};
       for (size_t axis = 0; axis < 3; ++axis) {
         const double variance = std::exp(2.0 * static_cast<double>(value(required[4 + axis])));
         if (!finite(variance)) return {{}, "Gaussian scale exceeds the supported numeric range."};
+        for (int r = 0; r < 3; ++r) factor[axis*4+static_cast<size_t>(r)] = static_cast<float>(std::sqrt(variance)*matrix(r,static_cast<int>(axis)));
         for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c)
           covariance[r][c] += variance * matrix(r, static_cast<int>(axis)) * matrix(c, static_cast<int>(axis));
       }
@@ -193,10 +195,35 @@ GaussianSceneLoad load_gaussian_scene(const QString& artifact, const QString& ca
               value(rest_indices[channel * static_cast<size_t>(rest_count / 3) + static_cast<size_t>(basis)]);
       }
       scene->points.push_back(point);
+      scene->spatial_factors.push_back(factor);
     }
   }
   if (!file.atEnd() || QString::fromLatin1(hash.result().toHex()) != expected_sha256)
     return {{}, "The Gaussian bytes changed while loading."};
+  if (scene->cameras.empty()) {
+    // Imported PLYs have no capture poses. Start with a neutral overview of the
+    // central 96% of centers so a handful of floaters do not swallow the scene.
+    std::array<float, 3> low{}, high{};
+    std::vector<float> coordinates; coordinates.reserve(scene->points.size());
+    for (size_t axis = 0; axis < 3; ++axis) {
+      coordinates.clear();
+      for (const auto& point : scene->points) {
+        if (std::abs(point.center_opacity[axis]) > 1e10F) return {{}, "The imported scene exceeds the supported coordinate range."};
+        coordinates.push_back(point.center_opacity[axis]);
+      }
+      const auto lower = static_cast<std::ptrdiff_t>((coordinates.size() - 1) / 50);
+      const auto upper = static_cast<std::ptrdiff_t>(coordinates.size() - 1) - lower;
+      std::nth_element(coordinates.begin(), coordinates.begin() + lower, coordinates.end()); low[axis] = coordinates[static_cast<size_t>(lower)];
+      std::nth_element(coordinates.begin(), coordinates.begin() + upper, coordinates.end()); high[axis] = coordinates[static_cast<size_t>(upper)];
+    }
+    const QVector3D minimum(low[0], low[1], low[2]), maximum(high[0], high[1], high[2]);
+    const auto radius = std::max(0.01F, (maximum - minimum).length() * 0.5F);
+    if (!std::isfinite(radius) || radius > 1e10F) return {{}, "The imported scene exceeds the supported coordinate range."};
+    GaussianCamera overview; overview.name = "Imported scene overview";
+    overview.image_size = {1600, 1000}; overview.fx = overview.fy = 1200; overview.cx = 800; overview.cy = 500;
+    overview.position = (minimum + maximum) * 0.5F - overview.forward * radius * 3.5F;
+    scene->cameras.push_back(overview);
+  }
   std::vector<float> depths;
   const auto& camera = scene->cameras.front();
   for (const auto& point : scene->points) {

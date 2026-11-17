@@ -1,4 +1,7 @@
 #include "edit_adjustment_patch.h"
+#include "edit_recipe_component_storage.h"
+#include "photo_layer_style_validation.h"
+#include "photo_layer_style_light.h"
 
 #include <QCryptographicHash>
 #include <QJsonArray>
@@ -355,6 +358,7 @@ EditRecipeState source_agnostic_adjustment_state(
   // A reusable adjustment may describe rendering intent, but it
   // must never carry identities or paths belonging to the source,
   // monitor, proofing device, or export destination that authored it.
+  result.selection_state.clear();
   result.input_color_profile = QStringLiteral("Embedded");
   result.camera_dcp_profile_asset = {};
   result.input_icc_profile_asset = {};
@@ -371,13 +375,32 @@ QJsonObject serialize_adjustment_patch(
     AdjustmentPatchScope scope) {
   const auto normalized_groups =
       normalize_adjustment_groups(groups);
-  const auto state_object = build_edit_adjustment_state_object(
-      scoped_state(state, normalized_groups, scope));
+  const auto scoped = scoped_state(state, normalized_groups, scope);
+  if (!photo_layer_style_light::valid_angle(
+          scoped.document_layer_style_light_angle)) return {};
+  QString style_error;
+  if (!validate_photo_layer_style_storage(scoped.layers, &style_error, 0, &scoped.mask_stack)) return {};
+  QString text_dimension_error;
+  if (!validate_photo_text_dimensions_in_layers(
+          scoped.layers, &text_dimension_error)) return {};
+  auto state_object = build_edit_adjustment_state_object(scoped);
+  QString component_error;
+  if (!pack_recipe_component_objects(&state_object, &component_error)) return {};
+  const auto has_styles = detail::photo_layers_have_styles(state_object.value(QStringLiteral("layers")).toArray().toVariantList());
+  const bool has_document_light =
+      detail::recipe_requires_document_layer_style_light(scoped);
+  const bool has_text_dimensions =
+      detail::photo_layers_have_text_dimensions(
+          scoped.layers);
+  const auto patch_version = has_text_dimensions ? 5 : has_document_light ? 4 : has_styles ? 3 : state_object.contains(QStringLiteral("componentObjectTable")) ? 2 : kPatchVersion;
+  if ((has_styles || has_document_light || has_text_dimensions) &&
+      !state_object.contains(QStringLiteral("componentObjectTable")) &&
+      !pack_recipe_component_objects(&state_object, &component_error, true)) return {};
 
   return QJsonObject{
       {QStringLiteral("format"),
        QString::fromLatin1(kPatchFormat)},
-      {QStringLiteral("version"), kPatchVersion},
+      {QStringLiteral("version"), patch_version},
       {QStringLiteral("scope"), scope_name(scope)},
       {QStringLiteral("groups"),
        groups_to_json(normalized_groups)},
@@ -389,11 +412,9 @@ QString serialize_adjustment_patch_json(
     const EditRecipeState& state,
     const QStringList& groups,
     AdjustmentPatchScope scope) {
-  return QString::fromUtf8(
-      QJsonDocument(
-          serialize_adjustment_patch(
-              state, groups, scope))
-          .toJson(QJsonDocument::Compact));
+  const auto object = serialize_adjustment_patch(state, groups, scope);
+  if (object.isEmpty()) return {};
+  return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
 QVariantMap build_reversible_preset_application_record(
@@ -465,8 +486,9 @@ AdjustmentPatchDecodeResult parse_adjustment_patch(
             "Unsupported adjustment patch format.");
     return result;
   }
-  if (patch.value(QStringLiteral("version")).toInt() !=
-      kPatchVersion) {
+  const auto patch_version = patch.value(QStringLiteral("version")).toInt();
+  if (patch_version != kPatchVersion && patch_version != 2 &&
+      patch_version != 3 && patch_version != 4 && patch_version != 5) {
     result.error =
         QStringLiteral(
             "Unsupported adjustment patch version.");
@@ -506,7 +528,55 @@ AdjustmentPatchDecodeResult parse_adjustment_patch(
             "Adjustment patch cannot embed a legacy recipe.");
     return result;
   }
+  QString component_error;
+  const auto storage_version = patch_version == 5
+      ? kPhotoTextDimensionEditRecipeVersion
+      : patch_version == 4
+      ? kPhotoDocumentLayerStyleLightEditRecipeVersion
+      : patch_version == 3 ? kPhotoLayerStyleEditRecipeVersion
+      : patch_version == 2 ? kPhotoComponentObjectTableEditRecipeVersion
+      : kCurrentEditRecipeVersion;
+  if (!expand_recipe_component_objects(&state_object, storage_version, &component_error)) {
+    result.error = component_error;
+    return result;
+  }
   auto parsed = parse_edit_adjustment_state_object(state_object);
+  const bool has_document_light = state_object.contains(
+      QStringLiteral("documentLayerStyleLightAngle"));
+  const bool has_text_dimensions =
+      detail::photo_layers_have_text_dimensions(parsed.layers);
+  QString text_dimension_error;
+  if (!validate_photo_text_dimensions_in_layers(
+          parsed.layers, &text_dimension_error)) {
+    result.error = text_dimension_error;
+    return result;
+  }
+  if ((has_text_dimensions && patch_version < 5) ||
+      (patch_version == 5 && !has_text_dimensions)) {
+    result.error = QStringLiteral(
+        "Dimensional text requires adjustment patch version 5.");
+    return result;
+  }
+  const bool requires_document_light =
+      detail::recipe_requires_document_layer_style_light(parsed);
+  if (patch_version < 4 && (has_document_light || requires_document_light)) {
+    result.error = QStringLiteral(
+        "Document layer style lighting requires adjustment patch version 4.");
+    return result;
+  }
+  if (patch_version >= 4 && requires_document_light && !has_document_light) {
+    result.error = QStringLiteral(
+        "Adjustment patch version 4 or later requires documentLayerStyleLightAngle.");
+    return result;
+  }
+  for (const auto* key : {"layers", "photoLayers"}) {
+    const auto layers = state_object.value(QString::fromLatin1(key)).toArray().toVariantList();
+    if (patch_version < 3 && detail::photo_layers_have_styles(layers)) {
+      result.error = QStringLiteral("Shared layer styles require adjustment patch version 3.");
+      return result;
+    }
+    if (!validate_photo_layer_style_storage(layers, &result.error, 0, &parsed.mask_stack)) return result;
+  }
   parsed = scoped_state(parsed, result.groups, *scope);
   result.state = std::move(parsed);
   return result;

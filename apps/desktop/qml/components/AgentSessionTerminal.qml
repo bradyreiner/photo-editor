@@ -43,6 +43,9 @@ Item {
     property string revisionPrompt: ""
     property string actionMessage: ""
     property string latestActivity: ""
+    property bool activityDetailsExpanded: false
+    property bool activityHistoryExpanded: false
+    property bool reviewDetailsExpanded: false
 
     readonly property string stage: String(controller.stage || "idle")
     readonly property var brief: controller.brief || ({})
@@ -73,7 +76,7 @@ Item {
         if (!(root.brief.blankCanvas || context.blankCanvas) || !isFinite(width) || !isFinite(height) ||
                 width <= 0 || height <= 0)
             return ""
-        return "CANVAS · " + width + " × " + height
+        return "Canvas · " + width + " × " + height
     }
     readonly property var questions: controller.questions || []
     readonly property var activeQuestions: questions.length > 0 ? questions : rememberedQuestions
@@ -83,16 +86,59 @@ Item {
     readonly property string activityText: latestActivity.length > 0
                                             ? latestActivity
                                             : String(controller.activity || "")
+    readonly property var activityEvents: {
+        if (!root.dialog || typeof root.dialog.runEvents !== "function")
+            return []
+        const events = root.dialog.runEvents()
+        return events && typeof events.length === "number" ? events : []
+    }
+    readonly property var visibleActivityHistory: root.activityEvents.slice(-8).reverse()
+    readonly property string currentTaskSummary: {
+        const events = root.activityEvents
+        const latest = events.length > 0 ? events[events.length - 1] || ({}) : ({})
+        const detail = String(latest.detail || latest.explanation || "").trim()
+        if (detail.length > 0)
+            return detail
+        if (root.activityText.length > 0)
+            return root.activityText
+        if (root.statusText.length > 0)
+            return root.statusText
+        return "The approved task is running."
+    }
+    readonly property string modelOutputText: {
+        const events = root.activityEvents
+        for (let index = events.length - 1; index >= 0; --index) {
+            const evidence = (events[index] || ({})).evidence || ({})
+            const output = String(evidence.modelOutput || "").trim()
+            if (evidence.modelOutputAvailable && output.length > 0)
+                return output
+        }
+        return ""
+    }
+    readonly property string reviewVerificationSummary: {
+        const report = root.runReport || ({})
+        const batch = report.batchSummary || ({})
+        const validation = report.validationReport || batch.validationReport || ({})
+        const score = Number(validation.qualityScorePercent ||
+                             Math.round(Number(validation.qualityScore || 0) * 100))
+        const proofCount = Number(batch.proofCount || 0)
+        const parts = []
+        if (score > 0)
+            parts.push("Goal check · " + score + "%")
+        if (proofCount > 0)
+            parts.push(proofCount + " preview" + (proofCount === 1 ? "" : "s") + " checked")
+        return parts.length > 0 ? parts.join(" · ") : "No additional edit verification was recorded."
+    }
     readonly property bool reducedMotion: Boolean(themeObject.reducedMotion)
-    readonly property color paper: "#e8ece9"
-    readonly property color muted: "#93a6aa"
-    readonly property color amber: "#cdded7"
-    readonly property color cyan: "#a5d9e0"
-    readonly property color coral: "#d9a08d"
-    readonly property color screen: "#111719"
-    readonly property color panel: "#172125"
-    readonly property color line: "#3b5259"
-    readonly property string mono: themeObject.fontMono
+    readonly property color paper: themeObject.textStrong
+    readonly property color muted: themeObject.textMuted
+    readonly property color amber: themeObject.textStrong
+    readonly property color cyan: themeObject.textStrong
+    readonly property color coral: themeObject.error
+    readonly property color screen: themeObject.popupFill
+    readonly property color panel: themeObject.fieldFill
+    readonly property color line: themeObject.controlEdge
+    readonly property string mono: themeObject.fontNumeric
     readonly property string uiFont: themeObject.fontUi
     readonly property var allInspiration: dialog.inspirationSuggestions || []
     readonly property var filteredInspiration: allInspiration.filter(function(item) {
@@ -105,7 +151,7 @@ Item {
     readonly property var visibleInspiration: filteredInspiration.slice(
         inspirationPage * inspirationPageSize,
         inspirationPage * inspirationPageSize + inspirationPageSize)
-    readonly property int questionsPerPage: 2
+    readonly property int questionsPerPage: themeObject.interfaceScale > 1.25 ? 1 : 2
     readonly property int questionPageCount: Math.max(1, Math.ceil(activeQuestions.length / questionsPerPage))
     readonly property var visibleQuestions: activeQuestions.slice(
         questionPage * questionsPerPage,
@@ -144,7 +190,7 @@ Item {
     }
 
     function exactCopyLabel() {
-        return root.suggestedCopyNeedsReview() ? "SUGGESTED COPY · REVIEW BEFORE START" : "EXACT COPY"
+        return root.suggestedCopyNeedsReview() ? "Suggested copy · review before starting" : "Exact copy"
     }
 
     function exactCopyText() {
@@ -177,6 +223,27 @@ Item {
                 return summary
         }
         return "No source selected · describe what to create"
+    }
+
+    function activityEventTitle(event) {
+        const item = event || ({})
+        const label = String(item.label || "").trim()
+        if (label.length > 0)
+            return label
+        const stage = String(item.stage || "").toLowerCase()
+        if (stage.indexOf("plan") === 0 || stage === "constrain") return "Planning"
+        if (stage === "render" || stage === "apply" || stage === "edit") return "Editing"
+        if (stage === "validate" || stage === "check") return "Checking the result"
+        if (stage === "connect" || stage === "observe") return "Reviewing the photo"
+        return stage.length > 0 ? stage.charAt(0).toUpperCase() + stage.slice(1) : "Working"
+    }
+
+    function activityEventStatus(event) {
+        const status = String((event || ({})).status || "").toLowerCase()
+        if (status === "running") return "In progress"
+        if (status === "complete") return "Done"
+        if (status === "failed") return "Stopped"
+        return status.length > 0 ? status.charAt(0).toUpperCase() + status.slice(1) : ""
     }
 
     function selectedSuggestions() {
@@ -480,6 +547,9 @@ Item {
     onStageChanged: {
         root.actionMessage = ""
         root.subview = ""
+        root.activityDetailsExpanded = false
+        root.activityHistoryExpanded = false
+        root.reviewDetailsExpanded = false
         if (root.stage === "idle") {
             root.rememberedQuestions = []
             root.answerEdits = ({})
@@ -525,68 +595,19 @@ Item {
         function onAssetCountChanged() { root.syncContext() }
     }
 
-    component TerminalButton: Button {
-        id: button
+    component TerminalButton: ActionButton {
         property bool primary: false
         property bool subtle: false
-        property string accessibleLabel: button.text
-        implicitHeight: 32
-        implicitWidth: Math.max(84, buttonLabel.implicitWidth + 24)
-        leftPadding: 11
-        rightPadding: 11
-        hoverEnabled: true
-        activeFocusOnTab: true
-        Accessible.name: button.accessibleLabel
-        Accessible.role: Accessible.Button
-        contentItem: Label {
-            id: buttonLabel
-            text: button.text
-            color: button.primary ? root.screen : button.subtle ? root.muted : root.paper
-            font.family: root.mono
-            font.pixelSize: 10
-            font.weight: Font.DemiBold
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-        }
-        background: Rectangle {
-            radius: 3
-            color: button.primary ? root.amber : button.hovered ? "#28383b" : "#1b292d"
-            border.width: button.visualFocus ? 2 : 1
-            border.color: button.visualFocus ? root.paper : button.primary ? "#dbe9e3" : root.line
-            opacity: button.enabled ? 1 : 0.42
-            Behavior on color { ColorAnimation { duration: root.reducedMotion ? 0 : 110 } }
-        }
-        HoverHandler { cursorShape: button.enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor }
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        radius: 5
-        color: root.screen
-        border.width: 1
-        border.color: "#4b6574"
-    }
-
-    // Low-contrast phosphor texture; the content remains crisp and fully readable.
-    Repeater {
-        model: Math.max(0, Math.floor(root.height / 6))
-        delegate: Rectangle {
-            required property int index
-            x: 1
-            y: index * 6 + 3
-            width: root.width - 2
-            height: 1
-            color: "#9edbe8"
-            opacity: 0.025
-            Accessible.ignored: true
-        }
+        property string accessibleLabel: text
+        accessibleName: accessibleLabel
+        compact: true
+        embedded: subtle
+        tone: primary ? "primary" : "secondary"
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 10
-        spacing: 7
+        spacing: themeObject.space8
 
         RowLayout {
             Layout.fillWidth: true
@@ -605,20 +626,20 @@ Item {
                 Layout.alignment: Qt.AlignVCenter
             }
 
-            Label {
+            BodyLabel {
                 Layout.fillWidth: true
-                text: root.subview === "inspiration" ? "PAST LOOKS / REFERENCES"
-                      : root.subview === "targets" ? "WORKSPACE TARGET"
-                      : root.subview === "questions" ? "A FEW DETAILS"
-                      : root.stage === "planning" ? "PREPARING PLAN"
-                      : root.stage === "plan-ready" ? "READY TO START"
-                      : root.stage === "executing" ? "WORKING"
-                      : root.stage === "review" ? "RESULT"
-                      : root.stage === "interrupted" ? "PAUSED"
-                      : root.stage === "error" ? "NEEDS ATTENTION" : "NEW REQUEST"
+                text: root.subview === "inspiration" ? "Past looks and references"
+                      : root.subview === "targets" ? "Workspace target"
+                      : root.subview === "questions" ? "A few details"
+                      : root.stage === "planning" ? "Preparing plan"
+                      : root.stage === "plan-ready" ? "Ready to start"
+                      : root.stage === "executing" ? "Working"
+                      : root.stage === "review" ? "Result"
+                      : root.stage === "interrupted" ? "Paused"
+                      : root.stage === "error" ? "Needs attention" : "New request"
                 color: root.cyan
-                font.family: root.mono
-                font.pixelSize: 10
+                font.family: root.uiFont
+                font.pixelSize: root.themeObject.typeCaption
                 font.weight: Font.DemiBold
                 font.letterSpacing: 1.1
                 elide: Text.ElideRight
@@ -652,12 +673,12 @@ Item {
             ColumnLayout {
                 spacing: 6
 
-                Label {
+                BodyLabel {
                     Layout.fillWidth: true
                     text: "What would you like to make?"
                     color: root.paper
                     font.family: root.uiFont
-                    font.pixelSize: root.width < 450 ? 16 : 19
+                    font.pixelSize: root.width < root.themeObject.scaled(450) ? root.themeObject.typeTitle : root.themeObject.typeHero
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
                 }
@@ -672,30 +693,28 @@ Item {
                         Layout.maximumWidth: Math.max(0, root.width - 96)
                         Layout.preferredWidth: Math.max(0, root.width - 96)
                         implicitHeight: 28
-                        radius: 3
-                        color: "#1b2934"
-                        border.width: 1
-                        border.color: "#3b5663"
+                        radius: themeObject.radiusControl
+                        color: "transparent"
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 8
                             anchors.rightMargin: 7
                             spacing: 6
-                            Label {
-                                text: "TARGET"
+                            BodyLabel {
+                                text: "Target"
                                 color: root.amber
-                                font.family: root.mono
-                                font.pixelSize: 8
+                                font.family: root.uiFont
+                                font.pixelSize: root.themeObject.typeMicro
                                 font.weight: Font.Bold
                             }
-                            Label {
+                            BodyLabel {
                                 id: targetSummaryLabel
                                 objectName: "agentSessionTargetSummary"
                                 Layout.fillWidth: true
                                 text: root.targetSummary()
                                 color: root.paper
                                 font.family: root.uiFont
-                                font.pixelSize: 10
+                                font.pixelSize: root.themeObject.typeCaption
                                 elide: Text.ElideRight
                             }
                         }
@@ -711,35 +730,24 @@ Item {
                     }
                 }
 
-                    Rectangle {
+                    Item {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         Layout.maximumWidth: root.width - 20
                         Layout.preferredHeight: Math.max(120, Math.min(190, root.height * 0.48))
                         Layout.minimumHeight: 92
                         Layout.maximumHeight: 190
-                    radius: 3
-                    color: root.panel
-                    border.width: promptEditor.activeFocus ? 2 : 1
-                    border.color: promptEditor.activeFocus ? root.cyan : "#3b4d5d"
 
-                    TextArea {
+                    ToneTextArea {
                         id: promptEditor
                         objectName: "agentSessionPromptEditor"
                         anchors.fill: parent
                         anchors.margins: 8
                         text: root.dialog.terminalPrompt
                         placeholderText: "A YouTube thumbnail with bold title text, warm light, and room for the subject…"
-                        placeholderTextColor: "#8f9ba3"
-                        color: root.paper
-                        selectionColor: root.cyan
-                        selectedTextColor: root.screen
-                        font.family: root.uiFont
-                        font.pixelSize: 12
                         wrapMode: TextEdit.Wrap
                         selectByMouse: true
                         activeFocusOnTab: true
-                        background: Item {}
                         Accessible.name: "Describe what you want the agent to make"
                         onTextChanged: {
                             if (root.dialog.terminalPrompt !== text)
@@ -765,22 +773,25 @@ Item {
                     TerminalButton {
                         id: inspirationButton
                         objectName: "agentSessionUseInspirationButton"
-                        text: "Use inspiration"
+                        text: "Add reference"
                         subtle: true
+                        tooltipText: "Choose a saved look or photo to guide the edit. References stay separate from target photos."
                         onClicked: root.prepareInspiration()
                     }
-                    Label {
+                    BodyLabel {
                         id: requestMessage
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         Layout.maximumWidth: root.width < 520 ? 180 : root.width
                         text: root.selectedSuggestions().length > 0
-                              ? root.selectedSuggestions().length + " selected · references stay separate from targets"
-                              : "Optional · your words are enough"
+                              ? root.selectedSuggestions().length +
+                                (root.selectedSuggestions().length === 1 ? " reference" : " references")
+                              : "References optional"
                         color: root.muted
                         font.family: root.uiFont
-                        font.pixelSize: 9
+                        font.pixelSize: root.themeObject.typeMicro
                         elide: Text.ElideRight
+                        Accessible.description: "References guide the look and stay separate from target photos."
                     }
                     TerminalButton {
                         id: submitButton
@@ -792,14 +803,14 @@ Item {
                     }
                 }
 
-                Label {
+                BodyLabel {
                     objectName: "agentSessionActionMessage"
                     Layout.fillWidth: true
                     visible: root.actionMessage.length > 0
                     text: root.actionMessage
                     color: root.coral
                     font.family: root.uiFont
-                    font.pixelSize: 9
+                    font.pixelSize: root.themeObject.typeMicro
                     elide: Text.ElideRight
                 }
             }
@@ -816,12 +827,12 @@ Item {
                         subtle: true
                         onClicked: root.subview = ""
                     }
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         text: "Choose saved looks or past photos as references."
                         color: root.muted
                         font.family: root.uiFont
-                        font.pixelSize: 9
+                        font.pixelSize: root.themeObject.typeMicro
                         wrapMode: Text.WordWrap
                         maximumLineCount: 2
                     }
@@ -849,12 +860,7 @@ Item {
                                 root.inspirationFilter = modelData.key
                                 root.inspirationPage = 0
                             }
-                            background: Rectangle {
-                                radius: 3
-                                color: root.inspirationFilter === filterButton.modelData.key ? "#334653" : "#1b292d"
-                                border.width: filterButton.visualFocus ? 2 : 1
-                                border.color: filterButton.visualFocus ? root.paper : root.line
-                            }
+                            active: root.inspirationFilter === filterButton.modelData.key
                         }
                     }
                     Item { Layout.fillWidth: true }
@@ -890,7 +896,8 @@ Item {
                     Repeater {
                         id: inspirationRepeater
                         model: root.visibleInspiration
-                        delegate: Button {
+                        delegate: ActionButton {
+                            active: chosen
                             id: inspirationCard
                             required property var modelData
                             objectName: "agentSessionInspiration-" + String(modelData.id || "item")
@@ -909,12 +916,6 @@ Item {
                             onClicked: {
                                 root.dialog.toggleSuggestion(modelData)
                                 root.syncContext()
-                            }
-                            background: Rectangle {
-                                radius: 3
-                                color: inspirationCard.chosen ? "#263945" : "#1a252f"
-                                border.width: inspirationCard.visualFocus ? 2 : inspirationCard.chosen ? 1 : 0
-                                border.color: inspirationCard.visualFocus ? root.paper : root.cyan
                             }
                             contentItem: ColumnLayout {
                                 spacing: 5
@@ -936,33 +937,33 @@ Item {
                                         anchors.fill: parent
                                         visible: !inspirationPhotoImage.visible
                                         color: String(inspirationCard.modelData.kind || "") === "photo" ? "#253c47" : "#443b32"
-                                        Label {
+                                        BodyLabel {
                                             anchors.centerIn: parent
-                                            text: String(inspirationCard.modelData.kind || "") === "photo" ? "REFERENCE" : "SAVED LOOK"
+                                            text: String(inspirationCard.modelData.kind || "") === "photo" ? "Reference" : "Saved look"
                                             color: String(inspirationCard.modelData.kind || "") === "photo" ? root.cyan : root.amber
-                                            font.family: root.mono
-                                            font.pixelSize: 8
+                                            font.family: root.uiFont
+                                            font.pixelSize: root.themeObject.typeMicro
                                             font.weight: Font.Bold
                                         }
                                     }
                                 }
-                                Label {
+                                BodyLabel {
                                     Layout.fillWidth: true
                                     text: String(inspirationCard.modelData.title || "Inspiration")
                                     color: root.paper
                                     font.family: root.uiFont
-                                    font.pixelSize: 10
+                                    font.pixelSize: root.themeObject.typeCaption
                                     font.weight: Font.DemiBold
                                     elide: Text.ElideRight
                                 }
-                                Label {
+                                BodyLabel {
                                     Layout.fillWidth: true
                                     text: String(inspirationCard.modelData.kind || "") === "photo"
                                           ? "Reference only · not an edit target"
                                           : String(inspirationCard.modelData.detail || "Saved starting look")
                                     color: root.muted
                                     font.family: root.uiFont
-                                    font.pixelSize: 8
+                                    font.pixelSize: root.themeObject.typeMicro
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
                                     wrapMode: Text.WordWrap
@@ -970,14 +971,14 @@ Item {
                             }
                         }
                     }
-                    Label {
+                    BodyLabel {
                         visible: root.visibleInspiration.length === 0
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignVCenter
                         text: "No saved examples yet. You can continue with your own words."
                         color: root.muted
                         font.family: root.uiFont
-                        font.pixelSize: 11
+                        font.pixelSize: root.themeObject.typeBody
                         wrapMode: Text.WordWrap
                     }
                 }
@@ -992,7 +993,7 @@ Item {
                             root.subview = ""
                         }
                     }
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         text: root.selectedSuggestions().length > 0
@@ -1000,7 +1001,7 @@ Item {
                               : "Nothing selected · continue without inspiration"
                         color: root.muted
                         font.family: root.uiFont
-                        font.pixelSize: 9
+                        font.pixelSize: root.themeObject.typeMicro
                         elide: Text.ElideRight
                     }
                 }
@@ -1018,12 +1019,12 @@ Item {
                         subtle: true
                         onClicked: root.subview = ""
                     }
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         text: "Choose where the result belongs. Your request and answers stay here."
                         color: root.muted
                         font.family: root.uiFont
-                        font.pixelSize: 9
+                        font.pixelSize: root.themeObject.typeMicro
                         maximumLineCount: 2
                         wrapMode: Text.WordWrap
                     }
@@ -1049,7 +1050,7 @@ Item {
                             }))
                         }
                     }
-                    Label {
+                    BodyLabel {
                         visible: root.dialog.availableScopeTiles().filter(function(item) { return Number(item.count || 0) > 0 }).length === 0
                         Layout.columnSpan: 2
                         Layout.fillWidth: true
@@ -1057,7 +1058,7 @@ Item {
                         text: root.targetSummary() + ". You can still describe a new blank canvas in your request."
                         color: root.muted
                         font.family: root.uiFont
-                        font.pixelSize: 10
+                        font.pixelSize: root.themeObject.typeCaption
                         wrapMode: Text.WordWrap
                     }
                 }
@@ -1075,12 +1076,12 @@ Item {
                         subtle: true
                         onClicked: root.subview = "prompt"
                     }
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         text: root.questions.length + " detail" + (root.questions.length === 1 ? "" : "s") + " · " + (root.questionPage + 1) + "/" + root.questionPageCount
                         color: root.muted
-                        font.family: root.mono
-                        font.pixelSize: 9
+                        font.family: root.uiFont
+                        font.pixelSize: root.themeObject.typeMicro
                     }
                     TerminalButton {
                         objectName: "agentSessionQuestionChangeTargetButton"
@@ -1107,44 +1108,33 @@ Item {
                                     root.firstQuestionField = String(modelData.inputType || "text") === "choice"
                                                                ? questionChoice : answerEditor
                             }
-                            Label {
+                            BodyLabel {
                                 Layout.fillWidth: true
                                 text: String(questionItem.modelData.prompt || "") + (Boolean(questionItem.modelData.required) ? " *" : "")
                                 color: root.paper
                                 font.family: root.uiFont
-                                font.pixelSize: 10
+                                font.pixelSize: root.themeObject.typeCaption
                                 wrapMode: Text.WordWrap
                                 maximumLineCount: 2
                                 elide: Text.ElideRight
                             }
-                            TextField {
+                            ToneTextField {
                                 id: answerEditor
                                 objectName: "agentSessionAnswerTextField-" + String(questionItem.modelData.id || "question")
                                 visible: String(questionItem.modelData.inputType || "text") !== "choice"
                                 Layout.fillWidth: true
-                                implicitHeight: 30
+                                implicitHeight: root.themeObject.controlHeightDense
                                 text: root.answerValue(questionItem.modelData)
                                 placeholderText: "Your answer, or use my judgment"
-                                placeholderTextColor: "#8f9ba3"
-                                color: root.paper
-                                selectionColor: root.cyan
-                                font.family: root.uiFont
-                                font.pixelSize: 10
                                 selectByMouse: true
                                 activeFocusOnTab: true
                                 onTextChanged: root.setAnswer(questionItem.modelData.id, text)
-                                background: Rectangle {
-                                    radius: 3
-                                    color: root.panel
-                                    border.width: parent.activeFocus ? 2 : 1
-                                    border.color: parent.activeFocus ? root.cyan : root.line
-                                }
                             }
-                            ComboBox {
+                            ToneComboBox {
                                 id: questionChoice
                                 visible: String(questionItem.modelData.inputType || "text") === "choice"
                                 Layout.fillWidth: true
-                                implicitHeight: 30
+                                implicitHeight: root.themeObject.controlHeightDense
                                 model: questionItem.modelData.options || []
                                 textRole: "label"
                                 currentIndex: {
@@ -1159,21 +1149,6 @@ Item {
                                     if (index >= 0 && index < options.length)
                                         root.setAnswer(questionItem.modelData.id, String(options[index].id || options[index].label || ""))
                                 }
-                                contentItem: Label {
-                                    leftPadding: 8
-                                    text: questionChoice.currentText || "Choose an option"
-                                    color: root.paper
-                                    font.family: root.uiFont
-                                    font.pixelSize: 10
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                }
-                                background: Rectangle {
-                                    radius: 3
-                                    color: root.panel
-                                    border.width: questionChoice.visualFocus ? 2 : 1
-                                    border.color: questionChoice.visualFocus ? root.cyan : root.line
-                                }
                             }
                         }
                     }
@@ -1187,12 +1162,12 @@ Item {
                         visible: root.questionPage > 0
                         onClicked: root.questionPage -= 1
                     }
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         text: root.actionMessage
                         color: root.coral
                         font.family: root.uiFont
-                        font.pixelSize: 9
+                        font.pixelSize: root.themeObject.typeMicro
                         elide: Text.ElideRight
                     }
                     TerminalButton {
@@ -1215,21 +1190,21 @@ Item {
             // Planning status comes from the session owner; there is no invented percent.
             ColumnLayout {
                 spacing: 9
-                Label {
+                BodyLabel {
                     Layout.fillWidth: true
                     text: "Preparing a plan"
                     color: root.paper
                     font.family: root.uiFont
-                    font.pixelSize: 18
+                    font.pixelSize: root.themeObject.typeDialogTitle
                     font.weight: Font.DemiBold
                 }
-                Label {
+                BodyLabel {
                     objectName: "agentSessionPlanningStatus"
                     Layout.fillWidth: true
                     text: root.statusText.length > 0 ? root.statusText : "Reading the request and workspace context."
                     color: root.muted
                     font.family: root.uiFont
-                    font.pixelSize: 10
+                    font.pixelSize: root.themeObject.typeCaption
                     wrapMode: Text.WordWrap
                     maximumLineCount: 3
                 }
@@ -1242,7 +1217,7 @@ Item {
                         subtle: true
                         onClicked: root.stopWork()
                     }
-                    Label { Layout.fillWidth: true; text: "No edits happen until you approve Start."; color: root.muted; font.family: root.uiFont; font.pixelSize: 9; wrapMode: Text.WordWrap }
+                    BodyLabel { Layout.fillWidth: true; text: "No edits happen until you approve Start."; color: root.muted; font.family: root.uiFont; font.pixelSize: root.themeObject.typeMicro; wrapMode: Text.WordWrap }
                 }
             }
 
@@ -1251,12 +1226,12 @@ Item {
                 spacing: 4
                 RowLayout {
                     Layout.fillWidth: true
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         text: "Here’s the plan"
                         color: root.paper
                         font.family: root.uiFont
-                        font.pixelSize: 18
+                        font.pixelSize: root.themeObject.typeDialogTitle
                         font.weight: Font.DemiBold
                     }
                     TerminalButton {
@@ -1266,160 +1241,172 @@ Item {
                         onClicked: root.showTargets()
                     }
                 }
-                Label {
-                    objectName: "agentSessionPlanSummary"
-                    Layout.fillWidth: true
-                    text: String(root.plan.summary || root.plan.outcome || "").trim()
-                    color: root.paper
-                    font.family: root.uiFont
-                    font.pixelSize: 13
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
-                    elide: Text.ElideRight
-                }
-                ColumnLayout {
-                    objectName: "agentSessionPlanActionList"
-                    Layout.fillWidth: true
-                    Layout.minimumHeight: 0
-                    spacing: 3
-                    visible: root.planActions.length > 0
-                    Label {
-                        Layout.fillWidth: true
-                        text: "WHAT I’LL DO"
-                        color: root.cyan
-                        font.family: root.mono
-                        font.pixelSize: 10
-                        font.weight: Font.Bold
-                    }
-                    Repeater {
-                        model: root.visiblePlanActions
-                        delegate: RowLayout {
-                            id: planActionRow
-                            required property var modelData
-                            required property int index
-                            Layout.fillWidth: true
-                            Layout.minimumHeight: 0
-                            spacing: 5
-                            Label {
-                                text: "›"
-                                color: root.amber
-                                font.family: root.mono
-                                font.pixelSize: 10
-                                font.weight: Font.Bold
-                            }
-                            Label {
-                                objectName: "agentSessionPlanActionSummary-" +
-                                            (root.planActionPage * root.planActionPageSize + planActionRow.index)
-                                Layout.fillWidth: true
-                                text: String((planActionRow.modelData || ({})).summary || "").trim()
-                                color: root.paper
-                                font.family: root.uiFont
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                                Accessible.name: text
-                            }
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        visible: root.planActionPageCount > 1
-                        Label {
-                            Layout.fillWidth: true
-                            text: "More steps · " + (root.planActionPage + 1) + "/" + root.planActionPageCount
-                            color: root.muted
-                            font.family: root.mono
-                            font.pixelSize: 10
-                        }
-                        TerminalButton {
-                            objectName: "agentSessionPlanActionPreviousButton"
-                            text: "Back"
-                            subtle: true
-                            enabled: root.planActionPage > 0
-                            onClicked: root.planActionPage = Math.max(0, root.planActionPage - 1)
-                        }
-                        TerminalButton {
-                            objectName: "agentSessionPlanActionNextButton"
-                            text: "More"
-                            subtle: true
-                            enabled: root.planActionPage + 1 < root.planActionPageCount
-                            onClicked: root.planActionPage = Math.min(root.planActionPageCount - 1, root.planActionPage + 1)
-                        }
-                    }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    Label {
-                        Layout.fillWidth: true
-                        text: "TARGET · " + root.targetSummary()
-                        color: root.cyan
-                        font.family: root.mono
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                    }
-                    Label {
-                        objectName: "agentSessionPlanCanvasSummary"
-                        Layout.preferredWidth: visible ? implicitWidth : 0
-                        visible: root.canvasSettingsSummary.length > 0
-                        text: root.canvasSettingsSummary
-                        color: root.amber
-                        font.family: root.mono
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                    }
-                }
-                Label {
-                    objectName: "agentSessionExactCopyReviewLabel"
-                    visible: (root.plan.exactCopy || []).length > 0
-                    text: root.exactCopyLabel()
-                    color: root.suggestedCopyNeedsReview() ? root.coral : root.amber
-                    font.family: root.mono
-                    font.pixelSize: 10
-                    font.weight: Font.Bold
-                }
-                Label {
-                    objectName: "agentSessionPlanExactCopy"
-                    Layout.fillWidth: true
-                    visible: (root.plan.exactCopy || []).length > 0
-                    text: root.exactCopyText()
-                    color: root.paper
-                    font.family: root.uiFont
-                    font.pixelSize: 12
-                    font.weight: Font.DemiBold
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
-                    elide: Text.ElideRight
-                }
-                Label {
-                    objectName: "agentSessionPlanDeliverables"
-                    Layout.fillWidth: true
-                    visible: (root.plan.deliverables || []).length > 0
-                    text: "DELIVERABLES · " + (root.plan.deliverables || []).slice(0, 3).join(" · ")
-                    color: root.muted
-                    font.family: root.uiFont
-                    font.pixelSize: 12
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
-                    elide: Text.ElideRight
-                }
-                Label {
-                    objectName: "agentSessionPlanConstraints"
-                    Layout.fillWidth: true
-                    visible: (root.plan.constraints || []).length > 0
-                    text: "Keep in mind · " + (root.plan.constraints || []).slice(0, 2).join(" · ")
-                    color: root.muted
-                    font.family: root.uiFont
-                    font.pixelSize: 10
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 1
-                    elide: Text.ElideRight
-                }
-                Item {
+                ScrollView {
+                    id: planReviewScroll
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: 0
+                    contentWidth: availableWidth
+                    clip: true
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    ColumnLayout {
+                        width: planReviewScroll.availableWidth
+                        spacing: 4
+                        BodyLabel {
+                            objectName: "agentSessionPlanSummary"
+                            Layout.fillWidth: true
+                            text: String(root.plan.summary || root.plan.outcome || "").trim()
+                            color: root.paper
+                            font.family: root.uiFont
+                            font.pixelSize: root.themeObject.typeBody
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                        }
+                        ColumnLayout {
+                            objectName: "agentSessionPlanActionList"
+                            Layout.fillWidth: true
+                            spacing: 3
+                            visible: root.planActions.length > 0
+                            BodyLabel {
+                                Layout.fillWidth: true
+                                text: "What I’ll do"
+                                color: root.cyan
+                                font.family: root.uiFont
+                                font.pixelSize: root.themeObject.typeCaption
+                                font.weight: Font.Bold
+                            }
+                            Repeater {
+                                model: root.visiblePlanActions
+                                delegate: RowLayout {
+                                    id: planActionRow
+                                    required property var modelData
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    spacing: 5
+                                    BodyLabel {
+                                        text: "›"
+                                        color: root.amber
+                                        font.family: root.uiFont
+                                        font.pixelSize: root.themeObject.typeCaption
+                                        font.weight: Font.Bold
+                                    }
+                                    BodyLabel {
+                                        objectName: "agentSessionPlanActionSummary-" +
+                                                    (root.planActionPage * root.planActionPageSize + planActionRow.index)
+                                        Layout.fillWidth: true
+                                        text: String((planActionRow.modelData || ({})).summary || "").trim()
+                                        color: root.paper
+                                        font.family: root.uiFont
+                                        font.pixelSize: root.themeObject.typeBody
+                                        wrapMode: Text.WordWrap
+                                        maximumLineCount: 2
+                                        elide: Text.ElideRight
+                                        Accessible.name: text
+                                    }
+                                }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: root.planActionPageCount > 1
+                                BodyLabel {
+                                    Layout.fillWidth: true
+                                    text: "More steps · " + (root.planActionPage + 1) + "/" + root.planActionPageCount
+                                    color: root.muted
+                                    font.family: root.uiFont
+                                    font.pixelSize: root.themeObject.typeCaption
+                                }
+                                TerminalButton {
+                                    objectName: "agentSessionPlanActionPreviousButton"
+                                    text: "Back"
+                                    subtle: true
+                                    enabled: root.planActionPage > 0
+                                    onClicked: root.planActionPage = Math.max(0, root.planActionPage - 1)
+                                }
+                                TerminalButton {
+                                    objectName: "agentSessionPlanActionNextButton"
+                                    text: "More"
+                                    subtle: true
+                                    enabled: root.planActionPage + 1 < root.planActionPageCount
+                                    onClicked: root.planActionPage = Math.min(root.planActionPageCount - 1, root.planActionPage + 1)
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            BodyLabel {
+                                Layout.fillWidth: true
+                                text: "Target · " + root.targetSummary()
+                                color: root.cyan
+                                font.family: root.uiFont
+                                font.pixelSize: root.themeObject.typeCaption
+                                elide: Text.ElideRight
+                            }
+                            BodyLabel {
+                                objectName: "agentSessionPlanCanvasSummary"
+                                Layout.preferredWidth: visible ? implicitWidth : 0
+                                visible: root.canvasSettingsSummary.length > 0
+                                text: root.canvasSettingsSummary
+                                color: root.amber
+                                font.family: root.mono
+                                font.features: root.themeObject.numericFontFeatures
+                                font.pixelSize: root.themeObject.typeCaption
+                                elide: Text.ElideRight
+                            }
+                        }
+                        BodyLabel {
+                            objectName: "agentSessionExactCopyReviewLabel"
+                            visible: (root.plan.exactCopy || []).length > 0
+                            text: root.exactCopyLabel()
+                            color: root.suggestedCopyNeedsReview() ? root.coral : root.amber
+                            font.family: root.uiFont
+                            font.pixelSize: root.themeObject.typeCaption
+                            font.weight: Font.Bold
+                        }
+                        BodyLabel {
+                            objectName: "agentSessionPlanExactCopy"
+                            Layout.fillWidth: true
+                            visible: (root.plan.exactCopy || []).length > 0
+                            text: root.exactCopyText()
+                            color: root.paper
+                            font.family: root.uiFont
+                            font.pixelSize: root.themeObject.typeBody
+                            font.weight: Font.DemiBold
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                        }
+                        BodyLabel {
+                            objectName: "agentSessionPlanDeliverables"
+                            Layout.fillWidth: true
+                            visible: (root.plan.deliverables || []).length > 0
+                            text: "Deliverables · " + (root.plan.deliverables || []).slice(0, 3).join(" · ")
+                            color: root.muted
+                            font.family: root.uiFont
+                            font.pixelSize: root.themeObject.typeBody
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                        }
+                        BodyLabel {
+                            objectName: "agentSessionPlanConstraints"
+                            Layout.fillWidth: true
+                            visible: (root.plan.constraints || []).length > 0
+                            text: "Keep in mind · " + (root.plan.constraints || []).slice(0, 2).join(" · ")
+                            color: root.muted
+                            font.family: root.uiFont
+                            font.pixelSize: root.themeObject.typeCaption
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 1
+                            elide: Text.ElideRight
+                        }
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.minimumHeight: 0
+                        }
+                    }
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -1430,12 +1417,12 @@ Item {
                         visible: root.activeQuestions.length > 0
                         onClicked: root.openQuestions()
                     }
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         text: root.actionMessage
                         color: root.coral
                         font.family: root.uiFont
-                        font.pixelSize: 9
+                        font.pixelSize: root.themeObject.typeMicro
                         elide: Text.ElideRight
                     }
                     TerminalButton {
@@ -1452,26 +1439,17 @@ Item {
 
             // Actual activity is shown as text from the session/task owner.
             ColumnLayout {
-                spacing: 8
-                Label {
-                    Layout.fillWidth: true
-                    text: "Working on your approved plan"
-                    color: root.paper
-                    font.family: root.uiFont
-                    font.pixelSize: 18
-                    font.weight: Font.DemiBold
-                }
+                spacing: 6
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.minimumHeight: 62
-                    radius: 3
-                    color: root.panel
-                    border.width: 1
-                    border.color: "#3b4e5d"
+                    Layout.minimumHeight: root.themeObject.scaled(58)
+                    Layout.preferredHeight: Math.max(root.themeObject.scaled(58),
+                                                     workingActivityRow.implicitHeight + root.themeObject.scaled(20))
+                    color: "transparent"
                     RowLayout {
+                        id: workingActivityRow
                         anchors.fill: parent
-                        anchors.margins: 10
+                        anchors.margins: root.themeObject.scaled(10)
                         spacing: 8
                         OpticalActivityIndicator {
                             Layout.preferredWidth: 18
@@ -1482,30 +1460,125 @@ Item {
                         }
                         ColumnLayout {
                             Layout.fillWidth: true
-                            Label {
+                            Layout.alignment: Qt.AlignTop
+                            BodyLabel {
                                 objectName: "agentSessionWorkingActivity"
                                 Layout.fillWidth: true
-                                text: root.activityText.length > 0 ? root.activityText
-                                      : root.statusText.length > 0 ? root.statusText
-                                      : "The approved task is running."
+                                text: root.currentTaskSummary
                                 color: root.paper
                                 font.family: root.uiFont
-                                font.pixelSize: 11
+                                font.pixelSize: root.themeObject.typeBody
                                 wrapMode: Text.WordWrap
-                                maximumLineCount: 4
+                                maximumLineCount: 2
                                 elide: Text.ElideRight
                             }
-                            Label {
+                            BodyLabel {
                                 Layout.fillWidth: true
                                 text: root.targetSummary()
                                 color: root.muted
-                                font.family: root.mono
-                                font.pixelSize: 8
+                                font.family: root.uiFont
+                                font.pixelSize: root.themeObject.typeMicro
                                 elide: Text.ElideRight
                             }
                         }
                     }
                 }
+                RowLayout {
+                    objectName: "agentSessionActivityDisclosureRow"
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: root.activityEvents.length > 0
+
+                    TerminalButton {
+                        objectName: "agentSessionActivityDetailsButton"
+                        visible: root.modelOutputText.length > 0
+                        text: root.activityDetailsExpanded ? "Hide details" : "Details"
+                        accessibleLabel: root.activityDetailsExpanded
+                                         ? "Hide model output details" : "Show model output details"
+                        subtle: true
+                        onClicked: root.activityDetailsExpanded = !root.activityDetailsExpanded
+                    }
+                    TerminalButton {
+                        objectName: "agentSessionActivityHistoryButton"
+                        visible: root.activityEvents.length > 1
+                        text: root.activityHistoryExpanded ? "Hide history" : "History"
+                        accessibleLabel: root.activityHistoryExpanded
+                                         ? "Hide recent activity history" : "Show recent activity history"
+                        subtle: true
+                        onClicked: root.activityHistoryExpanded = !root.activityHistoryExpanded
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+                Flickable {
+                    id: modelOutputDetailsScroll
+                    objectName: "agentSessionModelOutputDetailsScroll"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: root.activityDetailsExpanded
+                                              ? Math.min(root.height * 0.20,
+                                                         root.themeObject.scaled(112),
+                                                         modelOutputDetailsLabel.implicitHeight) : 0
+                    visible: root.activityDetailsExpanded && root.modelOutputText.length > 0
+                    clip: true
+                    contentWidth: width
+                    contentHeight: modelOutputDetailsLabel.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    BodyLabel {
+                        id: modelOutputDetailsLabel
+                        objectName: "agentSessionModelOutputDetails"
+                        width: modelOutputDetailsScroll.width
+                        text: "Model output · " + root.modelOutputText
+                        color: root.muted
+                        font.family: root.uiFont
+                        font.pixelSize: root.themeObject.typeCaption
+                        wrapMode: Text.WordWrap
+                        Accessible.name: "Model output details"
+                        Accessible.description: root.modelOutputText
+                    }
+                }
+                ListView {
+                    id: activityHistoryList
+                    objectName: "agentSessionActivityHistoryList"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: root.activityHistoryExpanded
+                    Layout.preferredHeight: root.activityHistoryExpanded
+                                              ? Math.min(144, activityHistoryList.count * 40) : 0
+                    visible: root.activityHistoryExpanded
+                    clip: true
+                    spacing: 4
+                    model: root.visibleActivityHistory
+                    delegate: Rectangle {
+                        id: activityHistoryRow
+                        required property var modelData
+                        required property int index
+                        objectName: "agentSessionActivityHistoryRow-" + index
+                        width: ListView.view.width
+                        height: 38
+                        color: "transparent"
+                        RowLayout {
+                            anchors.fill: parent
+                            spacing: 8
+                            BodyLabel {
+                                Layout.fillWidth: true
+                                text: root.activityEventTitle(activityHistoryRow.modelData) +
+                                      (String(activityHistoryRow.modelData.detail || "").length > 0
+                                       ? " · " + String(activityHistoryRow.modelData.detail) : "")
+                                color: root.muted
+                                font.family: root.uiFont
+                                font.pixelSize: root.themeObject.typeMicro
+                                maximumLineCount: 1
+                                elide: Text.ElideRight
+                            }
+                            BodyLabel {
+                                text: root.activityEventStatus(activityHistoryRow.modelData)
+                                color: root.muted
+                                font.family: root.uiFont
+                                font.pixelSize: root.themeObject.typeMicro
+                            }
+                        }
+                    }
+                }
+                Item { Layout.fillHeight: true }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
@@ -1524,12 +1597,12 @@ Item {
                         enabled: root.stage === "executing" && !Boolean(root.controller.revertPending)
                         onClicked: root.revertWork()
                     }
-                    Label {
+                    BodyLabel {
                         Layout.fillWidth: true
                         text: root.actionMessage
                         color: root.coral
                         font.family: root.uiFont
-                        font.pixelSize: 9
+                        font.pixelSize: root.themeObject.typeMicro
                         wrapMode: Text.WordWrap
                         maximumLineCount: 2
                         elide: Text.ElideRight
@@ -1540,21 +1613,21 @@ Item {
             // A completed result stays editable and can be revised through a new approved plan.
             ColumnLayout {
                 spacing: 6
-                Label {
+                BodyLabel {
                     Layout.fillWidth: true
                     text: "Your editable result is ready"
                     color: root.paper
                     font.family: root.uiFont
-                    font.pixelSize: 18
+                    font.pixelSize: root.themeObject.typeDialogTitle
                     font.weight: Font.DemiBold
                 }
-                Label {
+                BodyLabel {
                     objectName: "agentSessionReviewStatus"
                     Layout.fillWidth: true
                     text: root.statusText.length > 0 ? root.statusText : "Review the result in the editor."
                     color: root.muted
                     font.family: root.uiFont
-                    font.pixelSize: 10
+                    font.pixelSize: root.themeObject.typeCaption
                     wrapMode: Text.WordWrap
                     maximumLineCount: 2
                     elide: Text.ElideRight
@@ -1576,37 +1649,45 @@ Item {
                         visible: root.draftAvailable
                         onClicked: root.revertWork()
                     }
+                    TerminalButton {
+                        objectName: "agentSessionReviewDetailsButton"
+                        text: root.reviewDetailsExpanded ? "Hide review details" : "Review details"
+                        accessibleLabel: root.reviewDetailsExpanded
+                                         ? "Hide edit verification details" : "Show edit verification details"
+                        subtle: true
+                        onClicked: root.reviewDetailsExpanded = !root.reviewDetailsExpanded
+                    }
                 }
-                Label {
-                    text: "ASK FOR A REVISION"
+                BodyLabel {
+                    objectName: "agentSessionReviewDetailsSummary"
+                    Layout.fillWidth: true
+                    visible: root.reviewDetailsExpanded
+                    text: root.reviewVerificationSummary
+                    color: root.muted
+                    font.family: root.uiFont
+                    font.pixelSize: root.themeObject.typeCaption
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                }
+                BodyLabel {
+                    text: "Ask for a revision"
                     color: root.cyan
-                    font.family: root.mono
-                    font.pixelSize: 8
-                    font.weight: Font.Bold
+                    font.family: root.uiFont
+                    font.pixelSize: root.themeObject.typeCaption
+                    font.weight: Font.DemiBold
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    TextField {
+                    ToneTextField {
                         id: revisionField
                         objectName: "agentSessionRevisionPrompt"
                         Layout.fillWidth: true
-                        implicitHeight: 32
+                        implicitHeight: root.themeObject.controlHeightDense
                         text: root.revisionPrompt
                         placeholderText: "Make the headline larger…"
-                        placeholderTextColor: "#8f9ba3"
-                        color: root.paper
-                        selectionColor: root.cyan
-                        font.family: root.uiFont
-                        font.pixelSize: 10
                         selectByMouse: true
                         activeFocusOnTab: true
                         onTextChanged: root.revisionPrompt = text
-                        background: Rectangle {
-                            radius: 3
-                            color: root.panel
-                            border.width: parent.activeFocus ? 2 : 1
-                            border.color: parent.activeFocus ? root.cyan : root.line
-                        }
                     }
                     TerminalButton {
                         objectName: "agentSessionReviseButton"
@@ -1616,13 +1697,13 @@ Item {
                         onClicked: root.reviseResult()
                     }
                 }
-                Label {
+                BodyLabel {
                     Layout.fillWidth: true
                     text: root.actionMessage
                     visible: root.actionMessage.length > 0
                     color: root.coral
                     font.family: root.uiFont
-                    font.pixelSize: 9
+                    font.pixelSize: root.themeObject.typeMicro
                     elide: Text.ElideRight
                 }
             }
@@ -1630,15 +1711,15 @@ Item {
             // Failure and interruption retain the request and offer a direct retry.
             ColumnLayout {
                 spacing: 8
-                Label {
+                BodyLabel {
                     Layout.fillWidth: true
                     text: root.stage === "interrupted" ? "The task was stopped." : "The plan needs another try."
                     color: root.paper
                     font.family: root.uiFont
-                    font.pixelSize: 18
+                    font.pixelSize: root.themeObject.typeDialogTitle
                     font.weight: Font.DemiBold
                 }
-                Label {
+                BodyLabel {
                     objectName: "agentSessionFailureStatus"
                     Layout.fillWidth: true
                     text: root.statusText.length > 0 ? root.statusText
@@ -1646,7 +1727,7 @@ Item {
                           : "Your request and answers are still here."
                     color: root.muted
                     font.family: root.uiFont
-                    font.pixelSize: 10
+                    font.pixelSize: root.themeObject.typeCaption
                     wrapMode: Text.WordWrap
                     maximumLineCount: 4
                     elide: Text.ElideRight
@@ -1673,7 +1754,7 @@ Item {
                         subtle: true
                         onClicked: root.subview = "prompt"
                     }
-                    Label { Layout.fillWidth: true; text: "" }
+                    BodyLabel { Layout.fillWidth: true; text: "" }
                 }
                 RowLayout {
                     objectName: "agentSessionFailureRecoveryRow"
@@ -1691,14 +1772,14 @@ Item {
                         onClicked: root.revertWork()
                     }
                 }
-                Label {
+                BodyLabel {
                     objectName: "agentSessionFailureRecoveryStatus"
                     Layout.fillWidth: true
                     visible: root.failureRevertPending || root.actionMessage.length > 0
                     text: root.actionMessage.length > 0 ? root.actionMessage : "Waiting for the task owner to settle."
                     color: root.actionMessage.length > 0 ? root.coral : root.muted
                     font.family: root.uiFont
-                    font.pixelSize: 9
+                    font.pixelSize: root.themeObject.typeMicro
                     wrapMode: Text.WordWrap
                     maximumLineCount: 2
                     elide: Text.ElideRight

@@ -396,7 +396,11 @@ Item {
     }
 
     function workflowState() {
-        if (!root.hasController())
+        // Hidden legacy review bindings still evaluate when this Item exists.
+        // The conversational session has its own state; querying the old photo
+        // workflow here can synchronously parse and cluster an entire project
+        // on every model-probe notification, before the request page can open.
+        if (root.hasSessionController() || !root.hasController())
             return ({})
         const checkingModel = Boolean(root.agentEditController.modelProbeRunning)
         const state = root.agentEditController.aiEditWorkflowState(root.scopeMode) || ({})
@@ -890,16 +894,6 @@ Item {
 
     function setPage(page) {
         root.currentPage = Math.max(0, Math.min(3, page))
-    }
-
-    function terminalStageIndex() {
-        if (!root.hasSessionController() || root.currentPage === 3)
-            return root.currentPage
-        const stage = String(root.sessionController.stage || "idle")
-        if (stage === "planning" || stage === "plan-ready") return 1
-        if (stage === "executing" || stage === "interrupted" || stage === "error") return 2
-        if (stage === "review") return 3
-        return 0
     }
 
     function nextPage() {
@@ -2585,8 +2579,8 @@ Item {
     Item {
         id: robotStage
         objectName: "agentRobotStage"
-        width: Math.min(root.width - 24, root.height - 24, 1120)
-        height: width
+        width: Math.max(0, Math.min(root.width - theme.space24 * 2, theme.scaled(760)))
+        height: Math.max(0, Math.min(root.height - theme.space24 * 2, theme.scaled(640)))
         anchors.centerIn: parent
         opacity: root.presentationProgress
         scale: 0.965 + root.presentationProgress * 0.035
@@ -2636,14 +2630,13 @@ Item {
                 nodAngle = 0
                 eyesClosed = false
                 antennaSignal = 0.35
-            }
+            } else reactToActivity()
         }
         Timer {
             interval: 2700
             repeat: true
             running: robotStage.motionActive && root.agentRunning()
             onTriggered: {
-                robotStage.servoAngle = robotStage.servoAngle > 0 ? -2 : 2
                 blinkSequence.restart()
             }
         }
@@ -2665,37 +2658,19 @@ Item {
             ScriptAction { script: presentationCharacter.blinkOnce() }
         }
 
-        Rectangle {
+        PopupSurface {
             id: robotArtwork
             objectName: "agentRobotScreenArtwork"
-            x: heldScreen.x - 18
-            y: heldScreen.y - 18
-            width: heldScreen.width + 36
-            height: heldScreen.height + 36
-            radius: 16
-            color: "#11181b"
-            border.width: 1
-            border.color: "#485b60"
+            x: heldScreen.x - theme.popupPadding
+            y: heldScreen.y - theme.popupPadding
+            width: heldScreen.width + theme.popupPadding * 2
+            height: heldScreen.height + theme.popupPadding * 2
             Accessible.ignored: true
-            Rectangle {
-                anchors.fill: parent
-                anchors.margins: 5
-                radius: 12
-                color: "transparent"
-                border.width: 1
-                border.color: "#25363b"
-            }
-            Rectangle {
-                x: 22; y: 0
-                width: 34; height: 1
-                color: "#a5d9e0"
-                opacity: 0.7
-            }
         }
         LooksyAgentCharacter {
             id: presentationCharacter
             objectName: "agentPopupCharacter"
-            width: robotStage.width * 0.13
+            width: Math.min(theme.scaled(96), root.height * 0.14)
             height: width * 1.15
             x: robotArtwork.x + 14
             y: robotArtwork.y - feetBaseline + 1
@@ -2712,44 +2687,27 @@ Item {
             Accessible.ignored: true
         }
 
-        // The interface and character share a drawn frame with no raster bezel.
+        // Agent controls use application chrome; only the character is artwork.
         Item {
             id: heldScreen
             objectName: "agentHeldScreen"
-            x: robotStage.width * 0.177
-            y: robotStage.height * 0.265
-            width: robotStage.width * 0.646
-            height: robotStage.height * 0.58
+            x: theme.popupPadding
+            y: presentationCharacter.height + theme.space8
+            width: Math.floor(Math.max(0, robotStage.width - theme.popupPadding * 2))
+            height: Math.floor(Math.max(0, robotStage.height - y - theme.popupPadding))
             clip: true
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
+                anchors.margins: theme.space2
+                spacing: theme.space8
 
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 30
                     spacing: 8
 
-                    Label {
-                        Layout.fillWidth: true
-                        text: ["EDIT.EXE  /  REQUEST", "EDIT.EXE  /  PLAN", "EDIT.EXE  /  RUNNING", "EDIT.EXE  /  REVIEW"][root.terminalStageIndex()]
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        font.letterSpacing: 0.8
-                    }
-                    Repeater {
-                        model: 4
-                        delegate: Rectangle {
-                            required property int index
-                            implicitWidth: 5
-                            implicitHeight: 5
-                            radius: 2.5
-                            color: index === root.terminalStageIndex() ? theme.textStrong : theme.lineStrong
-                        }
-                    }
+                    Item { Layout.fillWidth: true }
                     ActionButton {
                         objectName: "agentSessionReturnToConversationButton"
                         visible: root.hasSessionController() && root.currentPage === 3

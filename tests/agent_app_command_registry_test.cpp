@@ -232,6 +232,81 @@ int main(int argc, char** argv) {
       output_handler_values == output_values && authorization_checks == 6,
       "Invocation uses validated values once and runs the current authorization evaluator");
 
+  const AgentAppCommandRegistry::Invocation legacy_invocation = []() {
+    return QVariantMap{{QStringLiteral("ok"), true},
+                       {QStringLiteral("path"), QStringLiteral("legacy-no-arg")}};
+  };
+  CHECK(legacy_invocation &&
+            legacy_invocation().value(QStringLiteral("path")).toString() ==
+                QStringLiteral("legacy-no-arg") &&
+            legacy_invocation.withPreimage(QByteArrayLiteral("ignored"))
+                    .value(QStringLiteral("path")).toString() ==
+                QStringLiteral("legacy-no-arg"),
+        "The scoped preimage wrapper preserves bool checks and no-argument Invocation behavior");
+
+  AgentAppCommandRegistry preimage_registry;
+  NativeFixture preimage_fixture;
+  auto preimage_policy = output_policy;
+  preimage_policy.resource = QStringLiteral("timeline-document");
+  preimage_policy.reversal = QStringLiteral("exact-task-baseline");
+  QByteArray observed_task_preimage;
+  auto preimage_action_calls = 0;
+  const auto preimage_owner = [](const QString&, const QVariantMap&,
+      const AgentAppCommandRegistry::Invocation& invoke) {
+    return invoke.withPreimage(QByteArrayLiteral("journal-preimage"));
+  };
+  CHECK(preimage_registry.registerActionWithPreimage(
+      QStringLiteral("timeline"), QStringLiteral("preimageAction"),
+      &preimage_fixture, output_schema, preimage_policy, preimage_owner,
+      [&observed_task_preimage, &preimage_action_calls](
+          const QVariantMap&, const QByteArray& preimage) {
+        ++preimage_action_calls;
+        observed_task_preimage = preimage;
+        return QVariantMap{{QStringLiteral("ok"), true},
+                           {QStringLiteral("preimageBytes"), preimage.size()}};
+      }),
+      "Register the one action that can consume the journal's scoped preimage");
+  auto invalid_preimage_values = output_values;
+  invalid_preimage_values.remove(QStringLiteral("outputPath"));
+  CHECK(!preimage_registry.invoke(QStringLiteral("timeline.action.preimageAction"),
+              invalid_preimage_values).value(QStringLiteral("ok")).toBool() &&
+            preimage_action_calls == 0,
+        "The scoped action still rejects invalid values before its interceptor or handler runs");
+  invocation_authorized = false;
+  CHECK(!preimage_registry.invoke(QStringLiteral("timeline.action.preimageAction"),
+              output_values).value(QStringLiteral("ok")).toBool() &&
+            preimage_action_calls == 0,
+        "Invocation-time authorization still blocks the scoped action before preimage dispatch");
+  invocation_authorized = true;
+  const auto preimage_receipt = preimage_registry.invoke(
+      QStringLiteral("timeline.action.preimageAction"), output_values);
+  CHECK(preimage_receipt.value(QStringLiteral("ok")).toBool() &&
+            preimage_receipt.value(QStringLiteral("preimageBytes")).toInt() ==
+                QByteArrayLiteral("journal-preimage").size() &&
+            observed_task_preimage == QByteArrayLiteral("journal-preimage") &&
+            preimage_action_calls == 1,
+        "The action interceptor forwards exact bytes only through withPreimage()");
+
+  const auto fallback_owner = [](const QString&, const QVariantMap&,
+      const AgentAppCommandRegistry::Invocation& invoke) { return invoke(); };
+  const auto fallback_action = QStringLiteral("timeline.action.preimageFallback");
+  CHECK(preimage_registry.registerActionWithPreimage(
+      QStringLiteral("timeline"), QStringLiteral("preimageFallback"),
+      &preimage_fixture, output_schema, preimage_policy, fallback_owner,
+      [&observed_task_preimage, &preimage_action_calls](
+          const QVariantMap&, const QByteArray& preimage) {
+        ++preimage_action_calls;
+        observed_task_preimage = preimage;
+        return QVariantMap{{QStringLiteral("ok"), true},
+                           {QStringLiteral("usedFreshFallback"), preimage.isEmpty()}};
+      }),
+      "Register a scoped action with a no-preimage compatibility fallback");
+  const auto fallback_receipt = preimage_registry.invoke(fallback_action, output_values);
+  CHECK(fallback_receipt.value(QStringLiteral("ok")).toBool() &&
+            fallback_receipt.value(QStringLiteral("usedFreshFallback")).toBool() &&
+            observed_task_preimage.isEmpty() && preimage_action_calls == 2,
+        "Legacy no-argument action interception uses the explicit fresh-state fallback");
+
   CHECK(registry.registerAction(QStringLiteral("edit"), QStringLiteral("missingReceipt"), &fixture,
       output_schema, output_policy, output_owner, [](const QVariantMap&) {
         return QVariantMap{{QStringLiteral("accepted"), true}};
@@ -249,6 +324,67 @@ int main(int argc, char** argv) {
   CHECK(!unowned_action_registry.schema(QStringLiteral("edit.action.unownedOutput")).value(QStringLiteral("available")).toBool() &&
       !unowned_action_registry.invoke(QStringLiteral("edit.action.unownedOutput"), output_values).value(QStringLiteral("ok")).toBool(),
       "Custom actions cannot bypass the registered resource and reversal owner requirement");
+
+  AgentAppCommandRegistry composed_registry;
+  NativeFixture composed_fixture;
+  int child_owner_calls = 0;
+  int child_authorization_calls = 0;
+  int child_value_authorization_calls = 0;
+  int child_action_calls = 0;
+  const QVariantMap composed_schema{
+      {QStringLiteral("type"), QStringLiteral("object")},
+      {QStringLiteral("properties"), QVariantMap{
+          {QStringLiteral("value"), QVariantMap{{QStringLiteral("type"), QStringLiteral("string")},
+              {QStringLiteral("minLength"), 1}}}}},
+      {QStringLiteral("required"), QStringList{QStringLiteral("value")}},
+      {QStringLiteral("additionalProperties"), false}};
+  AgentAppCommandRegistry::Policy composed_policy;
+  composed_policy.available = true;
+  composed_policy.resource = QStringLiteral("timeline-document");
+  composed_policy.reversal = QStringLiteral("task-baseline");
+  composed_policy.authorize = [&child_authorization_calls]() {
+    ++child_authorization_calls;
+    return QVariantMap{{QStringLiteral("ok"), true}};
+  };
+  composed_policy.authorize_values = [&child_value_authorization_calls](const QVariantMap& values) {
+    ++child_value_authorization_calls;
+    return values.value(QStringLiteral("value")).toString() == QStringLiteral("allowed")
+        ? QVariantMap{{QStringLiteral("ok"), true}}
+        : QVariantMap{{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("child values denied")}};
+  };
+  const auto composed_owner = [&child_owner_calls](const QString&, const QVariantMap&,
+      const AgentAppCommandRegistry::Invocation& invoke) {
+    ++child_owner_calls;
+    return invoke();
+  };
+  CHECK(composed_registry.registerAction(QStringLiteral("timeline"), QStringLiteral("typedChild"),
+      &composed_fixture, composed_schema, composed_policy, composed_owner,
+      [&child_action_calls](const QVariantMap& values) {
+        ++child_action_calls;
+        return QVariantMap{{QStringLiteral("ok"), true},
+            {QStringLiteral("stableId"), values.value(QStringLiteral("value"))}};
+      }), "Register a child action for one parent-owned batch");
+  const auto composed_id = QStringLiteral("timeline.action.typedChild");
+  CHECK(composed_registry.actionInputSchema(composed_id).value(QStringLiteral("inputSchema")).toMap() == composed_schema,
+      "A parent action can retrieve the exact child schema before preparing its transaction");
+  CHECK(!composed_registry.actionInputSchema(QStringLiteral("edit.method.add(int,int)")).value(QStringLiteral("ok")).toBool(),
+      "Composed dispatch does not accept reflected methods");
+  CHECK(!composed_registry.invokeActionWithinMutation(composed_id,
+      {{QStringLiteral("value"), 5}}).value(QStringLiteral("ok")).toBool() &&
+      child_authorization_calls == 0 && child_value_authorization_calls == 0 && child_action_calls == 0,
+      "Composed child schemas reject mistyped values before native authorization or action");
+  const auto denied_composed = composed_registry.invokeActionWithinMutation(composed_id,
+      {{QStringLiteral("value"), QStringLiteral("denied")}});
+  CHECK(!denied_composed.value(QStringLiteral("ok")).toBool() && child_action_calls == 0 &&
+      child_authorization_calls == 1 && child_value_authorization_calls == 1,
+      "Composed dispatch retains both native authorization gates before mutation");
+  const auto composed_result = composed_registry.invokeActionWithinMutation(composed_id,
+      {{QStringLiteral("value"), QStringLiteral("allowed")}});
+  CHECK(composed_result.value(QStringLiteral("ok")).toBool() &&
+      composed_result.value(QStringLiteral("commandId")).toString() == composed_id &&
+      composed_result.value(QStringLiteral("stableId")).toString() == QStringLiteral("allowed") &&
+      child_action_calls == 1 && child_owner_calls == 0,
+      "Composed child actions invoke their typed handler without opening a second mutation owner");
 
   AgentAppCommandRegistry unowned;
   unowned.registerObject("edit", &fixture, [](const QString&, bool, bool) { AgentAppCommandRegistry::Policy p; p.available = true; return p; });

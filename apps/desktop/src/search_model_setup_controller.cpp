@@ -22,6 +22,9 @@ SearchModelSetupController::SearchModelSetupController(LocalSimilaritySearch* se
 SearchModelSetupController::~SearchModelSetupController() {
   shutdown(); watcher_.disconnect(this);
 }
+void SearchModelSetupController::setRuntimeStatus(const QString& status) {
+  if (!running_ && !ready_) { status_ = status; emit changed(); }
+}
 void SearchModelSetupController::setRuntime(const QString& executable) {
   if (running_ || shutting_down_ || !QFileInfo(executable).isAbsolute()) return;
   executable_ = executable;

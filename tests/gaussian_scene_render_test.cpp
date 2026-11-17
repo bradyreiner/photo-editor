@@ -24,11 +24,20 @@ static GaussianPoint point(float z, std::array<float, 3> color) {
   return p;
 }
 #include "gaussian_film_effects_test.h"
+#include "gaussian_film_plane_render_test.h"
+#include "gaussian_camera_post_test.h"
+#include "gaussian_camera_tone_test.h"
+#include "gaussian_creative_camera_test.h"
+#include "gaussian_pupil_test.h"
+#include "gaussian_aberration_test.h"
+#include "gaussian_autofocus_test.h"
+#include "gaussian_alpha_model_test.h"
 #include "gaussian_film_perf.h"
 #include "gaussian_resolved_source_test.h"
 #include "gaussian_tiled_photo_test.h"
 #include "gaussian_bokeh_quality_test.h"
 #include "gaussian_optical_precision_test.h"
+#include "gaussian_ray_camera_test.h"
 static bool parser_regression() {
   QTemporaryDir temp;
   const auto write = [&](const QString& name, const QByteArray& bytes) {
@@ -129,7 +138,16 @@ int main(int argc, char** argv) {
   auto renderer = make_gaussian_scene_renderer();
   if (!renderer) return 1;
   const auto args = app.arguments();
+  if (args.value(1) == "--creative-camera-proof") return gaussian_creative_camera_regression(args.value(2)) ? 0 : 1;
   if (args.value(1) == "--film-perf" || args.value(1) == "--motion-perf") return gaussian_film_perf(args);
+  if (args.value(1) == "--autofocus-proof" && args.size() == 3) return gaussian_autofocus_regression(args[2]) ? 0 : 1;
+  if (args.value(1) == "--alpha-model-proof" && args.size() == 3) return gaussian_alpha_model_regression(args[2]) ? 0 : 1;
+  if (args.value(1) == "--aberration-proof" && args.size() == 3) return gaussian_aberration_regression(args[2]) ? 0 : 1;
+  if (args.value(1) == "--pupil-proof" && args.size() == 3) return gaussian_pupil_regression(args[2]) ? 0 : 1;
+  if (args.value(1) == "--camera-post-proof" && args.size() == 3) return gaussian_camera_post_regression(args[2]) ? 0 : 1;
+  if (args.value(1) == "--ray-camera-proof") return gaussian_ray_camera_regression(args.value(2)) ? 0 : 1;
+  if (args.value(1) == "--film-plane-proof" && args.size() == 3) return gaussian_film_plane_regression(args[2]) ? 0 : 1;
+  if (args.value(1) == "--camera-tone-proof" && args.size() == 3) return gaussian_camera_tone_regression(args[2]) ? 0 : 1;
   if (args.value(1) == "--bokeh-quality-proof" && args.size() == 3) return gaussian_bokeh_quality_regression(args[2]) ? 0 : 1;
   if (args.value(1) == "--optical-precision-proof" && args.size() == 3) return gaussian_optical_precision_regression(args[2]) ? 0 : 1;
   if (args.size() == 1) {
@@ -138,6 +156,12 @@ int main(int argc, char** argv) {
     if (!gaussian_bokeh_quality_regression()) return 1;
     if (!gaussian_optical_precision_regression()) return 1;
     if (!gaussian_film_effects_regression(renderer)) return 1;
+    if (!gaussian_camera_post_regression()) return 1;
+    if (!gaussian_camera_tone_regression()) return 1;
+    if (!gaussian_pupil_regression()) return 1;
+    if (!gaussian_aberration_regression()) return 1;
+    if (!gaussian_autofocus_regression()) return 1;
+    if (!gaussian_alpha_model_regression()) return 1;
     if (!gaussian_resolved_source_regression()) return 1;
     if (!gaussian_tiled_photo_regression()) return 1;
     if (!parser_regression()) { std::cerr << "Gaussian/camera parser regression failed"; return 1; }
@@ -212,13 +236,17 @@ int main(int argc, char** argv) {
   const auto validation = validate_gaussian_ply(args[1], {});
   const auto loaded = load_gaussian_scene(args[1], args[2], validation.value("artifactSha256").toString());
   if (!loaded.scene) { std::cerr << loaded.error.toStdString(); return 1; }
-  auto camera = loaded.scene->cameras.front();
+  auto scene = loaded.scene;
+  auto camera = scene->cameras.front();
   if (args.size() > 4) {
-    const auto found = std::find_if(loaded.scene->cameras.begin(), loaded.scene->cameras.end(), [&](const auto& value) { return value.name == args[4]; });
-    if (found == loaded.scene->cameras.end()) return 1;
+    const auto found = std::find_if(scene->cameras.begin(), scene->cameras.end(), [&](const auto& value) { return value.name == args[4]; });
+    if (found == scene->cameras.end()) return 1;
     camera = *found;
   }
-  auto frame = renderer->render(loaded.scene, camera, true);
+  if (args.contains("--inria-alpha")) {
+    auto profile = std::make_shared<GaussianSceneComposition>(); profile->alpha_model = GaussianAlphaModel::Inria99; camera.composition = profile;
+  }
+  auto frame = renderer->render(scene, camera, true);
   if (!frame.error.isEmpty()) { std::cerr << frame.error.toStdString(); return 1; }
   QFile output(args[3]);
   if (!output.open(QIODevice::WriteOnly | QIODevice::NewOnly) || !frame.image.save(&output, "PNG")) return 1;
@@ -256,13 +284,14 @@ int main(int argc, char** argv) {
         proof.insert("referenceP99ChannelError", static_cast<int>(error)); break;
       }
     }
-    if (args.contains("--scalar-audit")) proof.insert("scalarAudit", gaussian_reference::audit(*loaded.scene, camera, frame.image, reference));
+    if (args.contains("--scalar-audit")) proof.insert("scalarAudit", gaussian_reference::audit(*scene, camera, frame.image, reference));
+    if (args.contains("--original-raster-audit")) proof.insert("originalRasterAudit", gaussian_reference::audit(*scene,camera,frame.image,reference,true));
   }
   std::vector<double> times;
   const int motion_frames = args.contains("--no-motion") ? 0 : 30;
   for (int i = 0; i < motion_frames; ++i) {
     const auto moving_camera = navigate_gaussian_camera(camera, loaded.scene->focus_distance, static_cast<float>(i) * 0.1F, 0, 0, 0, 0);
-    const auto moving_frame = renderer->render(loaded.scene, moving_camera, false);
+    const auto moving_frame = renderer->render(scene, moving_camera, false);
     if (!moving_frame.error.isEmpty() || !moving_frame.image.isNull() || !moving_frame.native_texture) return 1;
     times.push_back(moving_frame.metrics.value("renderMs").toDouble());
   }

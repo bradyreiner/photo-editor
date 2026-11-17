@@ -1,0 +1,16 @@
+{
+  "rework_started_at_utc": "2026-11-16T22:07:49+00:00",
+  "packaged_at_utc": "2026-11-16T23:10:44.278687+00:00",
+  "elapsed_wall_seconds": 3775,
+  "elapsed_wall_minutes": 62.9,
+  "timing_note": "Actual elapsed rework time; not aggregate agent minutes. No artificial waiting was used to satisfy the requested minimum.",
+  "workstreams": [
+    "Primary-release research and audience objections",
+    "Current native photo import, committed edits, actual baseline/chosen export and pixel verification",
+    "Five distinct motion/graphic executions with hook alternatives and actual carousel artwork",
+    "Independent creative reviews and source-specific revisions",
+    "20-page designed director book and rendered-page QA",
+    "Editable production tracking, native proof ledger, color/audio/vector finishing and portable delivery"
+  ],
+  "native_app_final_state": "Existing Looksy PID20532 verified running at23:09UTC. Window inaccessible after Timeline setup; process was not forcibly closed or restarted. Separate workshop copy used; earlier Nepal boards untouched."
+}

@@ -300,6 +300,91 @@ int main() {
         "source-area policy must participate in stage identity and typed descriptors");
   }
 
+  // Decode caches the complete surface, including full-source RAW highlight
+  // analysis. Compile real recipes to prove its NormalizeRaw dependencies are
+  // refreshed while a scene-EV-only edit still reuses unexposed source work.
+  for (int variant = 0; variant < 4; ++variant) {
+    auto raw_recipe = EditRecipeV13{};
+    raw_recipe.recipe_id = AssetIdentifier{"raw-analysis-cache-recipe"};
+    raw_recipe.input.source = AssetIdentifier{"raw-analysis-cache-source"};
+    raw_recipe.input.decoder_provenance = "LibRaw:camera-linear:raw-analysis-test";
+    raw_recipe.output.rendering_target = DisplayRenderingTarget::SrgbSimulation;
+    const auto compile_request = [&](const EditRecipeV13& recipe) {
+      auto compiled_request = request_fixture();
+      const auto compiled = RecipeCompiler{}.compile(
+          recipe, RecipeCompileContext{.source_width = 2, .source_height = 1});
+      if (!compiled.ok()) {
+        compiled_request.plan = {};
+        return compiled_request;
+      }
+      compiled_request.plan = *compiled.plan;
+      compiled_request.source_revision_identity = "unchanged-raw-file-revision";
+      return compiled_request;
+    };
+    auto analysis_marker = std::size_t{1U};
+    auto decode_calls = 0;
+    const auto raw_callback = [&](const RenderStageInvocation& invocation,
+                                  std::optional<RenderSurface> input) {
+      auto pixels = input.has_value() ? input->pixels
+          : std::vector<ColorPixel>{{0.25F, 0.50F, 1.5F, 1.0F}, {0.75F, 0.40F, 0.10F, 1.0F}};
+      auto analysis = input.has_value() ? input->highlight_reconstruction
+          : std::optional<HighlightReconstructionAnalysis>{};
+      if (invocation.stage.kind == RenderStageKind::Decode) {
+        ++decode_calls;
+        analysis = HighlightReconstructionAnalysis{};
+        analysis->active = true;
+        analysis->model = "camera-linear-opposed-v2";
+        analysis->reconstructed_channel_samples = analysis_marker;
+      }
+      return RenderStageExecution{
+          .output = RenderSurface{
+              .descriptor = invocation.expected_output,
+              .pixels = std::move(pixels),
+              .identity = "surface:" + invocation.stage_cache_key,
+              .highlight_reconstruction = std::move(analysis)},
+          .backend = "raw-analysis-cache-fixture"};
+    };
+    RenderExecutor raw_executor(4096);
+    const auto base_request = compile_request(raw_recipe);
+    auto other_working_request = base_request;
+    other_working_request.working_color_space_identity = "Linear sRGB";
+    if (render_stage_cache_key(base_request, base_request.plan.stages.front(), std::nullopt) ==
+        render_stage_cache_key(other_working_request, other_working_request.plan.stages.front(), std::nullopt)) {
+      return fail("LibRaw Decode must separate characterized pixels expressed in different working spaces");
+    }
+    const auto initial = raw_executor.execute(base_request, raw_callback);
+    const auto warm = raw_executor.execute(base_request, raw_callback);
+    if (!initial.ok() || !warm.ok() || decode_calls != 1 ||
+        !warm.completed_stages.front().cache_hit) {
+      return fail("unchanged RAW Decode and attached analysis must be cacheable");
+    }
+    if (variant == 0) raw_recipe.input.black_level_override = 0.20;
+    else if (variant == 1) raw_recipe.input.white_level_override = 0.90;
+    else if (variant == 2)
+      raw_recipe.input.highlight_reconstruction = HighlightReconstructionModeV13::CameraDefault;
+    else raw_recipe.input.highlight_recovery_enabled = false;
+    analysis_marker = 2U;
+    const auto changed_request = compile_request(raw_recipe);
+    const auto changed = raw_executor.execute(changed_request, raw_callback);
+    if (!changed.ok() || decode_calls != 2 || changed.completed_stages.front().cache_hit ||
+        !changed.output->highlight_reconstruction.has_value() ||
+        changed.output->highlight_reconstruction->reconstructed_channel_samples != analysis_marker) {
+      return fail("RAW levels/recovery changes must refresh cached full-source highlight analysis");
+    }
+    raw_recipe.scene.exposure_ev = 1.9;
+    const auto exposure_request = compile_request(raw_recipe);
+    const auto exposed = raw_executor.execute(exposure_request, raw_callback);
+    if (!exposed.ok() || decode_calls != 2 || !exposed.completed_stages.front().cache_hit ||
+        !exposed.output->highlight_reconstruction.has_value() ||
+        exposed.output->highlight_reconstruction->reconstructed_channel_samples != analysis_marker ||
+        std::none_of(exposed.completed_stages.begin(), exposed.completed_stages.end(),
+            [](const RenderCompletedStage& completed) {
+              return completed.kind == RenderStageKind::SceneAdjustments && !completed.cache_hit;
+            })) {
+      return fail("scene EV must reuse current unexposed RAW Decode analysis and rerun SceneAdjustments");
+    }
+  }
+
   auto text_transform_request = request_fixture();
   text_transform_request.plan.plan_cache_key = "plan:text-position-before";
   text_transform_request.plan.stages = {

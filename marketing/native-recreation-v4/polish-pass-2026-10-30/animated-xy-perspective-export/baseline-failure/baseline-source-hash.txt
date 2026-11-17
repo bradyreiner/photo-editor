@@ -1,0 +1,1 @@
+e9039cdb78be226730ad6a5dcd89d0b9b6d3a527237f4268471a89718caf1021  apps/desktop/src/timeline_document_controller.cpp (pre-perspective-fix source; base-frame fix already present)

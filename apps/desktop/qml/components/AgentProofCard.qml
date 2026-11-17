@@ -69,7 +69,8 @@ Rectangle {
             width: parent.width - 10
             text: root.label
             color: theme.textStrong
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 9
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 7

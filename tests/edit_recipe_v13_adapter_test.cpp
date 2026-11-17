@@ -4,6 +4,8 @@
 #include "photo_editor/pipeline/recipe_compiler.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -349,15 +351,29 @@ int main() {
     return fail("desktop adapter must not relabel the legacy renderer as ACES 2");
   }
 
-  auto ambiguous_exposure = state;
-  ambiguous_exposure.raw_exposure = 0.5;
-  const auto ambiguous_result =
-      photo_editor::desktop::adapt_desktop_recipe_to_v13(
-          ambiguous_exposure,
-          context());
-  if (ambiguous_result.ok() ||
-      !has_error_path(ambiguous_result, "scene.exposure_ev")) {
-    return fail("desktop adapter must reject duplicate exposure ownership");
+  for (const auto& exposure :
+       {std::array{1.9, 0.5}, std::array{1.9, -1.9}, std::array{-4.0, -5.0},
+        std::array{4.0, 5.0}}) {
+    auto combined = state;
+    combined.raw_exposure = exposure[0];
+    combined.exposure = exposure[1];
+    const auto combined_result =
+        photo_editor::desktop::adapt_desktop_recipe_to_v13(combined, context());
+    const auto combined_plan =
+        photo_editor::desktop::compile_desktop_render_plan_with_derived_assets(
+            combined, production_request);
+    if (!combined_result.ok() || !combined_plan.ok() ||
+        std::abs(combined_result.recipe->scene.exposure_ev -
+                 (exposure[0] + exposure[1])) > 1.0e-12) {
+      return fail("RAW and Light EV must compile as one additive scene exposure, including cancellation and control limits");
+    }
+    auto raster_context = context();
+    raster_context.raw_source = false;
+    const auto raster_result =
+        photo_editor::desktop::adapt_desktop_recipe_to_v13(combined, raster_context);
+    if (!raster_result.ok() || raster_result.recipe->scene.exposure_ev != exposure[1]) {
+      return fail("canonical raster exposure must ignore stale RAW-only controls");
+    }
   }
 
   auto unsupported_mask = state;

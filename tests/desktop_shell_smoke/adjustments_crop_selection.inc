@@ -293,10 +293,9 @@
     return fail("clearing the adjust inspector filter should restore the full adjustment stack");
   }
   trace_smoke_progress("adjust filter restored");
-  for (auto* footer_child : edit_inspector_footer->findChildren<QObject*>()) {
-    if (footer_child->property("text").toString() == QStringLiteral("Export")) {
-      return fail("edit inspector footer should contain only edit-local actions, not export navigation");
-    }
+  for (const auto& entry : edit_inspector_actions->property("menuItems").toList()) {
+    if (entry.toMap().value("key").toString() == QStringLiteral("export"))
+      return fail("adjustment actions should remain local to the current edit");
   }
   auto* app_navigation_bar = find_named_item(root, QStringLiteral("appNavigationBar"));
   const auto app_activity_error_visible = root->property("appActivityErrorVisible").toBool();
@@ -310,7 +309,7 @@
                 ? QStringLiteral("failureActivityIndicator")
                 : QStringLiteral("floatingActivityIndicator"));
   auto* initial_edit_inspector = qobject_cast<QQuickItem*>(edit_inspector_panel);
-  auto* initial_edit_footer = qobject_cast<QQuickItem*>(edit_inspector_footer);
+  auto* initial_edit_actions = qobject_cast<QQuickItem*>(edit_inspector_actions);
   const auto activity_indicator_rect = scene_rect(initial_activity_indicator);
   const auto navigation_rect = scene_rect(app_navigation_bar);
   if (initial_activity_indicator == nullptr || app_navigation_bar == nullptr ||
@@ -320,7 +319,7 @@
         activity_indicator_rect.top() + 1.0 < navigation_rect.bottom())) ||
       (!status_row_visible && initial_activity_indicator->height() > 0.0) ||
       initial_edit_filmstrip == nullptr ||
-      !item_visible(initial_edit_inspector) || !item_visible(initial_edit_footer)) {
+      !item_visible(initial_edit_inspector) || !item_visible(initial_edit_actions)) {
     return fail("activity status should sit directly beneath navigation without occupying space while idle");
   }
   if (light_basic_tone_group == nullptr || light_advanced_tone_group == nullptr ||
@@ -1275,7 +1274,9 @@
   QCoreApplication::processEvents();
   QVariant horizon_applied;
   constexpr auto kPi = 3.14159265358979323846;
-  const auto expected_horizon_angle = std::atan2(0.2, 0.8) * 180.0 / kPi;
+  const auto expected_horizon_angle = std::atan2(
+      0.2 * editor_preview.sourceImageHeight() * editor_preview.cropRectHeight(),
+      0.8 * editor_preview.sourceImageWidth() * editor_preview.cropRectWidth()) * 180.0 / kPi;
 	  if (edit_workspace->property("cropToolMode").toString() != QStringLiteral("horizon") ||
 	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP") ||
 	      !crop_hud_horizon_button->property("active").toBool() ||
@@ -1510,6 +1511,22 @@
         edit_workspace->findChild<QObject*>(QStringLiteral("retouchHudMoreMenuButton"));
     auto* focused_retouch_mode_menu_button =
         find_named_object(edit_workspace, QStringLiteral("retouchHudModeMenuButton"));
+    auto* focused_retouch_remove_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudRemoveButton"));
+    auto* focused_retouch_heal_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudHealButton"));
+    auto* focused_retouch_patch_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudPatchButton"));
+    auto* focused_retouch_clone_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudCloneButton"));
+    auto* focused_retouch_guidance =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudGuidanceLabel"));
+    auto* focused_retouch_brush_size =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudBrushSizeSlider"));
+    auto* focused_retouch_review_before =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudReviewBeforeButton"));
+    auto* focused_retouch_review_after =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudReviewAfterButton"));
     auto* focused_edit_zoom_toolbar_for_retouch =
         find_named_object(edit_workspace, QStringLiteral("editZoomToolbar"));
     auto* focused_edit_action_toolbar_for_retouch =
@@ -1561,29 +1578,38 @@
         focused_retouch_apply_button == nullptr ||
         focused_retouch_more_menu_button == nullptr ||
         focused_retouch_mode_menu_button == nullptr ||
+        focused_retouch_remove_button == nullptr || focused_retouch_heal_button == nullptr ||
+        focused_retouch_patch_button == nullptr || focused_retouch_clone_button == nullptr ||
+        focused_retouch_guidance == nullptr || focused_retouch_brush_size == nullptr ||
+        focused_retouch_review_before == nullptr || focused_retouch_review_after == nullptr ||
         focused_edit_zoom_toolbar_for_retouch == nullptr ||
         focused_edit_action_toolbar_for_retouch == nullptr ||
         !focused_retouch_tool_hud->property("visible").toBool() ||
-        !focused_retouch_hud_contract.contains(QStringLiteral("specialized-tool-hud:v3|tool:retouch")) ||
-        !focused_retouch_hud_contract.contains(QStringLiteral("component:ToolCommandBar")) ||
-        !focused_retouch_hud_contract.contains(QStringLiteral("single-row:true")) ||
-        !focused_retouch_hud_contract.contains(QStringLiteral("mode-change-animation:true")) ||
-        !focused_retouch_hud_contract.contains(QStringLiteral("secondary-actions:more-menu")) ||
-        !focused_retouch_hud_contract.contains(QStringLiteral("no-elide:true")) ||
-        !focused_retouch_tool_hud->property("modeChangeAnimationEnabled").toBool() ||
-        !focused_retouch_tool_hud->property("modeChangeMotionContract").toString().contains(
-            QStringLiteral("mode-change-motion:v1|enabled:true")) ||
-        !focused_retouch_visibility_contract.contains(QStringLiteral("layout:single-row-command-bar")) ||
+        !focused_retouch_hud_contract.contains(QStringLiteral("specialized-tool-hud:v4|tool:retouch|component:RetouchToolHud")) ||
+        !focused_retouch_hud_contract.contains(QStringLiteral("visible-modes:remove-heal-patch-clone")) ||
+        !focused_retouch_hud_contract.contains(QStringLiteral("review:before-after")) ||
+        !focused_retouch_visibility_contract.contains(QStringLiteral("layout:grouped-workflow-panel")) ||
+        !focused_retouch_visibility_contract.contains(QStringLiteral("brush:size-presets")) ||
         !focused_retouch_visibility_contract.contains(QStringLiteral("primary:Apply")) ||
         !focused_retouch_visibility_contract.contains(QStringLiteral("inline:0")) ||
-        !focused_retouch_visibility_contract.contains(QStringLiteral("more:9")) ||
-        focused_retouch_mode_menu_button->property("text").toString() != QStringLiteral("Heal") ||
+        !focused_retouch_visibility_contract.contains(QStringLiteral("more:11")) ||
+        !focused_retouch_remove_button->property("visible").toBool() || !focused_retouch_heal_button->property("visible").toBool() ||
+        !focused_retouch_patch_button->property("visible").toBool() || !focused_retouch_clone_button->property("visible").toBool() ||
+        !focused_retouch_remove_button->property("showLeadingIcon").toBool() ||
+        !focused_retouch_heal_button->property("showLeadingIcon").toBool() ||
+        !focused_retouch_patch_button->property("showLeadingIcon").toBool() ||
+        !focused_retouch_clone_button->property("showLeadingIcon").toBool() ||
+        (focused_retouch_mode_menu_button->property("text").toString() != QStringLiteral("Other tools") &&
+         focused_retouch_mode_menu_button->property("text").toString() != QStringLiteral("Tools")) ||
         !focused_retouch_mode_menu_button->property("visible").toBool() ||
-        !focused_retouch_mode_menu.contains(QStringLiteral("items:8")) ||
-        !focused_retouch_mode_menu.contains(QStringLiteral("checked:1")) ||
-        !focused_retouch_mode_menu.contains(QStringLiteral("disabled:2")) ||
+        !focused_retouch_mode_menu.contains(QStringLiteral("items:2")) ||
+        !focused_retouch_mode_menu.contains(QStringLiteral("checked:0")) ||
+        !focused_retouch_mode_menu.contains(QStringLiteral("disabled:0")) ||
         !focused_retouch_mode_menu.contains(QStringLiteral("disabled-reasons-complete:true")) ||
         !focused_retouch_mode_menu.contains(QStringLiteral("danger:0")) ||
+        !focused_retouch_guidance->property("text").toString().contains(QStringLiteral("blemish")) ||
+        !focused_retouch_brush_size->property("visible").toBool() ||
+        !focused_retouch_review_before->property("visible").toBool() || !focused_retouch_review_after->property("visible").toBool() ||
         !edit_workspace->property("activeCanvasToolChromeReduced").toBool() ||
         focused_edit_zoom_toolbar_for_retouch->property("visible").toBool() ||
         focused_edit_action_toolbar_for_retouch->property("visible").toBool() ||
@@ -1594,13 +1620,14 @@
          focused_retouch_status.contains(editor_preview.inpaintRuntimeLabel())) ||
         !focused_retouch_status_label->property("readableStatusContract").toString().contains(QStringLiteral("fit-horizontal:true")) ||
         focused_retouch_apply_button->property("text").toString() != QStringLiteral("Apply") ||
-        focused_retouch_more_menu_button->property("text").toString() != QStringLiteral("More") ||
-        !focused_retouch_more_menu.contains(QStringLiteral("items:9")) ||
+        (focused_retouch_more_menu_button->property("text").toString() != QStringLiteral("Options") &&
+         focused_retouch_more_menu_button->property("text").toString() != QStringLiteral("More")) ||
+        !focused_retouch_more_menu.contains(QStringLiteral("items:11")) ||
         !focused_retouch_more_menu.contains(QStringLiteral("disabled:1")) ||
         !focused_retouch_more_menu.contains(QStringLiteral("disabled-reasons-complete:true")) ||
         !focused_retouch_more_menu.contains(QStringLiteral("danger:0")) ||
         !focused_retouch_visibility_invoked ||
-        !focused_retouch_visibility_signature.toString().contains(QStringLiteral("layout:single-row-command-bar")) ||
+        !focused_retouch_visibility_signature.toString().contains(QStringLiteral("layout:grouped-workflow-panel")) ||
         !focused_retouch_workflow_invoked ||
         focused_retouch_workflow_signature.toString() !=
             QStringLiteral("mode:heal|label:Heal|stage:Paint area|source:none|apply:true|regenerate:true|capability:%1|beforeAfter:after")
@@ -2056,7 +2083,7 @@
   }
   QCoreApplication::processEvents();
   if (!edit_workspace->property("objectPickArmed").toBool() ||
-      !edit_workspace->property("objectPickCreateNew").toBool() ||
+      edit_workspace->property("objectPickCreateNew").toBool() ||
       edit_workspace->property("objectPickMode").toString() != QStringLiteral("selection") ||
       editor_preview.maskCount() != mask_count_before_object_pick ||
       !active_canvas_tool_chip->property("visible").toBool() ||

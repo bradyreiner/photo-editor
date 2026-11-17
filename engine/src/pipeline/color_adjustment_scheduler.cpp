@@ -64,7 +64,8 @@ class ColorAdjustmentScheduler final {
     }
   }
 
-  void run(int count, const std::function<void(int)>& work) {
+  void run(int count, const std::function<void(int)>& work,
+           std::size_t maximum_tasks = 0) {
     if (count <= 0) {
       return;
     }
@@ -75,7 +76,8 @@ class ColorAdjustmentScheduler final {
     }
 
     const auto item_count = static_cast<std::size_t>(count);
-    const auto maximum_task_count = workers_.size();
+    const auto maximum_task_count = maximum_tasks == 0
+        ? workers_.size() : std::min(workers_.size(), maximum_tasks);
     const auto task_count = std::min<std::size_t>(
         maximum_task_count,
         std::max<std::size_t>(
@@ -196,6 +198,12 @@ void run_color_adjustment_parallel_for(
 
 void run_cpu_parallel_for(int count, const std::function<void(int)>& work) {
   color_adjustment_scheduler().run(count, work);
+}
+
+void run_cpu_parallel_for(int count, const std::function<void(int)>& work,
+                          int maximum_tasks) {
+  color_adjustment_scheduler().run(
+      count, work, static_cast<std::size_t>(std::max(1, maximum_tasks)));
 }
 
 }  // namespace photo_editor::pipeline

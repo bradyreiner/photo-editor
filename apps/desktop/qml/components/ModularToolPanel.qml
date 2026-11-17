@@ -7,10 +7,17 @@ Item {
     id: root
     property string title: qsTr("Tools")
     property string targetText: ""
+    property string contextKey: ""
     property bool active: false
     property bool floating: false
+    property bool footerVisible: false
+    property bool contentSized: false
     readonly property alias contentItem: toolContent
-    readonly property real preferredContentHeight: toolContent.implicitHeight + theme.scaled(90)
+    readonly property alias footerContentItem: toolFooter
+    readonly property real preferredContentHeight: toolContent.implicitHeight + headerRow.implicitHeight +
+        (targetLabel.visible ? targetLabel.implicitHeight + frameLayout.spacing : 0) +
+        theme.hairlineWidth + frameLayout.spacing * 2 + theme.panelPadding * 2 +
+        (toolFooter.visible ? toolFooter.implicitHeight + frameLayout.spacing : 0)
     signal floatingRequested(bool floating)
     signal closeRequested()
     signal undoRequested()
@@ -28,7 +35,16 @@ Item {
         })
     }
     onFloatingChanged: restoreWindowFocus()
-    onActiveChanged: restoreWindowFocus()
+    onActiveChanged: {
+        restoreWindowFocus()
+        if (active) resetScroll()
+    }
+    function resetScroll() {
+        Qt.callLater(function() {
+            if (toolScroll.contentItem) toolScroll.contentItem.contentY = 0
+        })
+    }
+    onContextKeyChanged: resetScroll()
 
     Theme { id: theme }
     visible: active && !floating
@@ -69,16 +85,25 @@ Item {
         objectName: "creativeToolsSurface"
         parent: root.floating ? toolWindow.contentItem : root
         anchors.fill: parent
-        color: theme.surfaceTop
-        border.width: theme.hairlineWidth
+        color: theme.ink950
+        border.width: theme.highContrast ? theme.hairlineWidth : 0
         border.color: theme.controlEdge
-        radius: theme.radiusPanel
+        radius: root.floating ? theme.radiusPanel : 0
         clip: true
+
+        Rectangle {
+            x: frameLayout.x + headerRow.x - theme.space4
+            y: frameLayout.y + headerRow.y - theme.space4
+            width: headerRow.width + theme.space8
+            height: headerRow.height + theme.space8
+            radius: theme.radiusControl
+            color: theme.ink800
+        }
 
         ColumnLayout {
             id: frameLayout
             anchors.fill: parent
-            anchors.margins: theme.space12
+            anchors.margins: theme.panelPadding
             spacing: theme.space8
 
             RowLayout {
@@ -94,6 +119,9 @@ Item {
                     font.pixelSize: theme.typeSection
                     font.weight: Font.DemiBold
                     color: theme.textStrong
+                    wrapMode: Text.NoWrap
+                    elide: Text.ElideRight
+                    Accessible.name: root.title
                 }
                 MiniButton {
                     objectName: "creativeToolsFloatButton"
@@ -109,12 +137,13 @@ Item {
                     square: true
                     iconName: "close"
                     role: "icon"
-                    tooltip: qsTr("Hide tools. Reopen from the Layout menu.")
+                    tooltip: qsTr("Hide tools. Reopen from the View menu.")
                     a11yName: tooltip
                     onClicked: root.closeRequested()
                 }
             }
             Label {
+                id: targetLabel
                 objectName: "creativeToolsTargetLabel"
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
@@ -123,7 +152,7 @@ Item {
                 color: theme.textMuted
                 font.family: theme.fontUi
                 font.pixelSize: theme.typeCaption
-                elide: Text.ElideRight
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             }
             StudioRowRule { Layout.fillWidth: true }
             ScrollView {
@@ -134,13 +163,28 @@ Item {
                 Layout.fillHeight: true
                 clip: true
                 contentWidth: availableWidth
+                wheelEnabled: !root.contentSized
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.policy: root.contentSized ? ScrollBar.AlwaysOff : ScrollBar.AsNeeded
+                Binding {
+                    target: toolScroll.contentItem
+                    property: "interactive"
+                    value: !root.contentSized
+                    when: toolScroll.contentItem !== null
+                }
                 ColumnLayout {
                     id: toolContent
                     objectName: "creativeToolsContent"
                     width: toolScroll.availableWidth
                     spacing: theme.space12
                 }
+            }
+            RowLayout {
+                id: toolFooter
+                objectName: "creativeToolsFooter"
+                Layout.fillWidth: true
+                spacing: theme.space6
+                visible: root.footerVisible
             }
         }
     }

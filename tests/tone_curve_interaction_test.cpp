@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <QFontMetricsF>
 #include <QJSValue>
 #include <QMouseEvent>
 #include <QtTest/qtestkeyboard.h>
@@ -37,6 +38,7 @@ int main(int argc, char** argv) {
 import QtQuick
 import "file:)" + QByteArray(PHOTO_EDITOR_SOURCE_DIR) + R"(/apps/desktop/qml/components"
 ToneCurveEditor {
+    objectName: "toneCurveTestEditor"
     width: 340; height: 430
     property int editCount: 0
     property int starts: 0
@@ -111,8 +113,14 @@ ToneCurveEditor {
     if (std::abs(ordinate(editor.get(), 0) - before_nudge - 1.1 / 255) > 1e-5)
       return fail("Curve arrow nudges must support one level and one tenth level");
     auto* numeric_output = editor->findChild<QQuickItem*>(QStringLiteral("toneCurveOutputField"));
-    if (!numeric_output || !numeric_output->isVisible())
-      return fail("Numeric output must remain visible in both layouts");
+    auto* numeric_input = editor->findChild<QQuickItem*>(QStringLiteral("toneCurveInputField"));
+    if (!numeric_output || !numeric_output->isVisible() || !numeric_input || !numeric_input->isVisible())
+      return fail("Numeric input and output must remain visible in both layouts");
+    const auto numeric_font = numeric_output->property("font").value<QFont>();
+    const auto numeric_width = numeric_output->width() - numeric_output->property("leftPadding").toDouble()
+                               - numeric_output->property("rightPadding").toDouble();
+    if (QFontMetricsF(numeric_font).horizontalAdvance(QStringLiteral("255.000")) > numeric_width + 1)
+      return fail("Curve point fields must fit the full accepted numeric precision");
     for (int attempt = 0; attempt < 5; ++attempt) {
       const auto before_three = ordinate(editor.get(), 0);
       for (int nudge = 0; nudge < 3; ++nudge)
@@ -161,6 +169,86 @@ ToneCurveEditor {
   if (!editor->property("expanded").toBool() || editor->property("compactLayout").toBool() ||
       editor->property("implicitHeight").toDouble() < 400)
     return fail("Expand must request the full graph layout");
-  std::cout << "Native curve offset, insertion, fine drag, keyboard nudge, axis lock, deletion and cancel passed in both sizes\n";
+
+  item->setWidth(250);
+  item->setHeight(430);
+  window.resize(250, 430);
+  QTest::qWait(60);
+  const auto narrowInset = editor->property("graphInset").toDouble();
+  const auto narrowHeight = graph->height() - narrowInset * 2;
+  if (graph->width() < 220 || narrowHeight < 120 ||
+      graph->mapToItem(item, QPointF(0, 0)).x() + graph->width() > item->width() + 1)
+    return fail("The tone graph must preserve usable geometry when its inspector narrows");
+  auto* narrow_input = editor->findChild<QQuickItem*>(QStringLiteral("toneCurveInputField"));
+  auto* narrow_output = editor->findChild<QQuickItem*>(QStringLiteral("toneCurveOutputField"));
+  if (!narrow_input || !narrow_output || narrow_input->width() < 72 || narrow_output->width() < 72 ||
+      narrow_input->mapToItem(item, QPointF(0, 0)).x() + narrow_input->width() > item->width() + 1 ||
+      narrow_output->mapToItem(item, QPointF(0, 0)).x() + narrow_output->width() > item->width() + 1)
+    return fail("Curve point fields must wrap and remain reachable in a narrow inspector");
+
+  QMetaObject::invokeMethod(editor.get(), "testResetActiveCurve");
+  const auto starts_before_numeric = editor->property("starts").toInt();
+  const auto finishes_before_numeric = editor->property("finishes").toInt();
+  QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier,
+                    narrow_output->mapToScene(QPointF(narrow_output->width() / 2,
+                                                     narrow_output->height() / 2)).toPoint());
+  if (!narrow_output->hasActiveFocus())
+    return fail("The resized numeric field must receive pointer focus at its mapped location");
+  QTest::keyClick(&window, Qt::Key_A, Qt::ControlModifier);
+  QTest::keyClick(&window, Qt::Key_6);
+  QTest::keyClick(&window, Qt::Key_4);
+  QTest::keyClick(&window, Qt::Key_Return);
+  QTest::qWait(20);
+  if (std::abs(ordinate(editor.get(), 0) - 64.0 / 255.0) > 1e-5 ||
+      editor->property("starts").toInt() != starts_before_numeric + 1 ||
+      editor->property("finishes").toInt() != finishes_before_numeric + 1)
+    return fail("Narrow curve numeric entry must edit the selected point in one transaction");
+
+  QMetaObject::invokeMethod(editor.get(), "testResetActiveCurve");
+  const auto narrowOrigin = graph->mapToScene(QPointF(narrowInset, narrowInset + narrowHeight));
+  const auto narrowPress = (narrowOrigin + QPointF(14, -12)).toPoint();
+  QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, narrowPress);
+  QTest::mouseMove(&window, narrowPress + QPoint(0, -5));
+  QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, narrowPress + QPoint(0, -5));
+  if (std::abs(ordinate(editor.get(), 0) - 5.0 / narrowHeight) > 1e-5)
+    return fail("Curve handle mapping must stay accurate after a narrow resize");
+  const auto capture_dir = qEnvironmentVariable("PHOTO_EDITOR_CURVE_CAPTURE_DIR");
+  if (!capture_dir.isEmpty() && !window.grabWindow().save(capture_dir + "/curve-narrow.png"))
+    return fail("Could not capture the resized curve UI proof");
+
+  const QVariantList editable_points{
+      QVariantMap{{QStringLiteral("x"), 0.0}, {QStringLiteral("y"), 0.0}},
+      QVariantMap{{QStringLiteral("x"), 0.5}, {QStringLiteral("y"), 0.25}},
+      QVariantMap{{QStringLiteral("x"), 1.0}, {QStringLiteral("y"), 1.0}}};
+  editor->setProperty("pointsModel", editable_points);
+  QVariant selected_index;
+  if (!QMetaObject::invokeMethod(editor.get(), "testSelectPoint", Q_RETURN_ARG(QVariant, selected_index),
+                                 Q_ARG(QVariant, 1)))
+    return fail("The selected curve point should be addressable for button interaction proof");
+  auto* delete_button = editor->findChild<QQuickItem*>(QStringLiteral("toneCurveTestEditorDeletePointButton"));
+  if (!delete_button || !delete_button->isVisible())
+    return fail("The selected interior curve point must expose its Delete action");
+  const auto starts_before_delete = editor->property("starts").toInt();
+  const auto finishes_before_delete = editor->property("finishes").toInt();
+  QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier,
+                    delete_button->mapToScene(QPointF(delete_button->width() / 2,
+                                                     delete_button->height() / 2)).toPoint());
+  if (points(editor.get()).size() != 2 || editor->property("starts").toInt() != starts_before_delete + 1 ||
+      editor->property("finishes").toInt() != finishes_before_delete + 1)
+    return fail("The Delete button must remove one point inside one edit transaction");
+
+  editor->setProperty("pointsModel", editable_points);
+  auto* reset_button = editor->findChild<QQuickItem*>(QStringLiteral("toneCurveTestEditorResetCurveButton"));
+  if (!reset_button || !reset_button->isVisible())
+    return fail("The full curve layout must expose its Reset action");
+  const auto starts_before_reset = editor->property("starts").toInt();
+  const auto finishes_before_reset = editor->property("finishes").toInt();
+  QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier,
+                    reset_button->mapToScene(QPointF(reset_button->width() / 2,
+                                                    reset_button->height() / 2)).toPoint());
+  if (points(editor.get()).size() != 2 || editor->property("starts").toInt() != starts_before_reset + 1 ||
+      editor->property("finishes").toInt() != finishes_before_reset + 1)
+    return fail("The Reset button must restore the identity curve inside one edit transaction");
+  std::cout << "Native curve offset, insertion, fine drag, keyboard nudge, axis lock, button deletion/reset, narrow resize and cancel passed\n";
   return EXIT_SUCCESS;
 }

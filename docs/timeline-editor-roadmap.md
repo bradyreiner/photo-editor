@@ -2,6 +2,10 @@
 
 ## Active milestone
 
+The [professional hardening work](timeline-professional-hardening-2026-10-22.md)
+tracks the current parallel implementation, regression evidence, and remaining
+professional workflow gates.
+
 The immediate focus is finishing real video edits with responsive playback,
 predictable preview quality, usable crop/transform tools, music and dialogue,
 stabilization, grading, and reliable delivery. The current findings and ordered

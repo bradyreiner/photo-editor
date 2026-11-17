@@ -140,13 +140,6 @@ void paint_thumbnail_checker(QPainter* painter, const QRect& rect) {
 }
 
 QImage decoded_layer_pixel_image(const QVariantMap& layer) {
-  if (layer.contains("paintTiles")) {
-    const QSize size(layer.value("pixelWidth").toInt(),layer.value("pixelHeight").toInt());
-    return convert_tagged_qimage_color_space(
-        rasterize_photo_paint_layer(layer,size.scaled(128,128,Qt::KeepAspectRatio)),
-        QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
-        QImageColorConversionPurpose::OutputPublication);
-  }
   const auto pixel_data = layer.value(QStringLiteral("pixelData")).toByteArray();
   if (!pixel_data.isEmpty()) {
     return QImage::fromData(pixel_data, "PNG");
@@ -505,7 +498,7 @@ QString rendered_photo_layer_thumbnail_source(const QVariantMap& layer) {
   const auto kind = layer.value(QStringLiteral("kind")).toString().trimmed().toLower();
   // Normalization also calls this on the UI thread. Linked sources must be
   // decoded by the cancellable worker, never by QImageReader or a placeholder.
-  if (kind == QStringLiteral("source")) return {};
+  if (kind == QStringLiteral("source") || layer.contains(QStringLiteral("paintTiles"))) return {};
   QImage thumbnail(kLayerThumbnailEdge, kLayerThumbnailEdge, QImage::Format_ARGB32_Premultiplied);
   thumbnail.fill(Qt::transparent);
   QPainter painter(&thumbnail);
@@ -611,8 +604,19 @@ QString non_adjustment_photo_layer_thumbnail_recipe_hash(
   }
 
   QVariantMap payload;
+  for (const auto* key : {"blendIf", "smartObject", "smartObjectDocument", "vectorMask", "vectorPath", "vectorFillColor", "vectorStrokeColor", "vectorStrokeWidth", "vectorFillEnabled", "vectorStrokeEnabled"})
+    if (layer.contains(QLatin1String(key))) payload.insert(QLatin1String(key), layer.value(QLatin1String(key)));
+  if (!layer.value(QStringLiteral("maskEnabled"), true).toBool())
+    payload.insert(QStringLiteral("maskEnabled"), false);
   if (kind == QStringLiteral("pixel") || kind == QStringLiteral("source"))
     payload.insert(QStringLiteral("colorRecipe"), photo_layer_adjustment_recipe(layer));
+  if (kind == QStringLiteral("pixel") &&
+      layer.value(QStringLiteral("copyBaseImageThroughAdjustments")).toBool() &&
+      photo_layer_revision >= 0) {
+    payload.insert(QStringLiteral("underlyingAdjustmentRevision"), photo_layer_revision);
+    payload.insert(QStringLiteral("identityContract"),
+        QStringLiteral("linked-cutout-adjustment-thumbnail-v1"));
+  }
   if (kind == QStringLiteral("pixel") && layer.contains(QStringLiteral("paintTiles")) &&
       photo_layer_revision >= 0) {
     payload.insert(QStringLiteral("kind"), kind);
@@ -665,6 +669,8 @@ QString non_adjustment_photo_layer_thumbnail_recipe_hash(
     payload.insert(QStringLiteral("pixelHeight"), layer.value(QStringLiteral("pixelHeight")).toInt());
   } else if (kind == QStringLiteral("pixel") || kind == QStringLiteral("source")) {
     payload.insert(QStringLiteral("copyBaseImage"), layer.value(QStringLiteral("copyBaseImage")));
+    payload.insert(QStringLiteral("copyBaseImageThroughAdjustments"),
+        layer.value(QStringLiteral("copyBaseImageThroughAdjustments")));
     payload.insert(QStringLiteral("sourcePath"), layer.value(QStringLiteral("sourcePath")).toString());
     if (kind == QStringLiteral("source") &&
         layer.value(QStringLiteral("pixelData")).toByteArray().isEmpty()) {
@@ -712,8 +718,13 @@ QString photo_layer_thumbnail_recipe_hash(
     int photo_layer_revision) {
   const auto kind = layer.value(QStringLiteral("kind")).toString().trimmed().toLower();
   if (kind == QStringLiteral("adjustment")) {
+    auto recipe = photo_layer_adjustment_recipe(layer);
+    if (layer.contains(QStringLiteral("blendIf"))) recipe.insert(QStringLiteral("blendIf"), layer.value(QStringLiteral("blendIf")));
+    if (layer.contains(QStringLiteral("vectorMask"))) recipe.insert(QStringLiteral("vectorMask"), layer.value(QStringLiteral("vectorMask")));
+    if (!layer.value(QStringLiteral("maskEnabled"), true).toBool())
+      recipe.insert(QStringLiteral("maskEnabled"), false);
     return QStringLiteral("sha1:%1").arg(
-        thumbnail_variant_sha1(photo_layer_adjustment_recipe(layer)));
+        thumbnail_variant_sha1(recipe));
   }
   return non_adjustment_photo_layer_thumbnail_recipe_hash(layer, photo_layer_revision);
 }
@@ -803,6 +814,9 @@ QVariantMap rendered_adjustment_photo_layer_thumbnail_entry(
   const auto layer_recipe_hash = dependencies.recipe_hash(layer);
   const auto layer_cache_recipe_hash = dependencies.entry_recipe_hash(layer);
   const auto layer_cache_mask_id = selection_mask_set_identity_signature(layer);
+  const auto output_version = photo_layer_thumbnail_output_version(layer,
+      thumbnail_content_output_policy_identity(request.state.working_color_profile,
+          request.state.photographic_rendering_model));
   const auto layer_cache_key = thumbnail_entry_cache_key(
       request.job.asset_id,
       layer_cache_recipe_hash,
@@ -811,7 +825,7 @@ QVariantMap rendered_adjustment_photo_layer_thumbnail_entry(
       kLayerThumbnailEdge,
       kLayerThumbnailEdge,
       kLayerThumbnailDevicePixelRatio,
-      QString::fromLatin1(kThumbnailColorPipelineVersion),
+      output_version,
       request.job.state_revision);
 
   QVariantMap thumbnail_metadata;
@@ -870,7 +884,7 @@ QVariantMap rendered_adjustment_photo_layer_thumbnail_entry(
       kLayerThumbnailEdge,
       kLayerThumbnailEdge,
       kLayerThumbnailDevicePixelRatio,
-      QString::fromLatin1(kThumbnailColorPipelineVersion),
+      output_version,
       request.job.state_revision,
       false,
       QStringLiteral("queue-worker"));
@@ -885,6 +899,24 @@ QVariantMap rendered_adjustment_photo_layer_thumbnail_entry(
       QStringLiteral("photo_layer_thumbnail"),
       layer_timer.elapsed());
   return layer;
+}
+
+QString thumbnail_content_output_policy_identity(
+    const QString& working_profile, const QString& rendering_model) {
+  return QStringLiteral("content-output-v1|working:%1|rendering:%2|srgb|png|straight-alpha")
+      .arg(working_profile.trimmed(), rendering_model.trimmed());
+}
+
+QString photo_layer_thumbnail_output_version(
+    const QVariantMap& layer, const QString& content_output_policy_identity) {
+  auto version = QString::fromLatin1(kThumbnailColorPipelineVersion);
+  if (!content_output_policy_identity.isEmpty() &&
+      (layer.value(QStringLiteral("kind")).toString().trimmed().toLower() == QStringLiteral("adjustment") ||
+       layer.contains(QStringLiteral("paintTiles")) ||
+       photo_layer_has_non_neutral_adjustments(layer))) {
+    version += QLatin1Char('|') + content_output_policy_identity;
+  }
+  return version;
 }
 
 QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
@@ -904,6 +936,9 @@ QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
   const auto layer_cache_recipe_hash = non_adjustment_photo_layer_thumbnail_entry_recipe_hash(
       layer, request.photo_layer_revision);
   const auto layer_cache_mask_id = selection_mask_set_identity_signature(layer);
+  const auto output_version = photo_layer_thumbnail_output_version(layer,
+      thumbnail_content_output_policy_identity(request.state.working_color_profile,
+          request.state.photographic_rendering_model));
   const auto layer_cache_key = thumbnail_entry_cache_key(
       request.job.asset_id,
       layer_cache_recipe_hash,
@@ -912,7 +947,7 @@ QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
       kLayerThumbnailEdge,
       kLayerThumbnailEdge,
       kLayerThumbnailDevicePixelRatio,
-      QString::fromLatin1(kThumbnailColorPipelineVersion),
+      output_version,
       request.job.state_revision);
 
   QVariantMap thumbnail_metadata;
@@ -920,8 +955,8 @@ QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
   const auto is_source = layer.value(QStringLiteral("kind")).toString().trimmed().toLower() ==
       QStringLiteral("source");
   const auto has_content_colors = (is_source || layer.value("kind").toString() == "pixel") &&
-      layer.value("hasNonNeutralAdjustments").toBool();
-  const auto thumbnail_source = is_source || has_content_colors
+      photo_layer_has_non_neutral_adjustments(layer);
+  const auto thumbnail_source = is_source || has_content_colors || layer.contains(QStringLiteral("paintTiles"))
       ? (source_renderer ? source_renderer(layer, request, &source_metadata) : QString{})
       : rendered_photo_layer_thumbnail_source(layer);
   if (thumbnail_source.trimmed().isEmpty() || thumbnail_refresh_cancelled(request) ||
@@ -1011,7 +1046,7 @@ QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
       kLayerThumbnailEdge,
       kLayerThumbnailEdge,
       kLayerThumbnailDevicePixelRatio,
-      QString::fromLatin1(kThumbnailColorPipelineVersion),
+      output_version,
       request.job.state_revision,
       false,
       QStringLiteral("queue-worker"));

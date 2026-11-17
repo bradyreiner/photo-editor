@@ -121,6 +121,8 @@ Item {
     property string activeFindingMaskId: ""
     property var activeFinding: ({})
     property bool tasteMirrorOpen: false
+    property bool calibrationOpen: false
+    property bool verificationDetailsOpen: false
     property bool tasteRenameOpen: false
     property string tasteRenameText: ""
     property bool northStarEditOpen: false
@@ -150,6 +152,7 @@ Item {
 
     signal assetRequested(string assetId)
     signal reopenRequested()
+    signal modelSettingsRequested()
     signal dismissedRequested()
     signal draftCommitted(var report)
     signal findingRequested(var finding)
@@ -323,6 +326,59 @@ Item {
         return String(question.question || question.prompt || question.summary || "")
     }
 
+    function planApprovalSummary() {
+        return String(root.pendingReport.planSummary || root.pendingQuestionText() ||
+                      "Review the proposed edit before I create a draft.")
+    }
+
+    function planApprovalTargetSummary() {
+        let ids = root.pendingReport.assetIds || []
+        if (ids.length === 0)
+            ids = root.targetAssetIds || []
+        const count = Math.max(1, Number(ids.length || 0))
+        const scope = String(root.pendingReport.scope || "current-photo")
+        const labels = {
+            "current-photo": "Current photo",
+            "selected-assets": "Selected photos",
+            "confirmed-assets": "Confirmed photos",
+            "filtered-library": "Filtered photos",
+            "project": "Project photos"
+        }
+        let target = String(labels[scope] || "Review targets")
+        if (count === 1 && ids.length > 0) {
+            const asset = root.catalogAssetForId(String(ids[0] || ""))
+            const name = String(asset.displayName || asset.fileName || "")
+            if (name.length > 0 && name.indexOf("asset-") !== 0)
+                target += " · " + name
+        } else {
+            target += " · " + count + " photos"
+        }
+        return target
+    }
+
+    function planApprovalReason() {
+        const risk = root.pendingReport.riskAssessment || ({})
+        const requests = risk.approvalRequests || []
+        if (requests.length > 0) {
+            const first = requests[0] || ({})
+            const reason = String(first.reason || "").trim()
+            if (reason.length > 0)
+                return reason
+            return String(first.label || "This change needs an explicit review.")
+        }
+        const policy = root.pendingReport.preDraftStopPolicy || ({})
+        const triggers = policy.triggers || []
+        if (triggers.length > 0) {
+            const first = triggers[0] || ({})
+            const reason = String(first.reason || first.detail || first.label || "").trim()
+            if (reason.length > 0)
+                return reason
+        }
+        if (String(root.pendingReport.safeStopReason || "") === "point_guided_retouch_repair")
+            return "The tightened repair area needs a fresh approval before rebuilding."
+        return "This plan crossed a pre-draft review check."
+    }
+
     function proofRejectionPresentation() {
         if (!root.hasController)
             return ({})
@@ -477,60 +533,16 @@ Item {
         return true
     }
 
-    component BubbleButton: Button {
-        id: bubbleButton
+    component BubbleButton: ActionButton {
         property bool primary: false
-        implicitHeight: 34
-        leftPadding: 13
-        rightPadding: 13
-        opacity: enabled ? 1.0 : 0.42
-        background: Rectangle {
-            radius: 9
-            color: bubbleButton.primary
-                   ? (bubbleButton.down ? Qt.darker(theme.primaryAccent, 1.08) : theme.primaryAccent)
-                   : (bubbleButton.hovered ? theme.alpha(theme.textStrong, 0.13)
-                                           : theme.alpha(theme.textStrong, 0.075))
-        }
-        contentItem: Label {
-            text: bubbleButton.text
-            color: bubbleButton.primary ? theme.brandPaper : theme.textStrong
-            font.family: theme.fontUi
-            font.pixelSize: 11
-            font.weight: Font.DemiBold
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
+        tone: primary ? "primary" : "secondary"
     }
 
-    component LedgerButton: Button {
-        id: ledgerButton
-        property bool accent: false
-        implicitHeight: 24
-        implicitWidth: ledgerButtonLabel.implicitWidth + 16
-        leftPadding: 8
-        rightPadding: 8
-        opacity: enabled ? 1.0 : 0.38
-        background: Rectangle {
-            radius: 7
-            color: ledgerButton.accent
-                   ? theme.alpha(theme.primaryAccent, ledgerButton.hovered ? 0.22 : 0.16)
-                   : ledgerButton.hovered ? theme.alpha(theme.primaryAccent, 0.16)
-                                          : theme.alpha(theme.textStrong, 0.065)
-            border.width: 1
-            border.color: theme.alpha(theme.primaryAccent,
-                                      ledgerButton.accent ? 0.46 : 0.18)
-        }
-        contentItem: Label {
-            id: ledgerButtonLabel
-            text: ledgerButton.text
-            color: theme.primaryAccent
-            font.family: theme.fontUi
-            font.pixelSize: 9
-            font.weight: Font.DemiBold
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-        HoverHandler { cursorShape: Qt.PointingHandCursor }
+    component LedgerButton: ActionButton {
+        property bool emphasized: false
+        compact: true
+        embedded: true
+        active: emphasized
     }
 
     function eventList() {
@@ -878,7 +890,7 @@ Item {
                            root.fastDraftDeepTargetCountdownText() +
                            "; deep local vision is still refining it, and Commit stays locked."
                          : "The fast local planner made this reversible preview. Its own image proof and deep local vision are running together; Commit stays locked.")
-                    : "Your preview is ready. I’m finishing the safety check; Commit Edits unlocks when it passes."
+                    : "Your preview is ready. I’m finishing the safety check; commit edits unlocks when it passes."
         return String(root.activeEvent.explanation || root.activeEvent.detail || "")
     }
 
@@ -904,25 +916,24 @@ Item {
 
     function fastDraftDeepTargetCountdownText() {
         const seconds = root.fastDraftDeepTargetCountdownSeconds()
-        return seconds > 0 ? "DEEP REVIEW TARGET " + String(seconds) + "s" : ""
+        return seconds > 0 ? "Deep review target in " + String(seconds) + " s" : ""
     }
 
     function localPlanningReceiptText() {
         const elapsed = Math.max(0, root.localPlanningElapsedSeconds)
         const minutes = Math.floor(elapsed / 60)
         const seconds = String(elapsed % 60).padStart(2, "0")
-        const phase = "WAITING FOR MODEL"
-        const countdown = root.fastDraftDeepTargetCountdownText()
-        const previewReceipt = root.progressivePreviewVisible
-                               ? (root.keepValidatedFastAvailable
-                                  ? " · PROVED PREVIEW · USE NOW OR WAIT" +
-                                    (countdown.length > 0 ? " · " + countdown : "")
-                                  : root.fastPreviewValidated
-                                    ? " · PROVED PREVIEW · " + countdown
-                                    : " · REVERSIBLE PREVIEW LIVE · PROVING")
-                               : " · NO PIXELS CHANGED"
-        return "LOCAL VISION · " + phase + " · " + minutes + ":" + seconds +
-               previewReceipt + " · CANCEL SAFE"
+        const state = root.progressivePreviewVisible
+                     ? root.keepValidatedFastAvailable
+                       ? "Preview checked. Use it or wait."
+                       : root.fastPreviewValidated
+                         ? "Preview checked. Deep review continues."
+                         : "A reversible preview is live. Checking it now."
+                     : "Waiting for local vision."
+        const pixelState = root.progressivePreviewVisible
+                           ? "Commit remains locked."
+                           : "No pixels changed."
+        return state + " · " + minutes + ":" + seconds + " · " + pixelState
     }
 
     function trustReceiptText() {
@@ -1006,7 +1017,7 @@ Item {
         const preserved = root.editStrategy().preserved || []
         if (preserved.length === 0)
             return ""
-        return "PROTECTED · " + preserved.slice(0, 4).join(" · ")
+        return "Protected · " + preserved.slice(0, 4).join(" · ")
     }
 
     function findingForLocalizedAction(action) {
@@ -1410,12 +1421,12 @@ Item {
     function tasteMaturityLabel() {
         const maturity = String(root.projectTaste().maturity || "new")
         if (maturity === "calibrated")
-            return "CALIBRATED"
+            return "Calibrated"
         if (maturity === "established")
-            return "ESTABLISHED"
+            return "Established"
         if (maturity === "learning")
-            return "LEARNING"
-        return "NEW"
+            return "Learning"
+        return "New"
     }
 
     function photographerCalibration() {
@@ -1876,8 +1887,8 @@ Item {
             y: 2
             text: String(root.currentTouchTarget.label || "")
             color: "#eec58a"
-            font.family: theme.fontMono
-            font.pixelSize: 10
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeMicro
             style: Text.Outline
             styleColor: "#111315"
         }
@@ -1899,11 +1910,11 @@ Item {
                 Layout.fillWidth: true
                 Label {
                     Layout.fillWidth: true
-                    text: (root.runFailed ? "STOPPED / " : "AGENT / ") + root.assetLabel() +
+                    text: (root.runFailed ? "Stopped / " : "Agent / ") + root.assetLabel() +
                           (root.localModelPlanningActive ? " / " + root.localPlanningElapsedSeconds + "s" : "")
                     color: "#eec58a"
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
                     style: Text.Outline
                     styleColor: "#111315"
                 }
@@ -1922,13 +1933,24 @@ Item {
                     compact: true
                     onClicked: root.agentEditController.cancelRun("user_cancelled")
                 }
+                ActionButton {
+                    objectName: "agentWorkspaceActivityDetailsButton"
+                    visible: root.running && agentWorkspaceModelOutput.text.length > 0
+                    text: root.verificationDetailsOpen ? "Hide details" : "Details"
+                    compact: true
+                    active: root.verificationDetailsOpen
+                    Accessible.name: root.verificationDetailsOpen
+                                     ? "Hide model output details"
+                                     : "Show model output details"
+                    onClicked: root.verificationDetailsOpen = !root.verificationDetailsOpen
+                }
             }
-            Button {
+            ActionButton {
                 id: statusDetail
                 objectName: "agentWorkspaceStatusDetail"
                 Layout.fillWidth: true
                 implicitHeight: Math.max(24, contentItem.implicitHeight)
-                background: Rectangle { color: "transparent" }
+                embedded: true
                 text: root.runFailed ? root.explanation() : String(root.activeEvent.detail || root.headline())
                 padding: 0
                 focusPolicy: root.runFailed ? Qt.StrongFocus : Qt.NoFocus
@@ -1938,8 +1960,8 @@ Item {
                 contentItem: Label {
                     text: statusDetail.text
                     color: "#e4e0da"
-                    font.family: theme.fontMono
-                    font.pixelSize: 11
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
                     maximumLineCount: 2
                     wrapMode: Text.WordWrap
                     elide: Text.ElideRight
@@ -1948,6 +1970,7 @@ Item {
                 }
             }
             Label {
+                id: agentWorkspaceModelOutput
                 objectName: "agentWorkspaceModelOutput"
                 Layout.fillWidth: true
                 text: {
@@ -1959,10 +1982,11 @@ Item {
                     }
                     return ""
                 }
-                visible: text.length > 0
+                visible: text.length > 0 && root.verificationDetailsOpen
                 color: "#eec58a"
-                font.family: theme.fontMono
-                font.pixelSize: 10
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
+                font.pixelSize: theme.typeMicro
                 maximumLineCount: 2
                 wrapMode: Text.WordWrap
                 elide: Text.ElideRight
@@ -1983,8 +2007,8 @@ Item {
                 visible: root.characterAsideText.length > 0 && !root.runFailed && !root.awaitingInput
                 text: root.characterAsideText
                 color: "#9bcbd1"
-                font.family: theme.fontMono
-                font.pixelSize: 10
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
                 wrapMode: Text.WordWrap
                 style: Text.Outline
                 styleColor: "#111315"
@@ -2014,19 +2038,11 @@ Item {
                     onClicked: root.showFailureDetails(this)
                 }
                 ActionButton {
-                    objectName: "agentWorkspaceUseFastModelButton"
-                    visible: root.runFailed && root.hasController &&
-                             (root.agentEditController.availableModels || []).some(function(model) { return model.model === "qwen3.6:35b" })
-                    text: "Use Qwen 35B"
+                    objectName: "agentWorkspaceModelSettingsButton"
+                    visible: root.runFailed && root.hasController
+                    text: "Model settings…"
                     compact: true
-                    onClicked: {
-                        const model = root.agentEditController.availableModels.find(function(entry) { return entry.model === "qwen3.6:35b" && entry.runtime === "external" })
-                        if (!model) return
-                        root.agentEditController.selectedModelId = model.id
-                        root.agentEditController.probeSelectedModelAsync(true)
-                        root.dismiss()
-                        root.reopenRequested()
-                    }
+                    onClicked: root.modelSettingsRequested()
                 }
             }
         }
@@ -2070,21 +2086,40 @@ Item {
         id: speechBubble
         visible: !root.dismissed && !root.compactStatus
         objectName: "agentWorkspaceSpeechBubble"
-        width: Math.min(430, Math.max(300, root.width * 0.31))
-        height: bubbleContent.implicitHeight + 34
+        width: Math.max(0, Math.min(460, Math.max(320, root.width * 0.34), root.width - 36))
+        height: Math.max(0, Math.min(root.height - 32,
+                                     bubbleContent.implicitHeight +
+                                     (agentWorkspaceDecisionFooter.visible
+                                      ? agentWorkspaceDecisionFooter.implicitHeight : 0) +
+                                     theme.popupPadding * 2 + theme.gapDense + 2))
         x: Math.max(18, root.width - root.inspectorWidth - width - 24)
         y: Math.max(18, root.height - root.filmstripHeight - height - 24)
-        fillColor: theme.popupFill
 
         Behavior on x { XAnimator { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
         Behavior on y { YAnimator { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
+
+        Flickable {
+            id: speechBubbleScroll
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: agentWorkspaceDecisionFooter.top
+            anchors.leftMargin: 1
+            anchors.rightMargin: 1
+            anchors.topMargin: 1
+            anchors.bottomMargin: theme.gapDense
+            clip: true
+            contentWidth: width
+            contentHeight: bubbleContent.implicitHeight + theme.popupPadding * 2
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
         ColumnLayout {
             id: bubbleContent
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: 17
+            anchors.margins: theme.popupPadding
             spacing: 7
 
             RowLayout {
@@ -2093,8 +2128,8 @@ Item {
                     Layout.fillWidth: true
                     text: root.assetLabel()
                     color: theme.alpha(theme.textStrong, 0.52)
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
                     font.letterSpacing: 1.0
                     font.weight: Font.DemiBold
                 }
@@ -2114,31 +2149,181 @@ Item {
                 }
             }
 
+            Label {
+                objectName: "agentWorkspaceHeadline"
+                Layout.fillWidth: true
+                text: root.headline()
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: theme.typeHero
+                font.weight: Font.DemiBold
+                wrapMode: Text.WordWrap
+            }
+
+            Label {
+                objectName: "agentWorkspaceExplanation"
+                Layout.fillWidth: true
+                text: root.explanation()
+                color: theme.alpha(theme.textStrong, 0.66)
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                lineHeight: 1.18
+                wrapMode: Text.WordWrap
+                maximumLineCount: 4
+                elide: Text.ElideRight
+            }
+
+            Rectangle {
+                objectName: "agentWorkspacePlanApprovalCard"
+                Layout.fillWidth: true
+                visible: root.awaitingPlanApproval
+                implicitHeight: planApprovalColumn.implicitHeight + 22
+                radius: 13
+                color: theme.alpha(theme.primaryAccent, 0.075)
+                border.width: 1
+                border.color: theme.alpha(theme.primaryAccent, 0.3)
+
+                ColumnLayout {
+                    id: planApprovalColumn
+                    anchors.fill: parent
+                    anchors.margins: 11
+                    spacing: 7
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        Label {
+                            objectName: "agentWorkspacePlanApprovalTitle"
+                            Layout.fillWidth: true
+                            text: "Proposed change"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            font.weight: Font.DemiBold
+                        }
+
+                        Label {
+                            text: "No draft yet"
+                            color: theme.primaryAccent
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
+                            font.weight: Font.DemiBold
+                        }
+                    }
+
+                    Label {
+                        objectName: "agentWorkspacePlanApprovalSummary"
+                        Layout.fillWidth: true
+                        text: root.planApprovalSummary()
+                        color: theme.alpha(theme.textStrong, 0.76)
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        lineHeight: 1.15
+                        wrapMode: Text.WordWrap
+                        Accessible.name: "Proposed edit plan"
+                        Accessible.description: text
+                    }
+
+                    Label {
+                        objectName: "agentWorkspacePlanApprovalTarget"
+                        Layout.fillWidth: true
+                        text: root.planApprovalTargetSummary()
+                        color: theme.primaryAccent
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Label {
+                        objectName: "agentWorkspacePlanApprovalReason"
+                        Layout.fillWidth: true
+                        text: "Why review is needed · " + root.planApprovalReason()
+                        color: theme.alpha(theme.textStrong, 0.58)
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Approval only allows an editable draft; it does not apply changes to the photo."
+                        color: theme.alpha(theme.textStrong, 0.5)
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            Rectangle {
+                objectName: "agentWorkspaceSelectionConfirmationCard"
+                Layout.fillWidth: true
+                visible: root.awaitingSelectionConfirmation
+                implicitHeight: selectionConfirmationColumn.implicitHeight + 22
+                radius: 13
+                color: theme.alpha(theme.primaryAccent, 0.07)
+                border.width: 1
+                border.color: theme.alpha(theme.primaryAccent, 0.28)
+
+                ColumnLayout {
+                    id: selectionConfirmationColumn
+                    anchors.fill: parent
+                    anchors.margins: 11
+                    spacing: 7
+
+                    Label {
+                        objectName: "agentWorkspaceSelectionConfirmationPrompt"
+                        Layout.fillWidth: true
+                        text: "Which " + String(root.selectionConfirmation.targetLabel || "object") + "?"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "The numbered outlines are candidates. Nothing is edited until you choose."
+                        color: theme.alpha(theme.textStrong, 0.58)
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Repeater {
+                        model: root.selectionConfirmation.candidates || []
+
+                        delegate: BubbleButton {
+                            required property var modelData
+                            required property int index
+                            objectName: "agentWorkspaceSelectionCandidate" + String(index + 1)
+                            Layout.fillWidth: true
+                            primary: false
+                            text: String(index + 1) + "  " +
+                                  String(modelData.label || ("Candidate " + String(index + 1))) +
+                                  "  ·  " + Math.round(Number(modelData.confidence || 0) * 100) + "%"
+                            Accessible.name: "Choose " + String(modelData.label || ("candidate " + String(index + 1)))
+                            onClicked: root.agentEditController.confirmGroundedSelectionCandidate(
+                                           String(modelData.id || ""))
+                        }
+                    }
+                }
+            }
+
             RowLayout {
                 Layout.fillWidth: true
-                visible: continuityReceipt.text.length > 0
                 spacing: 7
-
-                Label {
-                    id: continuityReceipt
-                    objectName: "agentWorkspaceContinuityReceipt"
-                    Layout.fillWidth: true
-                    text: root.continuityReceiptText()
-                    color: theme.alpha(theme.primaryAccent, 0.82)
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                    font.weight: Font.DemiBold
-                    wrapMode: Text.WordWrap
-                    Accessible.name: "Agent project memory"
-                    Accessible.description: text
-                }
 
                 LedgerButton {
                     objectName: "agentWorkspaceTasteMirrorButton"
-                    text: root.tasteMirrorOpen ? "Close taste" : "Taste"
+                    Layout.fillWidth: true
+                    text: "Memory"
+                    emphasized: root.tasteMirrorOpen
                     Accessible.name: root.tasteMirrorOpen
-                                     ? "Close project taste mirror"
-                                     : "Open project taste mirror"
+                                     ? "Hide project memory and taste details"
+                                     : "Show project memory and taste details"
                     onClicked: {
                         root.tasteMirrorOpen = !root.tasteMirrorOpen
                         root.tasteRenameOpen = false
@@ -2152,6 +2337,43 @@ Item {
                         root.tasteActionMessage = ""
                     }
                 }
+
+                LedgerButton {
+                    objectName: "agentWorkspaceCalibrationDisclosure"
+                    Layout.fillWidth: true
+                    text: "Calibration"
+                    emphasized: root.calibrationOpen
+                    Accessible.name: root.calibrationOpen
+                                     ? "Hide photographer calibration"
+                                     : "Show photographer calibration"
+                    onClicked: root.calibrationOpen = !root.calibrationOpen
+                }
+
+                LedgerButton {
+                    objectName: "agentWorkspaceVerificationDisclosure"
+                    Layout.fillWidth: true
+                    text: "Details"
+                    emphasized: root.verificationDetailsOpen
+                    Accessible.name: root.verificationDetailsOpen
+                                     ? "Hide edit verification details"
+                                     : "Show edit verification details"
+                    onClicked: root.verificationDetailsOpen = !root.verificationDetailsOpen
+                }
+            }
+
+            Label {
+                id: continuityReceipt
+                objectName: "agentWorkspaceContinuityReceipt"
+                Layout.fillWidth: true
+                visible: root.tasteMirrorOpen && text.length > 0
+                text: root.continuityReceiptText()
+                color: theme.alpha(theme.primaryAccent, 0.82)
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                font.weight: Font.DemiBold
+                wrapMode: Text.WordWrap
+                Accessible.name: "Agent project memory"
+                Accessible.description: text
             }
 
             Rectangle {
@@ -2161,7 +2383,7 @@ Item {
                 readonly property string northStarDraftReceiptContract:
                     "agent-project-north-star-draft-receipt-v1"
                 Layout.fillWidth: true
-                visible: Boolean(receipt.available)
+                visible: root.tasteMirrorOpen && Boolean(receipt.available)
                 implicitHeight: northStarDraftReceiptColumn.implicitHeight + 18
                 radius: 12
                 color: theme.alpha(theme.primaryAccent, 0.075)
@@ -2178,10 +2400,10 @@ Item {
                         Layout.fillWidth: true
 
                         Label {
-                            text: "ASSIGNMENT COMPASS"
+                            text: "Assignment compass"
                             color: theme.primaryAccent
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.Bold
                             font.letterSpacing: 0.8
                         }
@@ -2190,10 +2412,10 @@ Item {
 
                         Label {
                             objectName: "agentWorkspaceNorthStarDraftBoundary"
-                            text: "USED IN PLAN · CURRENT REQUEST LED"
+                            text: "Used in plan · current request led"
                             color: theme.alpha(theme.textStrong, 0.44)
-                            font.family: theme.fontMono
-                            font.pixelSize: 7
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.DemiBold
                         }
                     }
@@ -2204,7 +2426,7 @@ Item {
                         text: String(northStarDraftReceiptCard.receipt.brief || "")
                         color: theme.alpha(theme.textStrong, 0.76)
                         font.family: theme.fontUi
-                        font.pixelSize: 10
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                         maximumLineCount: 2
@@ -2222,16 +2444,16 @@ Item {
                             Layout.fillWidth: true
                             text: root.projectNorthStarProofText()
                             color: theme.alpha(theme.textStrong, 0.48)
-                            font.family: theme.fontMono
-                            font.pixelSize: 7
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             wrapMode: Text.WordWrap
                         }
 
                         Label {
-                            text: "NO AUTO CULL · NO AUTO RETOUCH"
+                            text: "No auto cull · no auto retouch"
                             color: theme.alpha(theme.primaryAccent, 0.78)
-                            font.family: theme.fontMono
-                            font.pixelSize: 7
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.DemiBold
                         }
                     }
@@ -2263,7 +2485,7 @@ Item {
                             text: root.tasteNameText()
                             color: theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 12
+                            font.pixelSize: theme.typeCaption
                             font.weight: Font.DemiBold
                         }
                         LedgerButton {
@@ -2279,10 +2501,10 @@ Item {
                             }
                         }
                         Label {
-                            text: root.tasteMaturityLabel() + " · THIS PROJECT ONLY"
+                            text: root.tasteMaturityLabel() + " · This project only"
                             color: theme.primaryAccent
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.Bold
                         }
                     }
@@ -2303,17 +2525,10 @@ Item {
                             maximumLength: 80
                             color: theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 10
+                            font.pixelSize: theme.typeMicro
                             onTextEdited: root.tasteRenameText = text
                             onAccepted: root.saveTasteName()
-                            background: Rectangle {
-                                radius: 8
-                                color: theme.alpha(theme.ink800, 0.9)
-                                border.width: 1
-                                border.color: parent.activeFocus
-                                              ? theme.primaryAccent
-                                              : theme.alpha(theme.textStrong, 0.12)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                         }
 
                         BubbleButton {
@@ -2329,8 +2544,8 @@ Item {
                         Layout.fillWidth: true
                         text: "What I'm learning from your approved choices"
                         color: theme.alpha(theme.textStrong, 0.48)
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                     }
 
@@ -2340,7 +2555,7 @@ Item {
                         text: root.tasteSummaryText()
                         color: theme.alpha(theme.textStrong, 0.68)
                         font.family: theme.fontUi
-                        font.pixelSize: 10
+                        font.pixelSize: theme.typeMicro
                         lineHeight: 1.15
                         wrapMode: Text.WordWrap
                         maximumLineCount: 3
@@ -2374,10 +2589,10 @@ Item {
                                 Layout.fillWidth: true
 
                                 Label {
-                                    text: "FIRST LOOK / DEEP REVIEW"
+                                    text: "First look / deep review"
                                     color: theme.primaryAccent
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 8
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     font.weight: Font.Bold
                                     font.letterSpacing: 0.7
                                 }
@@ -2386,10 +2601,10 @@ Item {
 
                                 Label {
                                     objectName: "agentWorkspaceTwoSpeedTasteAuthority"
-                                    text: "CURRENT REQUEST WINS · NO AUTO SELECT"
+                                    text: "Current request wins · no auto select"
                                     color: theme.alpha(theme.textStrong, 0.44)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 7
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     font.weight: Font.Bold
                                 }
                             }
@@ -2400,7 +2615,7 @@ Item {
                                 text: root.twoSpeedTasteHeadline()
                                 color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeMicro
                                 font.weight: Font.DemiBold
                                 wrapMode: Text.WordWrap
                             }
@@ -2412,8 +2627,8 @@ Item {
                                       Number(twoSpeedTasteCard.preference.deepReviewCount || 0) +
                                       " Deep Review · learned after confirmed commits only"
                                 color: theme.alpha(theme.textStrong, 0.54)
-                                font.family: theme.fontMono
-                                font.pixelSize: 8
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeMicro
                                 wrapMode: Text.WordWrap
                             }
 
@@ -2425,7 +2640,7 @@ Item {
                                     text: String(twoSpeedTasteCard.preference.planningGuidance || "")
                                     color: theme.alpha(theme.textStrong, 0.6)
                                     font.family: theme.fontUi
-                                    font.pixelSize: 9
+                                    font.pixelSize: theme.typeMicro
                                     lineHeight: 1.12
                                     maximumLineCount: 3
                                     wrapMode: Text.WordWrap
@@ -2470,10 +2685,10 @@ Item {
                                 Layout.fillWidth: true
 
                                 Label {
-                                    text: "ASSIGNMENT REFLECTION"
+                                    text: "Assignment reflection"
                                     color: theme.primaryAccent
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 8
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     font.weight: Font.Bold
                                     font.letterSpacing: 0.7
                                 }
@@ -2482,10 +2697,10 @@ Item {
 
                                 Label {
                                     objectName: "agentWorkspaceAssignmentReflectionBoundary"
-                                    text: "NOTHING REMEMBERED YET"
+                                    text: "Nothing remembered yet"
                                     color: theme.alpha(theme.textStrong, 0.44)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 7
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     font.weight: Font.Bold
                                 }
                             }
@@ -2496,7 +2711,7 @@ Item {
                                 text: String(assignmentReflectionCard.reflection.headline || "")
                                 color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeMicro
                                 font.weight: Font.DemiBold
                                 wrapMode: Text.WordWrap
                             }
@@ -2512,7 +2727,7 @@ Item {
                                 }
                                 color: theme.alpha(theme.textStrong, 0.56)
                                 font.family: theme.fontUi
-                                font.pixelSize: 9
+                                font.pixelSize: theme.typeMicro
                                 lineHeight: 1.12
                                 maximumLineCount: 2
                                 wrapMode: Text.WordWrap
@@ -2526,8 +2741,8 @@ Item {
                                     Layout.fillWidth: true
                                     text: "Review the wording first · current request still wins"
                                     color: theme.alpha(theme.textStrong, 0.42)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 7
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     wrapMode: Text.WordWrap
                                 }
 
@@ -2569,10 +2784,10 @@ Item {
                                 Layout.fillWidth: true
 
                                 Label {
-                                    text: "PROJECT NORTH STAR"
+                                    text: "Project north star"
                                     color: theme.primaryAccent
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 8
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     font.weight: Font.Bold
                                     font.letterSpacing: 0.8
                                 }
@@ -2580,10 +2795,10 @@ Item {
                                 Item { Layout.fillWidth: true }
 
                                 Label {
-                                    text: "FUTURE DRAFTS · CURRENT REQUEST WINS"
+                                    text: "Future drafts · current request wins"
                                     color: theme.alpha(theme.textStrong, 0.42)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 7
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     font.weight: Font.DemiBold
                                 }
                             }
@@ -2599,7 +2814,7 @@ Item {
                                        ? theme.alpha(theme.textStrong, 0.72)
                                        : theme.alpha(theme.textStrong, 0.44)
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeMicro
                                 lineHeight: 1.16
                                 wrapMode: Text.WordWrap
                                 maximumLineCount: 3
@@ -2620,7 +2835,7 @@ Item {
                                 selectByMouse: true
                                 color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeMicro
                                 onTextChanged: {
                                     if (text.length > 360) {
                                         text = text.slice(0, 360)
@@ -2628,14 +2843,7 @@ Item {
                                     }
                                     root.northStarDraftText = text
                                 }
-                                background: Rectangle {
-                                    radius: 8
-                                    color: theme.alpha(theme.ink800, 0.9)
-                                    border.width: 1
-                                    border.color: parent.activeFocus
-                                                  ? theme.primaryAccent
-                                                  : theme.alpha(theme.textStrong, 0.12)
-                                }
+                                background: InputFieldSurface { inputControl: parent }
                             }
 
                             RowLayout {
@@ -2648,8 +2856,8 @@ Item {
                                           ? root.northStarDraftText.trim().length + " / 360"
                                           : "Project-local qualitative guidance · no automatic recipe or culling authority"
                                     color: theme.alpha(theme.textStrong, 0.42)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 7
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     wrapMode: Text.WordWrap
                                 }
 
@@ -2693,387 +2901,7 @@ Item {
                         }
                     }
 
-                    Rectangle {
-                        id: calibrationReviewCard
-                        objectName: "agentWorkspaceCalibrationReviewCard"
-                        readonly property string calibrationReviewContract:
-                            "agent-photographer-calibration-review-launch-v1"
-                        readonly property string calibrationSessionHandoffContract:
-                            "agent-photographer-calibration-session-handoff-v1"
-                        readonly property var calibrationCoach:
-                            root.photographerCalibrationCoach()
-                        Layout.fillWidth: true
-                        implicitHeight: calibrationReviewColumn.implicitHeight + 18
-                        radius: 10
-                        color: theme.alpha(theme.ink800, 0.9)
-                        border.width: 1
-                        border.color: theme.alpha(theme.textStrong, 0.09)
 
-                        ColumnLayout {
-                            id: calibrationReviewColumn
-                            anchors.fill: parent
-                            anchors.margins: 9
-                            spacing: 6
-
-                            RowLayout {
-                                Layout.fillWidth: true
-
-                                Label {
-                                    text: "PHOTOGRAPHER CALIBRATION"
-                                    color: theme.alpha(theme.textStrong, 0.5)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 8
-                                    font.weight: Font.Bold
-                                    font.letterSpacing: 0.7
-                                }
-
-                                Item { Layout.fillWidth: true }
-
-                                Label {
-                                    text: "HUMAN-ONLY GATE"
-                                    color: theme.primaryAccent
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 7
-                                    font.weight: Font.Bold
-                                }
-                            }
-
-                            Label {
-                                objectName: "agentWorkspaceTasteCalibrationStatus"
-                                Layout.fillWidth: true
-                                text: Boolean(root.photographerCalibration().available)
-                                      ? String(root.photographerCalibration().summary ||
-                                               "Blind photographer evidence is active.")
-                                      : "Review the signed before/after proofs without seeing the machine verdict, then bring the resulting taste profile back to this project."
-                                color: theme.alpha(theme.textStrong, 0.62)
-                                font.family: theme.fontUi
-                                font.pixelSize: 9
-                                lineHeight: 1.12
-                                maximumLineCount: 3
-                                wrapMode: Text.WordWrap
-                                elide: Text.ElideRight
-                                Accessible.name: "Photographer calibration status"
-                                Accessible.description: text
-                            }
-
-                            Rectangle {
-                                id: calibrationCoachCard
-                                objectName: "agentWorkspaceCalibrationCoachCard"
-                                readonly property var lesson:
-                                    calibrationReviewCard.calibrationCoach.primaryLesson || ({})
-                                Layout.fillWidth: true
-                                implicitHeight: visible
-                                                ? calibrationCoachColumn.implicitHeight + 14 : 0
-                                visible: Boolean(calibrationReviewCard.calibrationCoach.available)
-                                radius: 8
-                                color: theme.alpha(theme.primaryAccent, 0.075)
-                                border.width: 1
-                                border.color: theme.alpha(theme.primaryAccent, 0.24)
-
-                                ColumnLayout {
-                                    id: calibrationCoachColumn
-                                    anchors.fill: parent
-                                    anchors.margins: 7
-                                    spacing: 3
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-
-                                        Label {
-                                            objectName: "agentWorkspaceCalibrationCoachTitle"
-                                            text: "CALIBRATION COACH"
-                                            color: theme.primaryAccent
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 7
-                                            font.weight: Font.Bold
-                                            font.letterSpacing: 0.6
-                                        }
-
-                                        Item { Layout.fillWidth: true }
-
-                                        Label {
-                                            text: "SIGNED LESSON · 1 OF " +
-                                                  Number(calibrationReviewCard.calibrationCoach.lessonCount || 0)
-                                            color: theme.alpha(theme.textStrong, 0.38)
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 7
-                                            font.weight: Font.DemiBold
-                                        }
-                                    }
-
-                                    Label {
-                                        objectName: "agentWorkspaceCalibrationCoachHeadline"
-                                        Layout.fillWidth: true
-                                        text: String(calibrationCoachCard.lesson.headline || "")
-                                        color: theme.alpha(theme.textStrong, 0.78)
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 9
-                                        font.weight: Font.DemiBold
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Label {
-                                        objectName: "agentWorkspaceCalibrationCoachExplanation"
-                                        Layout.fillWidth: true
-                                        text: String(calibrationCoachCard.lesson.explanation || "")
-                                        color: theme.alpha(theme.textStrong, 0.58)
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 8
-                                        maximumLineCount: 2
-                                        wrapMode: Text.WordWrap
-                                        elide: Text.ElideRight
-                                        Accessible.name: "Calibration lesson"
-                                        Accessible.description: text
-                                    }
-
-                                    Label {
-                                        objectName: "agentWorkspaceCalibrationCoachBoundary"
-                                        Layout.fillWidth: true
-                                        text: String(calibrationCoachCard.lesson.decisionContrast || "") +
-                                              " · NO AUTO TRAINING · NO THRESHOLD CHANGE"
-                                        color: theme.alpha(theme.primaryAccent, 0.68)
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 6
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WordWrap
-                                        Accessible.name: "Calibration Coach authority boundary"
-                                        Accessible.description: text
-                                    }
-                                }
-                            }
-
-                            Rectangle {
-                                id: tastePassportPreviewCard
-                                objectName: "agentWorkspaceTastePassportPreviewCard"
-                                readonly property var preview:
-                                    root.pendingTastePassportPreview || ({})
-                                readonly property var profile:
-                                    preview.profile || ({})
-                                Layout.fillWidth: true
-                                implicitHeight: visible
-                                                ? tastePassportPreviewColumn.implicitHeight + 14 : 0
-                                visible: root.pendingTastePassportDigest.length > 0
-                                radius: 8
-                                color: theme.alpha(theme.primaryAccent, 0.085)
-                                border.width: 1
-                                border.color: theme.alpha(theme.primaryAccent, 0.34)
-
-                                ColumnLayout {
-                                    id: tastePassportPreviewColumn
-                                    anchors.fill: parent
-                                    anchors.margins: 7
-                                    spacing: 4
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-
-                                        Label {
-                                            text: "VERIFIED TASTE PASSPORT"
-                                            color: theme.primaryAccent
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 7
-                                            font.weight: Font.Bold
-                                            font.letterSpacing: 0.6
-                                        }
-
-                                        Item { Layout.fillWidth: true }
-
-                                        Label {
-                                            text: Number(tastePassportPreviewCard.preview.caseCount || 0) +
-                                                  " BLIND CASE" +
-                                                  (Number(tastePassportPreviewCard.preview.caseCount || 0) === 1
-                                                   ? "" : "S")
-                                            color: theme.alpha(theme.textStrong, 0.42)
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 7
-                                            font.weight: Font.DemiBold
-                                        }
-                                    }
-
-                                    Label {
-                                        objectName: "agentWorkspaceTastePassportPreviewSummary"
-                                        Layout.fillWidth: true
-                                        text: String(tastePassportPreviewCard.preview.summary ||
-                                                     "Verified photographer calibration is ready to review.")
-                                        color: theme.alpha(theme.textStrong, 0.7)
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 9
-                                        maximumLineCount: 2
-                                        wrapMode: Text.WordWrap
-                                        elide: Text.ElideRight
-                                        Accessible.name: "Taste Passport lesson summary"
-                                        Accessible.description: text
-                                    }
-
-                                    Label {
-                                        objectName: "agentWorkspaceTastePassportPreviewBoundary"
-                                        Layout.fillWidth: true
-                                        text: Boolean(tastePassportPreviewCard.preview.wouldReplaceExisting)
-                                              ? "REPLACES CURRENT CALIBRATION · THIS PROJECT ONLY · EDITS UNCHANGED"
-                                              : "ADDS CALIBRATION · THIS PROJECT ONLY · EDITS UNCHANGED"
-                                        color: theme.alpha(theme.primaryAccent, 0.76)
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 7
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WordWrap
-                                        Accessible.name: "Taste Passport import effect"
-                                        Accessible.description: text
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 7
-
-                                        Item { Layout.fillWidth: true }
-
-                                        LedgerButton {
-                                            objectName: "agentWorkspaceTastePassportCancelButton"
-                                            text: "Not now"
-                                            onClicked: root.cancelPhotographerTastePassport()
-                                        }
-
-                                        BubbleButton {
-                                            objectName: "agentWorkspaceTastePassportConfirmButton"
-                                            text: "Use for this project"
-                                            primary: true
-                                            Accessible.name: "Use verified Taste Passport for this project"
-                                            Accessible.description:
-                                                "Recheck the reviewed passport digest and apply only its calibration lessons to the active project"
-                                            onClicked: root.confirmPhotographerTastePassport()
-                                        }
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 7
-
-                                BubbleButton {
-                                    objectName: "agentWorkspaceCalibrationReviewButton"
-                                    text: "Review proofs"
-                                    primary: !Boolean(root.photographerCalibration().available)
-                                    Accessible.name: "Open a verified blind calibration review"
-                                    Accessible.description:
-                                        "The agent verifies the packet and proof hashes, then hands judgment to you"
-                                    onClicked: photographerCalibrationReviewDialog.open()
-                                }
-
-                                BubbleButton {
-                                    objectName: "agentWorkspaceCalibrationFinalizeButton"
-                                    text: "Finish ratings"
-                                    primary: false
-                                    Accessible.name: "Finish exported photographer ratings"
-                                    Accessible.description:
-                                        "Verify the exported human ratings against the signed packet, create new local result files, and activate the project profile"
-                                    onClicked: root.beginPhotographerCalibrationFinalize()
-                                }
-
-                                Item { Layout.fillWidth: true }
-                            }
-
-                            BubbleButton {
-                                objectName: "agentWorkspaceCalibrationClipboardFinalizeButton"
-                                Layout.fillWidth: true
-                                visible: root.activeCalibrationReviewPacketUrl.length > 0
-                                text: "Finish copied ratings"
-                                primary: true
-                                Accessible.name: "Finish copied photographer ratings"
-                                Accessible.description:
-                                    "Read ratings and notes from the clipboard, re-verify them against the exact signed packet, activate calibration, and clear the clipboard"
-                                onClicked: root.finishCopiedPhotographerCalibrationRatings()
-                            }
-
-                            Label {
-                                objectName: "agentWorkspaceCalibrationPacketReady"
-                                Layout.fillWidth: true
-                                visible: root.activeCalibrationReviewPacketUrl.length > 0
-                                text: "VERIFIED PACKET READY · COPY FINISH IS ONE CLICK · JSON FALLBACK AVAILABLE · SESSION ONLY"
-                                color: theme.alpha(theme.primaryAccent, 0.78)
-                                font.family: theme.fontMono
-                                font.pixelSize: 7
-                                font.weight: Font.DemiBold
-                                wrapMode: Text.WordWrap
-                                Accessible.name: "Verified calibration packet ready for one-step finish"
-                                Accessible.description:
-                                    "The verified packet reference is kept only for this UI session; exported ratings are still re-verified before calibration is applied"
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 7
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "TASTE PASSPORT · CALIBRATION ONLY · NO PHOTOS OR PATHS"
-                                    color: theme.alpha(theme.primaryAccent, 0.72)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 7
-                                    font.weight: Font.DemiBold
-                                    wrapMode: Text.WordWrap
-                                    Accessible.name: "Portable photographer Taste Passport"
-                                    Accessible.description:
-                                        "Export or explicitly import only verified blind-review lessons for one project; photos, source paths, automatic training, and threshold changes stay excluded"
-                                }
-
-                                LedgerButton {
-                                    objectName: "agentWorkspaceTastePassportExportButton"
-                                    visible: Boolean(root.photographerCalibration().available)
-                                    text: "Export"
-                                    Accessible.name: "Export Taste Passport"
-                                    Accessible.description:
-                                        "Save this project's verified calibration lessons without photos, source paths, or project name"
-                                    onClicked: photographerTastePassportExportDialog.open()
-                                }
-
-                                BubbleButton {
-                                    objectName: "agentWorkspaceTastePassportImportButton"
-                                    text: "Import"
-                                    primary: false
-                                    Accessible.name: "Import Taste Passport for this project"
-                                    Accessible.description:
-                                        "Verify and explicitly apply portable calibration lessons only to the active project"
-                                    onClicked: photographerTastePassportImportDialog.open()
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 7
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: Boolean(root.photographerCalibration().importedFromTastePassport)
-                                          ? "Passport provenance verified · active project only"
-                                          : "Advanced: import a signed calibration profile"
-                                    color: theme.alpha(theme.textStrong, 0.42)
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 8
-                                }
-
-                                LedgerButton {
-                                    objectName: "agentWorkspaceTasteCalibrationImportButton"
-                                    text: Boolean(root.photographerCalibration().available)
-                                          ? "Replace profile" : "Import profile"
-                                    Accessible.name: text + " for this project"
-                                    onClicked: photographerCalibrationDialog.open()
-                                }
-                            }
-
-                            Label {
-                                objectName: "agentWorkspaceCalibrationReviewBoundary"
-                                Layout.fillWidth: true
-                                text: "PACKET VERIFIED BEFORE OPEN · VERIFIED PACKET KEPT FOR THIS SESSION · RATINGS VERIFIED BEFORE APPLY · MACHINE VERDICT HIDDEN · AGENT CANNOT RATE"
-                                color: theme.alpha(theme.textStrong, 0.4)
-                                font.family: theme.fontMono
-                                font.pixelSize: 7
-                                font.weight: Font.DemiBold
-                                wrapMode: Text.WordWrap
-                                Accessible.name: "Calibration review authority boundary"
-                                Accessible.description: text
-                            }
-                        }
-                    }
 
                     Repeater {
                         model: root.tasteEvidence().slice(
@@ -3124,10 +2952,10 @@ Item {
                                         visible: root.tasteEvidenceThumbnail(
                                                      tasteEvidenceDelegate.modelData).length === 0
                                         text: String(tasteEvidenceDelegate.modelData.kind || "") ===
-                                              "rejected-draft" ? "AVOID" : "TASTE"
+                                              "rejected-draft" ? "Avoid" : "Taste"
                                         color: theme.alpha(theme.textStrong, 0.4)
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 7
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeMicro
                                         font.weight: Font.Bold
                                     }
                                 }
@@ -3140,7 +2968,7 @@ Item {
                                         text: String(tasteEvidenceDelegate.modelData.title || "Learned choice")
                                         color: theme.textStrong
                                         font.family: theme.fontUi
-                                        font.pixelSize: 10
+                                        font.pixelSize: theme.typeMicro
                                         font.weight: Font.DemiBold
                                         elide: Text.ElideRight
                                     }
@@ -3149,7 +2977,7 @@ Item {
                                         text: String(tasteEvidenceDelegate.modelData.summary || "")
                                         color: theme.alpha(theme.textStrong, 0.58)
                                         font.family: theme.fontUi
-                                        font.pixelSize: 9
+                                        font.pixelSize: theme.typeMicro
                                         maximumLineCount: 2
                                         wrapMode: Text.WordWrap
                                         elide: Text.ElideRight
@@ -3158,8 +2986,8 @@ Item {
                                         Layout.fillWidth: true
                                         text: String(tasteEvidenceDelegate.modelData.detail || "")
                                         color: theme.alpha(theme.textStrong, 0.42)
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeMicro
                                         elide: Text.ElideRight
                                     }
                                 }
@@ -3188,8 +3016,8 @@ Item {
                               " older item" + (root.tasteEvidence().length - 4 === 1 ? "" : "s") +
                               " in the local memory vault"
                         color: theme.alpha(theme.textStrong, 0.44)
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                     }
 
                     Label {
@@ -3199,17 +3027,17 @@ Item {
                         text: root.tasteActionMessage
                         color: theme.primaryAccent
                         font.family: theme.fontUi
-                        font.pixelSize: 9
+                        font.pixelSize: theme.typeMicro
                         wrapMode: Text.WordWrap
                     }
 
                     Label {
                         objectName: "agentWorkspaceTastePrivacy"
                         Layout.fillWidth: true
-                        text: "LOCAL MEMORY · CALIBRATION IS SIGNED SUMMARY DATA · THUMBNAILS RESOLVE FROM CATALOG IDS · NO IMAGE BYTES · NO SOURCE PATHS · EDITS UNCHANGED WHEN FORGOTTEN"
+                        text: "Local memory · calibration is signed summary data · thumbnails resolve from catalog ids · no image bytes · no source paths · edits unchanged when forgotten"
                         color: theme.alpha(theme.textStrong, 0.42)
-                        font.family: theme.fontMono
-                        font.pixelSize: 7
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                         Accessible.name: "Project taste memory privacy"
@@ -3218,28 +3046,387 @@ Item {
                 }
             }
 
-            Label {
-                objectName: "agentWorkspaceHeadline"
+            Rectangle {
+                id: calibrationReviewCard
+                objectName: "agentWorkspaceCalibrationReviewCard"
+                readonly property string calibrationReviewContract:
+                    "agent-photographer-calibration-review-launch-v1"
+                readonly property string calibrationSessionHandoffContract:
+                    "agent-photographer-calibration-session-handoff-v1"
+                readonly property var calibrationCoach:
+                    root.photographerCalibrationCoach()
                 Layout.fillWidth: true
-                text: root.headline()
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 19
-                font.weight: Font.DemiBold
-                wrapMode: Text.WordWrap
-            }
+                visible: root.calibrationOpen
+                implicitHeight: visible ? calibrationReviewColumn.implicitHeight + 18 : 0
+                radius: 10
+                color: theme.alpha(theme.ink800, 0.9)
+                border.width: 1
+                border.color: theme.alpha(theme.textStrong, 0.09)
 
-            Label {
-                objectName: "agentWorkspaceExplanation"
-                Layout.fillWidth: true
-                text: root.explanation()
-                color: theme.alpha(theme.textStrong, 0.66)
-                font.family: theme.fontUi
-                font.pixelSize: 12
-                lineHeight: 1.18
-                wrapMode: Text.WordWrap
-                maximumLineCount: 4
-                elide: Text.ElideRight
+                ColumnLayout {
+                    id: calibrationReviewColumn
+                    anchors.fill: parent
+                    anchors.margins: 9
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        Label {
+                            text: "Photographer calibration"
+                            color: theme.alpha(theme.textStrong, 0.5)
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
+                            font.weight: Font.Bold
+                            font.letterSpacing: 0.7
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        Label {
+                            text: "Human-only gate"
+                            color: theme.primaryAccent
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
+                            font.weight: Font.Bold
+                        }
+                    }
+
+                    Label {
+                        objectName: "agentWorkspaceTasteCalibrationStatus"
+                        Layout.fillWidth: true
+                        text: Boolean(root.photographerCalibration().available)
+                              ? String(root.photographerCalibration().summary ||
+                                       "Blind photographer evidence is active.")
+                              : "Review the signed before/after proofs without seeing the machine verdict, then bring the resulting taste profile back to this project."
+                        color: theme.alpha(theme.textStrong, 0.62)
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        lineHeight: 1.12
+                        maximumLineCount: 3
+                        wrapMode: Text.WordWrap
+                        elide: Text.ElideRight
+                        Accessible.name: "Photographer calibration status"
+                        Accessible.description: text
+                    }
+
+                    Rectangle {
+                        id: calibrationCoachCard
+                        objectName: "agentWorkspaceCalibrationCoachCard"
+                        readonly property var lesson:
+                            calibrationReviewCard.calibrationCoach.primaryLesson || ({})
+                        Layout.fillWidth: true
+                        implicitHeight: visible
+                                        ? calibrationCoachColumn.implicitHeight + 14 : 0
+                        visible: Boolean(calibrationReviewCard.calibrationCoach.available)
+                        radius: 8
+                        color: theme.alpha(theme.primaryAccent, 0.075)
+                        border.width: 1
+                        border.color: theme.alpha(theme.primaryAccent, 0.24)
+
+                        ColumnLayout {
+                            id: calibrationCoachColumn
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            spacing: 3
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Label {
+                                    objectName: "agentWorkspaceCalibrationCoachTitle"
+                                    text: "Calibration coach"
+                                    color: theme.primaryAccent
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    font.weight: Font.Bold
+                                    font.letterSpacing: 0.6
+                                }
+
+                                Item { Layout.fillWidth: true }
+
+                                Label {
+                                    text: "Signed lesson · 1 of " +
+                                          Number(calibrationReviewCard.calibrationCoach.lessonCount || 0)
+                                    color: theme.alpha(theme.textStrong, 0.38)
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    font.weight: Font.DemiBold
+                                }
+                            }
+
+                            Label {
+                                objectName: "agentWorkspaceCalibrationCoachHeadline"
+                                Layout.fillWidth: true
+                                text: String(calibrationCoachCard.lesson.headline || "")
+                                color: theme.alpha(theme.textStrong, 0.78)
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeMicro
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                            }
+
+                            Label {
+                                objectName: "agentWorkspaceCalibrationCoachExplanation"
+                                Layout.fillWidth: true
+                                text: String(calibrationCoachCard.lesson.explanation || "")
+                                color: theme.alpha(theme.textStrong, 0.58)
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeMicro
+                                maximumLineCount: 2
+                                wrapMode: Text.WordWrap
+                                elide: Text.ElideRight
+                                Accessible.name: "Calibration lesson"
+                                Accessible.description: text
+                            }
+
+                            Label {
+                                objectName: "agentWorkspaceCalibrationCoachBoundary"
+                                Layout.fillWidth: true
+                                text: String(calibrationCoachCard.lesson.decisionContrast || "") +
+                                      " · NO AUTO TRAINING · NO THRESHOLD CHANGE"
+                                color: theme.alpha(theme.primaryAccent, 0.68)
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeMicro
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WordWrap
+                                Accessible.name: "Calibration Coach authority boundary"
+                                Accessible.description: text
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        id: tastePassportPreviewCard
+                        objectName: "agentWorkspaceTastePassportPreviewCard"
+                        readonly property var preview:
+                            root.pendingTastePassportPreview || ({})
+                        readonly property var profile:
+                            preview.profile || ({})
+                        Layout.fillWidth: true
+                        implicitHeight: visible
+                                        ? tastePassportPreviewColumn.implicitHeight + 14 : 0
+                        visible: root.pendingTastePassportDigest.length > 0
+                        radius: 8
+                        color: theme.alpha(theme.primaryAccent, 0.085)
+                        border.width: 1
+                        border.color: theme.alpha(theme.primaryAccent, 0.34)
+
+                        ColumnLayout {
+                            id: tastePassportPreviewColumn
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            spacing: 4
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Label {
+                                    text: "Verified taste passport"
+                                    color: theme.primaryAccent
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    font.weight: Font.Bold
+                                    font.letterSpacing: 0.6
+                                }
+
+                                Item { Layout.fillWidth: true }
+
+                                Label {
+                                    text: Number(tastePassportPreviewCard.preview.caseCount || 0) +
+                                          " BLIND CASE" +
+                                          (Number(tastePassportPreviewCard.preview.caseCount || 0) === 1
+                                           ? "" : "S")
+                                    color: theme.alpha(theme.textStrong, 0.42)
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    font.weight: Font.DemiBold
+                                }
+                            }
+
+                            Label {
+                                objectName: "agentWorkspaceTastePassportPreviewSummary"
+                                Layout.fillWidth: true
+                                text: String(tastePassportPreviewCard.preview.summary ||
+                                             "Verified photographer calibration is ready to review.")
+                                color: theme.alpha(theme.textStrong, 0.7)
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeMicro
+                                maximumLineCount: 2
+                                wrapMode: Text.WordWrap
+                                elide: Text.ElideRight
+                                Accessible.name: "Taste Passport lesson summary"
+                                Accessible.description: text
+                            }
+
+                            Label {
+                                objectName: "agentWorkspaceTastePassportPreviewBoundary"
+                                Layout.fillWidth: true
+                                text: Boolean(tastePassportPreviewCard.preview.wouldReplaceExisting)
+                                      ? "Replaces the current calibration · this project only · edits unchanged"
+                                      : "Adds calibration · this project only · edits unchanged"
+                                color: theme.alpha(theme.primaryAccent, 0.76)
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeMicro
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WordWrap
+                                Accessible.name: "Taste Passport import effect"
+                                Accessible.description: text
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 7
+
+                                Item { Layout.fillWidth: true }
+
+                                LedgerButton {
+                                    objectName: "agentWorkspaceTastePassportCancelButton"
+                                    text: "Not now"
+                                    onClicked: root.cancelPhotographerTastePassport()
+                                }
+
+                                BubbleButton {
+                                    objectName: "agentWorkspaceTastePassportConfirmButton"
+                                    text: "Use for this project"
+                                    primary: true
+                                    Accessible.name: "Use verified Taste Passport for this project"
+                                    Accessible.description:
+                                        "Recheck the reviewed passport digest and apply only its calibration lessons to the active project"
+                                    onClicked: root.confirmPhotographerTastePassport()
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 7
+
+                        BubbleButton {
+                            objectName: "agentWorkspaceCalibrationReviewButton"
+                            text: "Review proofs"
+                            primary: !Boolean(root.photographerCalibration().available)
+                            Accessible.name: "Open a verified blind calibration review"
+                            Accessible.description:
+                                "The agent verifies the packet and proof hashes, then hands judgment to you"
+                            onClicked: photographerCalibrationReviewDialog.open()
+                        }
+
+                        BubbleButton {
+                            objectName: "agentWorkspaceCalibrationFinalizeButton"
+                            text: "Finish ratings"
+                            primary: false
+                            Accessible.name: "Finish exported photographer ratings"
+                            Accessible.description:
+                                "Verify the exported human ratings against the signed packet, create new local result files, and activate the project profile"
+                            onClicked: root.beginPhotographerCalibrationFinalize()
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    BubbleButton {
+                        objectName: "agentWorkspaceCalibrationClipboardFinalizeButton"
+                        Layout.fillWidth: true
+                        visible: root.activeCalibrationReviewPacketUrl.length > 0
+                        text: "Finish copied ratings"
+                        primary: true
+                        Accessible.name: "Finish copied photographer ratings"
+                        Accessible.description:
+                            "Read ratings and notes from the clipboard, re-verify them against the exact signed packet, activate calibration, and clear the clipboard"
+                        onClicked: root.finishCopiedPhotographerCalibrationRatings()
+                    }
+
+                    Label {
+                        objectName: "agentWorkspaceCalibrationPacketReady"
+                        Layout.fillWidth: true
+                        visible: root.activeCalibrationReviewPacketUrl.length > 0
+                        text: "Verified packet ready · copy finish is one click · json fallback available · session only"
+                        color: theme.alpha(theme.primaryAccent, 0.78)
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                        Accessible.name: "Verified calibration packet ready for one-step finish"
+                        Accessible.description:
+                            "The verified packet reference is kept only for this UI session; exported ratings are still re-verified before calibration is applied"
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 7
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Taste passport · calibration only · no photos or paths"
+                            color: theme.alpha(theme.primaryAccent, 0.72)
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
+                            font.weight: Font.DemiBold
+                            wrapMode: Text.WordWrap
+                            Accessible.name: "Portable photographer Taste Passport"
+                            Accessible.description:
+                                "Export or explicitly import only verified blind-review lessons for one project; photos, source paths, automatic training, and threshold changes stay excluded"
+                        }
+
+                        LedgerButton {
+                            objectName: "agentWorkspaceTastePassportExportButton"
+                            visible: Boolean(root.photographerCalibration().available)
+                            text: "Export"
+                            Accessible.name: "Export Taste Passport"
+                            Accessible.description:
+                                "Save this project's verified calibration lessons without photos, source paths, or project name"
+                            onClicked: photographerTastePassportExportDialog.open()
+                        }
+
+                        BubbleButton {
+                            objectName: "agentWorkspaceTastePassportImportButton"
+                            text: "Import"
+                            primary: false
+                            Accessible.name: "Import Taste Passport for this project"
+                            Accessible.description:
+                                "Verify and explicitly apply portable calibration lessons only to the active project"
+                            onClicked: photographerTastePassportImportDialog.open()
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 7
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: Boolean(root.photographerCalibration().importedFromTastePassport)
+                                  ? "Passport provenance verified · active project only"
+                                  : "Advanced: import a signed calibration profile"
+                            color: theme.alpha(theme.textStrong, 0.42)
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
+                        }
+
+                        LedgerButton {
+                            objectName: "agentWorkspaceTasteCalibrationImportButton"
+                            text: Boolean(root.photographerCalibration().available)
+                                  ? "Replace profile" : "Import profile"
+                            Accessible.name: text + " for this project"
+                            onClicked: photographerCalibrationDialog.open()
+                        }
+                    }
+
+                    Label {
+                        objectName: "agentWorkspaceCalibrationReviewBoundary"
+                        Layout.fillWidth: true
+                        text: "Packet verified before open · verified packet kept for this session · ratings verified before apply · machine verdict hidden · agent cannot rate"
+                        color: theme.alpha(theme.textStrong, 0.4)
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                        Accessible.name: "Calibration review authority boundary"
+                        Accessible.description: text
+                    }
+                }
             }
 
             Rectangle {
@@ -3263,10 +3450,10 @@ Item {
                         Layout.fillWidth: true
 
                         Label {
-                            text: "TWO PROVED VERSIONS"
+                            text: "Two proved versions"
                             color: theme.primaryAccent
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.Bold
                             font.letterSpacing: 0.7
                         }
@@ -3275,14 +3462,14 @@ Item {
 
                         Label {
                             objectName: "agentWorkspaceTwoSpeedDraftChoiceReceipt"
-                            text: "CURRENT · " +
+                            text: "Current · " +
                                   (root.selectedTwoSpeedDraftVersion === "first-look"
-                                   ? "FIRST LOOK"
-                                   : "DEEP REVIEW") +
-                                  " · COMMIT SEPARATE"
+                                  ? "First look"
+                                  : "Deep review") +
+                                  " · commit is separate"
                             color: theme.alpha(theme.textStrong, 0.52)
-                            font.family: theme.fontMono
-                            font.pixelSize: 7
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.Bold
                         }
                     }
@@ -3292,7 +3479,7 @@ Item {
                         text: "Deep review refined the first look. Keep either one."
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                     }
@@ -3302,7 +3489,7 @@ Item {
                         text: "Both passed image proof. Discard still restores the exact pre-agent edit."
                         color: theme.alpha(theme.textStrong, 0.64)
                         font.family: theme.fontUi
-                        font.pixelSize: 9
+                        font.pixelSize: theme.typeMicro
                         wrapMode: Text.WordWrap
                     }
 
@@ -3337,7 +3524,7 @@ Item {
                 objectName: "agentWorkspaceEditStrategyCard"
                 readonly property string editStrategyContract: "agent-edit-strategy-route-v1"
                 Layout.fillWidth: true
-                visible: root.draftReady && !root.tasteMirrorOpen &&
+                visible: root.verificationDetailsOpen && root.draftReady && !root.tasteMirrorOpen &&
                          String(root.editStrategy().primaryPath || "").length > 0
                 implicitHeight: editStrategyColumn.implicitHeight + 18
                 radius: 12
@@ -3354,20 +3541,20 @@ Item {
                     RowLayout {
                         Layout.fillWidth: true
                         Label {
-                            text: "EDIT APPROACH"
+                            text: "Edit approach"
                             color: theme.alpha(theme.textStrong, 0.5)
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.Bold
                             font.letterSpacing: 0.8
                         }
                         Item { Layout.fillWidth: true }
                         Label {
                             objectName: "agentWorkspaceEditStrategyAuthority"
-                            text: "CHOSEN FOR THIS PHOTO"
+                            text: "Chosen for this photo"
                             color: theme.primaryAccent
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.Bold
                         }
                     }
@@ -3378,7 +3565,7 @@ Item {
                         text: String(root.editStrategy().label || "")
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                     }
 
@@ -3388,7 +3575,7 @@ Item {
                         text: String(root.editStrategy().reason || "")
                         color: theme.alpha(theme.textStrong, 0.65)
                         font.family: theme.fontUi
-                        font.pixelSize: 9
+                        font.pixelSize: theme.typeMicro
                         lineHeight: 1.12
                         wrapMode: Text.WordWrap
                         maximumLineCount: 2
@@ -3403,8 +3590,8 @@ Item {
                         visible: text.length > 0
                         text: root.editStrategyPreservedText()
                         color: theme.alpha(theme.textStrong, 0.44)
-                        font.family: theme.fontMono
-                        font.pixelSize: 7
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                     }
@@ -3414,11 +3601,11 @@ Item {
             Label {
                 objectName: "agentWorkspaceTrustReceipt"
                 Layout.fillWidth: true
-                visible: root.draftReady && text.length > 0
+                visible: root.verificationDetailsOpen && root.draftReady && text.length > 0
                 text: root.trustReceiptText()
                 color: theme.alpha(theme.textStrong, 0.56)
-                font.family: theme.fontMono
-                font.pixelSize: 9
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
                 font.weight: Font.DemiBold
                 wrapMode: Text.WordWrap
                 Accessible.name: "Edit check summary"
@@ -3430,7 +3617,7 @@ Item {
                 objectName: "agentWorkspacePhotographerTasteCheckCard"
                 readonly property var tasteCheck: root.photographerTasteCheck()
                 Layout.fillWidth: true
-                visible: root.draftReady && !root.tasteMirrorOpen &&
+                visible: root.calibrationOpen && root.draftReady && !root.tasteMirrorOpen &&
                          Boolean(tasteCheck.recommended)
                 implicitHeight: tasteCheckColumn.implicitHeight + 18
                 radius: 12
@@ -3446,10 +3633,10 @@ Item {
 
                     Label {
                         objectName: "agentWorkspacePhotographerTasteCheckEyebrow"
-                        text: "CALIBRATED TASTE CHECK"
+                        text: "Calibrated taste check"
                         color: theme.primaryAccent
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.Bold
                         font.letterSpacing: 0.7
                     }
@@ -3461,7 +3648,7 @@ Item {
                                      "I’m less certain about this direction.")
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                     }
@@ -3472,7 +3659,7 @@ Item {
                         text: String(tasteCheckCard.tasteCheck.explanation || "")
                         color: theme.alpha(theme.textStrong, 0.62)
                         font.family: theme.fontUi
-                        font.pixelSize: 10
+                        font.pixelSize: theme.typeMicro
                         lineHeight: 1.14
                         wrapMode: Text.WordWrap
                     }
@@ -3495,8 +3682,8 @@ Item {
                                   ? root.tasteCheckMessage
                                   : "2 REAL RENDERS · LEARNED ONLY AFTER CHOICE + COMMIT"
                             color: theme.alpha(theme.textStrong, 0.46)
-                            font.family: theme.fontMono
-                            font.pixelSize: 7
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.DemiBold
                             wrapMode: Text.WordWrap
                         }
@@ -3512,7 +3699,7 @@ Item {
                     ? ((root.agentEditController.lastRunReport || ({})).pointGroundedCorrection || ({}))
                     : ({})
                 Layout.fillWidth: true
-                visible: root.draftReady && Boolean(pointResolution.applied)
+                visible: root.verificationDetailsOpen && root.draftReady && Boolean(pointResolution.applied)
                 implicitHeight: pointResolutionColumn.implicitHeight + 16
                 radius: 10
                 color: theme.alpha(theme.primaryAccent, 0.075)
@@ -3531,8 +3718,8 @@ Item {
                         text: String(pointResolutionCard.pointResolution.resolutionLabel ||
                                      "Feathered area fallback")
                         color: theme.primaryAccent
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.Bold
                         wrapMode: Text.WordWrap
                     }
@@ -3541,11 +3728,11 @@ Item {
                         objectName: "agentWorkspacePointResolutionBoundary"
                         Layout.fillWidth: true
                         text: String(pointResolutionCard.pointResolution.resolutionMode || "") === "content-snap"
-                              ? "CONTENT BOUNDARY FOUND · CLICK INCLUDED · OUTSIDE PROTECTED"
-                              : "VISIBLE FEATHERED BOUNDARY · NO OBJECT CLAIM · OUTSIDE PROTECTED"
+                              ? "Content boundary found · click included · outside protected"
+                              : "Visible feathered boundary · no object claim · outside protected"
                         color: theme.alpha(theme.textStrong, 0.56)
-                        font.family: theme.fontMono
-                        font.pixelSize: 7
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                     }
@@ -3558,15 +3745,15 @@ Item {
                 visible: root.progressivePreviewVisible
                 text: String(root.progressivePreview.mode || "") === "fast-planning-preview"
                       ? (root.keepValidatedFastAvailable
-                         ? "FAST PROOF PASSED · USE NOW OR WAIT · COMMIT LOCKED"
+                         ? "Preview checked. Use it or wait; commit remains locked."
                          : root.fastPreviewValidated
-                           ? "FAST PROOF PASSED · " + root.fastDraftDeepTargetCountdownText() +
-                             " · COMMIT LOCKED"
-                           : "FAST PREVIEW · INDEPENDENT PROOF + DEEP REVIEW RUNNING · COMMIT LOCKED")
-                      : "PREVIEW READY · FINAL CHECK RUNNING · COMMIT LOCKED"
+                           ? "First look checked. " + root.fastDraftDeepTargetCountdownText() +
+                             "; commit remains locked."
+                           : "Reversible preview live. Proof and deep review continue; commit remains locked.")
+                      : "Preview ready. Safety check continues; commit remains locked."
                 color: theme.primaryAccent
-                font.family: theme.fontMono
-                font.pixelSize: 9
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
                 font.weight: Font.Bold
                 wrapMode: Text.WordWrap
                 Accessible.name: "Agent provisional preview status"
@@ -3603,30 +3790,23 @@ Item {
                         Layout.fillWidth: true
                         Label {
                             Layout.fillWidth: true
-                            text: "Your edit"
+                            text: "What I found"
                             color: theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 11
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.DemiBold
                         }
                         Label {
                             visible: root.localizedActions().length > 0
-                            text: root.localizedActions().length + " local " +
+                            text: root.localizedActions().length + " " +
                                   (root.localizedActions().length === 1 ? "change" : "changes")
                             color: theme.primaryAccent
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.DemiBold
+                            Accessible.name: root.localizedActions().length + " planned " +
+                                             (root.localizedActions().length === 1 ? "change" : "changes")
                         }
-                    }
-
-                    Label {
-                        text: "WHAT I SAW"
-                        color: theme.alpha(theme.textStrong, 0.42)
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
-                        font.letterSpacing: 0.8
-                        font.weight: Font.DemiBold
                     }
 
                     Repeater {
@@ -3669,7 +3849,7 @@ Item {
                                     text: String(findingDelegate.modelData.observation || "")
                                     color: theme.alpha(theme.textStrong, 0.72)
                                     font.family: theme.fontUi
-                                    font.pixelSize: 10
+                                    font.pixelSize: theme.typeMicro
                                     wrapMode: Text.WordWrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -3683,8 +3863,8 @@ Item {
                                     color: String(findingDelegate.modelData.maskId || "").length > 0
                                            ? theme.primaryAccent
                                            : theme.alpha(theme.textStrong, 0.46)
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 8
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
                                     font.weight: Font.DemiBold
                                 }
                             }
@@ -3708,26 +3888,22 @@ Item {
 
                     Label {
                         visible: root.localizedActions().length > 0
-                        text: "WHAT I'LL CHANGE"
+                        text: "Planned changes"
                         color: theme.alpha(theme.textStrong, 0.42)
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.letterSpacing: 0.8
                         font.weight: Font.DemiBold
                     }
 
                     Repeater {
                         model: root.localizedActions().slice(0, 2)
-                        delegate: Rectangle {
+                        delegate: Item {
                             id: intentActionDelegate
                             objectName: "agentWorkspaceIntentAction"
                             required property var modelData
                             Layout.fillWidth: true
                             Layout.preferredHeight: intentActionRow.implicitHeight + 10
-                            radius: 8
-                            color: theme.alpha(theme.ink800, 0.9)
-                            border.width: 1
-                            border.color: theme.alpha(theme.textStrong, 0.08)
 
                             RowLayout {
                                 id: intentActionRow
@@ -3746,7 +3922,7 @@ Item {
                                                   intentActionDelegate.modelData.targetLabel)
                                         color: theme.textStrong
                                         font.family: theme.fontUi
-                                        font.pixelSize: 10
+                                        font.pixelSize: theme.typeMicro
                                         font.weight: Font.DemiBold
                                         elide: Text.ElideRight
                                     }
@@ -3755,8 +3931,8 @@ Item {
                                         Layout.fillWidth: true
                                         text: root.localizedActionSummary(intentActionDelegate.modelData)
                                         color: theme.alpha(theme.textStrong, 0.54)
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeMicro
                                         elide: Text.ElideRight
                                     }
                                 }
@@ -3786,7 +3962,7 @@ Item {
                                         root.intentBoundarySerial >= 0 &&
                                         root.isIntentProtected(intentActionDelegate.modelData)
                                     text: intentProtected ? "Kept" : "Keep"
-                                    accent: intentProtected
+                                    emphasized: intentProtected
                                     Accessible.name: intentProtected
                                                      ? "Unlock this protected planned adjustment"
                                                      : "Protect this planned adjustment"
@@ -3806,10 +3982,10 @@ Item {
                         objectName: "agentWorkspaceIntentProtection"
                         Layout.fillWidth: true
                         visible: root.protectedIntentLabels().length > 0
-                        text: "PROTECTING · " + root.protectedIntentLabels().join(" · ")
+                        text: "Protecting · " + root.protectedIntentLabels().join(" · ")
                         color: theme.alpha(theme.textStrong, 0.48)
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                         Accessible.name: "Protected parts of the edit"
@@ -3843,7 +4019,7 @@ Item {
                                      "The proof found a visible cleanup problem.")
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                     }
@@ -3854,17 +4030,17 @@ Item {
                         text: String(root.visualCritique().evidenceSummary || "")
                         color: theme.alpha(theme.textStrong, 0.62)
                         font.family: theme.fontUi
-                        font.pixelSize: 10
+                        font.pixelSize: theme.typeMicro
                         wrapMode: Text.WordWrap
                     }
 
                     Label {
                         objectName: "agentWorkspaceVisualCritiqueReceipt"
                         Layout.fillWidth: true
-                        text: "ORIGINAL KEPT · OLD PATCH DISCARDED · NEW APPROVAL REQUIRED"
+                        text: "Original kept · old patch discarded · new approval required"
                         color: theme.primaryAccent
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                         Accessible.name: "Proof rejection safety receipt"
@@ -3896,7 +4072,7 @@ Item {
                               : "What should I change?"
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                     }
 
@@ -3910,8 +4086,8 @@ Item {
                                 root.findingTargetLabel((root.activeFinding || ({})).target,
                                                         (root.activeFinding || ({})).targetLabel)
                         color: theme.primaryAccent
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
                         elide: Text.ElideRight
                     }
@@ -3930,14 +4106,9 @@ Item {
                         wrapMode: TextEdit.WordWrap
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         onTextChanged: root.correctionText = text
-                        background: Rectangle {
-                            radius: 9
-                            color: theme.alpha(theme.ink800, 0.9)
-                            border.width: correctionEditor.activeFocus ? 1 : 0
-                            border.color: theme.primaryAccent
-                        }
+                        background: InputFieldSurface { inputControl: parent }
                     }
 
                     Label {
@@ -3946,7 +4117,7 @@ Item {
                         text: root.correctionError
                         color: theme.primaryAccent
                         font.family: theme.fontUi
-                        font.pixelSize: 10
+                        font.pixelSize: theme.typeMicro
                         wrapMode: Text.WordWrap
                     }
 
@@ -3966,7 +4137,7 @@ Item {
                         }
                         BubbleButton {
                             objectName: "agentWorkspaceSubmitCorrectionButton"
-                            text: "Make Changes"
+                            text: "Make changes"
                             primary: true
                             enabled: root.correctionText.trim().length > 0
                             onClicked: root.submitCorrection()
@@ -3997,7 +4168,7 @@ Item {
                         text: root.pendingQuestionText()
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                     }
@@ -4013,14 +4184,9 @@ Item {
                         wrapMode: TextEdit.WordWrap
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeCaption
                         onTextChanged: root.pendingAnswerText = text
-                        background: Rectangle {
-                            radius: 9
-                            color: theme.alpha(theme.ink800, 0.9)
-                            border.width: pendingAnswerEditor.activeFocus ? 1 : 0
-                            border.color: theme.primaryAccent
-                        }
+                        background: InputFieldSurface { inputControl: parent }
                     }
 
                     Label {
@@ -4029,7 +4195,7 @@ Item {
                         text: root.pendingAnswerError
                         color: theme.primaryAccent
                         font.family: theme.fontUi
-                        font.pixelSize: 10
+                        font.pixelSize: theme.typeMicro
                         wrapMode: Text.WordWrap
                     }
 
@@ -4051,79 +4217,50 @@ Item {
                 }
             }
 
+        }
+
+        }
+
+        ColumnLayout {
+            id: agentWorkspaceDecisionFooter
+            objectName: "agentWorkspaceDecisionFooter"
+            readonly property bool hasDecisionAction: !root.correctionOpen &&
+                ((root.running && !root.awaitingInput) || root.keepValidatedFastAvailable ||
+                 root.awaitingPlanApproval || root.awaitingSafeStop ||
+                 (root.spatialTargetMode && root.rejectedRepairPointMode) ||
+                 (root.runFailed && !root.spatialTargetMode) || root.draftReady)
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: theme.popupPadding
+            anchors.rightMargin: theme.popupPadding
+            anchors.bottomMargin: theme.popupPadding
+            visible: hasDecisionAction
+            height: visible ? implicitHeight : 0
+            spacing: theme.gapDense
+
             Rectangle {
-                objectName: "agentWorkspaceSelectionConfirmationCard"
                 Layout.fillWidth: true
-                visible: root.awaitingSelectionConfirmation
-                implicitHeight: selectionConfirmationColumn.implicitHeight + 22
-                radius: 13
-                color: theme.alpha(theme.primaryAccent, 0.07)
-                border.width: 1
-                border.color: theme.alpha(theme.primaryAccent, 0.28)
-
-                ColumnLayout {
-                    id: selectionConfirmationColumn
-                    anchors.fill: parent
-                    anchors.margins: 11
-                    spacing: 7
-
-                    Label {
-                        objectName: "agentWorkspaceSelectionConfirmationPrompt"
-                        Layout.fillWidth: true
-                        text: "Which " + String(root.selectionConfirmation.targetLabel || "object") + "?"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "The numbered outlines are candidates. Nothing is edited until you choose."
-                        color: theme.alpha(theme.textStrong, 0.58)
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Repeater {
-                        model: root.selectionConfirmation.candidates || []
-
-                        delegate: BubbleButton {
-                            required property var modelData
-                            required property int index
-                            objectName: "agentWorkspaceSelectionCandidate" + String(index + 1)
-                            Layout.fillWidth: true
-                            primary: false
-                            text: String(index + 1) + "  " +
-                                  String(modelData.label || ("Candidate " + String(index + 1))) +
-                                  "  ·  " + Math.round(Number(modelData.confidence || 0) * 100) + "%"
-                            Accessible.name: "Choose " + String(modelData.label || ("candidate " + String(index + 1)))
-                            onClicked: root.agentEditController.confirmGroundedSelectionCandidate(
-                                           String(modelData.id || ""))
-                        }
-                    }
-                }
+                Layout.preferredHeight: theme.hairlineWidth
+                color: theme.alpha(theme.lineSoft, 0.56)
             }
 
-            RowLayout {
+            Flow {
+                id: agentWorkspaceDecisionActions
+                objectName: "agentWorkspaceDecisionActions"
                 Layout.fillWidth: true
-                visible: (root.running || root.draftReady || root.awaitingInput || root.runFailed) &&
-                         !root.correctionOpen
-                spacing: 8
-
-                Item { Layout.fillWidth: true }
+                spacing: theme.gapDense
 
                 BubbleButton {
                     visible: root.running && !root.awaitingInput
                     text: "Stop"
+                    tooltipText: "Stop this agent run. Any current draft stays reversible."
                     onClicked: root.agentEditController.cancelRun("user_cancelled")
                 }
                 BubbleButton {
                     objectName: "agentWorkspaceKeepValidatedFastDraftButton"
                     visible: root.keepValidatedFastAvailable
-                    text: "Use Proved Draft"
+                    text: "Use proved draft"
                     primary: true
                     Accessible.name: "Keep independently proved fast draft"
                     Accessible.description: "Stop deep local planning and keep the visible fast result as a reversible, uncommitted draft"
@@ -4168,10 +4305,24 @@ Item {
                             root.reopenRequested()
                     }
                 }
-                BubbleButton {
+                MenuButton {
+                    objectName: "agentWorkspaceDraftOptionsButton"
                     visible: root.draftReady
-                    text: "Discard"
-                    onClicked: root.agentEditController.rollbackDraft("user_discarded")
+                    text: "Draft options"
+                    iconName: "more"
+                    compact: true
+                    primaryOpensMenu: true
+                    tooltipText: "Other actions for this reversible draft."
+                    menuItems: [
+                        {key: "discard-draft", label: "Discard draft", icon: "delete",
+                            danger: true, separatorBefore: true,
+                            tooltip: "Restore the exact edits from before this agent run."}
+                    ]
+                    menuWidth: 220
+                    onMenuItemTriggered: function(key) {
+                        if (key === "discard-draft")
+                            root.agentEditController.rollbackDraft("user_discarded")
+                    }
                 }
                 BubbleButton {
                     objectName: "agentWorkspacePointToAreaButton"
@@ -4196,7 +4347,7 @@ Item {
                     visible: root.draftReady
                     text: root.protectedIntentCount > 0
                           ? "Unlock kept change first"
-                          : "Make Changes"
+                          : "Make changes"
                     enabled: root.protectedIntentCount === 0
                     Accessible.description: enabled
                                             ? "Rebuild the reversible draft from your correction"
@@ -4209,8 +4360,10 @@ Item {
                 }
                 BubbleButton {
                     visible: root.draftReady
-                    text: "Commit Edits"
+                    text: "Commit edits"
                     primary: true
+                    Accessible.name: "Commit the checked edit to the photo"
+                    tooltipText: "Apply this reviewed draft to the photo."
                     onClicked: {
                         const report = root.agentEditController.commitDraft(true) || ({})
                         if (Boolean(report.ok))
@@ -4265,7 +4418,7 @@ Item {
                 elide: Text.ElideRight
                 color: theme.brandPaper
                 font.family: theme.fontUi
-                font.pixelSize: 10
+                font.pixelSize: theme.typeMicro
                 font.weight: Font.DemiBold
             }
         }
@@ -4289,7 +4442,7 @@ Item {
                 text: root.assetLabel()
                 color: theme.brandPaper
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: theme.typeMicro
                 font.weight: Font.DemiBold
             }
             Rectangle {

@@ -1,4 +1,5 @@
 #include "brush_matte_rebuild.h"
+#include "brush_input_schema.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -85,6 +86,89 @@ int main() {
       erased.value(QStringLiteral("scaledMatteBrushReplayPointCount")).toInt() != 2 ||
       erased.contains(QStringLiteral("full_resolution_matte_rebuild_pixels"))) {
     return fail("brush matte replay must preserve point order and scope full-resolution telemetry");
+  }
+
+  // A legacy ellipse must keep its horizontal reach on a wide image. A new
+  // retouch circle must have equal pixel radii instead of inheriting that tip.
+  auto legacy=brush;
+  legacy.insert("brushPoints",QVariantList{point(0.5,0.5)});
+  legacy.insert("toolRole","retouch");
+  legacy.insert("feather",0.05);
+  const auto old_tip=mask_with_rebuilt_brush_matte(legacy,QSize(401,201),"old-tip");
+  if (alpha_at(old_tip,275,100)!=255U || alpha_at(old_tip,200,175)!=0U)
+    return fail("Legacy brush replay must retain its normalized ellipse on non-square outputs");
+  auto modern=legacy;
+  modern.insert("brushHardness",1.0);
+  modern.insert("feather",0.0);
+  const BrushPreviewPoint dab{.x=0.5,.y=0.5,.size=0.25,.flow=1.0};
+  modern.insert("brushStrokes",QVariantList{brush_stroke_variant(modern,{dab},1)});
+  const auto new_tip=mask_with_rebuilt_brush_matte(modern,QSize(401,201),"new-tip");
+  if (alpha_at(new_tip,275,100)!=0U || alpha_at(new_tip,225,100)!=255U ||
+      alpha_at(new_tip,200,125)!=255U)
+    return fail("New retouch replay must preserve a circular pixel footprint and recorded hardness");
+  auto companion=modern;
+  companion.insert("toolRole","selection"); companion.insert("operation","subtract");
+  companion.insert("brushCompositeSource",true);
+  auto erase_dab=dab; erase_dab.erase=true;
+  auto companion_stroke=brush_stroke_variant(companion,{erase_dab},1);
+  if (companion_stroke.value("operation").toString()!="add" ||
+      companion_stroke.value("samples").toList().front().toMap().value("erase").toBool())
+    return fail("Subtractive companions must persist positive coverage rather than erase their empty source");
+  // Also recognize previously generated companion records with erase samples.
+  companion_stroke.insert("operation","erase");
+  companion_stroke.insert("samples",QVariantList{brush_point_variant(erase_dab)});
+  companion.insert("brushStrokes",QVariantList{companion_stroke});
+  if (alpha_at(mask_with_rebuilt_brush_matte(companion,QSize(401,201),"companion"),200,100)!=255U)
+    return fail("Subtractive companion replay must retain coverage before mask-set subtraction");
+  // Independent crop rendering at the same source pixel pitch must equal an
+  // actual crop of the full matte, including an off-crop stroke center.
+  const QRectF area(0.625,0.25,0.375,0.5);
+  for (auto history:{legacy,modern}) {
+    const auto full=mask_with_rebuilt_brush_matte(history,QSize(401,201),"full");
+    const auto cropped=mask_with_rebuilt_brush_matte(history,QSize(151,101),"crop",area);
+    for (int y=0;y<101;++y) for (int x=0;x<151;++x)
+      if (alpha_at(cropped,x,y)!=alpha_at(full,x+250,y+50))
+        return fail("Cropped legacy/new replay must match exact full-source pixels without resizing the tip");
+    for (const auto crop:{QRect(200,0,1,201),QRect(0,100,401,1),
+             QRect(200,100,1,1),QRect(0,0,1,1)}) {
+      const QRectF line_area(static_cast<double>(crop.x())/400,
+          static_cast<double>(crop.y())/200,static_cast<double>(crop.width()-1)/400,
+          static_cast<double>(crop.height()-1)/200);
+      const auto line=mask_with_rebuilt_brush_matte(history,crop.size(),"line",line_area,QSizeF(400,200));
+      for (int y=0;y<crop.height();++y) for (int x=0;x<crop.width();++x)
+        if (alpha_at(line,x,y)!=alpha_at(full,x+crop.x(),y+crop.y()))
+          return fail("One-pixel/line crops must sample exact source brush coverage without widening the span");
+    }
+  }
+  // Mixed histories retain the original legacy reach and the newer circle;
+  // changing the next brush settings cannot repaint either saved stroke.
+  auto mixed=modern;
+  auto old_dab=point(0.25,0.5);
+  auto new_dab=dab; new_dab.x=0.75;
+  mixed.insert("brushStrokes",QVariantList{
+      QVariantMap{{"samples",QVariantList{old_dab}}},
+      brush_stroke_variant(modern,{new_dab},2)});
+  mixed.insert("brushHardness",0.0);
+  const auto mix=mask_with_rebuilt_brush_matte(mixed,QSize(801,401),"mixed");
+  if (alpha_at(mix,340,200)==0U || alpha_at(mix,740,200)!=0U)
+    return fail("Mixed legacy and circular history must preserve each stroke's geometry at larger output sizes");
+
+  // Source-aware evidence belongs to the committed matte even when only an
+  // earlier stroke recorded the constraint and the current tool toggles it off.
+  for (const auto flag:{QStringLiteral("autoMask"),QStringLiteral("protectEdges")}) {
+    auto constrained=modern;
+    auto strokes=constrained.value("brushStrokes").toList();
+    auto saved=strokes.front().toMap(); auto settings=saved.value("settings").toMap();
+    settings.insert(flag,true); saved.insert("settings",settings); strokes[0]=saved;
+    constrained.insert("brushStrokes",strokes);
+    constrained.insert("segmentationData",QByteArray(12,char(73)));
+    const auto before=constrained;
+    if (!brush_history_requires_source(constrained) ||
+        !mask_with_rebuilt_brush_matte(constrained,QSize(801,401),"constrained").isEmpty())
+      return fail("Historical source-aware settings must prohibit reconstruction without source colors");
+    (void)rasterize_brush_history_into_mask(&constrained);
+    if (constrained!=before)
+      return fail("Source-free replay must never overwrite authoritative constrained alpha");
   }
 
   return EXIT_SUCCESS;

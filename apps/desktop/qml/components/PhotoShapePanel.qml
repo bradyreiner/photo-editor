@@ -112,6 +112,7 @@ ColumnLayout {
             onMoved: root.applyStyle(undefined, undefined, value <= 0.01 ? 0 : Math.max(1, Math.round(Math.pow(512, value) * 10) / 10))
         }
         ToneTextField {
+            numericEntry: true
             id: widthField
             objectName: "photoShapeLayerStrokeWidthField"
             Layout.preferredWidth: theme.scaled(72)

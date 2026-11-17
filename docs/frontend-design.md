@@ -1,5 +1,7 @@
 # Frontend Design Direction
 
+Application chrome follows the [enforced style contract](ui-style-contract.md). Its current palette, geometry, borders, and spacing take precedence over historical examples in this document.
+
 ## Design philosophy
 
 The product should feel like an editorial light table, not a generic creative dashboard.

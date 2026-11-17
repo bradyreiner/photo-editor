@@ -14,6 +14,7 @@ BrushLivePreviewItem::BrushLivePreviewItem(QQuickItem* parent)
   setFlag(ItemHasContents, true);
   connect(this, &QQuickItem::widthChanged, this, [this]() { syncFromController(); });
   connect(this, &QQuickItem::heightChanged, this, [this]() { syncFromController(); });
+  connect(this, &QQuickItem::visibleChanged, this, [this]() { syncFromController(); });
 }
 
 QObject* BrushLivePreviewItem::controller() const {
@@ -67,7 +68,7 @@ QSGNode* BrushLivePreviewItem::updatePaintNode(
     QSGNode* old_node,
     UpdatePaintNodeData*) {
   if (immediate_) {
-    if (immediate_raster_.image.isNull() || !window()) {
+    if (immediate_display_image_.isNull() || !window()) {
       delete old_node;
       texture_immediate_revision_ = -1;
       return nullptr;
@@ -80,7 +81,7 @@ QSGNode* BrushLivePreviewItem::updatePaintNode(
       texture_immediate_revision_ = -1;
     }
     if (texture_immediate_revision_ != immediate_revision_) {
-      auto* texture = window()->createTextureFromImage(immediate_raster_.image);
+      auto* texture = window()->createTextureFromImage(immediate_display_image_);
       if (!texture) { delete node; texture_immediate_revision_ = -1; return nullptr; }
       // The node owns its texture and releases the previous one on replacement.
       node->setTexture(texture);
@@ -123,7 +124,8 @@ QSGNode* BrushLivePreviewItem::updatePaintNode(
     scene_graph_texture_size_ = native_texture_size_;
   }
 
-  node->setRect(boundingRect());
+  node->setRect(QRectF(native_texture_rect_.x() * width(), native_texture_rect_.y() * height(),
+      native_texture_rect_.width() * width(), native_texture_rect_.height() * height()));
   node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
   return node;
 #else
@@ -134,15 +136,35 @@ QSGNode* BrushLivePreviewItem::updatePaintNode(
 
 void BrushLivePreviewItem::syncFromController() {
   if (immediate_) {
+    if (!isVisible()) {
+      const bool has_immediate_state =
+          !immediate_raster_.alpha.isEmpty() || !immediate_raster_.image.isNull() ||
+          !immediate_display_image_.isNull() || immediate_point_count_ != 0 ||
+          immediate_stroke_active_;
+      if (has_immediate_state) {
+        immediate_raster_ = {};
+        immediate_display_image_ = {};
+        immediate_point_count_ = 0;
+        immediate_stroke_active_ = false;
+        ++immediate_revision_;
+        update();
+      }
+      return;
+    }
+
     const auto painting = controller_ && controller_->brushStrokeActive();
     const auto values = controller_ ? controller_->activeMaskLiveBrushPoints() : QVariantList{};
     // A small, incremental raster gives immediate input feedback. The worker
     // replaces it with display-resolution coverage using this same rasterizer.
     const auto edge = std::max(width(), height());
     const auto scale = edge > 0.0 ? std::min(1.0, 512.0 / edge) : 1.0;
-    const QSize size(std::max(2, qRound(width() * scale)), std::max(2, qRound(height() * scale)));
-    if (values.isEmpty() || !controller_ || controller_->activeMaskBrushAutoMask()) {
+    const QSize output_size(std::max(2, qRound(width() * scale)), std::max(2, qRound(height() * scale)));
+    auto size = controller_ ? controller_->activeBrushCoordinateSize() : output_size;
+    size.scale(512, 512, Qt::KeepAspectRatio);
+    size = QSize(std::max(2, size.width()), std::max(2, size.height()));
+    if (values.isEmpty() || !controller_ || controller_->activeMaskBrushAutoMask() || controller_->activeMaskBrushProtectEdges()) {
       immediate_raster_ = {};
+      immediate_display_image_ = {};
       immediate_point_count_ = 0;
     } else {
       if ((painting && !immediate_stroke_active_) || values.size() < immediate_point_count_ ||
@@ -155,6 +177,7 @@ void BrushLivePreviewItem::syncFromController() {
       for (auto i = immediate_point_count_; i < values.size(); ++i)
         points.append(brush_preview_point_from_variant(values.at(i), 0.5, 0.5, 0.08, 1.0));
       immediate_raster_.append(size, points, controller_->activeBrushPreviewStyle());
+      immediate_display_image_ = controller_->projectActiveBrushPreview(immediate_raster_.image, output_size);
       immediate_point_count_ = values.size();
     }
     immediate_stroke_active_ = painting;
@@ -168,12 +191,13 @@ void BrushLivePreviewItem::syncFromController() {
       next_available ? controller_->activeMaskLiveBrushPreviewNativeHandle() : 0;
   const auto next_size =
       next_available ? controller_->activeMaskLiveBrushPreviewNativeSize() : QSize{};
+  const auto next_rect = controller_ ? controller_->activeMaskLiveBrushPreviewRect() : QRectF(0, 0, 1, 1);
   const auto next_revision =
       next_available ? controller_->activeMaskLiveBrushPreviewRevision() : 0;
 
   if (native_texture_available_ == next_available &&
       native_texture_handle_ == next_handle &&
-      native_texture_size_ == next_size &&
+      native_texture_size_ == next_size && native_texture_rect_ == next_rect &&
       native_texture_revision_ == next_revision) {
     return;
   }
@@ -181,6 +205,7 @@ void BrushLivePreviewItem::syncFromController() {
   native_texture_available_ = next_available;
   native_texture_handle_ = next_handle;
   native_texture_size_ = next_size;
+  native_texture_rect_ = next_rect;
   native_texture_revision_ = next_revision;
   update();
 }

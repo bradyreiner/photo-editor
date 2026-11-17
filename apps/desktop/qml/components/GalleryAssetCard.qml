@@ -81,10 +81,10 @@ Rectangle {
             color: "#0b1014"
             clip: true
 
-            Image {
+            ColorManagedImage {
                 id: cardPreview
                 anchors.fill: parent
-                source: root.thumbnailSource
+                imageSource: root.thumbnailSource
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 cache: true
@@ -109,7 +109,8 @@ Rectangle {
                     anchors.centerIn: parent
                     text: root.aspectRatioText(cardPreview.sourceSize.width, cardPreview.sourceSize.height)
                     color: theme.textStrong
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 10
                 }
             }
@@ -152,7 +153,8 @@ Rectangle {
             Label {
                 text: root.mediaLabel
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
             }
 
@@ -163,7 +165,8 @@ Rectangle {
                 text: root.durationText
                 visible: root.durationText.length > 0
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2

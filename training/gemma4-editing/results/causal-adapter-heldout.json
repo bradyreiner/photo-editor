@@ -1,0 +1,233 @@
+{
+  "contract": "looksy-gemma-editing-next-action-eval-v1",
+  "adapter": ".photo-editor/agent-training/adapters/causal-evaluation-candidate",
+  "split": "test",
+  "cases": [
+    {
+      "id": "test-duplicate_receipt-001",
+      "family": "duplicate_receipt",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 3.6060461669694632,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The creation was already completed. I will inspect the current composition to verify the existing layer and prepare for further edits.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-643869\"\n      },\n      \"reason\": \"Inspect the current state of the asset to confirm the existing layer.\"\n    }\n  ]\n}",
+      "generationTokens": 119
+    },
+    {
+      "id": "test-typography-001",
+      "family": "typography",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 3.5643551669782028,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"Update the size and color of layer test-layer-951602 to 40px and #FFF8F0.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.edit_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-470417\",\n        \"layerId\": \"test-layer-951602\",\n        \"operation\": \"typography\",\n        \"values\": {\n          \"size\": 40,\n          \"color\": \"#FFF8F0\"\n        }\n      },\n      \"reason\": \"Update size to 40 and color to #FFF8F0 for the specified layer.\"\n    }\n  ]\n}",
+      "generationTokens": 186
+    },
+    {
+      "id": "test-discover-000",
+      "family": "discover",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 1.9525656659388915,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"Discover available native controls for effects by listing available commands.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"app.list_commands\",\n      \"arguments\": {\n        \"query\": \"effect\"\n      },\n      \"reason\": \"Discover available native controls for effects by listing available commands.\"\n    }\n  ]\n}",
+      "generationTokens": 95
+    },
+    {
+      "id": "test-target_changed-001",
+      "family": "target_changed",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 1.4088145409477875,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The active asset differs from the approved target. I must stop the edit and not carry it over. No changes are required.\",\"toolCalls\":[]}",
+      "generationTokens": 42
+    },
+    {
+      "id": "test-recover_id-001",
+      "family": "recover_id",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.3815014580031857,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The previous edit failed because the target ID was stale. I need to inspect the current composition to find the correct layer IDs before retrying the edit.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-388123\"\n      },\n      \"reason\": \"Inspect the current layer IDs to recover from the rejected edit.\"\n    }\n  ]\n}",
+      "generationTokens": 125
+    },
+    {
+      "id": "test-created_id-000",
+      "family": "created_id",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.3170648750383407,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Style the newly created layer with size 64 and color #FFF8F0.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-329075\",\"layerId\":\"test-created-41458\",\"operation\":\"typography\",\"values\":{\"size\":64,\"color\":\"#FFF8F0\"}},\"reason\":\"Style the newly created layer.\"}]}",
+      "generationTokens": 101
+    },
+    {
+      "id": "test-render-001",
+      "family": "render",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 1.5863505840534344,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The requested changes have been applied. I need to obtain fresh pixels before judging the deliverable.\",\"toolCalls\":[{\"name\":\"photo.render_current_proof\",\"arguments\":{},\"reason\":\"The current rendered proof is unavailable. I must render the current state to see the changes.\"}]}",
+      "generationTokens": 70
+    },
+    {
+      "id": "test-created_id-001",
+      "family": "created_id",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.2865125000244007,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Style the newly created layer returned by the creation receipt.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-369433\",\"layerId\":\"test-created-91817\",\"operation\":\"typography\",\"values\":{\"size\":64,\"color\":\"#FFF8F0\"}},\"reason\":\"Style the new layer returned by the creation receipt.\"}]}",
+      "generationTokens": 98
+    },
+    {
+      "id": "test-duplicate_receipt-000",
+      "family": "duplicate_receipt",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.261365707963705,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The creation was already completed. I will inspect the current composition to verify the existing layer before proceeding.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-659564\"\n      },\n      \"reason\": \"Inspect the current state of the asset to confirm the existing layer.\"\n    }\n  ]\n}",
+      "generationTokens": 116
+    },
+    {
+      "id": "test-render-000",
+      "family": "render",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 1.5909997500712052,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The requested changes have been applied. I need to obtain fresh pixels before judging the deliverable.\",\"toolCalls\":[{\"name\":\"photo.render_current_proof\",\"arguments\":{},\"reason\":\"The current rendered proof is unavailable. I must render the current state to see the changes.\"}]}",
+      "generationTokens": 70
+    },
+    {
+      "id": "test-inspect-001",
+      "family": "inspect",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.1409689580323175,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"Inspect the asset to find the IDs of the existing layers before making changes.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-768286\"\n      },\n      \"reason\": \"Inspect the asset to find the IDs of the existing layers before making changes.\"\n    }\n  ]\n}",
+      "generationTokens": 113
+    },
+    {
+      "id": "test-recover_id-000",
+      "family": "recover_id",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.345265250070952,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The previous edit failed because the target ID was stale. I need to inspect the current composition to find the correct layer IDs before retrying the edit.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-880499\"\n      },\n      \"reason\": \"Inspect the current layer IDs to recover from the rejected edit.\"\n    }\n  ]\n}",
+      "generationTokens": 125
+    },
+    {
+      "id": "test-permission-001",
+      "family": "permission",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 1.5437892089830711,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to change the copy on layer-480419. However, the connection only has read capability. I must reject the change as it requires draft capability.\",\"toolCalls\":[]}",
+      "generationTokens": 54
+    },
+    {
+      "id": "test-transform-000",
+      "family": "transform",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.6497779169585556,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Move test-layer-245750 to the requested position.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-603407\",\"layerId\":\"test-layer-245750\",\"operation\":\"transform\",\"values\":{\"x\":114,\"y\":71,\"scale\":1,\"rotation\":0}},\"reason\":\"Move the layer to the requested position.\"}]}",
+      "generationTokens": 107
+    },
+    {
+      "id": "test-add_text-001",
+      "family": "add_text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.282333958079107,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Create the text layer 'CELEBRATE TOGETHER' at the specified coordinates.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-896201\",\"operation\":\"add_text\",\"values\":{\"text\":\"CELEBRATE TOGETHER\",\"x\":80,\"y\":120}},\"reason\":\"Create the text layer as requested.\"}]}",
+      "generationTokens": 96
+    },
+    {
+      "id": "test-text-000",
+      "family": "text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.1840225000632927,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Update the text in layer test-layer-532584 to \\\"Coastal Atlas\\\".\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-781260\",\"layerId\":\"test-layer-532584\",\"operation\":\"text\",\"values\":{\"text\":\"Coastal Atlas\"}},\"reason\":\"Update the text content while preserving existing style and position.\"}]}",
+      "generationTokens": 101
+    },
+    {
+      "id": "test-target_changed-000",
+      "family": "target_changed",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 2.7046008330071345,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The active asset differs from the approved target. I must stop the edit and ensure no changes are carried over. I will inspect the current asset to confirm its state before deciding on the next step.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-254670\"\n      },\n      \"reason\": \"Inspect the current asset to confirm its state before deciding on the next step.\"\n    }\n  ]\n}",
+      "generationTokens": 137
+    },
+    {
+      "id": "test-typography-000",
+      "family": "typography",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 3.4138785420218483,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"Update the size and color of layer test-layer-534724 to 35px and #20352B.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.edit_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-619496\",\n        \"layerId\": \"test-layer-534724\",\n        \"operation\": \"typography\",\n        \"values\": {\n          \"size\": 35,\n          \"color\": \"#20352B\"\n        }\n      },\n      \"reason\": \"Update the size and color of the existing layer.\"\n    }\n  ]\n}",
+      "generationTokens": 181
+    },
+    {
+      "id": "test-discover-001",
+      "family": "discover",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 1.9359296669717878,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"Discover available native controls for alignment by listing available commands.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"app.list_commands\",\n      \"arguments\": {\n        \"domain\": \"edit\"\n      },\n      \"reason\": \"Discover available native controls for alignment by listing available commands.\"\n    }\n  ]\n}",
+      "generationTokens": 95
+    },
+    {
+      "id": "test-transform-001",
+      "family": "transform",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.6581939170137048,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Move test-layer-753467 to the requested position.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-950450\",\"layerId\":\"test-layer-753467\",\"operation\":\"transform\",\"values\":{\"x\":190,\"y\":35,\"scale\":1,\"rotation\":0}},\"reason\":\"Move the layer to the requested position.\"}]}",
+      "generationTokens": 107
+    },
+    {
+      "id": "test-add_text-000",
+      "family": "add_text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.296828957973048,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Create the text layer 'CELEBRATE TOGETHER' at the specified coordinates.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-904399\",\"operation\":\"add_text\",\"values\":{\"text\":\"CELEBRATE TOGETHER\",\"x\":80,\"y\":120}},\"reason\":\"Create the text layer as requested.\"}]}",
+      "generationTokens": 96
+    },
+    {
+      "id": "test-inspect-000",
+      "family": "inspect",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.1347284159855917,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"Inspect the asset to find the IDs of the existing layers before making changes.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-785756\"\n      },\n      \"reason\": \"Inspect the asset to find the IDs of the existing layers before making changes.\"\n    }\n  ]\n}",
+      "generationTokens": 113
+    },
+    {
+      "id": "test-text-001",
+      "family": "text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.209617333021015,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Update the text in layer test-layer-245804 to \\\"Saturday Market\\\".\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-860785\",\"layerId\":\"test-layer-245804\",\"operation\":\"text\",\"values\":{\"text\":\"Saturday Market\"}},\"reason\":\"Update the text content while preserving existing style and position.\"}]}",
+      "generationTokens": 101
+    },
+    {
+      "id": "test-permission-000",
+      "family": "permission",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 1.5348315000301227,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to change the copy on test-layer-606004. However, the connection only has read capability. I must reject the change without mutation.\",\"toolCalls\":[]}",
+      "generationTokens": 53
+    }
+  ],
+  "scope": "synthetic workflow mechanics; no rendered editing quality qualification",
+  "dataSha256": "1f5aabbf0e9465d29539d62800f1d991ffd2a33b2f2fcec265f34fdf951b4825",
+  "passed": 18,
+  "total": 24,
+  "peakMemoryGB": 16.261347716,
+  "visionSmoke": {
+    "sourceSha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56",
+    "response": "A wide shot captures a range of jagged, rocky mountain peaks under a soft, pale sky. The scene is illuminated by the diffused, natural light of dusk or dawn.",
+    "scope": "manual semantic readback; not a photographic editing quality score"
+  }
+}

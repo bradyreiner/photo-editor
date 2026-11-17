@@ -50,6 +50,15 @@ AppPopup {
         }
     }
 
+    function revealGroup(group) {
+        const flick = groupScroll.contentItem
+        if (!flick || !group) return
+        const point = group.mapToItem(groupsBody, 0, 0)
+        if (point.y < flick.contentY) flick.contentY = point.y
+        else if (point.y + group.height > flick.contentY + flick.height)
+            flick.contentY = Math.max(0, point.y + group.height - flick.height)
+    }
+
     function toggleGroup(key) {
         const groups = selectedGroups.slice()
         const index = groups.indexOf(key)
@@ -61,7 +70,7 @@ AppPopup {
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(480, parent ? parent.width - 32 : 480)))
+    width: Math.min(popupAvailableWidth, theme.scaled(480))
     height: Math.min(popupAvailableHeight, Math.max(1, Math.min(contentItem.implicitHeight + padding * 2, parent ? parent.height - 32 : 660)))
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? Math.max(16, (parent.height - height) / 2) : 0
@@ -74,23 +83,24 @@ AppPopup {
         Accessible.ignored: false
     }
     contentItem: ColumnLayout {
-        spacing: 12
-        Label {
+        spacing: theme.space8
+        BodyLabel {
             text: "Copy Edits"
             color: theme.textStrong
             font.family: theme.fontUi
             font.pixelSize: theme.typeDialogTitle
             font.weight: Font.DemiBold
         }
-        Label {
+        BodyLabel {
             Layout.fillWidth: true
             text: "From " + root.sourceLabel
             color: theme.textMuted
+            wrapMode: Text.NoWrap
             elide: Text.ElideMiddle
         }
-        Label {
+        BodyLabel {
             Layout.fillWidth: true
-            text: "Choose what to copy. Paste onto one or more selected photos; other edit groups stay as they are."
+            text: "Paste changes only the groups you select."
             color: theme.textMuted
             wrapMode: Text.WordWrap
         }
@@ -107,40 +117,42 @@ AppPopup {
                 onClicked: root.selectedGroups = []
             }
         }
-        Repeater {
-            id: groupChoices
-            model: root.choices
-            ToneCheckBox {
-                id: choice
-                required property var modelData
-                objectName: "copyPhotoEditsGroup_" + modelData.key
-                Layout.fillWidth: true
-                checked: root.selectedGroups.indexOf(modelData.key) >= 0
-                text: modelData.title
-                Accessible.name: modelData.title
-                Accessible.description: modelData.detail
-                Accessible.role: Accessible.CheckBox
-                Accessible.checked: checked
-                onClicked: root.toggleGroup(modelData.key)
-                padding: 6
-                spacing: 12
-                implicitHeight: Math.max(theme.controlHeightDense, groupCaption.implicitHeight + topPadding + bottomPadding)
-                contentItem: Column {
-                    id: groupCaption
-                    leftPadding: 0
-                    spacing: 3
-                    Label { text: choice.modelData.title; color: theme.textStrong; font.weight: Font.Medium }
-                    Label {
-                        width: parent.width - parent.leftPadding
-                        text: choice.modelData.detail
-                        color: theme.textMuted
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
+        ScrollView {
+            id: groupScroll
+            objectName: "copyPhotoEditsGroupScroll"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: theme.controlHeightDense
+            Layout.preferredHeight: groupsBody.implicitHeight
+            contentWidth: availableWidth
+            clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ColumnLayout {
+                id: groupsBody
+                width: groupScroll.availableWidth
+                spacing: theme.space4
+                Repeater {
+                    id: groupChoices
+                    model: root.choices
+                    ToneCheckBox {
+                        id: choice
+                        required property var modelData
+                        objectName: "copyPhotoEditsGroup_" + modelData.key
+                        Layout.fillWidth: true
+                        checked: root.selectedGroups.indexOf(modelData.key) >= 0
+                        text: modelData.title
+                        description: modelData.detail
+                        Accessible.name: modelData.title
+                        Accessible.description: modelData.detail
+                        Accessible.role: Accessible.CheckBox
+                        Accessible.checked: checked
+                        onClicked: root.toggleGroup(modelData.key)
+                        onActiveFocusChanged: if (activeFocus) Qt.callLater(function() { root.revealGroup(choice) })
                     }
                 }
             }
         }
-        Label {
+        BodyLabel {
             visible: root.errorText.length > 0
             Layout.fillWidth: true
             text: root.errorText

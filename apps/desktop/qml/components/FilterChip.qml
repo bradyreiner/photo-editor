@@ -9,8 +9,9 @@ Button {
     property color accent: theme.accentWarm400
     property string tone: "neutral"
     property string iconName: ""
+    property bool showLeadingIcon: false
     property string tooltipText: ""
-    property bool fitTextToWidth: true
+    property bool fitTextToWidth: false
     property bool showFullTextTooltip: true
     readonly property color resolvedAccent: tone === "danger" ? theme.error
                                                     : tone === "warning" ? theme.warning
@@ -21,7 +22,8 @@ Button {
     Theme { id: theme }
 
     implicitHeight: theme.controlHeightDense
-    implicitWidth: Math.max(52, Math.min(theme.menuMaxWidth, contentRow.implicitWidth + theme.space12))
+    implicitWidth: Math.max(theme.scaled(52), Math.min(theme.menuMaxWidth,
+        contentRow.implicitWidth + leftPadding + rightPadding))
     font.family: theme.fontUi
     font.pixelSize: theme.typeControl
     hoverEnabled: true
@@ -30,24 +32,22 @@ Button {
     Accessible.description: root.tooltipText
     Accessible.role: Accessible.Button
     Accessible.checked: root.active
-    background: Rectangle {
-        radius: theme.radiusControl
-        border.width: theme.commandBorderWidth(root.visualFocus)
-        border.color: root.visualFocus ? theme.focusRing : theme.controlEdge
-        color: theme.commandFill("secondary", root.active, root.hovered, root.down, root.enabled, false)
-
-        Behavior on color {
-            ColorAnimation { duration: theme.reducedMotion ? 0 : theme.durationFast; easing.type: Easing.OutCubic }
-        }
-
+    background: CommandButtonSurface {
+        hovered: root.hovered
+        pressed: root.down
+        selected: root.active
+        focused: root.visualFocus
+        interactiveEnabled: root.enabled
+        fillColor: theme.commandFill("secondary", root.active, root.hovered, root.down, root.enabled, true)
     }
 
     contentItem: RowLayout {
         id: contentRow
-        spacing: root.iconName.length > 0 ? theme.space4 : 0
+        spacing: (root.text.length === 0 || root.showLeadingIcon) && root.iconName.length > 0 ? theme.space4 : 0
 
         AppIcon {
-            visible: root.iconName.length > 0
+                objectName: "sharedCommandIcon"
+            visible: (root.text.length === 0 || root.showLeadingIcon) && root.iconName.length > 0
             name: root.iconName.length > 0 ? root.iconName : "check"
             Layout.preferredWidth: visible ? theme.scaled(14) : 0
             Layout.preferredHeight: visible ? theme.scaled(14) : 0
@@ -57,6 +57,7 @@ Button {
 
         Text {
             id: contentLabel
+            objectName: "sharedCommandLabel"
             Layout.fillWidth: true
             text: root.text
             color: !root.enabled ? theme.alpha(theme.textMuted, 0.65) : (root.active ? theme.textStrong : theme.textMain)
@@ -68,8 +69,7 @@ Button {
             font.letterSpacing: 0
             maximumLineCount: 1
             elide: Text.ElideNone
-            fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
-            minimumPixelSize: 10
+            fontSizeMode: Text.FixedSize
             clip: true
         }
     }

@@ -136,6 +136,24 @@ var components = [
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "AiModelsSettings",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "AppDialog",
+        "family": "Dialogs & overlays",
+        "status": "Workspace review",
+        "plan": "Review focus entry and return, escape, sizing, and clear action hierarchy."
+    },
+    {
+        "name": "AppDrawer",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "AppIcon",
         "family": "Commands",
         "status": "Live specimen",
@@ -154,6 +172,12 @@ var components = [
         "plan": "Align command roles, hover, press, focus, selection, and disabled behavior."
     },
     {
+        "name": "AppPopup",
+        "family": "Dialogs & overlays",
+        "status": "Workspace review",
+        "plan": "Review focus entry and return, escape, sizing, and clear action hierarchy."
+    },
+    {
         "name": "AppPreferencesDialog",
         "family": "Dialogs & overlays",
         "status": "Workspace review",
@@ -164,6 +188,12 @@ var components = [
         "family": "Commands",
         "status": "Workspace review",
         "plan": "Align command roles, hover, press, focus, selection, and disabled behavior."
+    },
+    {
+        "name": "BodyLabel",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
         "name": "BrandPanel",
@@ -394,6 +424,12 @@ var components = [
         "plan": "Use shared color, type, geometry, and spacing tokens."
     },
     {
+        "name": "GroupedOptionsPopover",
+        "family": "Dialogs & overlays",
+        "status": "Workspace review",
+        "plan": "Review focus entry and return, escape, sizing, and clear action hierarchy."
+    },
+    {
         "name": "HistogramDisplay",
         "family": "Workspace compositions",
         "status": "Workspace review",
@@ -442,6 +478,12 @@ var components = [
         "plan": "Separate information from actions; make status readable without color alone."
     },
     {
+        "name": "InputFieldSurface",
+        "family": "Foundations",
+        "status": "Workspace review",
+        "plan": "Use shared color, type, geometry, and spacing tokens."
+    },
+    {
         "name": "InspectorSection",
         "family": "Panels & inspectors",
         "status": "Live specimen",
@@ -488,6 +530,30 @@ var components = [
         "family": "Rows & collections",
         "status": "Workspace review",
         "plan": "Review selection, row actions, long labels, empty states, and scrolling."
+    },
+    {
+        "name": "LibraryDeliveryPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "LibraryMetadataPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "LibraryNavigationPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "LibrarySearchCoordinator",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
         "name": "LooksyAgentCharacter",
@@ -580,6 +646,12 @@ var components = [
         "plan": "Converge on section hierarchy and explicit panel controls."
     },
     {
+        "name": "NavigationTab",
+        "family": "Navigation",
+        "status": "Workspace review",
+        "plan": "Distinguish selection from keyboard focus; keep destinations discoverable."
+    },
+    {
         "name": "NewCanvasDialog",
         "family": "Dialogs & overlays",
         "status": "Workspace review",
@@ -593,9 +665,9 @@ var components = [
     },
     {
         "name": "OpticalLightField",
-        "family": "Feedback",
+        "family": "Workspace compositions",
         "status": "Workspace review",
-        "plan": "Shared caustic, interference ring and spectral progress rendering."
+        "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
         "name": "PhotoEffectStack",
@@ -670,6 +742,18 @@ var components = [
         "plan": "Converge on section hierarchy and explicit panel controls."
     },
     {
+        "name": "PopupEnterTransition",
+        "family": "Dialogs & overlays",
+        "status": "Workspace review",
+        "plan": "Review focus entry and return, escape, sizing, and clear action hierarchy."
+    },
+    {
+        "name": "PopupExitTransition",
+        "family": "Dialogs & overlays",
+        "status": "Workspace review",
+        "plan": "Review focus entry and return, escape, sizing, and clear action hierarchy."
+    },
+    {
         "name": "PopupMenuRow",
         "family": "Commands",
         "status": "Workspace review",
@@ -700,6 +784,12 @@ var components = [
         "plan": "Review selection, row actions, long labels, empty states, and scrolling."
     },
     {
+        "name": "ProjectedBrushCursor",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "RecentDocumentRow",
         "family": "Rows & collections",
         "status": "Workspace review",
@@ -710,6 +800,12 @@ var components = [
         "family": "Feedback",
         "status": "Workspace review",
         "plan": "Separate information from actions; make status readable without color alone."
+    },
+    {
+        "name": "RecoveryStatusPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
     },
     {
         "name": "RetouchBeforeAfterControls",
@@ -730,13 +826,43 @@ var components = [
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "SavedTimelinesLibrary",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "SceneCompositionPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "SceneInspectorPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
         "name": "ScenePhotoEditHandoff",
         "family": "Workspace compositions",
         "status": "Workspace review",
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "SceneStudioLayout",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "SearchEditDialog",
+        "family": "Dialogs & overlays",
+        "status": "Workspace review",
+        "plan": "Review focus entry and return, escape, sizing, and clear action hierarchy."
+    },
+    {
+        "name": "SearchModelSetupDialog",
         "family": "Dialogs & overlays",
         "status": "Workspace review",
         "plan": "Review focus entry and return, escape, sizing, and clear action hierarchy."
@@ -994,6 +1120,12 @@ var components = [
         "plan": "Review selection, row actions, long labels, empty states, and scrolling."
     },
     {
+        "name": "TimelineAnimationChannels",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "TimelineAudioMeter",
         "family": "Workspace compositions",
         "status": "Workspace review",
@@ -1006,7 +1138,31 @@ var components = [
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "TimelineBackgroundWorkIntent",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineBlendCompositeEffect",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "TimelineClipContent",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineClipPointerArea",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineColorConsole",
         "family": "Workspace compositions",
         "status": "Workspace review",
         "plan": "Review in its actual workflow before adopting shared primitives."
@@ -1018,10 +1174,28 @@ var components = [
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "TimelineDeliveryToolsPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "TimelineDesktopLightField",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "TimelineDifferenceEffect",
         "family": "Workspace compositions",
         "status": "Workspace review",
         "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineEditorialPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
     },
     {
         "name": "TimelineEffectLibraryRow",
@@ -1037,6 +1211,12 @@ var components = [
     },
     {
         "name": "TimelineEffectsPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "TimelineInterchangePanel",
         "family": "Panels & inspectors",
         "status": "Workspace review",
         "plan": "Converge on section hierarchy and explicit panel controls."
@@ -1066,6 +1246,12 @@ var components = [
         "plan": "Review selection, row actions, long labels, empty states, and scrolling."
     },
     {
+        "name": "TimelineMinimap",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "TimelineMulticamAngleMonitor",
         "family": "Workspace compositions",
         "status": "Workspace review",
@@ -1078,7 +1264,31 @@ var components = [
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "TimelinePanelDock",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "TimelinePanelDockState",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "TimelinePanelStrip",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
         "name": "TimelinePerspectiveEffect",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelinePhotoFilters",
         "family": "Workspace compositions",
         "status": "Workspace review",
         "plan": "Review in its actual workflow before adopting shared primitives."
@@ -1090,16 +1300,76 @@ var components = [
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "TimelineRotoscopeCorrectionOverlay",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineRuler",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineScaleGeometry",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineScenePointOverlay",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineSceneProjectionEffect",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "TimelineScopesPanel",
         "family": "Panels & inspectors",
         "status": "Workspace review",
         "plan": "Converge on section hierarchy and explicit panel controls."
     },
     {
+        "name": "TimelineSourceCropClip",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineSourceEditBar",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineSourceMatteEffect",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "TimelineSourcePanel",
         "family": "Panels & inspectors",
         "status": "Workspace review",
         "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "TimelineSurfaceCorrectionOverlay",
+        "family": "Foundations",
+        "status": "Workspace review",
+        "plan": "Use shared color, type, geometry, and spacing tokens."
+    },
+    {
+        "name": "TimelineToolPalette",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
         "name": "TimelineTrackHeader",
@@ -1114,10 +1384,28 @@ var components = [
         "plan": "Align command roles, hover, press, focus, selection, and disabled behavior."
     },
     {
+        "name": "TimelineTrackingPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
+        "name": "TimelineTransformOverlay",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
         "name": "TimelineTransitionLibraryRow",
         "family": "Rows & collections",
         "status": "Workspace review",
         "plan": "Review selection, row actions, long labels, empty states, and scrolling."
+    },
+    {
+        "name": "TimelineVerticalWheelHandler",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
         "name": "TimelineViewerGuideOverlay",
@@ -1126,7 +1414,31 @@ var components = [
         "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
+        "name": "TimelineViewportWheelHandler",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineVirtualTrackRows",
+        "family": "Rows & collections",
+        "status": "Workspace review",
+        "plan": "Review selection, row actions, long labels, empty states, and scrolling."
+    },
+    {
+        "name": "TimelineVoiceoverPanel",
+        "family": "Panels & inspectors",
+        "status": "Workspace review",
+        "plan": "Converge on section hierarchy and explicit panel controls."
+    },
+    {
         "name": "TimelineWaveform",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
+    },
+    {
+        "name": "TimelineWorkspaceLayoutState",
         "family": "Workspace compositions",
         "status": "Workspace review",
         "plan": "Review in its actual workflow before adopting shared primitives."
@@ -1172,6 +1484,12 @@ var components = [
         "family": "Inputs",
         "status": "Live specimen",
         "plan": "Review value entry, reset, disabled reasons, focus, and density."
+    },
+    {
+        "name": "ToneSwitch",
+        "family": "Workspace compositions",
+        "status": "Workspace review",
+        "plan": "Review in its actual workflow before adopting shared primitives."
     },
     {
         "name": "ToneTextArea",
@@ -1246,10 +1564,17 @@ var iconNames = [
     "adjust",
     "agent-terminal",
     "analyze",
+    "aperture",
+    "arrow-down",
+    "arrow-left",
+    "arrow-right",
+    "arrow-up",
     "audio",
     "audio-muted",
+    "bring-front",
     "brush-subtract",
     "brush-tool",
+    "camera-lens",
     "captions",
     "carousel",
     "check",
@@ -1273,21 +1598,28 @@ var iconNames = [
     "duplicate",
     "edit",
     "effects",
+    "ellipse",
     "erase-tool",
     "error",
     "export",
+    "exposure",
     "external-link",
     "eyedropper",
     "fill",
+    "film",
     "filter",
     "fit",
+    "flag",
     "focus-frame",
     "folder",
     "fullscreen",
     "geometry",
+    "gradient-linear",
+    "gradient-radial",
     "grid",
     "group",
     "hand",
+    "hexagon",
     "hidden",
     "history",
     "image",
@@ -1296,6 +1628,7 @@ var iconNames = [
     "insert",
     "inspect",
     "invert",
+    "jump-end",
     "jump-start",
     "keyframe",
     "keyframe-filled",
@@ -1321,7 +1654,9 @@ var iconNames = [
     "move-forward",
     "move-up",
     "next",
+    "orbit",
     "overwrite",
+    "pan",
     "panel-left",
     "panel-right",
     "paste",
@@ -1329,9 +1664,11 @@ var iconNames = [
     "play",
     "plus",
     "polygon-tool",
+    "presets",
     "previous",
     "rating",
     "record",
+    "rectangle",
     "redo",
     "refresh",
     "render",
@@ -1344,6 +1681,7 @@ var iconNames = [
     "scope",
     "search",
     "select",
+    "send-back",
     "settings",
     "shape",
     "shape-tool",
@@ -1357,9 +1695,11 @@ var iconNames = [
     "speed",
     "split-view",
     "star",
+    "star-gold",
     "step-back",
     "step-forward",
     "stop",
+    "subject",
     "survey",
     "swap",
     "swatch",
@@ -1369,13 +1709,17 @@ var iconNames = [
     "timeline",
     "transition",
     "trash",
+    "triangle",
     "trim",
     "undo",
+    "unlink",
     "unlock",
     "video",
     "visible",
     "warning",
     "waveform",
     "wipe",
-    "zoom"
+    "zoom",
+    "zoom-in",
+    "zoom-out"
 ]

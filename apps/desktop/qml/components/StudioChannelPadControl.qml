@@ -119,7 +119,8 @@ Rectangle {
             Label {
                 text: control.valueText
                 color: "#C8D2DC"
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 font.weight: Font.Bold
                 font.letterSpacing: 0

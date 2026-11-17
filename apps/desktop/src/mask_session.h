@@ -56,6 +56,7 @@ class MaskSession final {
     QString intent;
     bool create_new = false;
     QString retouch_mode;
+    QString repair_id;
   };
 
   [[nodiscard]] const QVariantList& stack() const { return stack_; }
@@ -362,12 +363,13 @@ class MaskSession final {
     };
   }
 
-  void setInpaintRetry(QString detail, QString retouch_mode) {
+  void setInpaintRetry(QString detail, QString retouch_mode, QString repair_id = {}) {
     retry_ = RetryRequest{
         .action = QStringLiteral("inpaint"),
         .label = QStringLiteral("Retry Inpaint"),
         .detail = std::move(detail),
         .retouch_mode = std::move(retouch_mode),
+        .repair_id = std::move(repair_id),
     };
   }
 

@@ -23,6 +23,8 @@ struct EditorPreviewControllerTestAccess {
   }
 };
 }
+#include "library_original_pressure_proof.inc"
+
 using namespace photo_editor::desktop;
 namespace {
 int fail(const char* message) { std::cerr << message << '\n'; return 1; }
@@ -54,6 +56,11 @@ int main(int argc, char** argv) {
   QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temporary.path());
   QCoreApplication::setOrganizationName("LooksyCacheBudgetTest");
   QCoreApplication::setApplicationName("IsolatedCacheBudget");
+  if (argc >= 3 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--library-original-pressure-proof")) {
+    const bool expect_owner = app.arguments().contains(QStringLiteral("--expect-shared-owner"));
+    return library_original_pressure_proof::run_library_original_pressure_proof(
+        QString::fromLocal8Bit(argv[2]), expect_owner);
+  }
   constexpr quint64 mib = 1024 * 1024;
   if (automatic_photo_cache_budget_bytes(0) != 256 * mib ||
       automatic_photo_cache_budget_bytes(4ULL * 1024 * mib) != 512 * mib ||

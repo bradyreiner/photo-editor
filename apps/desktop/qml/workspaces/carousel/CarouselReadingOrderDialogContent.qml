@@ -158,7 +158,8 @@ ColumnLayout {
                     Layout.alignment: Qt.AlignTop
                     text: String(entry.modelData.position)
                     color: content.theme.textMuted
-                    font.family: content.theme.fontMono
+                    font.family: content.theme.fontNumeric
+                    font.features: content.theme.numericFontFeatures
                     font.pixelSize: content.theme.typeControl
                 }
                 ColumnLayout {

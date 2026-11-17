@@ -36,6 +36,13 @@
 
 namespace photo_editor::desktop {
 struct EditorPreviewControllerTestAccess {
+  static void clear_text_layout_cache(EditorPreviewController& controller) {
+    controller.photo_text_layout_info_key_.clear();
+    controller.photo_text_layout_info_.clear();
+  }
+  static bool text_layout_cached(const EditorPreviewController& controller) {
+    return !controller.photo_text_layout_info_key_.isEmpty();
+  }
   static EditState state(const EditorPreviewController& controller) { return controller.currentState(); }
   static RenderRequest current_render_request(EditorPreviewController& controller, bool full_resolution) {
     return controller.currentRenderRequest(full_resolution);
@@ -135,12 +142,17 @@ struct EditorPreviewControllerTestAccess {
         .cancelled = result.cancelled,
         .accepted_transaction_feedback = accepted_transaction_feedback,
         .edit_transaction_generation = result.edit_transaction_generation,
-        .source_asset_id = result.async_job.asset_id,
-        .source_file_path = result.async_job.file_path,
+        .source_asset_id = result.source_asset_id,
+        .source_file_path = result.file_path,
         .layer_source_content_revision = result.layer_source_content_revision,
-        .mask_work_revision = result.async_job.state_revision,
+        .mask_work_revision = result.mask_work_revision,
     };
     return controller.nativePreviewCommitAllowed(context);
+  }
+  static void set_next_interactive_render_draft(
+      EditorPreviewController& controller,
+      bool draft) {
+    controller.next_interactive_render_draft_ = draft;
   }
   static bool update_active_mask_definition(EditorPreviewController& controller, const QVariantMap& mask) {
     return controller.updateActiveMaskDefinition(mask);
@@ -157,6 +169,7 @@ using namespace photo_editor::desktop;
 #define CHECK(condition, message) do { if (!(condition)) { std::cerr << message << '\n'; return 1; } } while (false)
 static RenderResult feedback_frame_for_request(const RenderRequest& request, const QString& marker) {
   RenderResult result;
+  result.source_asset_id = request.source_asset_id;
   result.file_path = request.file_path;
   result.preview_source = QStringLiteral("test-feedback://%1").arg(marker);
   result.display_preview_source = result.preview_source;
@@ -170,6 +183,7 @@ static RenderResult feedback_frame_for_request(const RenderRequest& request, con
   result.generation = request.generation;
   result.edit_transaction_generation = request.edit_transaction_generation;
   result.layer_source_content_revision = request.layer_source_content_revision;
+  result.mask_work_revision = request.mask_work_revision;
   result.max_edge = request.max_edge;
   result.source_width = 640;
   result.source_height = 512;
@@ -399,6 +413,91 @@ static int run_render_feedback_guard_tests(const QString& source_path) {
     return wait_until([&] { return !controller->processing() && !controller->fullRenderRunning(); });
   };
 
+  controller->beginCoalescedEdit();
+  controller->setExposure(controller->exposure() + 0.12);
+  EditorPreviewControllerTestAccess::stop_transaction_preview_timer(*controller);
+  EditorPreviewControllerTestAccess::set_next_interactive_render_draft(*controller, true);
+  auto global_tone_request = EditorPreviewControllerTestAccess::current_render_request(
+      *controller, false);
+  CHECK(global_tone_request.source_asset_id == QStringLiteral("typography-render-guard") &&
+            global_tone_request.file_path == source_path &&
+            global_tone_request.dirty_domain == QStringLiteral("global_tone_color") &&
+            global_tone_request.draft_interactive &&
+            global_tone_request.edit_transaction_generation != 0,
+        "A global-tone draft request carries active transaction and source identity");
+  auto global_tone_result = feedback_frame_for_request(
+      global_tone_request, QStringLiteral("global-tone-frame"));
+  CHECK(global_tone_result.source_asset_id == global_tone_request.source_asset_id &&
+            global_tone_result.file_path == global_tone_request.file_path &&
+            global_tone_result.mask_work_revision == global_tone_request.mask_work_revision,
+        "A render result preserves the request source asset, path and mask revision");
+  CHECK(EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, global_tone_result, true),
+        "A current global-tone draft may commit to the native preview during its transaction");
+  EditorPreviewControllerTestAccess::advance_preview_generation(*controller);
+  CHECK(EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, global_tone_result, true),
+        "A completed global-tone native frame remains eligible after a later generation in the same transaction");
+  auto invalid_global_tone_result = global_tone_result;
+  invalid_global_tone_result.source_asset_id = QStringLiteral("different-asset");
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "A global-tone native frame for another source asset is rejected");
+  invalid_global_tone_result = global_tone_result;
+  invalid_global_tone_result.file_path = QStringLiteral("/different/source.png");
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "A global-tone native frame for another source path is rejected");
+  invalid_global_tone_result = global_tone_result;
+  ++invalid_global_tone_result.mask_work_revision;
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "A global-tone native frame after mask work changes is rejected");
+  invalid_global_tone_result = global_tone_result;
+  ++invalid_global_tone_result.layer_source_content_revision;
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "A global-tone native frame after linked source content changes is rejected");
+  invalid_global_tone_result = global_tone_result;
+  invalid_global_tone_result.success = false;
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "A failed global-tone frame cannot commit natively");
+  invalid_global_tone_result = global_tone_result;
+  invalid_global_tone_result.cancelled = true;
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "A cancelled global-tone frame cannot commit natively");
+  invalid_global_tone_result = global_tone_result;
+  invalid_global_tone_result.full_resolution = true;
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "A global-tone draft cannot use the full-resolution transaction exception");
+  invalid_global_tone_result = global_tone_result;
+  invalid_global_tone_result.overlay_only = true;
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, invalid_global_tone_result, true),
+        "An overlay-only global-tone result cannot use the native transaction exception");
+  controller->endCoalescedEdit();
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, global_tone_result, true),
+        "A queued global-tone native frame is rejected after transaction release");
+  CHECK(settled(), "Global-tone native commit fixture settles after release");
+
+  controller->beginCoalescedEdit();
+  controller->setExposure(controller->exposure() - 0.08);
+  EditorPreviewControllerTestAccess::stop_transaction_preview_timer(*controller);
+  EditorPreviewControllerTestAccess::set_next_interactive_render_draft(*controller, true);
+  const auto cancelled_global_tone_request =
+      EditorPreviewControllerTestAccess::current_render_request(*controller, false);
+  const auto cancelled_global_tone_result = feedback_frame_for_request(
+      cancelled_global_tone_request, QStringLiteral("cancelled-global-tone-frame"));
+  CHECK(controller->cancelCoalescedEdit(), "Cancel the global-tone native frame fixture");
+  CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
+            *controller, cancelled_global_tone_result, true),
+        "A queued global-tone native frame is rejected after transaction cancellation");
+  CHECK(settled(), "Cancelled global-tone native commit fixture settles");
+
   const auto transform_layer_index = layer_index();
   CHECK(transform_layer_index >= 0,
         "Render-guard fixture keeps its text layer available for transform-draft coverage");
@@ -513,16 +612,19 @@ static int run_render_feedback_guard_tests(const QString& source_path) {
             *controller, invalid_native_context, true),
         "A stale native frame from another transaction token is rejected");
   invalid_native_context = result;
+  invalid_native_context.source_asset_id = QStringLiteral("different-asset");
   invalid_native_context.async_job.asset_id = QStringLiteral("different-asset");
   CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
             *controller, invalid_native_context, true),
         "A stale native frame for another asset is rejected");
   invalid_native_context = result;
+  invalid_native_context.file_path = QStringLiteral("/different/source.png");
   invalid_native_context.async_job.file_path = QStringLiteral("/different/source.png");
   CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
             *controller, invalid_native_context, true),
         "A stale native frame for another source path is rejected");
   invalid_native_context = result;
+  ++invalid_native_context.mask_work_revision;
   ++invalid_native_context.async_job.state_revision;
   CHECK(!EditorPreviewControllerTestAccess::native_preview_commit_allowed(
             *controller, invalid_native_context, true),
@@ -636,6 +738,7 @@ static int run_render_feedback_guard_tests(const QString& source_path) {
 
   CHECK(prepare_stale_feedback(&request, &result, QStringLiteral("asset-frame")),
       "Capture a frame for asset identity rejection");
+  result.source_asset_id = QStringLiteral("different-asset");
   result.async_job.asset_id = QStringLiteral("different-asset");
   const auto asset_publication_before =
       EditorPreviewControllerTestAccess::preview_publication_revision(*controller);
@@ -647,6 +750,7 @@ static int run_render_feedback_guard_tests(const QString& source_path) {
 
   CHECK(prepare_stale_feedback(&request, &result, QStringLiteral("path-frame")),
       "Capture a frame for source-path rejection");
+  result.file_path = QStringLiteral("/different/source.png");
   result.async_job.file_path = QStringLiteral("/different/source.png");
   const auto path_publication_before =
       EditorPreviewControllerTestAccess::preview_publication_revision(*controller);
@@ -956,6 +1060,62 @@ Rectangle {
   auto point=state().layers[0].toMap();
   CHECK(point.value("text")=="City light / evening" && point.value("textTypography").toMap().value("mode")=="point",
       "Point text stores unwrapped mode");
+  const auto point_base_typography = controller->photoLayerTypography(0);
+  CHECK(QMetaObject::invokeMethod(editor, "beginEditing") &&
+      QMetaObject::invokeMethod(input, "select", Q_ARG(int, 0), Q_ARG(int, 4)) &&
+      controller->setPhotoLayerTextRangeStyle(0, 0, 4,
+          {{"family", "Georgia"}, {"color", "#ffff347a"}, {"underline", true}},
+          input->property("text").toString()),
+      "Selected text formatting persists a Unicode range through the canvas editor");
+  auto* quick_document = qobject_cast<QQuickTextDocument*>(
+      input->property("textDocument").value<QObject*>());
+  CHECK(quick_document, "Canvas TextEdit exposes its live QTextDocument");
+  const auto selected_document_format = [&] {
+    QTextCursor cursor(quick_document->textDocument());
+    cursor.setPosition(0);
+    cursor.setPosition(4, QTextCursor::KeepAnchor);
+    return cursor.charFormat();
+  };
+  settle();
+  CHECK(selected_document_format().font().family() == QStringLiteral("Georgia") &&
+      selected_document_format().foreground().color() == QColor(QStringLiteral("#ffff347a")) &&
+      selected_document_format().fontUnderline(),
+      "Live canvas document applies the selected run's font, fill, and underline");
+  auto invalid_range_state = state();
+  auto invalid_range_layer = invalid_range_state.layers.at(0).toMap();
+  auto invalid_range_style = invalid_range_layer.value(QStringLiteral("textTypography")).toMap();
+  auto invalid_runs = invalid_range_style.value(QStringLiteral("runs")).toList();
+  auto invalid_run = invalid_runs.front().toMap();
+  invalid_run.insert(QStringLiteral("length"), input->property("text").toString().size() + 1);
+  invalid_runs[0] = invalid_run;
+  invalid_range_style.insert(QStringLiteral("runs"), invalid_runs);
+  invalid_range_layer.insert(QStringLiteral("textTypography"), invalid_range_style);
+  invalid_range_state.layers[0] = invalid_range_layer;
+  CHECK(!validate_edit_recipe_json(serialize_edit_recipe_json(invalid_range_state)).valid,
+      "Recipe validation rejects character runs that extend beyond their text layer");
+  CHECK(QMetaObject::invokeMethod(editor, "finish", Q_ARG(QVariant, QVariant(true))),
+      "Close the selected-style edit transaction");
+  controller->undo();
+  settle();
+  const auto restored_document_format = selected_document_format();
+  CHECK(state().layers[0].toMap() == point &&
+      restored_document_format.font().family() == point_base_typography.value("family").toString() &&
+      restored_document_format.foreground().color() == QColor(point_base_typography.value("color").toString()) &&
+      !restored_document_format.fontUnderline(),
+      "Undo removes persisted character runs and clears their live document formatting");
+  CHECK(!controller->setPhotoLayerTextRangeStyle(0, 2, 3, {{"color", "#ffff0000"}},
+          QString::fromUtf8("A😀B")) && state().layers[0].toMap() == point,
+      "Range formatting rejects a selection that splits a UTF-16 surrogate pair");
+  CHECK(QMetaObject::invokeMethod(editor, "beginEditing"), "Reopen point text for a cancel-format fixture");
+  input->setProperty("text", QStringLiteral("Draft only"));
+  CHECK(QMetaObject::invokeMethod(input, "select", Q_ARG(int, 0), Q_ARG(int, 5)) &&
+      controller->setPhotoLayerTextRangeStyle(0, 0, 5, {{"color", "#ffff0000"}},
+          input->property("text").toString()) &&
+      !controller->photoLayerTypography(0).value("runs").toList().isEmpty(),
+      "Formatting an on-canvas draft stages text and character style together");
+  key(Qt::Key_Escape, Qt::NoModifier);
+  CHECK(!editor->property("editing").toBool() && state().layers[0].toMap() == point,
+      "Escape cancels both draft content and range formatting as one edit transaction");
   const auto fresh_text_id = point.value("id").toString();
   const auto fresh_text_material = controller->photoCompositionCommand(QVariantMap{
       {QStringLiteral("assetId"), QStringLiteral("typography-proof")},
@@ -1237,6 +1397,40 @@ Rectangle {
   CHECK(controller->setPhotoLayerTransform(0, point_box_layer.value("x").toInt(),
       point_box_layer.value("y").toInt(), 1.7, 20), "Prepare scaled, rotated text for box-only resizing");
   const auto transformed_point=state().layers;
+  const auto positioned_layout = controller->photoLayerTextLayoutInfo(0);
+  CHECK(positioned_layout.value("lineCount").toInt() == 1,
+      "Translation, scale and rotation preserve inspector text metrics");
+  CHECK(EditorPreviewControllerTestAccess::text_layout_cached(*controller),
+      "Inspector retains one layout result for repeated gesture updates");
+  constexpr int layout_samples = 32;
+  QElapsedTimer layout_timer;
+  layout_timer.start();
+  for (int sample = 0; sample < layout_samples; ++sample) {
+    EditorPreviewControllerTestAccess::clear_text_layout_cache(*controller);
+    CHECK(controller->photoLayerTextLayoutInfo(0) == positioned_layout,
+        "Cold inspector metrics stay identical");
+  }
+  const auto cold_layout_ns = layout_timer.nsecsElapsed();
+  layout_timer.restart();
+  for (int sample = 0; sample < layout_samples; ++sample) {
+    CHECK(controller->photoLayerTextLayoutInfo(0) == positioned_layout,
+        "Cached inspector metrics stay identical");
+  }
+  const auto cached_layout_ns = layout_timer.nsecsElapsed();
+  std::cout << "text_inspector_layout samples=" << layout_samples
+            << " cold_ns=" << cold_layout_ns << " cached_ns=" << cached_layout_ns << '\n';
+  bool fonts_notified = false;
+  const auto fonts_connection = QObject::connect(controller.get(),
+      &EditorPreviewController::photoTextFontsChanged, [&fonts_notified] { fonts_notified = true; });
+  CHECK(QMetaObject::invokeMethod(QCoreApplication::instance(), "fontDatabaseChanged",
+      Qt::DirectConnection) && !EditorPreviewControllerTestAccess::text_layout_cached(*controller) &&
+      fonts_notified,
+      "Installing or removing a font invalidates cached fallback and face metrics");
+  QObject::disconnect(fonts_connection);
+  CHECK(controller->property("photoTextFontFamilies").toStringList() == controller->availablePhotoTextFonts(),
+      "The live font inventory property exposes the current installed font families");
+  CHECK(controller->photoLayerTextLayoutInfo(0) == positioned_layout,
+      "Inspector resolves the current font database after invalidation");
   const auto point_box_style=controller->photoLayerTypography(0);
   controller->beginCoalescedEdit();
   CHECK(controller->resizePhotoLayerTextBox(0, 72, 81, 200, 180) &&
@@ -1939,6 +2133,125 @@ Rectangle {
       multi_panel->property("selectedLayerIndices").toList().size() == 1 &&
       multi_panel->property("layerIndex").toInt() == text_layer_index(),
       "Leaving shared styling restores the selected contour layer as the single inspector target");
+
+  // Text-session history restores copy and the complete style together, and its
+  // preview exclusion never mutates the durable document/export state.
+  const auto session_index = text_layer_index();
+  const auto session_before = state();
+  const auto session_layer = session_before.layers.at(session_index).toMap();
+  const auto session_id = session_layer.value("id").toString();
+  const auto session_style = controller->photoLayerTypography(session_index);
+  const auto session_alignment = session_layer.value("textAlignment", "left").toString();
+  controller->beginCoalescedEdit();
+  CHECK(controller->photoAuthoringDraftActive(), "Even an untouched text draft owns automation admission before creating a layer");
+  controller->setPhotoTextEditingLayerId(session_id);
+  CHECK(state().layers == session_before.layers, "Draft preview exclusion never changes durable layers");
+  const auto excluded_request = EditorPreviewControllerTestAccess::current_render_request(*controller, false);
+  CHECK(!excluded_request.state.layers.at(session_index).toMap().value("enabled").toBool() &&
+      state().layers.at(session_index).toMap().value("enabled").toBool(),
+      "Only preview requests suppress the committed text under the transparent editor");
+  auto changed_style = session_style;
+  changed_style.insert("size", 31.0);
+  CHECK(controller->restorePhotoLayerTextState(session_id, session_layer.value("text").toString(),
+      changed_style, session_alignment), "Session snapshot restores complete typography by stable ID");
+  CHECK(controller->restorePhotoLayerTextState(session_id, session_layer.value("text").toString(),
+      session_style, session_alignment) && state().layers == session_before.layers,
+      "Local style Undo restores the exact copy/style/geometry without global history traversal");
+  CHECK(!controller->restorePhotoLayerTextState(QStringLiteral("missing-text"), QStringLiteral("Wrong target"),
+      session_style, session_alignment), "Stale text session IDs cannot mutate another layer");
+  controller->cancelCoalescedEdit();
+  controller->setPhotoTextEditingLayerId(QString());
+  CHECK(state().layers == session_before.layers && !controller->photoAuthoringDraftActive(),
+      "Text-session Cancel restores its entire baseline and releases automation admission");
+  photo_editor::desktop::PhotoTextStyle draft_base;
+  const auto draft_style = photo_editor::desktop::encode_photo_text_style(draft_base).toVariantMap();
+  const auto draft_range = controller->photoTextDraftTypography(draft_style, QStringLiteral("Hello world"),
+      {{"family", "Georgia"}, {"color", "#ffff347a"}}, 0, 5);
+  CHECK(draft_range.value("runs").toList().size() == 1 &&
+      draft_range.value("family") == draft_style.value("family"),
+      "New drafts use native range formatting without creating a document layer");
+  const auto remapped_draft = controller->photoTextDraftTypography(draft_range, QStringLiteral("A Hello world"),
+      {}, -1, -1, QStringLiteral("Hello world"));
+  CHECK(!remapped_draft.isEmpty() && remapped_draft.value("runs").toList().at(0).toMap().value("start").toInt() == 0 &&
+      remapped_draft.value("runs").toList().at(0).toMap().value("length").toInt() == 7,
+      "Typing after new-draft range styling remaps character runs through the shared native helper");
+  const auto draft_material = controller->photoTextDraftTypography(draft_style, QStringLiteral("Caption"),
+      {{"material", "warm_gold"}});
+  const auto draft_without_material = controller->photoTextDraftTypography(draft_material, QStringLiteral("Caption"),
+      {{"material", "none"}});
+  CHECK(!draft_material.isEmpty() && !draft_without_material.isEmpty() && !draft_without_material.contains("material"),
+      "Draft material removal restores canonical absent-field representation without discarding other typography");
+  CHECK(controller->photoTextDraftTypography(draft_style, QStringLiteral("Caption"), {{"size", -1}}).isEmpty() &&
+      controller->photoTextDraftTypography(draft_style, QString::fromUtf8("😀 text"), {{"color", "#ffffffff"}}, 1, 2).isEmpty() &&
+      controller->photoTextDraftTypography(draft_style, QStringLiteral("A\r\nB"), {{"color", "#ffffffff"}}, 0, 2).isEmpty() &&
+      !controller->photoTextDraftTypography(draft_style, QString::fromUtf8("😀 text"), {{"color", "#ffffffff"}}, 0, 2).isEmpty(),
+      "Draft typography validates requested surrogate/CRLF boundaries even when formatting produces no runs");
+  CHECK(state().layers == session_before.layers, "Pure draft formatting never publishes a layer or history");
+
+  const auto parity_before = state();
+  const auto parity_copy = QStringLiteral("Agent paragraph\nSecond line");
+  controller->beginCoalescedEdit();
+  CHECK(controller->addParagraphTextLayer(parity_copy, 30, 40, 320, 120,
+      controller->sourceImageWidth(), controller->sourceImageHeight()) &&
+      controller->setPhotoLayerTextRangeStyle(0, 0, 5, {{"color", "#ffff347a"}}, parity_copy),
+      "Manual paragraph/range setup uses the canonical native controls");
+  controller->endCoalescedEdit();
+  const auto manual_paragraph_live = state().layers.at(0).toMap();
+  CHECK(!manual_paragraph_live.contains("thumbnailInvalidationLayerId") ||
+      manual_paragraph_live.value("thumbnailInvalidationLayerId") == manual_paragraph_live.value("id"),
+      "Manual paragraph thumbnail metadata identifies its own stable layer");
+  // Use the production recipe codec: cache/presentation hashes include the
+  // unique layer ID and are deliberately excluded from persisted authoring state.
+  auto manual_paragraph = photo_editor::desktop::detail::serialize_photo_layers({manual_paragraph_live}).at(0).toMap();
+  manual_paragraph.remove("id");
+  controller->undo();
+  CHECK(state().layers == parity_before.layers, "Manual paragraph/range task is one Undo");
+  controller->beginCoalescedEdit();
+  const auto paragraph_receipt = controller->photoCompositionCommand({{"assetId", controller->assetId()},
+      {"operation", "add_paragraph_text"}, {"values", QVariantMap{{"text", parity_copy},
+          {"x", 30}, {"y", 40}, {"width", 320}, {"height", 120}}}});
+  const auto paragraph_id = paragraph_receipt.value("createdLayerId").toString();
+  CHECK(paragraph_receipt.value("ok").toBool() && !paragraph_id.isEmpty(),
+      "Agent paragraph creation returns its actual stable layer ID");
+  const QVariantMap range_request{{"assetId", controller->assetId()}, {"operation", "text_range_style"},
+      {"layerId", paragraph_id}, {"values", QVariantMap{{"start", 0}, {"end", 5},
+          {"textSnapshot", parity_copy}, {"style", QVariantMap{{"color", "#ffff347a"}}}}}};
+  const auto range_receipt = controller->photoCompositionCommand(range_request);
+  CHECK(range_receipt.value("ok").toBool() && range_receipt.value("affectedLayerId") == paragraph_id,
+      "Agent range formatting targets and reports the exact stable ID");
+  controller->endCoalescedEdit();
+  const auto agent_paragraph_live = state().layers.at(0).toMap();
+  CHECK(!agent_paragraph_live.contains("thumbnailInvalidationLayerId") ||
+      agent_paragraph_live.value("thumbnailInvalidationLayerId") == paragraph_id,
+      "Agent paragraph thumbnail metadata identifies the ID in its creation receipt");
+  auto agent_paragraph = photo_editor::desktop::detail::serialize_photo_layers({agent_paragraph_live}).at(0).toMap();
+  agent_paragraph.remove("id");
+  if (agent_paragraph != manual_paragraph) {
+    auto keys = manual_paragraph.keys();
+    for (const auto& key : agent_paragraph.keys()) if (!keys.contains(key)) keys.push_back(key);
+    keys.sort();
+    for (const auto& key : keys) {
+      if (manual_paragraph.contains(key) == agent_paragraph.contains(key) &&
+          manual_paragraph.value(key) == agent_paragraph.value(key)) continue;
+      const auto bounded = [](const QVariant& value) {
+        return QJsonDocument(QJsonArray{QJsonValue::fromVariant(value)}).toJson(QJsonDocument::Compact).left(384);
+      };
+      std::cerr << "First paragraph parity difference: " << key.toStdString()
+          << " manual(" << manual_paragraph.value(key).typeName() << ")=" << bounded(manual_paragraph.value(key)).toStdString()
+          << " agent(" << agent_paragraph.value(key).typeName() << ")=" << bounded(agent_paragraph.value(key)).toStdString() << '\n';
+      break;
+    }
+  }
+  CHECK(agent_paragraph == manual_paragraph, "Manual and agent paragraph/range operations publish identical normalized state");
+  const auto parity_after = state();
+  auto stale_range = range_request;
+  auto stale_values = stale_range.value("values").toMap();
+  stale_values.insert("textSnapshot", QStringLiteral("Stale copy"));
+  stale_range.insert("values", stale_values);
+  CHECK(!controller->photoCompositionCommand(stale_range).value("ok").toBool() && state().layers == parity_after.layers,
+      "Agent range formatting rejects stale inspected copy without mutating the document");
+  controller->undo();
+  CHECK(state().layers == parity_before.layers, "Agent paragraph/range task restores the exact baseline with one Undo");
 
   CHECK(wait_until([&]{return !reopened->processing()&&!reopened->fullRenderRunning();}),
       "Reopened preview settles before controller teardown");

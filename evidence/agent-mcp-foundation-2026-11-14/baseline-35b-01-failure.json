@@ -1,0 +1,42 @@
+{
+  "errorCode": "planning_context_budget_exceeded",
+  "requestSent": false,
+  "promptComponents": {
+    "additionalProofImageCount": 0,
+    "additionalProofImageTransmittedBytes": 0,
+    "aggregateTextUtf8Bytes": 19907,
+    "attachedImageCount": 1,
+    "availableToolCatalogUtf8Bytes": 2,
+    "contextEstimateMethod": "ceil(ascii_utf8_bytes / 4) + non_ascii_utf8_bytes + 512 + output_tokens + sum(imageContextReservations); Qwen3.5/Qwen3.6 valid transmitted dimensions <=1600px per edge use max(2048, ceil512(ceil(w/32)*ceil(h/32)+512)); other recognized Qwen vision images <=768px per edge reserve 2048; all other images reserve 4096; conservative processor/dimension proxy, not exact Ollama tokenization; non-ASCII is charged by UTF-8 byte fallback; format grammar audited separately",
+    "contextTokenLimit": 8192,
+    "contextTokensRequested": 8192,
+    "contract": "ollama-planning-prompt-components-v1",
+    "estimatedAggregateTextTokens": 4977,
+    "estimatedAsciiUtf8Bytes": 19907,
+    "estimatedContextTokensBeforeCap": 9073,
+    "estimatedNonAsciiCodePointCount": 0,
+    "estimatedNonAsciiUtf8Bytes": 0,
+    "generationSchemaUtf8Bytes": 1597,
+    "imageContextReservations": [
+      {
+        "ceilingGridTokens": 432,
+        "dimensionsValid": true,
+        "gridAlignmentPixels": 32,
+        "imageIndex": 0,
+        "modelFamily": "qwen3.6",
+        "reservationRule": "qwen35_36_32px_grid_512_overhead_2048_floor",
+        "reserveTokens": 2048,
+        "transmittedHeight": 576,
+        "transmittedWidth": 768
+      }
+    ],
+    "primaryImageTransmittedBytes": 8593,
+    "priorToolHistoryUtf8Bytes": 2,
+    "systemPromptUtf8Bytes": 7224,
+    "userGuidanceMode": "full_planning_guidance_v1",
+    "userPromptUtf8Bytes": 12683
+  },
+  "stage": "synthetic-planning-smoke",
+  "model": "qwen3.6:35b",
+  "sourceLogSha256": "0c7d80710d11c9e2d0d306e02ebfebd8deeb76fcb4a836836894fb120f69ef90"
+}

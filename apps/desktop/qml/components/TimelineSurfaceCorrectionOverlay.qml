@@ -149,7 +149,8 @@ Item {
                 anchors.verticalCenter: handle.verticalCenter
                 text: ["TL", "TR", "BL", "BR"][index]
                 color: root.theme.textStrong
-                font.family: root.theme.fontMono
+                font.family: root.theme.fontNumeric
+                font.features: root.theme.numericFontFeatures
                 font.pixelSize: root.theme.typeMicro
             }
             MouseArea {

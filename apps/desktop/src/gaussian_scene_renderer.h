@@ -31,6 +31,9 @@ class GaussianProgressiveFrames {
   std::mutex mutex_;
   std::optional<GaussianFrame> latest_;
 };
+struct GaussianFocusRenderContext {
+  QVariantMap authored_camera, resolved_camera, report;
+};
 struct GaussianRenderOptions {
   std::shared_ptr<std::atomic_bool> canceled;
   std::shared_ptr<std::atomic_int> samples_completed;
@@ -40,6 +43,10 @@ struct GaussianRenderOptions {
   int export_tile_edge = 0;
   std::shared_ptr<std::atomic_int> tiles_completed{};
   std::shared_ptr<GaussianProgressiveFrames> progressive_frames{};
+  std::shared_ptr<std::atomic_int> lighting_batches_completed{};
+  // Renderer-owned immutable metadata shared by completed progressive snapshots.
+  // Public render entry points replace this context before using it.
+  std::shared_ptr<const GaussianFocusRenderContext> focus_context{};
 };
 class GaussianSceneRenderer {
  public:

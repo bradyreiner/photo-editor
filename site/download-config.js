@@ -34,7 +34,8 @@ window.LooksyDownloads = {
     "support": "./support.html"
   },
   "supportedPlatforms": [
-    "mac-arm"
+    "mac-arm",
+    "windows"
   ],
   "paymentProvider": "lemonsqueezy",
   "purchaseRecoveryUrl": "https://app.lemonsqueezy.com/my-orders/",

@@ -16,6 +16,7 @@ Usage: ./scripts/run-native.sh [options] [-- app arguments...]
 
 Build only Looksy and its dependencies, prepare PostgreSQL, and launch.
 Existing builds are incremental; tests and benchmarks are built separately.
+A second build of the same preset exits while the first is running.
 
   --release       Use the optimized release-macos build (default)
   --debug         Use dev-macos-debug for debugger sessions
@@ -61,6 +62,7 @@ BUILD_PRESET="build-${CONFIGURE_PRESET}"
 BUILD_DIR="${REPO_ROOT}/build/${CONFIGURE_PRESET}"
 APP_BINARY="${BUILD_DIR}/apps/desktop/Looksy.app/Contents/MacOS/Looksy"
 RUST_BIN_DIR="${REPO_ROOT}/rust/target/debug"
+export PHOTO_EDITOR_SCENE_LIBRARY_DIR="${PHOTO_EDITOR_SCENE_LIBRARY_DIR:-${REPO_ROOT}/.photo-editor/scenes}"
 NATIVE_LOG_STYLE="${PHOTO_EDITOR_NATIVE_LOG_STYLE:-pretty}"
 LOG_COLOR_MODE="${PHOTO_EDITOR_LOG_COLOR:-auto}"
 
@@ -182,9 +184,9 @@ warn() {
 }
 
 if [ "${BUILD_ENABLED}" -eq 1 ]; then
-  for tool in cmake ninja cargo; do
+  for tool in cmake ninja cargo python3; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
-      fail "${tool} is required to build. Install build tools with: brew install cmake ninja rust qt"
+      fail "${tool} is required to build. Install build tools with: brew install cmake ninja rust qt python"
     fi
   done
 fi
@@ -203,6 +205,8 @@ fi
 cd "${REPO_ROOT}"
 
 if [ "${BUILD_ENABLED}" -eq 1 ]; then
+  source "${SCRIPT_DIR}/build-lock.sh"
+  acquire_build_lock "${BUILD_DIR}"
   CARGO_ARGS=(build --manifest-path rust/Cargo.toml -p photo-catalog --bins)
   if [ -n "${BUILD_JOBS}" ]; then
     CARGO_ARGS+=(--jobs "${BUILD_JOBS}")
@@ -220,6 +224,7 @@ if [ "${BUILD_ENABLED}" -eq 1 ]; then
     BUILD_ARGS+=(--parallel "${BUILD_JOBS}")
   fi
   run_step "Desktop build" cmake "${BUILD_ARGS[@]}"
+  release_build_lock
 fi
 
 [ -x "${APP_BINARY}" ] || fail "App not built: ${APP_BINARY}. Run without --no-build first."

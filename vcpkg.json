@@ -13,12 +13,21 @@
         "dng-lossy"
       ],
       "version>=": "0.21.5"
+    },
+    {
+      "name": "opencolorio",
+      "default-features": false,
+      "version>=": "2.5.1"
     }
   ],
   "overrides": [
     {
       "name": "libraw",
       "version": "0.21.5"
+    },
+    {
+      "name": "opencolorio",
+      "version": "2.5.1"
     }
   ]
 }

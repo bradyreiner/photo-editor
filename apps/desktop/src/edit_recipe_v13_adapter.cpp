@@ -1,3 +1,4 @@
+#include "photo_smart_document_payload_codec.h"
 #include "edit_recipe_v13_adapter.h"
 #include "linked_image_source.h"
 #include "photo_layer_effect_codec.h"
@@ -878,13 +879,6 @@ DesktopRecipeV13AdapterResult adapt_desktop_recipe_to_v13(
         "look.renderer",
         "legacy and prototype photographic renderers cannot be written as v13");
   }
-  if (active(state.raw_exposure) && active(state.exposure)) {
-    add_error(
-        &result,
-        DesktopRecipeAdapterErrorCode::AmbiguousLegacyIntent,
-        "scene.exposure_ev",
-        "desktop v12 has simultaneous rawExposure and exposure values");
-  }
   if (active(state.raw_boost) ||
       active(state.raw_shadow_boost - 1.0) ||
       active(state.raw_detail) ||
@@ -1052,8 +1046,11 @@ DesktopRecipeV13AdapterResult adapt_desktop_recipe_to_v13(
       signed_percent(state.raw_blue_primary_hue);
   recipe.input.blue_primary_saturation =
       signed_percent(state.raw_blue_primary_saturation);
+  // RAW and Light exposure are additive EV at the same float scene boundary.
+  // The canonical recipe owns their total; raster sources ignore stale RAW
+  // controls just as the metadata-aware execution bridge does.
   recipe.scene.exposure_ev =
-      active(state.exposure) ? state.exposure : state.raw_exposure;
+      state.exposure + (context.raw_source ? state.raw_exposure : 0.0);
   recipe.tone.contrast = signed_percent(state.contrast);
   recipe.tone.highlights = signed_percent(state.highlights);
   recipe.tone.shadows = signed_percent(state.shadows);
@@ -1896,6 +1893,24 @@ DesktopRenderPlanResult compile_desktop_render_plan_with_derived_assets(
       compile_context.available_content_assets.push_back(payload);
     }
     if (*kind == LayerKind::Adjustment || *kind == LayerKind::Group) {
+      // These layers have no raster content, but tonal blending still changes
+      // the Layers stage. Carry its own fingerprint into that stage's identity;
+      // the outer plan digest alone does not key cached intermediate surfaces.
+      const auto blend_if = layer.value(QStringLiteral("blendIf")).toMap();
+      QVariantMap blending_identity;
+      if (blend_if.value(QStringLiteral("enabled"), false).toBool()) blending_identity.insert("blendIf", blend_if);
+      const auto vector_mask = layer.value("vectorMask").toMap();
+      if (!vector_mask.isEmpty() && vector_mask.value("enabled", true).toBool()) blending_identity.insert("vectorMask", vector_mask);
+      const auto component = layer.value("smartObjectDocument").toMap();
+      if (!component.isEmpty()) blending_identity.insert("smartObjectDocument", encode_component_payloads(component));
+      if (!blending_identity.isEmpty()) {
+        const auto fingerprint = QCryptographicHash::hash(
+            QJsonDocument::fromVariant(blending_identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex();
+        const auto identity = AssetIdentifier{"desktop-layer-blending:" + utf8(layer_id) + ":" + fingerprint.toStdString()};
+        adapter_context.layer_content_assets.push_back(
+            DesktopRecipeV13Context::LayerContentBinding{.layer_id = layer_id, .content_asset = identity});
+        compile_context.available_content_assets.push_back(identity);
+      }
       continue;
     }
     const auto content = AssetIdentifier{

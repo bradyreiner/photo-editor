@@ -1,0 +1,12 @@
+{
+  "title": "Cat Walk",
+  "artist": "Arulo",
+  "catalog": "https://mixkit.co/free-stock-music/house/",
+  "source": "https://assets.mixkit.co/music/371/371.mp3",
+  "license": "https://mixkit.co/license/modal/musicFree/",
+  "duration_seconds": 123.990385,
+  "pitch_preserving_tempo_factor": 1.0,
+  "arrangement": "Complete produced cue at its original tempo and pitch, with a short end fade and 10ms padding to 124 seconds. No repeated phrase or middle splice. Picture-specific gain and sounds are authored in LaunchScore.tsx.",
+  "source_sha256": "e241cba000ce12e52cadd4c9956274e391ef1f66d1e48a5dd40bfc21645aa489",
+  "status": "Soundtrack candidate; full creative/aural review remains unproven."
+}

@@ -5,14 +5,44 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QImageReader>
 #include <QSaveFile>
 #include <QStorageInfo>
+#include <QTemporaryDir>
 #include <cmath>
+#include <vector>
 
 namespace photo_editor::desktop {
+namespace {
+// A focus ranking at one fixed proxy scale, not an image-quality or motion
+// detector. Locked capture exposure is still necessary: noise, illumination
+// changes and moving subjects can affect this local edge statistic.
+double focus_score(const QString& path) {
+  QImageReader reader(path);
+  const auto size = reader.size();
+  if (size.width() < 3 || size.height() < 3 || size.width() > 320 || size.height() > 320) return -1;
+  const auto image = reader.read().convertToFormat(QImage::Format_RGB32);
+  if (image.isNull()) return -1;
+  std::vector<double> luma(static_cast<size_t>(size.width()*size.height()));
+  for (int y = 0; y < size.height(); ++y) {
+    const auto* row = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+    for (int x = 0; x < size.width(); ++x)
+      luma[static_cast<size_t>(y*size.width()+x)] = (0.2126*qRed(row[x])+0.7152*qGreen(row[x])+0.0722*qBlue(row[x]))/255;
+  }
+  double sum = 0, squared = 0;
+  for (int y = 1; y+1 < size.height(); ++y) for (int x = 1; x+1 < size.width(); ++x) {
+    const auto i = static_cast<size_t>(y*size.width()+x), stride = static_cast<size_t>(size.width());
+    const auto laplacian = 4*luma[i]-luma[i-1]-luma[i+1]-luma[i-stride]-luma[i+stride];
+    sum += laplacian; squared += laplacian*laplacian;
+  }
+  const auto count = static_cast<double>((size.width()-2)*(size.height()-2));
+  return std::max(0.0,squared/count-(sum/count)*(sum/count));
+}
+}
 QVariantMap prepare_gaussian_video(const QString& source, const QString& project, int maximum_edge,
     int frame_count, const QString& ffmpeg, const QString& ffprobe,
-    const std::shared_ptr<std::atomic_bool>& canceled, const std::shared_ptr<GaussianProcessLog>& log) {
+    const std::shared_ptr<std::atomic_bool>& canceled, const std::shared_ptr<GaussianProcessLog>& log,
+    bool prefer_sharp_frames) {
   const auto fail = [](const QString& message) { return QVariantMap{{"ok", false}, {"error", message}}; };
   const QFileInfo before(source);
   const QDir root(project);
@@ -44,7 +74,8 @@ QVariantMap prepare_gaussian_video(const QString& source, const QString& project
   const auto frames_dir = root.filePath("video-frames");
   if (QFileInfo::exists(frames_dir)) return fail("Video frame folder already exists; it will not be overwritten.");
   const QStorageInfo storage(project);
-  const qint64 estimated_bytes = static_cast<qint64>(maximum_edge) * maximum_edge * 3 * frame_count * 3;
+  const qint64 proxy_bytes = prefer_sharp_frames ? static_cast<qint64>(320)*320*3*frame_count*3 : 0;
+  const qint64 estimated_bytes = static_cast<qint64>(maximum_edge) * maximum_edge * 3 * frame_count * 3+proxy_bytes;
   if (storage.isValid() && storage.bytesAvailable() >= 0 && storage.bytesAvailable() < estimated_bytes + 1024LL * 1024 * 1024)
     return fail("Not enough free space for video frames, prepared images and training. Choose fewer frames or a smaller image edge.");
   QFile input(source);
@@ -58,13 +89,54 @@ QVariantMap prepare_gaussian_video(const QString& source, const QString& project
   }
   input.close();
   if (!root.mkdir("video-frames")) return fail("Cannot create the video frame folder.");
-  const auto rate = QString::number(static_cast<double>(frame_count) / duration, 'g', 15);
-  const auto filter = QString("fps=%1:start_time=0:round=near,scale=w='min(%2,iw)':h='min(%2,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,"
-      "colorspace=all=bt709:trc=srgb:format=yuv444p,format=rgb24").arg(rate).arg(maximum_edge);
-  const auto extraction = run_gaussian_process(ffmpeg, {"-hide_banner", "-loglevel", "error", "-nostdin", "-n",
+  const int candidates_per_interval = prefer_sharp_frames ? 3 : 1;
+  const auto rate = QString::number(static_cast<double>(frame_count*candidates_per_interval) / duration, 'g', 15);
+  const auto prefix = QString("fps=%1:start_time=0:round=near,").arg(rate);
+  const auto pixels = [](int edge) { return QString("scale=w='min(%1,iw)':h='min(%1,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,"
+      "colorspace=all=bt709:trc=srgb:format=yuv444p,format=rgb24").arg(edge); };
+  QString selection;
+  QVariantList candidate_records;
+  std::vector<int> selected_indices;
+  if (prefer_sharp_frames) {
+    QTemporaryDir proxies(root.filePath(".video-focus-XXXXXX"));
+    if (!proxies.isValid()) return fail("Cannot prepare video focus samples.");
+    const auto extraction = run_gaussian_process(ffmpeg, {"-hide_banner", "-loglevel", "error", "-nostdin", "-n",
+        "-threads", "2", "-protocol_whitelist", "file,pipe", "-i", source, "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "2",
+        "-vf", prefix+pixels(320), "-frames:v", QString::number(frame_count*3), "-threads", "2", "-compression_level", "3",
+        "-fps_mode", "passthrough", QDir(proxies.path()).filePath("frame_%06d.png")},
+        project,QProcessEnvironment::systemEnvironment(),canceled,log);
+    if (canceled->load()) return fail("Video focus selection canceled; original is unchanged.");
+    if (extraction.value("exitCode").toInt() != 0 || extraction.value("failedToStart").toBool()) return fail("Cannot analyze video focus. "+log->tail.right(2048));
+    const auto candidates = QDir(proxies.path()).entryInfoList({"frame_*.png"},QDir::Files,QDir::Name);
+    // Do not silently drop an interval or train on an incomplete selection.
+    if (candidates.size() != frame_count*3) return fail("Video did not yield all focus intervals. Choose fewer frames or use uniform sampling.");
+    QStringList expressions;
+    for (int interval = 0; interval < frame_count; ++interval) {
+      int best = interval*3; double best_score = -1;
+      for (int offset = 0; offset < 3; ++offset) {
+        if (canceled->load()) return fail("Video focus selection canceled; original is unchanged.");
+        const int index = interval*3+offset; const auto& frame = candidates[index];
+        if (frame.isSymLink() || !frame.isFile()) return fail("Invalid video focus sample.");
+        const auto score = focus_score(frame.absoluteFilePath());
+        if (score < 0 || !std::isfinite(score)) return fail("Cannot read a video focus sample.");
+        QFile bytes(frame.absoluteFilePath()); if (!bytes.open(QIODevice::ReadOnly)) return fail("Cannot read video focus provenance.");
+        candidate_records.append(QVariantMap{{"interval",interval},{"candidateIndex",index},{"sampleTimeSeconds",static_cast<double>(index)*duration/(frame_count*3)},
+            {"focusScore",score},{"proxySha256",QString::fromLatin1(QCryptographicHash::hash(bytes.readAll(),QCryptographicHash::Sha256).toHex())}});
+        if (score > best_score) { best = index; best_score = score; }
+      }
+      selected_indices.push_back(best); expressions.append(QString("eq(n,%1)").arg(best));
+    }
+    selection = "select='"+expressions.join('+')+"',";
+  }
+  const auto filter = prefix+selection+pixels(maximum_edge);
+  QStringList output_options;
+  if (prefer_sharp_frames) output_options = {"-fps_mode","passthrough"};
+  QStringList extraction_args{"-hide_banner", "-loglevel", "error", "-nostdin", "-n",
       "-threads", "2", "-protocol_whitelist", "file,pipe", "-i", source, "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "2",
       "-vf", filter, "-frames:v", QString::number(frame_count), "-threads", "2", "-compression_level", "3",
-      "-progress", "pipe:1", "-nostats", QDir(frames_dir).filePath("frame_%06d.png")},
+      "-progress", "pipe:1", "-nostats"};
+  extraction_args.append(output_options); extraction_args.append(QDir(frames_dir).filePath("frame_%06d.png"));
+  const auto extraction = run_gaussian_process(ffmpeg, extraction_args,
       project, QProcessEnvironment::systemEnvironment(), canceled, log);
   if (canceled->load()) return fail("Video preparation canceled; partial frames retained and original unchanged.");
   if (extraction.value("exitCode").toInt() != 0 || extraction.value("failedToStart").toBool())
@@ -77,11 +149,21 @@ QVariantMap prepare_gaussian_video(const QString& source, const QString& project
   for (const auto& frame : QDir(frames_dir).entryInfoList({"frame_*.png"}, QDir::Files, QDir::Name)) {
     if (frame.isSymLink() || frame.size() == 0) return fail("Invalid extracted video frame.");
     const auto index = frames.size();
+    if (index >= frame_count) return fail("Video produced more frames than requested.");
     frames.append(frame.canonicalFilePath());
-    samples.append(QVariantMap{{"path", "video-frames/" + frame.fileName()},
-        {"sampleTimeSeconds", static_cast<double>(index) * duration / frame_count}});
+    const auto selected = prefer_sharp_frames ? selected_indices[static_cast<size_t>(index)] : index;
+    QVariantMap sample{{"path", "video-frames/" + frame.fileName()},
+        {"sampleTimeSeconds", static_cast<double>(selected) * duration / (frame_count*candidates_per_interval)}};
+    if (prefer_sharp_frames) {
+      sample.insert("candidateIndex",selected); sample.insert("interval",index);
+      sample.insert("focusScore",candidate_records[selected].toMap().value("focusScore"));
+      QFile bytes(frame.absoluteFilePath()); if (!bytes.open(QIODevice::ReadOnly)) return fail("Cannot hash selected video frame.");
+      sample.insert("frameSha256",QString::fromLatin1(QCryptographicHash::hash(bytes.readAll(),QCryptographicHash::Sha256).toHex()));
+    }
+    samples.append(sample);
   }
   if (frames.size() < 8 || frames.size() > frame_count) return fail("The clip did not yield enough frames for reconstruction.");
+  if (prefer_sharp_frames && frames.size() != frame_count) return fail("Selected video frames are incomplete; reconstruction was not started.");
   QVariantMap result{{"ok", true}, {"schema", "framehouse-video-capture-v1"}, {"source", source},
       {"sourceSha256", QString::fromLatin1(hash.result().toHex())}, {"originalsModified", false},
       {"durationSeconds", duration}, {"sourceWidth", width}, {"sourceHeight", height},
@@ -89,6 +171,13 @@ QVariantMap prepare_gaussian_video(const QString& source, const QString& project
       {"selection", "uniform-time-sampling-v1; nearest decoded frame, not blur-ranked or exact source PTS"},
       {"colorContract", "tagged-SDR-Rec709-to-sRGB; no HDR tonemapping; display-referred"},
       {"ffmpegFilter", filter}, {"rotation", "ffmpeg-autorotate"}};
+  if (prefer_sharp_frames) {
+    result.insert("schema","framehouse-video-capture-v2");
+    result.insert("selection","sharpest-of-three-per-interval-v1; nearest decoded candidates, not exact source PTS");
+    result.insert("focusMeasure","sRGB-luma-Laplacian-variance-max320-v1");
+    result.insert("focusCandidates",candidate_records); result.insert("candidateCount",candidate_records.size());
+    result.insert("selectionScope","One frame per time interval; focus ranking does not certify capture coverage, static geometry, alignment or reconstruction quality.");
+  }
   QSaveFile receipt(root.filePath("video-capture.json"));
   const auto bytes = QJsonDocument::fromVariant(result).toJson();
   if (!receipt.open(QIODevice::WriteOnly) || receipt.write(bytes) != bytes.size() || !receipt.commit())

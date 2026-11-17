@@ -302,7 +302,8 @@ ColumnLayout {
                             Layout.fillWidth: true
                             text: row.modelData.before
                             color: content.theme.textMuted
-                            font.family: content.theme.fontMono
+                            font.family: content.theme.fontNumeric
+                            font.features: content.theme.numericFontFeatures
                             font.pixelSize: content.theme.typeControl
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
@@ -325,7 +326,8 @@ ColumnLayout {
                             Layout.fillWidth: true
                             text: row.modelData.after
                             color: content.theme.textMain
-                            font.family: content.theme.fontMono
+                            font.family: content.theme.fontNumeric
+                            font.features: content.theme.numericFontFeatures
                             font.pixelSize: content.theme.typeControl
                             font.weight: row.modelData.changed ? Font.DemiBold : Font.Normal
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere

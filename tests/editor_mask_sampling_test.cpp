@@ -2,7 +2,9 @@
 #include "photo_render_utils.h"
 #include "recipe_mask_sampling.h"
 #include "mask_outline_presentation.h"
+#include "photo_source_precision.h"
 #include <QGuiApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QTemporaryDir>
 #include <QThread>
@@ -10,8 +12,12 @@
 #include <QJsonDocument>
 #include <QtConcurrent/QtConcurrentRun>
 #include <iostream>
+#include <algorithm>
+#include <atomic>
+#include <memory>
 
 namespace photo_editor::desktop {
+RenderResult render_preview_request_for_test(const RenderRequest& request);
 struct EditorPreviewControllerTestAccess {
   static void setup(EditorPreviewController& c, const QString& path, const EditRecipeState& state) {
     c.asset_id_ = QStringLiteral("overlay-proof");
@@ -32,6 +38,174 @@ struct EditorPreviewControllerTestAccess {
 };
 }
 using namespace photo_editor::desktop;
+
+bool check_bounded_color_mask_preview(const QString& root) {
+  EditRecipeState policy;
+  if (needs_native_composite(policy)) return false;
+  for (const auto& recipe : {
+           QVariantMap{{"contrast", 35.0}},
+           QVariantMap{{"masterCurvePoints", QVariantList{QVariantMap{{"x", 0.5}, {"y", 0.8}}}}},
+           QVariantMap{{"adjustments", QVariantMap{{"colorGrading", QVariantMap{
+               {"shadows", QVariantMap{{"saturation", 20.0}}}}}}}}}) {
+    for (const auto* kind : {"source", "pixel"}) {
+      auto layer = recipe;
+      layer.insert("kind", kind);
+      if (QString::fromLatin1(kind) == QStringLiteral("pixel")) {
+        layer.insert("baseImageEdit", true); layer.insert("copyBaseImage", true);
+      }
+      // This is the persisted state: no derived photoLayers() annotations.
+      policy.layers = {layer};
+      if (!needs_native_composite(policy)) return false;
+      layer.insert("enabled", false); policy.layers = {layer};
+      if (needs_native_composite(policy)) return false;
+    }
+  }
+  policy.layers.clear();
+  policy.layers = {QVariantMap{{"kind", "pixel"}, {"baseImageEdit", true}, {"copyBaseImage", true}}};
+  if (needs_native_composite(policy)) return false;
+  policy.layers = {QVariantMap{{"kind", "pixel"}, {"baseImageEdit", true}, {"copyBaseImage", true},
+      {"paintTiles", QVariantMap{{"tiles", QVariantMap{}}}}}};
+  if (needs_native_composite(policy)) return false;
+  auto edited_base = policy.layers.first().toMap();
+  edited_base.insert("paintDraftTiles", QVariantMap{{"0,0", QImage(1, 1, QImage::Format_RGBA32FPx4_Premultiplied)}});
+  policy.layers = {edited_base};
+  if (!needs_native_composite(policy)) return false;
+  policy.layers = {QVariantMap{{"kind", "pixel"}, {"paintTiles", QVariantMap{}}}};
+  if (!needs_native_composite(policy)) return false;
+  policy.layers = {QVariantMap{{"kind", "pixel"}, {"pixelData", QByteArray("pixel-payload")}, {"enabled", false}}};
+  if (needs_native_composite(policy)) return false;
+  policy.layers.clear();
+  for (const auto* kind : {"brush", "color", "luminance", "depth"}) {
+    policy.mask_stack = {QVariantMap{{"kind", kind}, {"enabled", true}}};
+    if (!needs_native_composite(policy)) return false;
+    policy.mask_stack = {QVariantMap{{"kind", kind}, {"enabled", false}}};
+    if (needs_native_composite(policy)) return false;
+  }
+  policy.mask_stack = {QVariantMap{{"kind", "rectangle"}, {"maskSetSelectionFineEdge", 20.0}}};
+  if (!needs_native_composite(policy)) return false;
+  QImage source(576, 576, QImage::Format_ARGB32);
+  source.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+  for (int y = 0; y < source.height(); ++y) for (int x = 0; x < source.width(); ++x)
+    source.setPixelColor(x, y, x < 288 ? QColor(195, 85, 35, y < 288 ? 100 : 210)
+                                     : QColor(35, 90, 175, y < 288 ? 210 : 100));
+  const auto path = QDir(root).filePath("bounded-color-mask-p3.png");
+  if (!source.save(path)) return false;
+  EditRecipeState state;
+  state.exposure = 0.7; state.contrast = 35; state.shadows = 25;
+  state.saturation = 30; state.temperature = 25; state.tint = 12;
+  state.mask_stack = {
+      QVariantMap{{"id", "luma"}, {"maskSetId", "source-color-set"}, {"kind", "luminance"},
+          {"coordinateSpace", "source"}, {"luminanceMin", 0.2}, {"luminanceMax", 0.65},
+          {"rangeFeather", 0.15}, {"exposure", -3.0}},
+      QVariantMap{{"id", "color"}, {"maskSetId", "source-color-set"}, {"kind", "color"},
+          {"coordinateSpace", "source"}, {"hueCenter", 0.07}, {"hueRange", 0.15},
+          {"rangeFeather", 0.1}, {"exposure", -3.0}}};
+  const auto render = [&](const EditRecipeState& recipe, bool full, int generation,
+                          const EditRecipeState* comparison_reference = nullptr) {
+    RenderRequest request;
+    request.source_asset_id = "bounded-color-mask-proof";
+    request.file_path = path; request.state = recipe;
+    request.generation = generation;
+    request.latest_generation = std::make_shared<std::atomic<int>>(generation);
+    request.full_resolution = full; request.max_edge = full ? 0 : 96;
+    request.full_invalidation = true; request.use_in_memory_preview = true;
+    request.draft_interactive = false; request.require_cpu_preview_image = true;
+    request.require_cpu_display_image = true; request.require_canonical_render_plan = true;
+    request.render_mode = full ? "max_preview" : "settled_preview";
+    if (comparison_reference != nullptr) {
+      request.compare_mode = true;
+      request.has_comparison_reference_state = true;
+      request.comparison_reference_state = *comparison_reference;
+    }
+    return render_preview_request_for_test(request);
+  };
+  const auto full = render(state, true, 701);
+  const auto bounded = render(state, false, 702);
+  if (!full.success || !bounded.success || full.preview_image.size() != QSize(576, 576) ||
+      bounded.preview_image.size() != QSize(96, 96)) {
+    std::cerr << "Color-mask preview routes failed full=" << full.success << ' '
+              << full.status.toStdString() << " bounded=" << bounded.success << ' '
+              << bounded.status.toStdString() << '\n';
+    return false;
+  }
+  const auto reference = full.preview_image.convertToFormat(QImage::Format_ARGB32_Premultiplied)
+      .scaled(96, 96, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+  const auto actual = bounded.preview_image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  int maximum = 0;
+  QPoint worst;
+  for (int y = 0; y < actual.height(); ++y) for (int x = 0; x < actual.width(); ++x) {
+    const auto a = actual.pixel(x, y), b = reference.pixel(x, y);
+    const auto delta = std::max({std::abs(qRed(a) - qRed(b)), std::abs(qGreen(a) - qGreen(b)),
+        std::abs(qBlue(a) - qBlue(b)), std::abs(qAlpha(a) - qAlpha(b))});
+    if (delta > maximum) { maximum = delta; worst = QPoint(x, y); }
+  }
+  auto neutral = state; neutral.mask_stack.clear();
+  const auto control = render(neutral, true, 703);
+  if (!control.success || control.preview_image == full.preview_image) return false;
+  const auto compared = render(state, false, 704, &neutral);
+  if (!compared.success || compared.preview_image.size() != QSize(96, 96) ||
+      compared.reference_preview_image.size() != QSize(96, 96)) {
+    std::cerr << "Bounded native Compare must publish edited and reference images at 96x96: "
+              << compared.status.toStdString() << '\n';
+    return false;
+  }
+  const auto reference_control = control.preview_image.convertToFormat(QImage::Format_ARGB32_Premultiplied)
+      .scaled(96, 96, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+  int compare_edited_error = 0, compare_reference_error = 0;
+  const auto compared_edited = compared.preview_image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  const auto compared_reference = compared.reference_preview_image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  for (int y = 0; y < 96; ++y) for (int x = 0; x < 96; ++x) {
+    const auto rgba_delta = [](QRgb a, QRgb b) {
+      return std::max({std::abs(qRed(a) - qRed(b)), std::abs(qGreen(a) - qGreen(b)),
+          std::abs(qBlue(a) - qBlue(b)), std::abs(qAlpha(a) - qAlpha(b))});
+    };
+    compare_edited_error = std::max(compare_edited_error,
+        rgba_delta(compared_edited.pixel(x, y), reference.pixel(x, y)));
+    compare_reference_error = std::max(compare_reference_error,
+        rgba_delta(compared_reference.pixel(x, y), reference_control.pixel(x, y)));
+  }
+  std::cout << "bounded canonical color-mask composite max premultiplied RGBA8=" << maximum
+            << " worst=" << worst.x() << ',' << worst.y()
+            << " compare_edited=" << compare_edited_error << " compare_reference=" << compare_reference_error
+            << " source=576x576 publication=96x96 full_reference=1 draft=0 visible_mask=1\n";
+  return maximum == 0 && compare_edited_error == 0 && compare_reference_error == 0;
+}
+
+bool check_source_geometry_sampling(const QString& path) {
+  EditRecipeState state;
+  const QVariantMap target{{"id","geometry-target"},{"maskSetId","geometry-target-set"},
+      {"kind","luminance"},{"coordinateSpace","source"},
+      {"luminanceMin",0.02},{"luminanceMax",0.15},{"rangeFeather",0.04}};
+  state.mask_stack={QVariantMap{{"id","spatial-prefix"},{"maskSetId","spatial-prefix-set"},
+      {"kind","rectangle"},{"toolRole","selection"},{"coordinateSpace","source"},
+      {"centerX",0.62},{"centerY",0.4},{"radiusX",0.18},{"radiusY",0.26},
+      {"rotation",17.0},{"feather",0.1},{"exposure",1.0}},target};
+  QImage decoded;
+  photo_editor::pipeline::DecodedImageMetadata metadata;
+  if (!decode_source_image(path,&decoded,512,state,&metadata)) return false;
+  const auto full=prepare_recipe_mask_sampling(decoded,state,metadata,target,QRect(QPoint(),decoded.size()));
+  if (!full.valid) return false;
+  const auto full_alpha=full.evaluate({full.compile_mask(target)});
+  if (!full_alpha.valid) return false;
+  const QRect crop(decoded.width()/4,decoded.height()/4,decoded.width()/2,decoded.height()/2);
+  const auto cropped=prepare_recipe_mask_sampling(decoded,state,metadata,target,crop);
+  if (!cropped.valid) return false;
+  const auto crop_alpha=cropped.evaluate({cropped.compile_mask(target)});
+  if (!crop_alpha.valid || crop_alpha.size!=crop.size()) return false;
+  bool selected=false,unselected=false;
+  for (int y=0;y<crop.height();++y) for (int x=0;x<crop.width();++x) {
+    const auto expected=full_alpha.alpha_mask.at((y+crop.y())*decoded.width()+x+crop.x());
+    const auto actual=crop_alpha.alpha_mask.at(y*crop.width()+x);
+    if (actual!=expected) {
+      std::cerr<<"Recipe mask sampling must retain source crop geometry for preceding spatial masks at "
+          <<x<<','<<y<<'\n';
+      return false;
+    }
+    selected=selected || static_cast<unsigned char>(actual)>0;
+    unselected=unselected || static_cast<unsigned char>(actual)<255;
+  }
+  return selected && unselected;
+}
 
 bool check_small_outline_worker(const QString& path, const QString& kind) {
   EditRecipeState state;
@@ -250,6 +424,7 @@ int main(int argc, char** argv) {
   qputenv("PHOTO_EDITOR_CACHE_DIR", root.filePath("cache").toUtf8());
   qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
   QGuiApplication app(argc, argv);
+  if (!check_bounded_color_mask_preview(root.path())) return 1;
   const QVariantMap geometric{{"kind", "rectangle"}, {"operation", "add"}};
   if (!clean_canvas_outline_matches_final_single_mask(geometric)) return 1;
   for (const auto* key : {"opacity", "density", "maskSetOpacity", "maskSetDensity"}) {
@@ -267,6 +442,7 @@ int main(int argc, char** argv) {
       image.setPixelColor(x, y, QColor(10 + x, 5 + y * 2, 35 + x));
   const auto path = root.filePath("gradient.jpg");
   if (!image.save(path)) return 1;
+  if (!check_source_geometry_sampling(path)) return 1;
   for (const auto* kind : {"linear", "radial"})
     if (!check_small_outline_worker(path, QString::fromLatin1(kind))) return 1;
   QStringList paths{path};

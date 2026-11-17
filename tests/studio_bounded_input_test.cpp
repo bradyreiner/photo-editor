@@ -14,6 +14,7 @@
 #include <QVariant>
 #include <QVariantMap>
 #include <QVector>
+#include "scope_plot_item.h"
 
 namespace {
 
@@ -161,10 +162,15 @@ Item {
     property bool scopeShowGrid: true
     property bool scopeShowTrace: true
     property bool scopeShowDensity: true
+    property real scopeDensityGain: 1
+    property var scopeReferenceFrame: ({})
     property color hairline: "#445566"
     property alias previewController: preview
     QtObject {
         id: preview
+        property var scopeFrame: ({})
+        property bool scopesFrozen: false
+        property string scopeRangeMode: "SDR"
         property var histogramRed: []
         property var histogramGreen: []
         property var histogramBlue: []
@@ -318,10 +324,11 @@ Item {
   const auto* image = card->findChild<QObject*>(QStringLiteral("filmstripImage"));
   const auto* placeholder = card->findChild<QObject*>(QStringLiteral("filmstripPlaceholder"));
   const auto* selection =
-      card->findChild<QObject*>(QStringLiteral("filmstripSelectionIndicator"));
+      card->findChild<QObject*>(QStringLiteral("thumbnailSelectionEdge"));
   return image != nullptr && placeholder != nullptr && selection != nullptr &&
          placeholder->property("visible").toBool() &&
-         selection->property("visible").toBool();
+         selection->property("visible").toBool() &&
+         card->findChild<QObject*>(QStringLiteral("filmstripSelectionIndicator")) == nullptr;
 }
 
 bool verify_offline_recovery_banner(QQmlEngine* engine) {
@@ -480,6 +487,7 @@ bool verify_tool_transition_overlay(QQmlEngine* engine) {
 
 int main(int argc, char** argv) {
   QGuiApplication app(argc, argv);
+  qmlRegisterType<photo_editor::desktop::ScopePlotItem>("PhotoEditor", 1, 0, "ScopePlotItem");
   QQmlEngine engine;
 
   auto detail = create_component(&engine, QStringLiteral("StudioDetailTextureControl.qml"));

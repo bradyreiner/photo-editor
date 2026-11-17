@@ -1,12 +1,16 @@
 #include "app_bootstrap.h"
 
 #include <QCoreApplication>
+#include <QAbstractSocket>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QHostAddress>
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTcpSocket>
+#include <QUrl>
 
 #include <algorithm>
 
@@ -157,6 +161,60 @@ QString direct_helper_path(const QString& binary_name) {
   }
 
   return {};
+}
+
+enum class DatabaseEndpointPreflight {
+  NotApplicable,
+  ReachableOrUncertain,
+  ConnectionRefused,
+};
+
+DatabaseEndpointPreflight preflight_database_endpoint(
+    const QString& database_url,
+    QString* error_message) {
+  const QUrl url(database_url, QUrl::StrictMode);
+  const auto scheme = url.scheme().toLower();
+  if (!url.isValid() ||
+      (scheme != QStringLiteral("postgres") &&
+       scheme != QStringLiteral("postgresql"))) {
+    return DatabaseEndpointPreflight::NotApplicable;
+  }
+
+  const auto port = url.port(-1);
+  if (port <= 0 || port > 65535) {
+    return DatabaseEndpointPreflight::NotApplicable;
+  }
+
+  QHostAddress address;
+  if (!address.setAddress(url.host()) || !address.isLoopback()) {
+    // Only literal loopback hosts are eligible. Never resolve DNS or probe
+    // remote/custom endpoints here.
+    return DatabaseEndpointPreflight::NotApplicable;
+  }
+
+  QTcpSocket socket;
+  socket.connectToHost(address, static_cast<quint16>(port));
+  constexpr int kEndpointPreflightWaitMs = 250;
+  socket.waitForConnected(kEndpointPreflightWaitMs);
+  if (socket.error() != QAbstractSocket::ConnectionRefusedError) {
+    // A timeout or any other socket outcome is ambiguous; preserve the
+    // existing helper path and its established timeout behavior.
+    return DatabaseEndpointPreflight::ReachableOrUncertain;
+  }
+
+  observability::logWarning(
+      photoEditorCatalogLog(),
+      QStringLiteral("catalog.database.endpoint_refused"),
+      {
+          {QStringLiteral("host"), address.toString()},
+          {QStringLiteral("port"), port},
+      });
+  if (error_message != nullptr) {
+    *error_message = QStringLiteral(
+        "catalog.database.endpoint_refused: The configured local PostgreSQL "
+        "endpoint is refusing TCP connections.");
+  }
+  return DatabaseEndpointPreflight::ConnectionRefused;
 }
 
 QStringList helper_arguments(const QString& binary_name, const QStringList& arguments) {
@@ -465,8 +523,11 @@ bool run_helper(
   const auto large_timeline_document_payload =
       binary_name == QStringLiteral("catalog_timeline_documents") &&
       arguments.value(0) == QStringLiteral("upsert");
+  const auto large_carousel_document_payload =
+      binary_name == QStringLiteral("catalog_carousel_documents") &&
+      arguments.value(0) == QStringLiteral("upsert");
   const auto use_stdin =
-      (large_export_job_payload || large_timeline_document_payload) &&
+      (large_export_job_payload || large_timeline_document_payload || large_carousel_document_payload) &&
       catalog_helper_payload_uses_stdin(arguments.value(1));
   const auto stream_timeline_payload = use_stdin && large_timeline_document_payload;
   qsizetype timeline_stdin_payload_size = 0;
@@ -800,6 +861,14 @@ bool AppBootstrap::runCatalogHelper(
     int timeout_ms) {
   QProcessEnvironment environment;
   if (!prepareProcessEnvironment(&environment, error_message)) {
+    return false;
+  }
+  if (preflight_database_endpoint(
+          environment.value(QStringLiteral("PHOTO_EDITOR_DATABASE_URL")),
+          error_message) == DatabaseEndpointPreflight::ConnectionRefused) {
+    if (output != nullptr) {
+      output->clear();
+    }
     return false;
   }
   return run_helper(

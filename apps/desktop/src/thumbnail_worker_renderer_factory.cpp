@@ -1,4 +1,6 @@
 #include "photo_paint_surface.h"
+#include "photo_vector_path.h"
+#include "photo_smart_object.h"
 #include "thumbnail_worker_renderer_factory.h"
 
 #include "canonical_composite_mask_alpha.h"
@@ -13,7 +15,9 @@
 #include "mask_range_preview_math.h"
 #include "mask_source_revision.h"
 #include "photo_render_utils.h"
+#include "photo_source_precision.h"
 #include "photo_layer_adjustment_recipe.h"
+#include "render_plan_store.h"
 #include "scaled_mask_matte_service.h"
 #include "thumbnail_render_job.h"
 #include "working_image.h"
@@ -28,6 +32,26 @@
 #include <utility>
 namespace photo_editor::desktop {
 namespace {
+
+bool literal_alpha_without_source_color(const QVariantMap& definition) {
+  const auto mask = normalized_mask_definition(definition);
+  const auto kind = mask.value(QStringLiteral("kind")).toString();
+  if (kind == QStringLiteral("color") || kind == QStringLiteral("luminance") ||
+      kind == QStringLiteral("depth")) return false;
+  for (const auto* key : {"selectionFineEdge", "selectionFeather", "selectionBlur",
+           "selectionDecontaminate", "maskSetSelectionFineEdge", "maskSetSelectionDecontaminate"})
+    if (mask.value(QLatin1String(key)).toDouble() > 1.0e-9 ||
+        definition.value(QLatin1String(key)).toDouble() > 1.0e-9) return false;
+  for (const auto* key : {"refineLuminanceMin", "refineSaturationMin", "refineDepthMin"})
+    if (mask.value(QLatin1String(key)).toDouble() > 1.0e-9) return false;
+  for (const auto* key : {"refineLuminanceMax", "refineSaturationMax", "refineDepthMax"})
+    if (mask.value(QLatin1String(key), 1.0).toDouble() < 1.0 - 1.0e-9) return false;
+  if (mask.value(QStringLiteral("refineHueRange"), 0.5).toDouble() < 0.5 - 1.0e-9) return false;
+  for (const auto* key : {"sources", "components", "masks"})
+    for (const auto& child : definition.value(QLatin1String(key)).toList())
+      if (!literal_alpha_without_source_color(child.toMap())) return false;
+  return true;
+}
 
 QString render_source_layer_thumbnail(
     const QVariantMap& layer,
@@ -45,14 +69,29 @@ QString render_source_layer_thumbnail(
   QImage decoded;
   const auto embedded = layer.value(QStringLiteral("pixelData")).toByteArray();
   const auto path = layer.value(QStringLiteral("sourcePath")).toString();
-  if (layer.contains("paintTiles")) {
+  const auto float_paint = layer.contains(QStringLiteral("paintTiles"));
+  auto content_policy = neutral;
+  content_policy.layers = {layer};
+  const auto native_content = needs_native_composite(content_policy);
+  if (!layer.value(QStringLiteral("vectorPath")).toMap().isEmpty()) {
+    vector_paths::VectorPathDocument document; QString error;
+    const auto size = QSize(layer.value("pixelWidth").toInt(), layer.value("pixelHeight").toInt()).scaled(128, 128, Qt::KeepAspectRatio);
+    if (!vector_paths::to_document(layer.value(QStringLiteral("vectorPath")).toMap(), &document, &error)) return {};
+    decoded = vector_paths::rasterize_fill(document, size, QColor(layer.value("vectorFillColor", "#4a78ff").toString()), &error);
+    if (!decoded.isNull() && layer.value("vectorStrokeWidth").toDouble() > 0) {
+      const auto stroke = vector_paths::rasterize_stroke(document, size, QColor(layer.value("vectorStrokeColor", "#ffffff").toString()),
+          layer.value("vectorStrokeWidth").toDouble() * size.width() / std::max(1, layer.value("pixelWidth").toInt()), &error);
+      QPainter painter(&decoded); painter.drawImage(QPoint(), stroke);
+    }
+  } else if (float_paint) {
     const auto canvas = QSize(layer.value("pixelWidth").toInt(),layer.value("pixelHeight").toInt());
-    decoded = rasterize_photo_paint_layer(layer,canvas.scaled(128,128,Qt::KeepAspectRatio));
+    decoded = rasterize_photo_paint_layer(layer,
+        native_content ? canvas : canvas.scaled(128,128,Qt::KeepAspectRatio));
   } else if (!embedded.isEmpty()) {
-    decoded = QImage::fromData(embedded, "PNG");
+    decoded = QImage::fromData(embedded);
   } else if (!decode_source_image(
                  path,
-                 &decoded, 128, neutral, &source_metadata, cancellation)) {
+                 &decoded, native_content ? 0 : 128, neutral, &source_metadata, cancellation)) {
     return {};
   }
   if (decoded.isNull() || cancellation.cancelled()) return {};
@@ -62,18 +101,36 @@ QString render_source_layer_thumbnail(
     decoded.setColorSpace(QColorSpace(QColorSpace::SRgb));
   }
   auto content_state = neutral;
-  if (layer.value(QStringLiteral("hasNonNeutralAdjustments")).toBool()) {
+  if (float_paint) {
+    // Float paint is scene radiance, including signed/wide-gamut/HDR values.
+    // Match the document's photographic output without importing its grade,
+    // crop, masks, display ICC or layer placement into this content thumbnail.
+    content_state.working_color_profile = request.state.working_color_profile;
+    content_state.photographic_rendering_model = request.state.photographic_rendering_model;
+  }
+  if (photo_layer_has_non_neutral_adjustments(layer)) {
     auto recipe = photo_layer_adjustment_recipe(layer);
     recipe.insert(QStringLiteral("kind"), QStringLiteral("adjustment"));
     recipe.insert(QStringLiteral("id"), QStringLiteral("thumbnail-content-colors"));
     content_state.layers = {recipe};
     content_state.photographic_rendering_model = request.state.photographic_rendering_model;
+    content_state.working_color_profile = request.state.working_color_profile;
   }
-  const auto rendered = scene_linear_source || !content_state.layers.isEmpty() ? render_output_image_with_backend(
+  std::optional<photo_editor::pipeline::RenderPlan> paint_plan;
+  if (float_paint && normalized_photographic_rendering_model_name(
+          content_state.photographic_rendering_model) == QStringLiteral("aces2-ocio-v1")) {
+    const auto admission = RenderPlanStore::shared().admit(
+        QStringLiteral("paint-content-thumbnail:%1").arg(decoded.cacheKey()), {}, content_state,
+        decoded.size(), photo_editor::pipeline::RenderPurpose::Thumbnail,
+        photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation);
+    if (!admission.admitted) return {};
+    paint_plan = *admission.plan;
+  }
+  const auto rendered = float_paint || scene_linear_source || !content_state.layers.isEmpty() ? render_output_image_with_backend(
       decoded, content_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
       RenderBackendPreference::CpuOnly, &source_metadata, nullptr, {},
       photo_editor::pipeline::RemovalQuality::Final,
-      RenderOutputPolicy::DisplayReferred, nullptr, cancellation)
+      RenderOutputPolicy::DisplayReferred, paint_plan ? &*paint_plan : nullptr, cancellation)
       : convert_tagged_qimage_color_space(decoded, QColorSpace(QColorSpace::SRgb),
             QImage::Format_ARGB32, QImageColorConversionPurpose::OutputPublication);
   if (rendered.isNull() || cancellation.cancelled()) return {};
@@ -84,20 +141,24 @@ QString render_source_layer_thumbnail(
   if (metadata != nullptr) {
     const auto content_colors = !content_state.layers.isEmpty();
     metadata->insert(QStringLiteral("thumbnailRenderSource"), content_colors
-        ? QStringLiteral("layer-content-colors") : scene_linear_source
+        ? QStringLiteral("layer-content-colors") : float_paint
+        ? QStringLiteral("paint-photographic-output") : scene_linear_source
         ? QStringLiteral("source-neutral-develop") : QStringLiteral("source-icc-conversion"));
-    metadata->insert(QStringLiteral("thumbnailSharedRenderPath"), scene_linear_source || content_colors);
+    metadata->insert(QStringLiteral("thumbnailSharedRenderPath"), float_paint || scene_linear_source || content_colors);
     metadata->insert(QStringLiteral("thumbnailSharedRenderPathContract"),
-        content_colors ? QStringLiteral("raster-content-colors-canonical-output-v1")
+        float_paint ? QStringLiteral("float-paint-content-canonical-output-v1|alpha:preserve")
+        : content_colors ? QStringLiteral("raster-content-colors-canonical-output-v1")
         : scene_linear_source ? QStringLiteral("source-neutral-canonical-output-v1")
                             : QStringLiteral("source-display-referred-icc-v1"));
     metadata->insert(QStringLiteral("thumbnailColorManaged"), true);
     metadata->insert(QStringLiteral("thumbnailColorManagementContract"),
         QStringLiteral("source-thumbnail-v1|own-metadata|raw:neutral-aces2|display:icc|srgb|document-grade:none"));
     metadata->insert(QStringLiteral("thumbnailPreviewRenderMode"), QStringLiteral("source_neutral_srgb"));
-    metadata->insert(QStringLiteral("thumbnailSourceWorkingProfile"), scene_linear_source
+    metadata->insert(QStringLiteral("thumbnailSourceWorkingProfile"), float_paint || content_colors
+        ? content_state.working_color_profile : scene_linear_source
         ? neutral.working_color_profile : QStringLiteral("Embedded ICC"));
-    metadata->insert(QStringLiteral("thumbnailSourceRenderingModel"), scene_linear_source
+    metadata->insert(QStringLiteral("thumbnailSourceRenderingModel"), float_paint || content_colors
+        ? content_state.photographic_rendering_model : scene_linear_source
         ? neutral.photographic_rendering_model : QStringLiteral("none-display-referred"));
   }
   return source;
@@ -451,12 +512,34 @@ QVariantMap render_mask_thumbnail_entries(
     return entries;
   }
 
+  auto full_resolution_color = needs_native_composite(request.state);
+  auto literal_alpha = true;
+  for (const auto& set_value : request.mask_sets)
+    for (const auto& source_value : set_value.toMap().value(QStringLiteral("sources")).toList()) {
+      full_resolution_color = full_resolution_color || needs_native_mask_sampling(source_value.toMap());
+      literal_alpha = literal_alpha && literal_alpha_without_source_color(source_value.toMap());
+    }
+  for (const auto& mask : request.state.mask_stack)
+    literal_alpha = literal_alpha && literal_alpha_without_source_color(mask.toMap());
+
   QImage source_image;
   photo_editor::pipeline::DecodedImageMetadata source_metadata;
-  if (!decode_source_image(
+  if (literal_alpha) {
+    auto size = source_image_size(request.job.file_path);
+    if (!full_resolution_color) size = size.scaled(kMaskThumbnailBackingEdge,
+        kMaskThumbnailBackingEdge, Qt::KeepAspectRatio);
+    // Dimensions only: literal native alpha never reads these pixels.
+    if (!size.isEmpty()) {
+      source_image = QImage(size, QImage::Format_Alpha8);
+      source_image.fill(Qt::transparent);
+    }
+  }
+  // Some RAW formats have no Qt dimension probe. Keep their decoder fallback
+  // rather than interpreting an unavailable size as an empty source.
+  if (source_image.isNull() && !decode_source_image(
           request.job.file_path,
           &source_image,
-          kMaskThumbnailBackingEdge,
+          full_resolution_color ? 0 : kMaskThumbnailBackingEdge,
           request.state,
           &source_metadata,
           photo_editor::pipeline::CancellationToken{
@@ -464,50 +547,72 @@ QVariantMap render_mask_thumbnail_entries(
           })) {
     return entries;
   }
-  // This image supplies raster dimensions only, never display RGB mask samples.
+  if (source_image.isNull()) return entries;
+  // Color selection is nonlinear. Evaluate it on source-resolution working
+  // pixels before reducing alpha; selecting from a reduced encoded RGBA image
+  // changes hue/luminance and quantizes partially transparent colors. Purely
+  // geometric masks retain the bounded preview path.
   const auto thumbnail_image = apply_crop(source_image, request.state);
   if (thumbnail_image.isNull()) {
     return entries;
   }
 
-  const auto pipeline_state = compile_base_color_adjustment_state(
+  auto pipeline_state = compile_base_color_adjustment_state(
       request.state, &source_metadata);
+  const auto source_geometry = DesktopSourceGeometry{source_image.size(),
+      crop_rect_for_image(source_image.size(), request.state)};
+  const auto edge_area = source_geometry.edge_area();
+  pipeline_state.input_transform.source_area_x = edge_area.x();
+  pipeline_state.input_transform.source_area_y = edge_area.y();
+  pipeline_state.input_transform.source_area_width = edge_area.width();
+  pipeline_state.input_transform.source_area_height = edge_area.height();
+  const auto mask_area = source_geometry.mask_area();
+  const auto mask_basis = QSizeF(source_image.width() - 1, source_image.height() - 1);
   const auto& color_pipeline = pipeline_state.color_pipeline;
   const auto preserve_device_rgb =
       photo_editor::pipeline::decoded_image_requires_engine_input_transform(source_metadata);
   // Linearize before crop, exactly as the preview decoder does. Converting a
   // JPEG through a different intermediate QImage format changes ICC rounding.
-  const auto full_source = working_image_from_qimage(
-      source_image, request.state.working_color_profile,
-      &color_pipeline.input_icc_profile_asset, preserve_device_rgb);
-  if (full_source.isNull()) return entries;
-  auto working = crop_working_image(
-      full_source, crop_rect_for_image(source_image.size(), request.state));
-  if (working.isNull()) return entries;
-  // Match the source-scoped RAW highlight analysis used by cropped previews.
-  auto prefix = photo_editor::pipeline::prepare_color_prefix_stage_context(
-      full_source.pixels, full_source.width, full_source.height, pipeline_state);
+  auto working = WorkingImage{};
+  working.width = thumbnail_image.width(); working.height = thumbnail_image.height();
   const photo_editor::pipeline::CancellationToken cancellation{
       .cancellation_requested = request.cancellation.get()};
   using namespace photo_editor::pipeline;
-  if (!apply_color_normalize_raw_stage(&working.pixels, working.width, working.height,
-          pipeline_state, &prefix, cancellation) ||
-      !apply_color_camera_characterization_stage(&working.pixels, working.width, working.height,
-          pipeline_state, prefix, cancellation) ||
-      !apply_color_scene_adjustments_stage(&working.pixels, working.width, working.height,
-          pipeline_state, cancellation) ||
-      !apply_color_tone_stage(&working.pixels, working.width, working.height,
-          pipeline_state, cancellation) ||
-      !apply_color_curves_stage(&working.pixels, working.width, working.height,
-          pipeline_state, cancellation) ||
-      !apply_color_look_stage(&working.pixels, working.width, working.height,
-          pipeline_state, cancellation)) return entries;
+  if (!literal_alpha) {
+    const auto full_source = working_image_from_qimage(
+        source_image, request.state.working_color_profile,
+        &color_pipeline.input_icc_profile_asset, preserve_device_rgb);
+    if (full_source.isNull()) return entries;
+    working = crop_working_image(
+        full_source, crop_rect_for_image(source_image.size(), request.state));
+    if (working.isNull()) return entries;
+    // Match the source-scoped RAW highlight analysis used by cropped previews.
+    auto full_prefix_state = pipeline_state;
+    full_prefix_state.input_transform.source_area_x = 0;
+    full_prefix_state.input_transform.source_area_y = 0;
+    full_prefix_state.input_transform.source_area_width = 1;
+    full_prefix_state.input_transform.source_area_height = 1;
+    auto prefix = photo_editor::pipeline::prepare_color_prefix_stage_context(
+        full_source.pixels, full_source.width, full_source.height, full_prefix_state);
+    if (!apply_color_normalize_raw_stage(&working.pixels, working.width, working.height,
+            pipeline_state, &prefix, cancellation) ||
+        !apply_color_camera_characterization_stage(&working.pixels, working.width, working.height,
+            pipeline_state, prefix, cancellation) ||
+        !apply_color_scene_adjustments_stage(&working.pixels, working.width, working.height,
+            pipeline_state, cancellation) ||
+        !apply_color_tone_stage(&working.pixels, working.width, working.height,
+            pipeline_state, cancellation) ||
+        !apply_color_curves_stage(&working.pixels, working.width, working.height,
+            pipeline_state, cancellation) ||
+        !apply_color_look_stage(&working.pixels, working.width, working.height,
+            pipeline_state, cancellation)) return entries;
+  }
   constexpr auto exposure_gain = 1.0;
   constexpr std::array<double, 3> white_balance{1.0, 1.0, 1.0};
   const auto look_pixels = working.pixels;
   const auto active_sets = compile_pipeline_local_mask_sets(
       request.state.mask_stack, DesktopRenderPurpose::Preview,
-      LocalMaskRasterPolicy::RebuildEditableAtOutputResolution, thumbnail_image.size());
+      LocalMaskRasterPolicy::RebuildEditableAtOutputResolution, thumbnail_image.size(), mask_area, mask_basis);
   QHash<QString, const LocalMaskSet*> active_set_lookup;
   for (const auto& set : active_sets) active_set_lookup.insert(QString::fromStdString(set.id), &set);
   QHash<QString, int> set_order;
@@ -523,6 +628,8 @@ QVariantMap render_mask_thumbnail_entries(
   }
   LocalMaskSet composite_settings;
   bool composite_phase = false;
+  auto cached_alpha_definition = std::optional<LocalMaskSet>{};
+  QVariantMap cached_alpha_payload;
   const auto thumbnail_source_revision = mask_tile_source_revision(
       request.job.file_path,
       request.state,
@@ -530,7 +637,8 @@ QVariantMap render_mask_thumbnail_entries(
   const auto queue_dependencies = ThumbnailRefreshQueueMaskThumbnailDependencies{
       .scaled_mask_source = mask_with_scaled_segmentation_matte,
       .thumbnail_payload = [&working, &look_pixels, &color_pipeline,
-                            &composite_settings, &composite_phase, cancellation](
+                            &composite_settings, &composite_phase, cancellation, mask_area, mask_basis,
+                            literal_alpha, &cached_alpha_definition, &cached_alpha_payload](
           const QImage& image, const QVariantList& masks, double,
           const std::array<double, 3>&) -> QVariantMap {
         if (cancellation.cancelled() || masks.isEmpty()) return {};
@@ -539,11 +647,22 @@ QVariantMap render_mask_thumbnail_entries(
         for (const auto& value : masks) {
           mask_set.sources.push_back(compile_pipeline_local_mask(
               value.toMap(), LocalMaskRasterPolicy::RebuildEditableAtOutputResolution,
-              image.size()));
+              image.size(), mask_area, mask_basis));
         }
-        const auto alpha = rasterize_local_mask_set_alpha_with_context(
-            mask_set, working.width, working.height, working.pixels, look_pixels, color_pipeline);
-        if (alpha.size() != working.pixels.size() || cancellation.cancelled()) return {};
+        auto alpha_definition = mask_set;
+        alpha_definition.id.clear(); alpha_definition.name.clear();
+        alpha_definition.exposure = alpha_definition.contrast = alpha_definition.highlights =
+            alpha_definition.shadows = alpha_definition.whites = alpha_definition.blacks =
+            alpha_definition.temperature = alpha_definition.tint = alpha_definition.vibrance =
+            alpha_definition.saturation = alpha_definition.hue_shift = alpha_definition.saturation_shift =
+            alpha_definition.colorize_hue = alpha_definition.colorize_strength = 0.0;
+        if (literal_alpha && cached_alpha_definition && *cached_alpha_definition == alpha_definition)
+          return cached_alpha_payload;
+        const auto alpha = literal_alpha ? rasterize_local_mask_set_alpha(
+            mask_set, working.width, working.height, {}, color_pipeline)
+            : rasterize_local_mask_set_alpha_with_context(
+                mask_set, working.width, working.height, working.pixels, look_pixels, color_pipeline);
+        if (alpha.size() != static_cast<std::size_t>(working.width) * static_cast<std::size_t>(working.height) || cancellation.cancelled()) return {};
         const auto evaluated = evaluate_mask_alpha(
             image.size(), static_cast<int>(masks.size()),
             [&alpha, &working](int x, int y, double, double) {
@@ -556,7 +675,7 @@ QVariantMap render_mask_thumbnail_entries(
             grayscale_mask_alpha_image(evaluated), kMaskThumbnailBackingEdge);
         const auto display_cache_key = QStringLiteral("sha1:%1").arg(QString::fromLatin1(
             QCryptographicHash::hash(
-                QStringLiteral("mask-input-v3|%1|%2x%3|%4|square:%5")
+                QStringLiteral("mask-input-v4-source-color|%1|%2x%3|%4|square:%5")
                     .arg(evaluated.alpha_hash).arg(working.width).arg(working.height)
                     .arg(masks.size()).arg(kMaskThumbnailBackingEdge).toUtf8(),
                 QCryptographicHash::Sha1).toHex()));
@@ -568,7 +687,9 @@ QVariantMap render_mask_thumbnail_entries(
             });
         auto payload = mask_thumbnail_payload_from_alpha(displayed);
         payload.insert(QStringLiteral("thumbnailMaskInputContract"),
-            QStringLiteral("mask-input-v3|float|source-metadata|working-profile|through-look|stack-prefix|fixed-edge-reference"));
+            literal_alpha ? QStringLiteral("mask-input-v5|native-spatial-alpha|source-rgb:unused|alpha-before-resize")
+              : QStringLiteral("mask-input-v4|float|source-metadata|working-profile|through-look|stack-prefix|fixed-edge-reference|color-alpha-before-resize"));
+        if (literal_alpha) { cached_alpha_definition = std::move(alpha_definition); cached_alpha_payload = payload; }
         return payload;
       },
       .thumbnail_metadata = scaled_mask_matte_metadata,
@@ -601,7 +722,7 @@ QVariantMap render_mask_thumbnail_entries(
     if (const auto* active = active_set_lookup.value(set_id, nullptr)) composite_settings = *active;
     // Advance once in recipe order while retaining the immutable edge image.
     // This avoids replaying every preceding adjustment for every UI row.
-    while (next_active_set < active_sets.size() &&
+    while (!literal_alpha && next_active_set < active_sets.size() &&
         set_order.value(QString::fromStdString(active_sets[next_active_set].id), -1) <
             set_order.value(set_id, -1)) {
       preceding.local_mask_sets = {active_sets[next_active_set++]};

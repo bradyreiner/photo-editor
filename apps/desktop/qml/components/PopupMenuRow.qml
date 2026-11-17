@@ -25,15 +25,21 @@ Button {
     readonly property bool itemDanger: modelData.danger === true || modelData.destructive === true
     readonly property bool previousDanger: previousItem && (previousItem.danger === true || previousItem.destructive === true)
     readonly property bool itemSeparatorBefore: modelData.separatorBefore === true || (itemDanger && index > 0 && !previousDanger)
-    readonly property string itemTooltip: !enabled && itemDisabledReason.length > 0
-                                          ? itemLabel + " - " + itemDisabledReason
-                                          : String(modelData.tooltip || itemLabel)
+    readonly property string itemAccessibleDetails: [itemDescription, itemDisabledReason]
+                                                    .filter(function(detail) { return detail.length > 0 })
+                                                    .join(" ")
+    readonly property string itemTooltip: {
+        const details = [String(modelData.tooltip || ""), itemDisabledReason, itemDescription]
+            .filter(function(detail) { return detail.length > 0 })
+        return details.length > 0 ? details.join("\n") : itemLabel
+    }
+    readonly property bool transientPopupKeyboardScope: true
     readonly property int rowMinimumHeight: theme.controlHeightDense
     readonly property int rowPreferredHeight: theme.menuItemHeight
     readonly property int menuIconColumnWidth: theme.scaled(16)
     readonly property int menuShortcutColumnWidth: theme.scaled(72)
-    readonly property string popupMenuRowContract: "popup-menu-row:v3|shared-delegate:true|keyboard:true|hover:true|description:true|disabled-reason:true|disabled-fallback:true|checked-state:true|danger-state:true|shortcut-fit:true|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true|role:menu-item"
-    readonly property string readableTextContract: "readable-text:v2|ellipsis:none|label-wrap:true|description-wrap:true|disabled-wrap:true|shortcut-fit:true|tooltip-full:true|accessibility-full:true|full-label-available:true"
+    readonly property string popupMenuRowContract: "popup-menu-row:v4|shared-delegate:true|keyboard:true|hover:true|description:tooltip-accessible|disabled-reason:tooltip-accessible|disabled-fallback:true|checked-state:true|danger-state:true|shortcut-font:ui|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true|role:menu-item"
+    readonly property string readableTextContract: "readable-text:v3|ellipsis:none|label-wrap:true|shortcut-wrap:true|tooltip-full:true|accessibility-full:true|details:not-inline|full-label-available:true"
     readonly property string menuGeometryContract: "popup-menu-row-geometry:v2|min-height:dense-token|preferred-height:menu-token|icon-column:16|shortcut-column:72|shortcut-align:right|label-lines:" +
                                                    String(root.labelMaxLines)
 
@@ -42,6 +48,7 @@ Button {
     signal navigateRequested(int direction)
     signal firstRequested()
     signal lastRequested()
+    signal dismissRequested()
 
     Theme { id: theme }
 
@@ -54,7 +61,7 @@ Button {
                 ? root.objectNamePrefix + "Item" + index
                 : ""
     Accessible.name: itemLabel
-    Accessible.description: itemDisabledReason.length > 0 ? itemDisabledReason : itemDescription
+    Accessible.description: itemAccessibleDetails
     Accessible.role: Accessible.MenuItem
     Accessible.checked: itemChecked
     AppToolTip {
@@ -68,7 +75,10 @@ Button {
     onClicked: activated(itemKey)
 
     Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+        if (event.key === Qt.Key_Escape) {
+            root.dismissRequested()
+            event.accepted = true
+        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             event.accepted = true
             if (root.enabled && !event.isAutoRepeat)
                 root.activated(root.itemKey)
@@ -88,15 +98,15 @@ Button {
     }
 
     background: CommandButtonSurface {
+        tone: root.itemDanger ? "danger" : "secondary"
         cornerRadius: theme.radiusControl
         hovered: root.hovered
         pressed: root.down
-        selected: root.itemChecked
+        selected: false
         interactiveEnabled: root.enabled
-        fillColor: theme.commandFill(root.itemDanger ? "danger" : "secondary", root.itemChecked,
+        fillColor: theme.commandFill(root.itemDanger ? "danger" : "secondary", false,
                                      root.hovered, root.down, root.enabled, true)
-        borderWidth: theme.commandBorderWidth(root.visualFocus)
-        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
+        focused: root.visualFocus
     }
 
     contentItem: ColumnLayout {
@@ -115,9 +125,10 @@ Button {
             spacing: theme.space8
 
             AppIcon {
+                objectName: "sharedMenuIcon"
                 Layout.preferredWidth: root.menuIconColumnWidth
                 Layout.preferredHeight: root.menuIconColumnWidth
-                name: root.itemChecked ? "check" : root.itemIcon
+                name: root.itemIcon.length > 0 ? root.itemIcon : root.itemChecked ? "check" : ""
                 color: root.itemDanger ? theme.error : (root.itemChecked ? theme.selectionAccent : !root.enabled ? theme.textFaint : theme.textMuted)
             }
 
@@ -127,6 +138,8 @@ Button {
 
                 Text {
                     Layout.fillWidth: true
+                    objectName: "sharedCommandLabel"
+                    fontSizeMode: Text.FixedSize
                     text: root.itemLabel
                     color: !root.enabled
                            ? theme.alpha(theme.textMuted, 0.84)
@@ -143,49 +156,34 @@ Button {
                     clip: true
                 }
 
-                Text {
-                    Layout.fillWidth: true
-                    visible: root.enabled && root.itemDescription.length > 0
-                    text: root.itemDescription
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: theme.typeCaption
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    maximumLineCount: 2
-                    elide: Text.ElideNone
-                    clip: true
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    visible: !root.enabled && root.itemDisabledReason.length > 0
-                    text: root.itemDisabledReason
-                    color: theme.alpha(theme.textMuted, 0.88)
-                    font.family: theme.fontUi
-                    font.pixelSize: theme.typeCaption
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    maximumLineCount: 2
-                    elide: Text.ElideNone
-                    clip: true
-                }
             }
 
             Text {
+                objectName: "sharedCommandCaption"
                 visible: root.itemShortcut.length > 0
                 text: root.itemShortcut
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: theme.typeCaption
                 horizontalAlignment: Text.AlignRight
                 verticalAlignment: Text.AlignVCenter
-                maximumLineCount: 1
                 elide: Text.ElideNone
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 10
+                fontSizeMode: Text.FixedSize
+                wrapMode: Text.Wrap
                 Layout.preferredWidth: root.itemShortcut.length > 0 ? root.menuShortcutColumnWidth : 0
                 Layout.minimumWidth: root.itemShortcut.length > 0 ? root.menuShortcutColumnWidth : 0
                 Layout.maximumWidth: root.menuShortcutColumnWidth
                 clip: true
+            }
+            AppIcon {
+                objectName: "sharedMenuCheck"
+                Accessible.ignored: true
+                Layout.preferredWidth: root.menuIconColumnWidth
+                Layout.preferredHeight: root.menuIconColumnWidth
+                visible: root.itemIcon.length > 0 && root.modelData.checked !== undefined
+                opacity: root.itemChecked ? 1 : 0
+                name: "check"
+                color: theme.selectionAccent
             }
         }
     }

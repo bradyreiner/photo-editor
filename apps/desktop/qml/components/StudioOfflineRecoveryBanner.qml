@@ -33,19 +33,18 @@ PopupSurface {
              availabilityState !== "online" &&
              availabilityState !== "none" &&
              !importModeOpen
-    width: Math.min(760, Math.max(460, parent ? parent.width - 36 : 460))
-    height: recoveryContent.implicitHeight + 22
-    fillColor: studioTheme.popupFill
+    width: Math.min(banner.studioTheme.scaled(760), Math.max(0, parent ? parent.width - banner.studioTheme.space16 * 2 : banner.studioTheme.scaled(460)))
+    height: recoveryContent.implicitHeight + banner.studioTheme.popupPadding * 2
 
     ColumnLayout {
         id: recoveryContent
         anchors.fill: parent
-        anchors.margins: 11
-        spacing: 8
+        anchors.margins: banner.studioTheme.popupPadding
+        spacing: banner.studioTheme.space8
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 9
+            spacing: banner.studioTheme.space8
 
             Rectangle {
                 Layout.preferredWidth: 8
@@ -58,54 +57,53 @@ PopupSurface {
                 Layout.fillWidth: true
                 spacing: 2
 
-                Label {
+                BodyLabel {
                     objectName: banner.exportSurface
                                 ? "exportOfflineRecoveryTitle" : "offlineRecoveryTitle"
                     Layout.fillWidth: true
                     text: banner.availabilityTitle
                     color: banner.studioTheme.textStrong
                     font.family: banner.studioTheme.fontUi
-                    font.pixelSize: 12
+                    font.pixelSize: banner.studioTheme.typeControl
                     font.weight: Font.DemiBold
                     elide: Text.ElideNone
                 }
 
-                Label {
+                BodyLabel {
                     objectName: banner.exportSurface
                                 ? "exportOfflineRecoveryDetail" : "offlineRecoveryDetail"
                     Layout.fillWidth: true
                     text: banner.availabilityDetail
                     color: banner.dimTextColor
                     font.family: banner.studioTheme.fontUi
-                    font.pixelSize: 10
+                    font.pixelSize: banner.studioTheme.typeCaption
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    maximumLineCount: 3
-                    elide: Text.ElideNone
+                            elide: Text.ElideNone
                 }
             }
 
-            Label {
+            BodyLabel {
                 objectName: banner.exportSurface
                             ? "exportOfflineRecoverySurfaceLabel" : "offlineRecoverySurfaceLabel"
                 text: banner.pageName === "library" ? "LIBRARY"
                       : banner.pageName === "edit" ? "EDIT" : "EXPORT"
                 color: banner.accentColor
-                font.family: banner.studioTheme.fontMono
-                font.pixelSize: 9
+                font.family: banner.studioTheme.fontUi
+                font.pixelSize: banner.studioTheme.typeMicro
                 font.weight: Font.DemiBold
             }
         }
 
-        RowLayout {
+        Flow {
             Layout.fillWidth: true
-            spacing: 7
+            spacing: banner.studioTheme.space8
 
             ActionButton {
                 objectName: banner.exportSurface
                             ? "exportOfflineRelinkSelectedButton" : "offlineRelinkSelectedButton"
-                Layout.preferredWidth: 132
-                Layout.preferredHeight: 38
-                minimumReadableWidth: 132
+                implicitWidth: Math.max(banner.studioTheme.scaled(132), commandNaturalWidth)
+                implicitHeight: banner.studioTheme.controlHeight
+                minimumReadableWidth: banner.studioTheme.scaled(132)
                 text: "Relink This"
                 iconName: "folder"
                 accent: banner.accentColor
@@ -134,7 +132,6 @@ PopupSurface {
                 onClicked: banner.recheckRequested()
             }
 
-            Item { Layout.fillWidth: true }
 
             MiniButton {
                 objectName: banner.exportSurface

@@ -1,0 +1,48 @@
+{
+  "schema": "looksy.native-timeline-plan-set/v1",
+  "status": "Planning only; native creation not run",
+  "priorV2Status": "External references; do not count as native authored or native-complete assets.",
+  "campaignCount": 5,
+  "plannedFilms": [
+    {
+      "campaign": "01",
+      "title": "I wanted to make this.",
+      "seconds": 32,
+      "commands": 39,
+      "sourceAssets": 3,
+      "plan": "timeline-campaign01.commands.json"
+    },
+    {
+      "campaign": "02",
+      "title": "NEPAL. In three forms.",
+      "seconds": 42,
+      "commands": 63,
+      "sourceAssets": 9,
+      "plan": "timeline-campaign02.commands.json"
+    },
+    {
+      "campaign": "03",
+      "title": "Keep the gold. Keep the quiet blues.",
+      "seconds": 33,
+      "commands": 39,
+      "sourceAssets": 3,
+      "plan": "timeline-campaign03.commands.json"
+    },
+    {
+      "campaign": "04",
+      "title": "The last tweak. Again.",
+      "seconds": 24,
+      "commands": 74,
+      "sourceAssets": 1,
+      "plan": "timeline-campaign04.commands.json"
+    },
+    {
+      "campaign": "05",
+      "title": "Make room for your eye.",
+      "seconds": 36,
+      "commands": 51,
+      "sourceAssets": 5,
+      "plan": "timeline-campaign05.commands.json"
+    }
+  ]
+}

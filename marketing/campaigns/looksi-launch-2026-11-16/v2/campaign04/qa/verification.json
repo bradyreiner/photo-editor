@@ -1,0 +1,368 @@
+{
+  "videos": {
+    "hero.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1080,
+          "height": 1920,
+          "pix_fmt": "yuv420p",
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "24/1",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "576"
+        },
+        {
+          "codec_name": "aac",
+          "r_frame_rate": "0/0",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "1125"
+        }
+      ],
+      "format": {
+        "duration": "24.000000"
+      },
+      "full_decode": "passed",
+      "bytes": 4136652,
+      "sha256": "8465a12a3a9b49dc4426a21f54ffdde9b67b630d290fea2f1dfecb884e859122"
+    },
+    "hero-silent.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1080,
+          "height": 1920,
+          "pix_fmt": "yuv420p",
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "24/1",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "576"
+        }
+      ],
+      "format": {
+        "duration": "24.000000"
+      },
+      "full_decode": "passed",
+      "bytes": 3537129,
+      "sha256": "e3dbc5c4337cfb8ff31bb53d3896e530ff10d7c1beb29603f82aaa36cdabf190"
+    },
+    "hook-b.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1080,
+          "height": 1920,
+          "pix_fmt": "yuv420p",
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "24/1",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "576"
+        },
+        {
+          "codec_name": "aac",
+          "r_frame_rate": "0/0",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "1125"
+        }
+      ],
+      "format": {
+        "duration": "24.000000"
+      },
+      "full_decode": "passed",
+      "bytes": 4119220,
+      "sha256": "bd2fd9df63edcab102c7bd1935e5d8e68febc98ac5f2c8e8515e4c5bb46d740f"
+    },
+    "hook-b-silent.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1080,
+          "height": 1920,
+          "pix_fmt": "yuv420p",
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "24/1",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "576"
+        }
+      ],
+      "format": {
+        "duration": "24.000000"
+      },
+      "full_decode": "passed",
+      "bytes": 3519697,
+      "sha256": "9dfc81fa8ae96e3715fdfb409de75dc5bbfe2256bea1ab3853f0a04e0eb3e6ee"
+    },
+    "hook-c.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1080,
+          "height": 1920,
+          "pix_fmt": "yuv420p",
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "24/1",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "576"
+        },
+        {
+          "codec_name": "aac",
+          "r_frame_rate": "0/0",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "1125"
+        }
+      ],
+      "format": {
+        "duration": "24.000000"
+      },
+      "full_decode": "passed",
+      "bytes": 4119035,
+      "sha256": "851b0c1277af11191c12964a7aff2285287f9d9dc25f89ac5d1b36caef083895"
+    },
+    "hook-c-silent.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1080,
+          "height": 1920,
+          "pix_fmt": "yuv420p",
+          "color_range": "tv",
+          "color_space": "bt709",
+          "color_transfer": "bt709",
+          "color_primaries": "bt709",
+          "r_frame_rate": "24/1",
+          "start_time": "0.000000",
+          "duration": "24.000000",
+          "nb_read_frames": "576"
+        }
+      ],
+      "format": {
+        "duration": "24.000000"
+      },
+      "full_decode": "passed",
+      "bytes": 3519512,
+      "sha256": "feb98010d33e5bbaec30a9bf62bc4ae13d497f03c0d5a3c9e74a3ba5e509f6e8"
+    }
+  },
+  "audio": {
+    "sample_rate": 48000,
+    "channels": 2,
+    "duration": 24.0,
+    "sample_peak_dbfs": -1.97186332431972,
+    "max_adjacent_sample_step_at_scene_cuts": {
+      "3": 0.004150390625,
+      "7": 0.03314208984375,
+      "11": 0.038360595703125,
+      "14": 0.0433349609375,
+      "16": 0.003814697265625,
+      "18": 0.04254150390625
+    },
+    "measured_integrated_lufs": -18.41,
+    "measured_true_peak_dbtp": -1.73,
+    "measured_loudness_range_lu": 5.6,
+    "encoded_aac_measurement": {
+      "integrated_lufs": -18.44,
+      "true_peak_dbtp": -1.43,
+      "loudness_range_lu": 5.6
+    }
+  },
+  "visual_review_files": [
+    "qa/hero-decoded-contact.png",
+    "qa/hook-b-decoded-contact.png",
+    "qa/hook-c-decoded-contact.png"
+  ],
+  "images": {
+    "cover": "1080x1350 PNG and editable vector SVG",
+    "storyboard": "2400x1500 PNG and SVG; 5 panels",
+    "phone_cover": "qa/cover-phone-360.png"
+  },
+  "review_page": {
+    "static_local_links_checked": 16,
+    "browser_playback": "Native browser interaction not asserted by this file check."
+  },
+  "color_transport": {
+    "conversion_filter": "scale=in_range=pc:out_range=tv:out_color_matrix=bt709,setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709",
+    "inverse_control_filter": "scale=in_color_matrix=bt709:in_range=tv:out_range=pc:flags=accurate_rnd+full_chroma_int",
+    "metadata": [
+      "-color_range",
+      "tv",
+      "-colorspace",
+      "bt709",
+      "-color_primaries",
+      "bt709",
+      "-color_trc",
+      "bt709"
+    ],
+    "patch_results": [
+      {
+        "patch": "black",
+        "source_rgb": [
+          0,
+          0,
+          0
+        ],
+        "decoded_rgb_mean": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_rgb_code_error": 0.0,
+        "encoded_y_mean": 16.0,
+        "expected_bt709_limited_y": 16.0
+      },
+      {
+        "patch": "white",
+        "source_rgb": [
+          255,
+          255,
+          255
+        ],
+        "decoded_rgb_mean": [
+          255.0,
+          255.0,
+          255.0
+        ],
+        "max_rgb_code_error": 0.0,
+        "encoded_y_mean": 235.0,
+        "expected_bt709_limited_y": 234.99999999999997
+      },
+      {
+        "patch": "midgray",
+        "source_rgb": [
+          128,
+          128,
+          128
+        ],
+        "decoded_rgb_mean": [
+          128.0,
+          128.0,
+          128.0
+        ],
+        "max_rgb_code_error": 0.0,
+        "encoded_y_mean": 126.0,
+        "expected_bt709_limited_y": 125.92941176470588
+      },
+      {
+        "patch": "brand red",
+        "source_rgb": [
+          255,
+          59,
+          48
+        ],
+        "decoded_rgb_mean": [
+          255.0,
+          59.0,
+          47.0
+        ],
+        "max_rgb_code_error": 1.0,
+        "encoded_y_mean": 102.0,
+        "expected_bt709_limited_y": 101.77534352941174
+      },
+      {
+        "patch": "brand green",
+        "source_rgb": [
+          48,
+          209,
+          88
+        ],
+        "decoded_rgb_mean": [
+          48.0,
+          210.0,
+          88.0
+        ],
+        "max_rgb_code_error": 1.0,
+        "encoded_y_mean": 159.0,
+        "expected_bt709_limited_y": 158.59493647058824
+      },
+      {
+        "patch": "brand blue",
+        "source_rgb": [
+          50,
+          130,
+          255
+        ],
+        "decoded_rgb_mean": [
+          51.0,
+          130.0,
+          255.0
+        ],
+        "max_rgb_code_error": 1.0,
+        "encoded_y_mean": 121.0,
+        "expected_bt709_limited_y": 120.79107058823529
+      },
+      {
+        "patch": "ink",
+        "source_rgb": [
+          7,
+          8,
+          10
+        ],
+        "decoded_rgb_mean": [
+          6.0,
+          8.0,
+          10.0
+        ],
+        "max_rgb_code_error": 1.0,
+        "encoded_y_mean": 23.0,
+        "expected_bt709_limited_y": 22.812016470588233
+      },
+      {
+        "patch": "paper",
+        "source_rgb": [
+          243,
+          243,
+          237
+        ],
+        "decoded_rgb_mean": [
+          242.0,
+          243.0,
+          236.0
+        ],
+        "max_rgb_code_error": 1.0,
+        "encoded_y_mean": 224.0,
+        "expected_bt709_limited_y": 224.32207529411767
+      }
+    ],
+    "scope": "Numerical control of explicit BT.709 matrix and limited range using lossless YUV coding and an explicitly rounded inverse to isolate conversion from production CRF quantization and decoder fast-path rounding. This is not independent display or player color-accuracy qualification."
+  },
+  "notes": [
+    "Full MP4 decode and native stream metadata verified.",
+    "Contact sheets and full-size decoded stills support visual review. They do not establish behavior in every social platform player.",
+    "The film uses original campaign artwork and authored audio. It is not a product capture.",
+    "All audio joins were removed by encoding complete continuous masters."
+  ]
+}

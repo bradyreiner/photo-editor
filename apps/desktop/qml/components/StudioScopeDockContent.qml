@@ -4,126 +4,191 @@ import QtQuick.Layouts
 
 ColumnLayout {
     id: scopeDock
-
     required property Item workspace
     required property var previewController
     property bool large: false
     property string placement: "bottom"
     property string objectPrefix: "dock"
-    spacing: 8
-
+    readonly property bool compactPlots: placement === "bottom" && height < theme.scaled(330) && width < theme.scaled(760)
+    readonly property bool hasReference: Number(workspace.scopeReferenceFrame.sampleCount || 0) > 0
+    readonly property var domains: [
+        {key: "final-display", label: "Display"}, {key: "working", label: "Working"},
+        {key: "scene-linear", label: "Scene linear"}, {key: "pre-output", label: "Output"}
+    ].concat(previewController.softProofEnabled ? [{key: "proof", label: "Soft proof"}] : [])
+    spacing: theme.space6
     Theme { id: theme }
+
+    component ScopeAction: MiniButton {
+        square: true
+        labelVisible: false
+        role: "icon"
+    }
 
     RowLayout {
         Layout.fillWidth: true
-        StudioSectionTitle { Layout.fillWidth: true; label: "Scopes" }
-        Label {
-            objectName: scopeDock.objectPrefix + "ScopeProofingStatusLabel"
-            text: scopeDock.previewController.scopeDomainLabel
-            color: scopeDock.previewController.softProofEnabled ? theme.accentCool400 : theme.textMuted
-            font.family: theme.fontUi
-            font.pixelSize: 10
-            fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 8
-            elide: Text.ElideNone
-            Layout.maximumWidth: scopeDock.width < 400 ? 130 : 320
+        spacing: theme.gapCommand
+        StudioSectionTitle { Layout.fillWidth: true; label: "Scopes"; visible: !scopeDock.compactPlots }
+        MenuButton {
+            Layout.fillWidth: true
+            visible: scopeDock.compactPlots
+            text: scopeDock.workspace.scopeCompactKind
+            compact: true
+            primaryOpensMenu: true
+            accessibleName: "Active scope"
+            menuItems: scopeDock.workspace.scopeAnalysisModes().map(function(kind) {
+                return {key: kind, label: kind, checked: scopeDock.workspace.scopeCompactKind === kind}
+            })
+            onMenuItemTriggered: function(key) { scopeDock.workspace.scopeCompactKind = key }
         }
-        MiniButton {
+        ScopeAction {
+            objectName: scopeDock.objectPrefix + "ScopeFreezeButton"
+            text: scopeDock.previewController.scopesFrozen ? "Resume scopes" : "Freeze scopes"
+            iconName: scopeDock.previewController.scopesFrozen ? "play" : "pause"
+            active: scopeDock.previewController.scopesFrozen
+            tooltip: text
+            onClicked: scopeDock.previewController.scopesFrozen = !scopeDock.previewController.scopesFrozen
+        }
+        ScopeAction {
+            objectName: scopeDock.objectPrefix + "ScopeReferenceButton"
+            text: scopeDock.hasReference ? "Clear scope reference" : "Hold scope reference"
+            iconName: "compare"
+            active: scopeDock.hasReference
+            enabled: scopeDock.hasReference || Number(scopeDock.previewController.scopeFrame.sampleCount || 0) > 0
+            tooltip: text
+            onClicked: scopeDock.workspace.scopeReferenceFrame = scopeDock.hasReference ? ({}) : scopeDock.previewController.scopeFrame
+        }
+        ScopeAction {
             objectName: "largeScopesImageModeButton"
             visible: scopeDock.large
-            text: "Image"
-            role: "secondary"
-            tooltip: "Return to the photograph"
+            text: "Return to image"
+            iconName: "image"
+            tooltip: text
             onClicked: scopeDock.workspace.setScopesViewMode("image")
         }
-        MiniButton {
+        ScopeAction {
             id: settingsButton
             objectName: scopeDock.objectPrefix + "ScopeSettingsButton"
-            text: "Settings"
-            iconName: "adjust"
-            role: "secondary"
-            tooltip: "Analysis domain, channels, sampling, and dock placement"
+            text: "Scope settings"
+            iconName: "settings"
+            tooltip: text
             active: scopeSettings.opened
-            onClicked: scopeSettings.open()
+            onClicked: scopeSettings.toggleTransient(settingsButton)
         }
     }
-
     Label {
         objectName: scopeDock.objectPrefix + "ScopeAsyncStatusLabel"
         Layout.fillWidth: true
-        text: (scopeDock.previewController.histogramUpdateActive ? "Updating · " : "")
-              + scopeDock.workspace.proofingStatusText()
-        color: scopeDock.previewController.histogramUpdateActive ? theme.interaction400 : theme.textMuted
+        text: scopeDock.previewController.scopeDomainLabel + " · " + scopeDock.previewController.scopeRangeMode
+        color: theme.textMuted
         font.family: theme.fontUi
-        font.pixelSize: 10
+        font.pixelSize: theme.typeCaption
         wrapMode: Text.Wrap
     }
-
     AppPopup {
         id: scopeSettings
         objectName: scopeDock.objectPrefix + "ScopeSettingsPopup"
         parent: Overlay.overlay
+        width: Math.min(popupAvailableWidth, theme.scaled(350))
+        padding: theme.popupPadding
         onAboutToShow: {
             const overlay = Overlay.overlay
             const anchor = settingsButton.mapToItem(overlay, settingsButton.width, settingsButton.height)
             x = Math.max(8, Math.min(overlay.width - width - 8, anchor.x - width))
-            const below = anchor.y + 6
-            y = below + height <= overlay.height - 8
-                ? below : Math.max(8, anchor.y - settingsButton.height - height - 6)
+            y = anchor.y + height + 6 <= overlay.height - 8
+                ? anchor.y + 6 : Math.max(8, anchor.y - settingsButton.height - height - 6)
         }
-        width: Math.min(popupAvailableWidth, Math.max(1, 370))
-        padding: 14
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: PopupSurface {}
-        contentItem: ColumnLayout {
-            spacing: 12
-            Label { text: "Analysis domain"; color: theme.textStrong; font.pixelSize: theme.typeLabel }
-            Flow {
-        id: scopeDomainFlow
-        Layout.fillWidth: true
-        Layout.preferredHeight: childrenRect.height
-        spacing: 6
-
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeSceneLinearDomainButton"; text: "Scene"; role: "segmented"; active: scopeDock.previewController.scopeDomain === "scene-linear"; tooltip: "Analyze characterized scene-linear pixels before creative edits."; onClicked: scopeDock.previewController.scopeDomain = "scene-linear" }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeWorkingDomainButton"; text: "Working"; role: "segmented"; active: scopeDock.previewController.scopeDomain === "working"; tooltip: "Analyze the complete adjusted working-space image before output rendering."; onClicked: scopeDock.previewController.scopeDomain = "working" }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopePreOutputDomainButton"; text: "Output"; role: "segmented"; active: scopeDock.previewController.scopeDomain === "pre-output"; tooltip: "Analyze the photographic output carrier before proof and device conversion."; onClicked: scopeDock.previewController.scopeDomain = "pre-output" }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeProofDomainButton"; text: "Proof"; role: "segmented"; active: scopeDock.previewController.scopeDomain === "proof"; enabled: scopeDock.previewController.softProofEnabled; disabledReason: "Enable Soft Proof to analyze the proof domain."; tooltip: "Analyze proof-simulated pixels before monitor conversion."; onClicked: scopeDock.previewController.scopeDomain = "proof" }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeFinalDisplayDomainButton"; text: "Display"; role: "segmented"; active: scopeDock.previewController.scopeDomain === "final-display"; tooltip: "Analyze final encoded pixels for the active display."; onClicked: scopeDock.previewController.scopeDomain = "final-display" }
-    }
-
-            Label { text: "Dock placement"; color: theme.textStrong; font.pixelSize: theme.typeLabel }
-            Flow {
-        id: scopeDockPlacementFlow
-        Layout.fillWidth: true
-        Layout.preferredHeight: childrenRect.height
-        spacing: 6
-
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeBottomDockButton"; width: Math.max(58, Math.min(implicitWidth, scopeDockPlacementFlow.width / 4 - 5)); height: implicitHeight; text: "Bottom"; role: "segmented"; active: scopeDock.workspace.scopeDockActive("bottom"); onClicked: scopeDock.workspace.openScopesDock("bottom") }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeLeftDockButton"; width: Math.max(48, Math.min(implicitWidth, scopeDockPlacementFlow.width / 4 - 5)); height: implicitHeight; text: "Left"; role: "segmented"; active: scopeDock.workspace.scopeDockActive("left"); onClicked: scopeDock.workspace.openScopesDock("left") }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeRightDockButton"; width: Math.max(54, Math.min(implicitWidth, scopeDockPlacementFlow.width / 4 - 5)); height: implicitHeight; text: "Right"; role: "segmented"; active: scopeDock.workspace.scopeDockActive("right"); onClicked: scopeDock.workspace.openScopesDock("right") }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeLargeDockButton"; width: Math.max(56, Math.min(implicitWidth, scopeDockPlacementFlow.width / 4 - 5)); height: implicitHeight; text: "Large"; role: "segmented"; active: scopeDock.workspace.scopesViewMode() === "large"; onClicked: scopeDock.workspace.setScopesViewMode("large") }
-    }
-
-            Label { text: "Channels & sampling"; color: theme.textStrong; font.pixelSize: theme.typeLabel }
-            Flow {
-        id: scopeDockToggleFlow
-        Layout.fillWidth: true
-        Layout.preferredHeight: childrenRect.height
-        spacing: 6
-
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeRgbToggle"; width: Math.max(52, Math.min(implicitWidth, scopeDockToggleFlow.width / 4 - 5)); height: implicitHeight; text: "RGB"; role: "segmented"; active: scopeDock.workspace.scopeShowRgb; onClicked: scopeDock.workspace.scopeShowRgb = !scopeDock.workspace.scopeShowRgb }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeLumaToggle"; width: Math.max(58, Math.min(implicitWidth, scopeDockToggleFlow.width / 4 - 5)); height: implicitHeight; text: "Luma"; role: "segmented"; active: scopeDock.workspace.scopeShowLuma; onClicked: scopeDock.workspace.scopeShowLuma = !scopeDock.workspace.scopeShowLuma }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeDensityToggle"; width: Math.max(70, Math.min(implicitWidth, scopeDockToggleFlow.width / 4 - 5)); height: implicitHeight; text: "Density"; role: "segmented"; active: scopeDock.workspace.scopeShowDensity; onClicked: scopeDock.workspace.scopeShowDensity = !scopeDock.workspace.scopeShowDensity }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeTraceToggle"; width: Math.max(58, Math.min(implicitWidth, scopeDockToggleFlow.width / 4 - 5)); height: implicitHeight; text: "Trace"; role: "segmented"; active: scopeDock.workspace.scopeShowTrace; onClicked: scopeDock.workspace.scopeShowTrace = !scopeDock.workspace.scopeShowTrace }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeLogToggle"; text: scopeDock.workspace.scopeLogHistogram ? "Log" : "Linear"; role: "segmented"; active: scopeDock.workspace.scopeLogHistogram; tooltip: "Toggle logarithmic histogram scale"; onClicked: scopeDock.workspace.scopeLogHistogram = !scopeDock.workspace.scopeLogHistogram }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeGridToggle"; width: Math.max(54, Math.min(implicitWidth, scopeDockToggleFlow.width / 4 - 5)); height: implicitHeight; text: "Grid"; role: "segmented"; active: scopeDock.workspace.scopeShowGrid; onClicked: scopeDock.workspace.scopeShowGrid = !scopeDock.workspace.scopeShowGrid }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeLayoutButton"; width: Math.max(72, Math.min(implicitWidth, scopeDockToggleFlow.width / 3 - 5)); height: implicitHeight; text: scopeDock.workspace.scopeLayoutPreset; role: "segmented"; onClicked: scopeDock.workspace.setScopeLayoutPreset(scopeDock.workspace.scopeLayoutPreset === "Stacked" ? "Quad" : scopeDock.workspace.scopeLayoutPreset === "Quad" ? "Tall" : "Stacked") }
-        MiniButton { objectName: scopeDock.objectPrefix + "ScopeSamplingButton"; width: Math.max(78, Math.min(implicitWidth, scopeDockToggleFlow.width / 3 - 5)); height: implicitHeight; text: scopeDock.workspace.scopeSamplingMode; role: "segmented"; onClicked: scopeDock.workspace.setScopeSamplingMode(scopeDock.workspace.scopeSamplingMode === "Fast" ? "Balanced" : scopeDock.workspace.scopeSamplingMode === "Balanced" ? "Precise" : "Fast") }
-    }
-
+        contentItem: ScrollView {
+            implicitHeight: settingsContent.implicitHeight
+            clip: true
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ColumnLayout {
+                id: settingsContent
+                width: scopeSettings.availableWidth
+                spacing: theme.space8
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: theme.space8
+                    rowSpacing: theme.space4
+                    Label { text: "Domain"; color: theme.textMuted; font.pixelSize: theme.typeLabel }
+                    ToneComboBox {
+                        objectName: scopeDock.objectPrefix + "ScopeDomainControl"
+                        Layout.fillWidth: true
+                        accessibleLabel: "Scope analysis domain"
+                        model: scopeDock.domains
+                        textRole: "label"
+                        currentIndex: Math.max(0, scopeDock.domains.findIndex(function(item) { return item.key === scopeDock.previewController.scopeDomain }))
+                        onActivated: function(index) { scopeDock.previewController.scopeDomain = scopeDock.domains[index].key }
+                    }
+                    Label { text: "Range"; color: theme.textMuted; font.pixelSize: theme.typeLabel }
+                    ToneComboBox {
+                        objectName: scopeDock.objectPrefix + "ScopeRangeControl"
+                        Layout.fillWidth: true
+                        accessibleLabel: "Scope signal range"
+                        model: ["0–100%", "−25–400%", "0–1600%"]
+                        currentIndex: ["SDR", "Extended", "HDR"].indexOf(scopeDock.previewController.scopeRangeMode)
+                        onActivated: function(index) { scopeDock.previewController.scopeRangeMode = ["SDR", "Extended", "HDR"][index] }
+                    }
+                    Label { text: "Quality"; color: theme.textMuted; font.pixelSize: theme.typeLabel }
+                    ToneComboBox {
+                        objectName: scopeDock.objectPrefix + "ScopeSamplingControl"
+                        Layout.fillWidth: true
+                        accessibleLabel: "Scope sampling quality"
+                        model: ["Fast", "Balanced", "Precise"]
+                        currentIndex: model.indexOf(scopeDock.workspace.scopeSamplingMode)
+                        onActivated: function(index) { scopeDock.workspace.setScopeSamplingMode(model[index]) }
+                    }
+                    Label { text: "Area"; color: theme.textMuted; font.pixelSize: theme.typeLabel }
+                    ToneComboBox {
+                        objectName: scopeDock.objectPrefix + "ScopeRegionControl"
+                        Layout.fillWidth: true
+                        accessibleLabel: "Scope analysis region"
+                        model: ["Full image", "Visible area"]
+                        currentIndex: scopeDock.workspace.scopeRegionMode === "Visible area" ? 1 : 0
+                        onActivated: scopeDock.workspace.scopeRegionMode = currentText
+                    }
+                }
+                InspectorSlider {
+                    objectName: scopeDock.objectPrefix + "ScopeDensityGain"
+                    Layout.fillWidth: true
+                    label: "Gain"
+                    from: 0.25; to: 4; stepSize: 0.05; defaultValue: 1
+                    value: scopeDock.workspace.scopeDensityGain
+                    valueText: value.toFixed(2) + "×"
+                    onValueDragged: function(value) { scopeDock.workspace.scopeDensityGain = value }
+                    onResetRequested: scopeDock.workspace.scopeDensityGain = 1
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.gapCommand
+                    MiniButton { objectName: scopeDock.objectPrefix + "ScopeRgbToggle"; text: "RGB"; role: "segmented"; active: scopeDock.workspace.scopeShowRgb; tooltip: "RGB channels"; onClicked: scopeDock.workspace.scopeShowRgb = !active }
+                    MiniButton { objectName: scopeDock.objectPrefix + "ScopeLumaToggle"; text: "Y"; role: "segmented"; active: scopeDock.workspace.scopeShowLuma; tooltip: "Luminance"; a11yName: "Luminance"; onClicked: scopeDock.workspace.scopeShowLuma = !active }
+                    ScopeAction { objectName: scopeDock.objectPrefix + "ScopeDensityToggle"; text: "Density"; iconName: "density"; active: scopeDock.workspace.scopeShowDensity; tooltip: text; onClicked: scopeDock.workspace.scopeShowDensity = !active }
+                    ScopeAction { objectName: scopeDock.objectPrefix + "ScopeTraceToggle"; text: "Trace"; iconName: "curve"; active: scopeDock.workspace.scopeShowTrace; tooltip: text; onClicked: scopeDock.workspace.scopeShowTrace = !active }
+                    ScopeAction { objectName: scopeDock.objectPrefix + "ScopeGridToggle"; text: "Grid"; iconName: "grid"; active: scopeDock.workspace.scopeShowGrid; tooltip: text; onClicked: scopeDock.workspace.scopeShowGrid = !active }
+                    MiniButton { objectName: scopeDock.objectPrefix + "ScopeLogToggle"; text: "Log"; role: "segmented"; active: scopeDock.workspace.scopeLogHistogram; tooltip: "Logarithmic histogram"; onClicked: scopeDock.workspace.scopeLogHistogram = !active }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.gapCommand
+                    Label { Layout.fillWidth: true; text: "Dock"; color: theme.textMuted; font.pixelSize: theme.typeLabel }
+                    ScopeAction { objectName: scopeDock.objectPrefix + "ScopeBottomDockButton"; text: "Dock scopes below"; iconName: "panel-bottom"; active: scopeDock.workspace.scopeDockActive("bottom"); tooltip: text; onClicked: scopeDock.workspace.openScopesDock("bottom") }
+                    ScopeAction { objectName: scopeDock.objectPrefix + "ScopeLeftDockButton"; text: "Dock scopes left"; iconName: "panel-left"; active: scopeDock.workspace.scopeDockActive("left"); tooltip: text; onClicked: scopeDock.workspace.openScopesDock("left") }
+                    ScopeAction { objectName: scopeDock.objectPrefix + "ScopeRightDockButton"; text: "Dock scopes right"; iconName: "panel-right"; active: scopeDock.workspace.scopeDockActive("right"); tooltip: text; onClicked: scopeDock.workspace.openScopesDock("right") }
+                    ScopeAction { objectName: scopeDock.objectPrefix + "ScopeLargeDockButton"; text: "Expand scopes"; iconName: "fullscreen"; active: scopeDock.workspace.scopesViewMode() === "large"; tooltip: text; onClicked: scopeDock.workspace.setScopesViewMode("large") }
+                    ScopeAction {
+                        objectName: scopeDock.objectPrefix + "ScopeLayoutButton"
+                        visible: scopeDock.large
+                        text: scopeDock.workspace.scopeLayoutPreset === "Quad" ? "Stack scopes" : "Quad scopes"
+                        iconName: scopeDock.workspace.scopeLayoutPreset === "Quad" ? "list" : "grid"
+                        tooltip: text
+                        onClicked: scopeDock.workspace.setScopeLayoutPreset(scopeDock.workspace.scopeLayoutPreset === "Quad" ? "Stacked" : "Quad")
+                    }
+                }
+            }
         }
     }
-
     StudioScopeGrid {
         Layout.fillWidth: true
         Layout.fillHeight: scopeDock.large || scopeDock.placement === "bottom"
@@ -131,6 +196,7 @@ ColumnLayout {
         previewController: scopeDock.previewController
         large: scopeDock.large
         horizontal: scopeDock.placement === "bottom"
+        compact: scopeDock.compactPlots
         objectPrefix: scopeDock.objectPrefix
     }
 }

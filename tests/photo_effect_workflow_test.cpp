@@ -1,4 +1,5 @@
 #include "app_bootstrap.h"
+#include "creative_example_thumbnail_image_provider.h"
 #include "editor_preview_controller.h"
 #include "editor_preview_image_provider.h"
 #include "photo_render_utils.h"
@@ -9,9 +10,12 @@
 #include <QQmlEngine>
 #include <QQuickWindow>
 #include <QQuickItem>
-#include <QMouseEvent>
 #include <QKeyEvent>
+#include <QEventLoop>
+#include <QWheelEvent>
+#include <QTest>
 #include <QTemporaryDir>
+#include <QSettings>
 #include <QElapsedTimer>
 #include <QThread>
 #include <QDir>
@@ -45,7 +49,12 @@ int main(int argc, char** argv) {
   qputenv("QT_QUICK_CONTROLS_STYLE","Basic");
   qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE","1");
   QGuiApplication app(argc,argv);
+  app.setOrganizationName(QStringLiteral("LooksyPhotoEffectsWorkflow"));
+  app.setApplicationName(QStringLiteral("PhotoEffectWorkflowTest"));
   QTemporaryDir temp;
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temp.filePath("settings"));
+  { QSettings isolated_settings; isolated_settings.clear(); }
   qputenv("PHOTO_EDITOR_APP_DATA_DIR",temp.path().toUtf8());
   CHECK(AppBootstrap::ensureRuntimeDirectories(),"Runtime directory");
   const auto photo_path=qEnvironmentVariable("PHOTO_EFFECT_TEST_SOURCE");
@@ -63,6 +72,7 @@ int main(int argc, char** argv) {
   source.setColorSpace(QColorSpace(QColorSpace::SRgb));
   const auto source_path=temp.filePath("source.png"); CHECK(source.save(source_path),"Source fixture");
   QQmlEngine engine;
+  register_creative_example_thumbnail_provider(&engine);
   auto* provider=new EditorPreviewImageProvider;
   engine.addImageProvider("editor-preview",provider);
   auto controller=std::make_unique<EditorPreviewController>();
@@ -185,8 +195,12 @@ Rectangle {
       for (auto* ancestor=item->parentItem();ancestor;ancestor=ancestor->parentItem()) {
         if (!ancestor->property("contentY").isValid() || !ancestor->property("contentHeight").isValid()) continue;
         const auto point=item->mapToItem(ancestor,QPointF(0,item->height()/2));
-        const auto maximum=std::max(0.0,ancestor->property("contentHeight").toDouble()-ancestor->height());
-        const auto next=std::clamp(ancestor->property("contentY").toDouble()+point.y()-ancestor->height()/2,0.0,maximum);
+        const auto minimum=ancestor->property("originY").isValid()
+            ? ancestor->property("originY").toDouble() : 0.0;
+        const auto maximum=minimum+std::max(0.0,
+            ancestor->property("contentHeight").toDouble()-ancestor->height());
+        const auto next=std::clamp(ancestor->property("contentY").toDouble()+point.y()-ancestor->height()/2,
+            minimum,maximum);
         ancestor->setProperty("contentY",next);settle();
       }
     }
@@ -195,12 +209,8 @@ Rectangle {
       std::cerr << "Control outside window " << object->objectName().toStdString() << " at " << position.x() << ',' << position.y() << '\n';
       return false;
     }
-    const auto global=window.mapToGlobal(position.toPoint());
-    QMouseEvent down(QEvent::MouseButtonPress,position,position,global,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
-    QCoreApplication::sendEvent(&window,&down);
-    QCoreApplication::processEvents();
-    QMouseEvent up(QEvent::MouseButtonRelease,position,position,global,Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
-    QCoreApplication::sendEvent(&window,&up);settle();return true;
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, position.toPoint());
+    settle();return true;
   };
   const auto edit=[&](const QString& name,const QString& value) {
     auto* field=find(name+"ValueField");
@@ -220,7 +230,12 @@ Rectangle {
       if(auto* flickable=find_flickable(settings_scroll)) {
         if(auto* flickable_item=qobject_cast<QQuickItem*>(flickable)) {
           const auto point=field_item->mapToItem(flickable_item,QPointF(0,field_item->height()/2));
-          const auto next_y=std::max(0.0,flickable->property("contentY").toDouble()+point.y()-flickable_item->height()/2);
+          const auto minimum_y=flickable->property("originY").isValid()
+              ? flickable->property("originY").toDouble() : 0.0;
+          const auto maximum_y=minimum_y+std::max(0.0,
+              flickable->property("contentHeight").toDouble()-flickable_item->height());
+          const auto next_y=std::clamp(flickable->property("contentY").toDouble()+point.y()-flickable_item->height()/2,
+              minimum_y,maximum_y);
           flickable->setProperty("contentY",next_y);
           settle();
         }
@@ -250,9 +265,52 @@ Rectangle {
     auto* view=qobject_cast<QQuickItem*>(flickable);
     if(!flickable || !view)return false;
     const auto point=target->mapToItem(view,QPointF(0,target->height()));
-    const auto max_y=std::max(0.0,flickable->property("contentHeight").toDouble()-view->height());
-    const auto next_y=std::clamp(flickable->property("contentY").toDouble()+point.y()-view->height(),0.0,max_y);
+    const auto min_y=flickable->property("originY").isValid()
+        ? flickable->property("originY").toDouble() : 0.0;
+    const auto max_y=min_y+std::max(0.0,flickable->property("contentHeight").toDouble()-view->height());
+    const auto next_y=std::clamp(flickable->property("contentY").toDouble()+point.y()-view->height(),min_y,max_y);
     flickable->setProperty("contentY",next_y);settle();return true;
+  };
+  const auto reveal_gallery_item_by_wheel=[&](const QString& object_name) {
+    auto* gallery=qobject_cast<QQuickItem*>(find("photoEffectGalleryList"));
+    if(!gallery || !gallery->isVisible() || gallery->width()<=0 || gallery->height()<=0)return false;
+    bool scanning_down=true;
+    bool reversed_at_boundary=false;
+    for(int attempt=0;attempt<200;++attempt) {
+      auto* target=qobject_cast<QQuickItem*>(find(object_name));
+      if(target && target->isVisible()) {
+        const auto center=target->mapToItem(gallery,QPointF(target->width()/2,target->height()/2));
+        if(gallery->boundingRect().contains(center))return true;
+        if(center.y()<0)scanning_down=false;
+        else if(center.y()>gallery->height())scanning_down=true;
+      }
+      const auto before=gallery->property("contentY").toDouble();
+      const auto wheel_position=gallery->mapToScene(QPointF(gallery->width()/2,gallery->height()/2));
+      const auto global_position=window.mapToGlobal(wheel_position.toPoint());
+      const QPoint pixel_delta(0,scanning_down ? -160 : 160);
+      QWheelEvent wheel(wheel_position,QPointF(global_position),pixel_delta,QPoint(),
+          Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);
+      QCoreApplication::sendEvent(&window,&wheel);
+      QCoreApplication::processEvents(QEventLoop::AllEvents,20);
+      const auto after=gallery->property("contentY").toDouble();
+      if(std::abs(after-before)<0.5) {
+        const auto minimum=gallery->property("originY").toDouble();
+        const auto maximum=minimum+std::max(0.0,
+            gallery->property("contentHeight").toDouble()-gallery->height());
+        const bool at_boundary=scanning_down ? after>=maximum-0.5 : after<=minimum+0.5;
+        if(!at_boundary)return false;
+        if(scanning_down && !reversed_at_boundary) {
+          scanning_down=false;
+          reversed_at_boundary=true;
+          continue;
+        }
+        return false;
+      }
+    }
+    return false;
+  };
+  const auto click_gallery_card=[&](const QString& object_name) {
+    return reveal_gallery_item_by_wheel(object_name) && click(find(object_name));
   };
   const auto evidence=qEnvironmentVariable("PHOTO_EFFECT_EVIDENCE_DIR");
   if(!evidence.isEmpty()) { CHECK(QDir().mkpath(evidence),"Evidence directory");CHECK(source.save(evidence+"/source.png"),"Source evidence"); }
@@ -276,7 +334,7 @@ Rectangle {
       auto* picker=find("photoEffectPicker");
       CHECK(picker && !picker->property("modal").toBool() && !picker->property("dim").toBool(), "Preview never dims canvas");
       CHECK(wait_until([&]{return picker->property("opened").toBool();}), "Discovery popup finishes opening");
-      CHECK(click(find("photoEffectChoice_"+type)), "Native pointer chooses new filter");
+      CHECK(click_gallery_card("photoEffectChoice_"+type), "Pointer wheel reveals and chooses new filter");
       auto rows=controller->photoLayerEffects(0);
       if(rows.size()!=1 || !rows[0].toMap().value("extended").toBool()) {
         std::cerr << "Preview selection " << type.toStdString() << " rows=" << rows.size()
@@ -400,7 +458,7 @@ Rectangle {
       auto* search=find("photoEffectSearchField");
       CHECK(search, "Creative look search is available");
       search->setProperty("text",name);settle();
-      CHECK(click(find("photoEffectLookChoice_"+id)), "Apply curated look through its native button");
+      CHECK(click_gallery_card("photoEffectLookChoice_"+id), "Pointer wheel reveals and applies curated look through its native button");
       CHECK(wait_until([&]{return !controller->processing() && !controller->fullRenderRunning();}),
           "Creative look preview settles");
       const auto expected=controller->photoLayerEffects(0);
@@ -453,7 +511,7 @@ Rectangle {
       CHECK(click(find("photoAddEffectButton")), "Open new operator picker");
       auto* search=find("photoEffectSearchField");CHECK(search, "New operator search exists");
       search->setProperty("text",QString::fromUtf8(control.name));settle();
-      CHECK(click(find("photoEffectChoice_"+QString::fromUtf8(control.type))), "Choose real new operator");
+      CHECK(click_gallery_card("photoEffectChoice_"+QString::fromUtf8(control.type)), "Pointer wheel reveals and chooses real new operator");
       CHECK(edit("photoEffectParameter_"+QString::fromUtf8(control.key),QString::fromUtf8(control.input)),
           "Edit a new operator using its numeric control");
       const auto draft=controller->photoLayerEffects(0);
@@ -473,7 +531,7 @@ Rectangle {
       CHECK(wait_until([&]{return !controller->processing() && !controller->fullRenderRunning();}), "New operator undo settles");
       CHECK(click(find("photoAddEffectButton")), "Open cancellation check");
       search=find("photoEffectSearchField");search->setProperty("text",QString::fromUtf8(control.name));settle();
-      CHECK(click(find("photoEffectChoice_"+QString::fromUtf8(control.type))), "Preview new operator for cancellation");
+      CHECK(click_gallery_card("photoEffectChoice_"+QString::fromUtf8(control.type)), "Pointer wheel reveals and previews new operator for cancellation");
       CHECK(click(find("photoEffectPreviewCancel")) && controller->photoLayerEffects(0).isEmpty(),
           "Cancel discards new operator preview");
     }
@@ -488,7 +546,7 @@ Rectangle {
     search->setProperty("text",QStringLiteral("optical"));
     settle();
     const auto previous_preview=controller->displayPreviewSource();
-    CHECK(click(find("photoEffectChoice_optical_diffusion")),"Choose Optical Diffusion for F1 review");
+    CHECK(click_gallery_card("photoEffectChoice_optical_diffusion"),"Pointer wheel reveals and chooses Optical Diffusion for F1 review");
     const auto parameter=[](const char* name,double fallback) {
       bool ok=false;
       const auto value=qEnvironmentVariable(name).toDouble(&ok);
@@ -608,9 +666,17 @@ Rectangle {
   const auto baseline_preview=controller->displayPreviewSource();
   settle();
   const auto closed_picker_frame = window.grabWindow();
-  CHECK(click(find("photoAddEffectButton")),"Open Qt Quick effect picker");
+  auto* add_effect_button = find("photoAddEffectButton");
+  CHECK(add_effect_button && click(add_effect_button),"Open Qt Quick effect picker with a pointer event");
   auto* filter_picker = find("photoEffectPicker");
-  CHECK(filter_picker && !filter_picker->property("modal").toBool() && !filter_picker->property("dim").toBool(),
+  if (!filter_picker || !filter_picker->property("visible").toBool()) {
+    if (!evidence.isEmpty()) window.grabWindow().save(evidence+"/effect-picker-open-failure.png");
+    std::cerr << "Effect picker did not open after the Add effect pointer event\n";
+    return 1;
+  }
+  CHECK(wait_until([&]{return filter_picker->property("opened").toBool();}),
+      "Wait for the effect picker open transition before another popup interaction");
+  CHECK(!filter_picker->property("modal").toBool() && !filter_picker->property("dim").toBool(),
       "Filter picker leaves the image undimmed and interactive");
   const auto open_picker_frame = window.grabWindow();
   CHECK(!closed_picker_frame.isNull() && !open_picker_frame.isNull(), "Filter brightness proof has rendered frames");
@@ -624,6 +690,13 @@ Rectangle {
   }
   auto* category_picker = find("photoEffectCategoryPicker");
   CHECK(category_picker && click(category_picker), "Open filter groups with pointer events");
+  auto* category_popup = category_picker->property("popup").value<QObject*>();
+  if (!category_popup) category_popup = find("photoEffectCategoryPickerPopup");
+  if (!category_popup || !category_popup->property("visible").toBool()) {
+    if (!evidence.isEmpty()) window.grabWindow().save(evidence+"/effect-category-popup-failure.png");
+    std::cerr << "Filter group popup did not open after the combo pointer event\n";
+    return 1;
+  }
   int blur_category_index = -1;
   for (int i = 0; i < category_picker->property("count").toInt(); ++i) {
     QString category_text;
@@ -631,22 +704,69 @@ Rectangle {
         "Read the filter group label");
     if (category_text == QStringLiteral("Blur")) blur_category_index = i;
   }
-  CHECK(blur_category_index > 0 && click(find("photoEffectCategoryPickerOption" + QString::number(blur_category_index))),
+  const auto option_name = QStringLiteral("photoEffectCategoryPickerOption") + QString::number(blur_category_index);
+  auto* category_list = qobject_cast<QQuickItem*>(category_popup->property("contentItem").value<QObject*>());
+  QSet<QObject*> popup_visited;
+  std::function<QObject*(QObject*)> find_popup_list = [&](QObject* object) -> QObject* {
+    if (!object || popup_visited.contains(object)) return nullptr;
+    popup_visited.insert(object);
+    auto* item = qobject_cast<QQuickItem*>(object);
+    if (item && item->property("contentY").isValid() && item->property("contentHeight").isValid() &&
+        item->height() > 0)
+      return item;
+    for (auto* child : object->children())
+      if (auto* result = find_popup_list(child)) return result;
+    if (item)
+      for (auto* child : item->childItems())
+        if (auto* result = find_popup_list(child)) return result;
+    return nullptr;
+  };
+  if (!category_list) category_list = qobject_cast<QQuickItem*>(find_popup_list(category_popup));
+  CHECK(blur_category_index > 0 && category_list, "Find the scrollable filter group popup list");
+  const auto category_count = std::max(1, category_picker->property("count").toInt());
+  const auto category_row_height = category_list->property("contentHeight").toDouble() / category_count;
+  const auto category_list_min_y = category_list->property("originY").isValid()
+      ? category_list->property("originY").toDouble() : 0.0;
+  const auto category_list_max_y = category_list_min_y + std::max(0.0,
+      category_list->property("contentHeight").toDouble() - category_list->height());
+  const auto target_category_y = std::clamp(category_list_min_y + category_row_height * blur_category_index +
+      category_row_height / 2 - category_list->height() / 2, category_list_min_y, category_list_max_y);
+  category_list->setProperty("contentY", target_category_y);
+  settle();
+  auto* blur_option = find(option_name);
+  CHECK(blur_option && qobject_cast<QQuickItem*>(blur_option)->isVisible() && click(blur_option),
       "Choose the Blur group with pointer events");
-  CHECK(filter_picker->property("visible").toBool() && find("photoEffectChoice_motion_blur") && !find("photoEffectGroup_Film"),
+  CHECK(filter_picker->property("visible").toBool() && !find("photoEffectGroup_Film"),
       "Choosing a group filters the list without closing the filter browser");
-  auto* category_view = qobject_cast<QQuickItem*>(find("photoEffectPickerBodyScrollView"));
+  CHECK(reveal_gallery_item_by_wheel("photoEffectChoice_motion_blur"),
+      "Pointer wheel reveals the motion-blur card in the filtered gallery");
+  auto* category_view = qobject_cast<QQuickItem*>(find("photoEffectGalleryList"));
   auto* category_choice = qobject_cast<QQuickItem*>(find("photoEffectChoice_motion_blur"));
   CHECK(category_view && category_choice && QRectF(0, 0, category_view->width(), category_view->height()).contains(
       category_choice->mapToItem(category_view, QPointF(category_choice->width() / 2, category_choice->height() / 2))),
-      "Category filtering lays out the first group on screen without manual scrolling");
+      "Pointer-wheel reveal places the filter card inside the visible gallery viewport");
+  auto* motion_example = qobject_cast<QQuickItem*>(find("photoEffectChoice_motion_blurThumbnail"));
+  CHECK(category_choice && motion_example &&
+      !category_choice->property("thumbnailSource").toString().isEmpty() &&
+      !category_choice->property("originalSource").toString().isEmpty(),
+      "The real filter card binds processed and original example sources");
+  CHECK(wait_until([&]{return category_choice->property("previewReady").toBool();}),
+      "The asynchronous real-engine motion-blur sample renders in its gallery card");
+  CHECK(reveal_gallery_item_by_wheel("photoEffectChoice_motion_blurOriginal"),
+      "Pointer wheel reveals the sample comparison control in the gallery");
+  auto* original_compare = find("photoEffectChoice_motion_blurOriginal");
+  CHECK(original_compare && click(original_compare) &&
+      category_choice->property("comparingOriginal").toBool() && filter_picker->property("browsing").toBool(),
+      "Original comparison swaps only the sample image and leaves browsing open");
+  CHECK(click(original_compare) && !category_choice->property("comparingOriginal").toBool(),
+      "Restore the processed sample after comparing with original");
   if (!evidence.isEmpty())
     CHECK(window.grabWindow().save(evidence+"/filter-picker-blur-native.png"), "Save category-filtered native picker");
-  CHECK(click(find("photoEffectChoice_motion_blur")) && !filter_picker->property("browsing").toBool(),
+  CHECK(click_gallery_card("photoEffectChoice_motion_blur") && !filter_picker->property("browsing").toBool(),
       "A filter in the chosen group is visible and responds to pointer events");
   CHECK(click(find("photoEffectChangeFilterButton")), "Return to browsing the chosen group");
   CHECK(click(find("photoEffectCategoryReset")), "Restore all filter groups without reopening the group menu");
-  CHECK(click(find("photoEffectChoice_motion_blur")),"Choose motion blur with pointer events");
+  CHECK(click_gallery_card("photoEffectChoice_motion_blur"),"Pointer wheel reveals and chooses motion blur with pointer events");
   CHECK(!filter_picker->property("dim").toBool() && !filter_picker->property("browsing").toBool(),
       "Live filter preview leaves dimming off and presents parameters directly");
   CHECK(edit("photoEffectParameter_distance","37.25") && edit("photoEffectParameter_angle","-48.5"),"Qt Quick motion parameter input");
@@ -654,7 +774,7 @@ Rectangle {
   CHECK(motion.value("distance").toDouble()==37.25 && motion.value("angle").toDouble()==-48.5,"Fractional motion parameters reach controller");
   QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QCoreApplication::sendEvent(&window,&escape);settle();
   CHECK(EditorPreviewControllerTestAccess::state(*controller).layers==baseline,"Escape restores exact baseline");
-  CHECK(click(find("photoAddEffectButton")) && click(find("photoEffectChoice_motion_blur")),"Reopen motion preview");
+  CHECK(click(find("photoAddEffectButton")) && click_gallery_card("photoEffectChoice_motion_blur"),"Reopen motion preview after pointer-wheel reveal");
   CHECK(edit("photoEffectParameter_distance","24") && edit("photoEffectParameter_angle","25"),"Set accepted motion values");
   CHECK(click(find("photoEffectPreviewApply")),"Apply the motion preview");
   const auto motion_layers=EditorPreviewControllerTestAccess::state(*controller).layers;
@@ -663,7 +783,7 @@ Rectangle {
   controller->redo();CHECK(EditorPreviewControllerTestAccess::state(*controller).layers==motion_layers,"Redo preserves effect identity");
   CHECK(wait_until([&]{return controller->displayPreviewSource()!=baseline_preview && !controller->processing() && !controller->fullRenderRunning();}),"Accepted motion preview publishes");
   if(!evidence.isEmpty()) { settle();CHECK(window.grabWindow().save(evidence+"/motion-native.png"),"Motion native screenshot"); }
-  CHECK(click(find("photoAddEffectButton")) && click(find("photoEffectChoice_unsharp_mask")),"Qt Quick unsharp preview");
+  CHECK(click(find("photoAddEffectButton")) && click_gallery_card("photoEffectChoice_unsharp_mask"),"Qt Quick unsharp preview after pointer-wheel reveal");
   CHECK(edit("photoEffectParameter_sharpenRadius","2.75") && edit("photoEffectParameter_strength","185") &&
       edit("photoEffectParameter_threshold","2.5"),"Qt Quick sharpening controls");
   const auto sharp=controller->photoLayerEffects(0).last().toMap();
@@ -679,7 +799,7 @@ Rectangle {
   effect_search->setProperty("text",QStringLiteral("optical"));
   settle();
   const auto before_diffusion_preview=controller->displayPreviewSource();
-  CHECK(click(find("photoEffectChoice_optical_diffusion")),"Qt Quick optical diffusion preview");
+  CHECK(click_gallery_card("photoEffectChoice_optical_diffusion"),"Pointer wheel reveals and previews Optical Diffusion");
   const auto review_parameter=[](const char* name,double fallback) {
     bool ok=false;
     const auto value=qEnvironmentVariable(name).toDouble(&ok);
@@ -778,7 +898,7 @@ Rectangle {
   CHECK(effect_search,"Filter search remains available for print effects");
   effect_search->setProperty("text",QStringLiteral("imperfect print"));
   settle();
-  CHECK(click(find("photoEffectChoice_imperfect_print")),"Choose imperfect print");
+  CHECK(click_gallery_card("photoEffectChoice_imperfect_print"),"Pointer wheel reveals and chooses imperfect print");
   CHECK(edit("photoEffectParameter_paperScale","18") &&
       edit("photoEffectParameter_paperTexture","42") &&
       edit("photoEffectParameter_inkSpread","30") &&
@@ -812,7 +932,7 @@ Rectangle {
   CHECK(effect_search,"Dragged shutter remains discoverable in the filter picker");
   effect_search->setProperty("text",QStringLiteral("dragged shutter"));
   settle();
-  CHECK(click(find("photoEffectChoice_dragged_shutter")),"Choose dragged shutter");
+  CHECK(click_gallery_card("photoEffectChoice_dragged_shutter"),"Pointer wheel reveals and chooses dragged shutter");
   CHECK(edit("photoEffectParameter_distance","84") &&
       edit("photoEffectParameter_angle","-14") &&
       edit("photoEffectParameter_falloff","72") &&

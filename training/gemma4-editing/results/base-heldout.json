@@ -1,0 +1,233 @@
+{
+  "contract": "looksy-gemma-editing-next-action-eval-v1",
+  "adapter": null,
+  "split": "test",
+  "cases": [
+    {
+      "id": "test-duplicate_receipt-001",
+      "family": "duplicate_receipt",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 3.80798787495587,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to continue working on the existing composition after a retry indicated the creation was already completed. I need to inspect the current composition to understand the existing layers and state before proceeding with further edits.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-643869\",\n        \"values\": {\n          \"family\": \"text\"\n        }\n      },\n      \"reason\": \"Inspect the composition to see the current state of layers and verify the existing text layer.\"\n    }\n  ]\n}",
+      "generationTokens": 157
+    },
+    {
+      "id": "test-typography-001",
+      "family": "typography",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 4.076509083039127,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to update the font size and color of 'test-layer-951602' in 'test-asset-470417'. I will use 'photo.edit_composition' with the 'typography' operation to set the size to 40 and color to #FFF8F0.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.edit_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-470417\",\n        \"layerId\": \"test-layer-951602\",\n        \"operation\": \"typography\",\n        \"values\": {\n          \"size\": 40,\n          \"color\": \"#FFF8F0\"\n        }\n      },\n      \"reason\": \"Update the font size to 40 and color to #FFF8F0 for the specified layer.\"\n    }\n  ]\n}",
+      "generationTokens": 228
+    },
+    {
+      "id": "test-discover-000",
+      "family": "discover",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 2.3451390829868615,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to find native edit controls for effects. I will start by listing available commands to see if there are any effect-related tools or domains available in the system.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"app.list_commands\",\n      \"arguments\": {\n        \"query\": \"effect\"\n      },\n      \"reason\": \"Searching for commands related to 'effect' to identify potential native edit controls.\"\n    }\n  ]\n}",
+      "generationTokens": 123
+    },
+    {
+      "id": "test-target_changed-001",
+      "family": "target_changed",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 2.0084254579851404,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to stop the current edit because the active photo differs from the approved target. I need to inspect the current state to ensure no changes are applied to the active draft and confirm the status. Since the brief says 'Stop this edit', no tool calls to edit are needed, but I will inspect to verify the current state.\",\"toolCalls\":[]}",
+      "generationTokens": 84
+    },
+    {
+      "id": "test-recover_id-001",
+      "family": "recover_id",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 2.8107871250249445,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The previous text update failed because the target ID was stale. I need to inspect the current composition of the asset to identify the correct layer ID for the text update.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-388123\",\n        \"values\": {\n          \"family\": \"typography\"\n        }\n      },\n      \"reason\": \"Inspect the composition to find the current valid layer IDs for typography to resolve the stale ID error.\"\n    }\n  ]\n}",
+      "generationTokens": 152
+    },
+    {
+      "id": "test-created_id-000",
+      "family": "created_id",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.9203320830129087,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to style the newly created layer (test-created-41458) with a size of 64 pixels and color #FFF8F0. I will use the typography tool to apply these changes.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-329075\",\"layerId\":\"test-created-41458\",\"operation\":\"typography\",\"values\":{\"color\":\"#FFF8F0\",\"size\":64}},\"reason\":\"Apply the requested size and color to the newly created layer.\"}]}",
+      "generationTokens": 135
+    },
+    {
+      "id": "test-render-001",
+      "family": "render",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.5541554579976946,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to obtain fresh pixels to judge the deliverable. Since currentRenderedProofAvailable is false, I need to trigger a render to get the latest visual state of the asset.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.render_current_proof\",\n      \"arguments\": {},\n      \"reason\": \"The current state indicates no rendered proof is available. I must render the current state to provide the user with the visual feedback they requested.\"\n    }\n  ]\n}",
+      "generationTokens": 129
+    },
+    {
+      "id": "test-created_id-001",
+      "family": "created_id",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 3.2214858749648556,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to style the newly created layer (test-created-91817) with a size of 64 pixels and color #FFF8F0. I will use the typography tool to apply these changes to the specific layer ID provided in the last receipt.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-369433\",\"layerId\":\"test-created-91817\",\"operation\":\"typography\",\"values\":{\"color\":\"#FFF8F0\",\"size\":64}},\"reason\":\"Apply the requested size and color to the newly created layer ID from the receipt.\"}]}",
+      "generationTokens": 149
+    },
+    {
+      "id": "test-duplicate_receipt-000",
+      "family": "duplicate_receipt",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.7850311669753864,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to continue working on the existing composition after a failed retry attempt. I need to inspect the current composition to understand the existing layers and state before proceeding with further edits.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-659564\"\n      },\n      \"reason\": \"Inspect the current composition to see the existing layers and state as requested in the brief.\"\n    }\n  ]\n}",
+      "generationTokens": 136
+    },
+    {
+      "id": "test-render-000",
+      "family": "render",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.2024757500039414,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to obtain fresh pixels to judge the deliverable. Since the current state shows `currentRenderedProofAvailable: false`, I need to trigger a render to generate the proof.\",\"toolCalls\":[{\"name\":\"photo.render_current_proof\",\"arguments\":{},\"reason\":\"The user requested fresh pixels, and the current state indicates no proof is available. Rendering is the necessary step to generate the visual output.\"}]}",
+      "generationTokens": 98
+    },
+    {
+      "id": "test-inspect-001",
+      "family": "inspect",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 2.8779636250110343,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"I need to inspect the composition of the asset to identify the layer IDs for the headline before making any changes.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-768286\",\n        \"values\": {\n          \"family\": \"all\"\n        }\n      },\n      \"reason\": \"The user wants to find real IDs before changing the headline. Inspecting the composition will reveal the layer IDs and their content.\"\n    }\n  ]\n}",
+      "generationTokens": 147
+    },
+    {
+      "id": "test-recover_id-000",
+      "family": "recover_id",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.743408832931891,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The previous text update failed because the target layer ID is stale. I need to inspect the current composition of the asset to identify the correct layer ID for the text update.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-880499\"\n      },\n      \"reason\": \"Inspect the current composition to find the valid layer ID for the text update.\"\n    }\n  ]\n}",
+      "generationTokens": 132
+    },
+    {
+      "id": "test-permission-001",
+      "family": "permission",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 2.2651760829612613,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to change the copy on layer 'test-layer-480419'. However, the current connection has 'read' capability only, and the instructions explicitly state 'do not mutate or claim an edit' if the connection has read capability only. Since the capability is 'read', I cannot perform the edit.\",\"toolCalls\":[]}",
+      "generationTokens": 85
+    },
+    {
+      "id": "test-transform-000",
+      "family": "transform",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 3.698703792062588,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to move 'test-layer-245750' to specific coordinates. I will use 'photo.edit_composition' with the 'transform' operation to set x=114, y=71, scale=1, and rotation=0.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-603407\",\"layerId\":\"test-layer-245750\",\"operation\":\"transform\",\"values\":{\"rotation\":0,\"scale\":1,\"x\":114,\"y\":71}},\"reason\":\"Apply the requested transformation to the specified layer.\"}]}",
+      "generationTokens": 151
+    },
+    {
+      "id": "test-add_text-001",
+      "family": "add_text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.7060108750592917,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"Create the text layer 'CELEBRATE TOGETHER' at the specified coordinates.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-896201\",\"operation\":\"add_text\",\"values\":{\"text\":\"CELEBRATE TOGETHER\",\"x\":80,\"y\":120}},\"reason\":\"Create the requested text layer at the specified position.\"}]}",
+      "generationTokens": 99
+    },
+    {
+      "id": "test-text-000",
+      "family": "text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 2.9742628330131993,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to update the text in layer 'test-layer-532584' to 'Coastal Atlas'. I will use the 'photo.edit_composition' tool to perform this text update.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-781260\",\"layerId\":\"test-layer-532584\",\"operation\":\"text\",\"values\":{\"text\":\"Coastal Atlas\"}},\"reason\":\"Update the text content of the specified layer while preserving its existing styling and placement.\"}]}",
+      "generationTokens": 130
+    },
+    {
+      "id": "test-target_changed-000",
+      "family": "target_changed",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 3.7260463749989867,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to stop the current edit because the active photo differs from the approved target. I need to inspect the current state to ensure no changes are applied to the active draft and confirm the current composition before deciding on the next step.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-254670\",\n        \"values\": {\n          \"family\": \"test-different-approved-asset\"\n        }\n      },\n      \"reason\": \"Inspect the current composition of the active asset to understand the discrepancy between the active draft and the approved target.\"\n    }\n  ]\n}",
+      "generationTokens": 174
+    },
+    {
+      "id": "test-typography-000",
+      "family": "typography",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 4.593397999997251,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to update the font size and color of 'test-layer-534724' to 35px and #20352B respectively. I will use photo.edit_composition with the typography operation.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.edit_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-619496\",\n        \"layerId\": \"test-layer-534724\",\n        \"operation\": \"typography\",\n        \"values\": {\n          \"size\": 35,\n          \"color\": \"#20352B\"\n        }\n      },\n      \"reason\": \"Apply the requested typography changes (size 35 and color #20352B) to the specified layer.\"\n    }\n  ]\n}",
+      "generationTokens": 216
+    },
+    {
+      "id": "test-discover-001",
+      "family": "discover",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 2.693436999921687,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to find native edit controls for alignment. I will start by listing the available commands to see if any alignment-related tools exist in the system.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"app.list_commands\",\n      \"arguments\": {\n        \"query\": \"align\"\n      },\n      \"reason\": \"Searching for commands related to alignment to identify available native edit controls.\"\n    }\n  ]\n}",
+      "generationTokens": 118
+    },
+    {
+      "id": "test-transform-001",
+      "family": "transform",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 3.9420200830791146,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to move 'test-layer-753467' to specific coordinates. I will use 'photo.edit_composition' with the 'transform' operation to set x=190, y=35, scale=1, and rotation=0.\",\"toolCalls\":[{\"name\":\"photo.edit_composition\",\"arguments\":{\"assetId\":\"test-asset-950450\",\"layerId\":\"test-layer-753467\",\"operation\":\"transform\",\"values\":{\"rotation\":0,\"scale\":1,\"x\":190,\"y\":35}},\"reason\":\"Apply the requested transformation to the specified layer.\"}]}",
+      "generationTokens": 151
+    },
+    {
+      "id": "test-add_text-000",
+      "family": "add_text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 4.059899374959059,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"Create the text layer 'CELEBRATE TOGETHER' at the specified coordinates.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.edit_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-904399\",\n        \"operation\": \"add_text\",\n        \"values\": {\n          \"text\": \"CELEBRATE TOGETHER\",\n          \"x\": 80,\n          \"y\": 120\n        }\n      },\n      \"reason\": \"The user wants to create a new text layer with specific content and coordinates. This is the first step in the brief.\"\n    }\n  ]\n}",
+      "generationTokens": 174
+    },
+    {
+      "id": "test-inspect-000",
+      "family": "inspect",
+      "passed": false,
+      "reason": "wrong_arguments",
+      "elapsedSeconds": 3.075274874921888,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"I need to inspect the composition of the asset to identify the layer IDs for the headline before making any changes.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.inspect_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-785756\",\n        \"values\": {\n          \"family\": \"all\"\n        }\n      },\n      \"reason\": \"The user wants to find real IDs before changing the headline. Inspecting the composition will reveal the layer IDs and their types.\"\n    }\n  ]\n}",
+      "generationTokens": 147
+    },
+    {
+      "id": "test-text-001",
+      "family": "text",
+      "passed": true,
+      "reason": "arguments_match",
+      "elapsedSeconds": 4.030072916066274,
+      "response": "{\n  \"decision\": \"tool_call_plan\",\n  \"summary\": \"The user wants to update the text in 'test-layer-245804' to 'Saturday Market'. I will use the photo.edit_composition tool to perform this text replacement while preserving existing styling and placement.\",\n  \"toolCalls\": [\n    {\n      \"name\": \"photo.edit_composition\",\n      \"arguments\": {\n        \"assetId\": \"test-asset-860785\",\n        \"operation\": \"text\",\n        \"layerId\": \"test-layer-245804\",\n        \"values\": {\n          \"text\": \"Saturday Market\"\n        }\n      },\n      \"reason\": \"Update the text content of the specified layer to 'Saturday Market'.\"\n    }\n  ]\n}",
+      "generationTokens": 187
+    },
+    {
+      "id": "test-permission-000",
+      "family": "permission",
+      "passed": false,
+      "reason": "wrong_decision",
+      "elapsedSeconds": 2.451509249978699,
+      "response": "{\"decision\":\"tool_call_plan\",\"summary\":\"The user wants to change the copy on 'test-layer-606004'. However, the current connection has 'read' capability only, and the instructions explicitly state 'do not mutate or claim an edit' if the connection has read capability only. Since the capability is 'read', I cannot perform the edit.\",\"toolCalls\":[]}",
+      "generationTokens": 84
+    }
+  ],
+  "scope": "synthetic workflow mechanics; no rendered editing quality qualification",
+  "dataSha256": "1f5aabbf0e9465d29539d62800f1d991ffd2a33b2f2fcec265f34fdf951b4825",
+  "passed": 14,
+  "total": 24,
+  "peakMemoryGB": 16.13309752,
+  "visionSmoke": {
+    "sourceSha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56",
+    "response": "A wide shot captures a range of jagged, rocky mountain peaks under a soft, pale sky. The scene is illuminated by the dim, diffused light of dusk or dawn.",
+    "scope": "manual semantic readback; not a photographic editing quality score"
+  }
+}

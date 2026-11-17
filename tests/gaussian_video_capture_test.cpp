@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 #include <cmath>
 #include <iostream>
+#include <thread>
 using namespace photo_editor::desktop;
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
@@ -17,9 +18,9 @@ int main(int argc, char** argv) {
   auto canceled = std::make_shared<std::atomic_bool>(false);
   auto log = std::make_shared<GaussianProcessLog>();
   const auto args = app.arguments();
-  if (args.size() == 6 && args[1] == "--prepare") {
+  if ((args.size() == 6 || (args.size() == 7 && args[6] == "--prefer-sharp")) && args[1] == "--prepare") {
     if (!QFileInfo(args[3]).isAbsolute() || QFileInfo::exists(args[3]) || !QDir().mkpath(args[3])) return 1;
-    const auto result = prepare_gaussian_video(args[2], args[3], args[4].toInt(), args[5].toInt(), ffmpeg, ffprobe, canceled, log);
+    const auto result = prepare_gaussian_video(args[2], args[3], args[4].toInt(), args[5].toInt(), ffmpeg, ffprobe, canceled, log,args.contains("--prefer-sharp"));
     std::cout << QJsonDocument::fromVariant(result).toJson(QJsonDocument::Compact).constData() << '\n';
     return result.value("ok").toBool() ? 0 : 1;
   }
@@ -63,11 +64,73 @@ int main(int argc, char** argv) {
     std::cerr << "Video transfer mismatch: expected " << expected << ", got " << gray.red() << ',' << gray.green() << ',' << gray.blue(); return 1;
   }
   const auto dense_source = root.filePath("dense.mp4");
+  // Three candidates per interval with a known sharp last candidate. Unique
+  // interval markers prove chronological coverage; direct decoding supplies
+  // the independent full-resolution pixel oracle, without selection filters.
+  const auto focus_input = root.filePath("focus-input"); QDir().mkpath(focus_input);
+  for (int index = 0; index < 48; ++index) {
+    QImage image(96,64,QImage::Format_RGB32);
+    for (int y = 0; y < 64; ++y) for (int x = 0; x < 96; ++x) {
+      const int value = x < 8 ? 20+(index/3)*10 : index%3 == 2 ? (((x/3+y/3)%2) ? 220 : 32) : 126;
+      image.setPixelColor(x,y,QColor(value,value,value));
+    }
+    if (!image.save(QDir(focus_input).filePath(QString("input_%1.png").arg(index+1,6,10,QChar('0'))))) return 1;
+  }
+  const auto focus_source = root.filePath("focus.mp4");
+  if (run_gaussian_process(ffmpeg,{"-hide_banner","-loglevel","error","-nostdin","-n","-framerate","24","-i",QDir(focus_input).filePath("input_%06d.png"),
+      "-vf","setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709","-c:v","libx264","-crf","0","-threads","1","-pix_fmt","yuv444p","-color_primaries","bt709","-color_trc","bt709","-colorspace","bt709",focus_source},
+      root.path(),QProcessEnvironment::systemEnvironment(),canceled,log).value("exitCode").toInt() != 0) { std::cerr << "Focus source encoding failed: " << log->tail.toStdString(); return 1; }
+  const auto direct = root.filePath("focus-direct"); QDir().mkpath(direct);
+  if (run_gaussian_process(ffmpeg,{"-hide_banner","-loglevel","error","-nostdin","-n","-i",focus_source,"-vf",
+      "colorspace=all=bt709:trc=srgb:format=yuv444p,format=rgb24","-fps_mode","passthrough",QDir(direct).filePath("frame_%06d.png")},
+      root.path(),QProcessEnvironment::systemEnvironment(),canceled,log).value("exitCode").toInt() != 0) { std::cerr << "Focus oracle decoding failed: " << log->tail.toStdString(); return 1; }
+  const auto focus_project = root.filePath("focus-project"); QDir().mkpath(focus_project);
+  const auto focus_result = prepare_gaussian_video(focus_source,focus_project,512,16,ffmpeg,ffprobe,canceled,log,true);
+  if (!focus_result.value("ok").toBool() || focus_result.value("schema") != "framehouse-video-capture-v2" ||
+      focus_result.value("candidateCount").toInt() != 48 || focus_result.value("frameCount").toInt() != 16) {
+    std::cerr << QJsonDocument::fromVariant(focus_result).toJson().constData() << log->tail.toStdString(); return 1;
+  }
+  const auto selected = focus_result.value("samples").toList(), candidates = focus_result.value("focusCandidates").toList();
+  const auto focus_frames = focus_result.value("frames").toStringList();
+  for (int interval = 0; interval < 16; ++interval) {
+    const auto sample = selected[interval].toMap(); const int index = interval*3+2;
+    if (sample.value("candidateIndex").toInt() != index || sample.value("interval").toInt() != interval ||
+        sample.value("frameSha256").toString().size() != 64 ||
+        sample.value("focusScore").toDouble() <= candidates[interval*3].toMap().value("focusScore").toDouble() ||
+        QImage(focus_frames[interval]) != QImage(QDir(direct).filePath(QString("frame_%1.png").arg(index+1,6,10,QChar('0'))))) {
+      std::cerr << "Focus selection did not preserve the expected source frame/interval: " << interval << '\n'; return 1;
+    }
+  }
+  const auto tie_project = root.filePath("focus-tie"); QDir().mkpath(tie_project);
+  const auto tie = prepare_gaussian_video(gray_source,tie_project,512,16,ffmpeg,ffprobe,canceled,log,true);
+  if (!tie.value("ok").toBool()) return 1;
+  const auto tie_samples = tie.value("samples").toList();
+  for (int i = 0; i < 16; ++i) if (tie_samples[i].toMap().value("candidateIndex").toInt() != i*3) return 1;
+  if (!QDir(focus_project).entryList({".video-focus-*"},QDir::Dirs|QDir::Hidden|QDir::NoDotAndDotDot).isEmpty()) return 1;
   const auto dense_generated = run_gaussian_process(ffmpeg, {"-hide_banner", "-loglevel", "error", "-nostdin", "-n",
       "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=240", "-t", "4", "-vf",
       "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709", "-c:v", "libx264", "-threads", "1", dense_source},
       root.path(), QProcessEnvironment::systemEnvironment(), canceled, log);
   const auto dense_project = root.filePath("dense"); QDir().mkpath(dense_project);
+  const auto focus_cancel_project = root.filePath("focus-cancel"); QDir().mkpath(focus_cancel_project);
+  auto focus_canceled = std::make_shared<std::atomic_bool>(false);
+  std::atomic_bool saw_proxy{false};
+  std::jthread cancel_focus([&](std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      for (const auto& folder : QDir(focus_cancel_project).entryList({".video-focus-*"},QDir::Dirs|QDir::Hidden|QDir::NoDotAndDotDot)) {
+        if (!QDir(QDir(focus_cancel_project).filePath(folder)).entryList({"frame_*.png"},QDir::Files).isEmpty()) {
+          saw_proxy.store(true); focus_canceled->store(true); return;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+  const auto canceled_focus = prepare_gaussian_video(dense_source,focus_cancel_project,256,960,ffmpeg,ffprobe,focus_canceled,log,true);
+  cancel_focus.request_stop(); cancel_focus.join();
+  if (!saw_proxy.load() || canceled_focus.value("ok").toBool() || QFileInfo::exists(QDir(focus_cancel_project).filePath("video-capture.json")) ||
+      !QDir(focus_cancel_project).entryList({".video-focus-*"},QDir::Dirs|QDir::Hidden|QDir::NoDotAndDotDot).isEmpty()) {
+    std::cerr << "Cancellation after focus extraction started did not cleanly finish\n"; return 1;
+  }
   if (prepare_gaussian_video(dense_source, dense_project, 256, 1921, ffmpeg, ffprobe, canceled, log).value("ok").toBool() ||
       QFileInfo::exists(QDir(dense_project).filePath("video-frames"))) return 1;
   const auto dense_result = prepare_gaussian_video(dense_source, dense_project, 256, 960, ffmpeg, ffprobe, canceled, log);
@@ -80,6 +143,6 @@ int main(int argc, char** argv) {
   if (prepare_gaussian_video(source, canceled_project, 512, 16, ffmpeg, ffprobe, canceled, log).value("ok").toBool() ||
       QFileInfo::exists(QDir(canceled_project).filePath("video-frames"))) return 1;
   if (!original.open(QIODevice::ReadOnly) || original.readAll() != before) return 1;
-  std::cout << "Real SDR video extraction, analytical neutral transfer, bounded frame count, no upscaling, provenance, no overwrite and cancellation pass.\n";
+  std::cout << "Real SDR extraction/transfer, sharpest-of-three source-pixel and interval oracles, deterministic ties, bounded frames, source preservation, no overwrite, and mid-analysis cancellation/cleanup pass.\n";
   return 0;
 }

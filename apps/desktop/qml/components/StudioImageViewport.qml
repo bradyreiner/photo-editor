@@ -2,8 +2,10 @@ import QtQuick
 import QtQuick.Window
 import QtQuick.Controls.Basic as Controls
 import QtQuick.Layouts
+import QtMultimedia
 import PhotoEditor
 import "../workspaces"
+import "BoardViewportGestures.js" as BoardGestures
 
 Rectangle {
     id: viewport
@@ -18,6 +20,9 @@ Rectangle {
     property real zoom: 1.0
     property real panX: 0
     property real panY: 0
+    property var positioningLayer: ({})
+    property real positioningCanvasWidth: 0
+    property real positioningCanvasHeight: 0
     property int boardDragIndex: -1
     property int boardDragStart: -1
     property int boardDragSpan: 0
@@ -97,10 +102,15 @@ Rectangle {
     }
 
     Keys.onShortcutOverride: function(event) {
-        if (viewport.boardDragActive && event.key === Qt.Key_Escape) event.accepted = true
+        if ((viewport.boardDragActive || workspaceContext.cloneSourcePickArmed) &&
+                event.key === Qt.Key_Escape)
+            event.accepted = true
     }
     Keys.onEscapePressed: function(event) {
-        if (viewport.boardDragActive) {
+        if (workspaceContext.cloneSourcePickArmed) {
+            workspaceContext.cancelCloneSourcePick()
+            event.accepted = true
+        } else if (viewport.boardDragActive) {
             viewport.cancelBoardDrag()
             event.accepted = true
         } else event.accepted = false
@@ -124,6 +134,13 @@ Rectangle {
     property string pendingImageDropUrl: ""
     property string pendingImageDropBoardId: ""
     property string pendingImageDropDocumentId: ""
+    property var pendingImageDropPlacement: null
+    function boardDropPlacement(index, point) {
+        const unit = boardUnitWidth * zoom
+        const left = imageFrameX + boardOffset(boardCanvasStart(index), unit, zoom) - boardOffset(imageSpanStart, unit, zoom)
+        return { x: (point.x - left) / Math.max(1, unit * boardCanvasCount(index)),
+                 y: (point.y - imageFrameY) / Math.max(1, boardUnitHeight * zoom) }
+    }
     function acceptsImageDrop(drag) {
         return viewport.boardStageActive && !workspaceContext.editBoardSwitchBusy && !workspaceContext.editBoardExportBusy &&
             drag.hasUrls && drag.urls.length === 1 &&
@@ -137,6 +154,7 @@ Rectangle {
         viewport.pendingImageDropUrl = String(url)
         viewport.pendingImageDropBoardId = String(board.boardId)
         viewport.pendingImageDropDocumentId = workspaceContext.editBoardDocumentId
+        viewport.pendingImageDropPlacement = viewport.boardDropPlacement(index, point)
         boardImageDropMenu.x = Math.max(12, Math.min(viewport.width - boardImageDropMenu.width - 12, point.x))
         boardImageDropMenu.y = Math.max(viewport.contentTopMargin, Math.min(viewport.height - boardImageDropMenu.height - 12, point.y))
         boardImageDropMenu.open()
@@ -154,7 +172,7 @@ Rectangle {
         const index = viewport.pendingImageDropIndex
         const url = viewport.pendingImageDropUrl
         boardImageDropMenu.close()
-        workspaceContext.editBoardImageDropRequested(index, url, operation)
+        workspaceContext.editBoardImageDropRequested(index, url, operation, viewport.pendingImageDropPlacement)
     }
     property string fitMode: "fit"
     property int topChromeInset: 0
@@ -189,10 +207,29 @@ Rectangle {
         border.color: viewport.workspaceContext.mint
         z: 40
     }
+    Loader {
+        objectName: "cutoutResultPreviewLoader"
+        anchors.fill: parent
+        z: 300
+        active: !!viewport.previewContext.cutoutPreview &&
+                String(viewport.previewContext.cutoutPreview.assetId || "") === String(viewport.previewContext.assetId || "") &&
+                String(viewport.previewContext.cutoutPreview.source || "").length > 0 &&
+                viewport.workspaceContext.editTool === "layers" &&
+                viewport.workspaceContext.photoLayerIndexForId(String(viewport.previewContext.cutoutPreview.layerId || "")) ===
+                    viewport.workspaceContext.selectedEditTargetLayerIndex() &&
+                viewport.workspaceContext.selectedEditTargetLayerIndex() >= 0
+        sourceComponent: CutoutResultPreview {
+            objectName: "cutoutResultPreview"
+            controller: viewport.previewContext
+            workspace: viewport.workspaceContext
+            themeContext: viewport.themeContext
+        }
+    }
     property real pointerX: width / 2
     property real pointerY: height / 2
     readonly property real loupeSize: 168
-    readonly property int contentMargin: framed ? 10 : 0
+    property int rulerInset: 0
+    readonly property int contentMargin: Math.max(rulerInset, framed ? 10 : 0)
     readonly property int contentTopMargin: contentMargin + topChromeInset
     readonly property bool editedPreviewSurface: String(source || "") === String(workspaceContext.displayImageSource(0) || "") &&
                                                  String(source || "").length > 0
@@ -201,10 +238,14 @@ Rectangle {
     readonly property bool providerPreviewVisible: String(source || "").length > 0 &&
                                                    (!nativePreviewActive || !inspectionDisplayReady)
     readonly property real viewportContentWidth: Math.max(0, width - contentMargin * 2)
-    readonly property real viewportContentHeight: Math.max(0, height - contentTopMargin - contentMargin)
+    readonly property real boardStatusSpace: boardStageActive ? themeContext.scaled(28) : 0
+    readonly property real viewportContentHeight: Math.max(0, height - contentTopMargin - contentMargin - boardStatusSpace)
     readonly property bool editBoardSurface: objectName === "editImageViewport" && workspaceContext.page === "edit"
-    readonly property bool boardStageActive: editBoardSurface && workspaceContext.editBoardMode
-    property bool boardFocusMode: false
+    // Geometry tools need the complete source, outside the board's cover/clip.
+    readonly property bool boardStageActive: editBoardSurface && workspaceContext.editBoardMode &&
+                                             workspaceContext.editTool !== "crop"
+    property bool boardFocusMode: true
+    property string viewportBoardDocumentId: ""
     readonly property var boardStageModel: boardStageActive ? workspaceContext.editBoardModel : []
     readonly property int boardStageCount: Math.max(1, boardStageModel.length)
     readonly property int boardStageIndex: boardStageActive ? workspaceContext.editBoardIndex : 0
@@ -215,11 +256,21 @@ Rectangle {
             if (!boardStageModel[board].joinedPrevious) offset += boardStageGap * gapScale
         return offset
     }
+    function boardCanvasStart(index) {
+        const board = boardStageModel[index] || ({})
+        return Number(board.imageSpanStart === undefined ? index : board.imageSpanStart)
+    }
+    function boardCanvasCount(index) {
+        return Math.max(1, Number((boardStageModel[index] || ({})).imageSpanCount || 1))
+    }
+    function boardInActiveCanvas(index) {
+        return index >= imageSpanStart && index < imageSpanStart + imageSpanCount
+    }
     readonly property real boardStageFitGaps: boardFocusMode ? 0 : boardStageTotalGaps
     readonly property real boardStageTotalGaps: boardOffset(boardStageCount - 1, 0, 1)
     readonly property real boardAddSpace: editBoardSurface && previewContext.hasAsset ? themeContext.scaled(56) : 0
     readonly property real previewFitWidth: Math.max(1, (viewportContentWidth - boardAddSpace -
-        boardStageFitGaps) / (boardFocusMode ? 1 : boardStageCount))
+        boardStageFitGaps) / (boardFocusMode ? imageSpanCount : boardStageCount))
     readonly property real boardHeaderSpace: boardStageActive ? themeContext.scaled(32) : 0
     readonly property real previewFitHeight: Math.max(1, viewportContentHeight -
         (boardStageActive ? boardHeaderSpace + themeContext.scaled(40) : 0))
@@ -247,7 +298,7 @@ Rectangle {
     readonly property real boardUnitWidth: Math.min(previewFitWidth, previewFitHeight * boardAspect)
     readonly property real boardUnitHeight: boardUnitWidth / boardAspect
     readonly property real baseImageFrameX: contentMargin + (boardFocusMode
-        ? (viewportContentWidth - boardAddSpace - boardUnitWidth) / 2 - (boardStageIndex - imageSpanStart) * boardUnitWidth
+        ? (viewportContentWidth - boardAddSpace - boardUnitWidth * imageSpanCount) / 2
         : (viewportContentWidth - boardAddSpace - boardStageCount * boardUnitWidth - boardStageTotalGaps) / 2
           + boardOffset(imageSpanStart, boardUnitWidth, 1))
     readonly property real baseImageFrameY: contentTopMargin + boardHeaderSpace + (previewFitHeight - boardUnitHeight) / 2
@@ -365,7 +416,7 @@ Rectangle {
     color: themeContext.mediaCanvas
     border.width: themeContext.chromeBorderWidth
     border.color: themeContext.alpha(workspaceContext.hairline, 0.78)
-    radius: themeContext.radius8
+    radius: 0
     clip: true
 
     function nextInspectionZoom() {
@@ -415,10 +466,10 @@ Rectangle {
         const requestedZoom = finiteOr(nextZoom, zoom)
         const safeMaxZoom = Math.max(1.0, finiteOr(maxInspectionZoom, 8.0))
         const oldZoom = Math.max(0.01, finiteOr(zoom, 1.0))
-        const clampedZoom = workspaceContext.clamp(requestedZoom, 0.25, safeMaxZoom)
+        const clampedZoom = workspaceContext.clamp(requestedZoom, boardStageActive ? 0.02 : 0.25, safeMaxZoom)
         if (Math.abs(clampedZoom - oldZoom) < 0.0001)
             return
-        if (clampedZoom <= 1.0) {
+        if (clampedZoom <= 1.0 && !boardStageActive) {
             zoom = clampedZoom
             panX = 0
             panY = 0
@@ -435,6 +486,15 @@ Rectangle {
                     finiteOr(anchorY === undefined ? viewportHeight / 2 : anchorY, viewportHeight / 2),
                     0,
                     viewportHeight)
+        if (boardStageActive) {
+            const originX = boardBoundaryX(0)
+            const originY = imageFrameY
+            const ratio = clampedZoom / oldZoom
+            zoom = clampedZoom
+            panX += pivotX - (pivotX - originX) * ratio - boardBoundaryX(0)
+            panY += pivotY - (pivotY - originY) * ratio - imageFrameY
+            return
+        }
         const basePaintedWidth = Math.max(1, finiteOr(paintedContentWidth / oldZoom, basePaintedContentWidth))
         const basePaintedHeight = Math.max(1, finiteOr(paintedContentHeight / oldZoom, basePaintedContentHeight))
         const basePaintedX = finiteOr(paintedContentX, basePaintedContentX) - finiteOr(panX, 0) + basePaintedWidth * (oldZoom - 1) / 2
@@ -485,7 +545,7 @@ Rectangle {
         if (nextFitMode !== "fit" && nextFitMode !== "fill")
             return
         fitMode = nextFitMode
-        boardFocusMode = false
+        boardFocusMode = boardStageActive
         zoom = 1.0
         panX = 0
         panY = 0
@@ -524,21 +584,32 @@ Rectangle {
     }
 
     function zoomIn() {
-        setZoom(nextInspectionZoom())
+        setZoom(boardStageActive ? zoom * wheelZoomStepBase : nextInspectionZoom())
     }
 
     function zoomOut() {
-        setZoom(previousInspectionZoom())
+        setZoom(boardStageActive ? zoom / wheelZoomStepBase : previousInspectionZoom())
     }
 
     CanvasCoordinateMapper {
         id: viewportCoordinateMapper
+        geometryMapper: previewContext
+        inputCoordinateSpace: "source"
+        coordinateSpace: workspaceContext.pixelExactToolReady() ? "source" : "active"
         contentX: viewport.paintedContentX
         contentY: viewport.paintedContentY
         contentWidth: viewport.paintedContentWidth
         contentHeight: viewport.paintedContentHeight
         fitMode: viewport.fitMode
         devicePixelRatio: workspaceContext.thumbnailScreenDevicePixelRatio()
+    }
+
+    function normalizedOutputPointForViewport(x, y) {
+        const localX = (Number(x) - paintedContentX) / paintedContentWidth
+        const localY = (Number(y) - paintedContentY) / paintedContentHeight
+        return { valid: paintedContentWidth > 1 && paintedContentHeight > 1 &&
+                        localX >= 0 && localX <= 1 && localY >= 0 && localY <= 1,
+                 x: localX, y: localY }
     }
 
     function normalizedPointForViewport(x, y) {
@@ -573,13 +644,13 @@ Rectangle {
             return { valid: false, x: 0, y: 0, width: 0, height: 0, pixelX: -1, pixelY: -1 }
         const sourceWidth = Math.max(1, Number(previewContext.sourceImageWidth || 1))
         const sourceHeight = Math.max(1, Number(previewContext.sourceImageHeight || 1))
-        const pixelX = workspaceContext.clamp(Math.floor(point.x * sourceWidth), 0, sourceWidth - 1)
-        const pixelY = workspaceContext.clamp(Math.floor(point.y * sourceHeight), 0, sourceHeight - 1)
+        const pixelX = workspaceContext.clamp(Math.round(point.x * Math.max(1, sourceWidth - 1)), 0, sourceWidth - 1)
+        const pixelY = workspaceContext.clamp(Math.round(point.y * Math.max(1, sourceHeight - 1)), 0, sourceHeight - 1)
         const rect = viewRectForImage(
-                    pixelX / sourceWidth,
-                    pixelY / sourceHeight,
-                    1.0 / sourceWidth,
-                    1.0 / sourceHeight)
+                    (pixelX - 0.5) / Math.max(1, sourceWidth - 1),
+                    (pixelY - 0.5) / Math.max(1, sourceHeight - 1),
+                    1.0 / Math.max(1, sourceWidth - 1),
+                    1.0 / Math.max(1, sourceHeight - 1))
         return {
             valid: rect.valid,
             x: rect.x,
@@ -696,7 +767,7 @@ Rectangle {
     }
 
     function updatePixelInspectorAt(x, y) {
-        const point = normalizedPointForViewport(x, y)
+        const point = normalizedOutputPointForViewport(x, y)
         if (point.valid)
             previewContext.updatePixelInspector(point.x, point.y)
         else
@@ -706,7 +777,7 @@ Rectangle {
     function handleSamplingPointerPressed(mouse) {
         if (!previewContext.hasAsset || previewContext.compareMode)
             return false
-        const point = normalizedPointForViewport(mouse.x, mouse.y)
+        const point = normalizedOutputPointForViewport(mouse.x, mouse.y)
         if (!point.valid)
             return false
         if (workspaceContext.colorMixerImageDragActive) {
@@ -776,7 +847,7 @@ Rectangle {
         }
         if (!workspaceContext.maskLuminanceRangeSampling || previewContext.activeMaskKind !== "luminance")
             return false
-        const point = normalizedPointForViewport(mouse.x, mouse.y)
+        const point = normalizedOutputPointForViewport(mouse.x, mouse.y)
         if (!point.valid)
             return false
         return previewContext.updateActiveLuminanceRangeSample(point.x, point.y)
@@ -793,7 +864,7 @@ Rectangle {
         }
         if (!workspaceContext.maskLuminanceRangeSampling || previewContext.activeMaskKind !== "luminance")
             return false
-        const point = normalizedPointForViewport(mouse.x, mouse.y)
+        const point = normalizedOutputPointForViewport(mouse.x, mouse.y)
         if (!point.valid) {
             previewContext.cancelActiveLuminanceRangeSample()
             return true
@@ -820,12 +891,20 @@ Rectangle {
         return mask ? String(mask.id || "") : ""
     }
 
+    readonly property bool retouchBrushActive: workspaceContext.page === "edit" &&
+        workspaceContext.editTool === "retouch" && previewContext.hasActiveMask &&
+        previewContext.activeMaskKind === "brush" && previewContext.activeMaskToolRole === "retouch" &&
+        !previewContext.activeMaskCommitted && !previewContext.activeMaskLocked &&
+        !previewContext.inpaintProgressActive
+    readonly property bool canvasBrushActive: workspaceContext.brushToolReady() || retouchBrushActive
+
     function maskPointerActive() {
-        return (viewport.masked || workspaceContext.objectPickArmed || workspaceContext.pixelExactToolReady()) &&
+        return (viewport.masked || workspaceContext.objectPickArmed || workspaceContext.cloneSourcePickArmed ||
+               workspaceContext.pixelExactToolReady()) &&
                viewport.previewContentVisible &&
                !workspaceContext.spacePanActive &&
                !previewContext.compareMode &&
-               (workspaceContext.brushToolReady() || workspaceContext.pixelExactToolReady() || workspaceContext.editTool === "masks")
+               (canvasBrushActive || workspaceContext.pixelExactToolReady() || workspaceContext.editTool === "masks")
     }
 
     function handleMaskPointerPressed(mouse) {
@@ -852,16 +931,29 @@ Rectangle {
         if (workspaceContext.pixelExactToolReady() && pixelGridVisible) {
             maskGestureKind = "pixel"
             const operation = workspaceContext.applyMaskOperationForModifierState(mouse.modifiers)
-            previewContext.applyActiveSelectionPixel(point.x, point.y, operation)
+            previewContext.applyActiveSelectionSourcePixel(point.x, point.y, operation)
             maskGestureId = currentMaskIdentity()
             return true
         }
 
-        if (workspaceContext.brushToolReady()) {
-            workspaceContext.applyMaskOperationForModifierState(mouse.modifiers)
+        if (retouchBrushActive && previewContext.activeMaskRetouchMode === "clone" &&
+                workspaceContext.cloneSourcePickArmed) {
+            workspaceContext.completeCloneSourcePick(point.x, point.y)
+            return true
+        }
+
+        if (canvasBrushActive) {
+            if (retouchBrushActive && previewContext.activeMaskRetouchMode === "clone" &&
+                    ((mouse.modifiers & Qt.AltModifier) || !previewContext.activeMaskCloneSourceSet)) {
+                previewContext.setActiveMaskCloneSource(point.x, point.y)
+                return true
+            }
+            const strokeOperation = !retouchBrushActive
+                    ? workspaceContext.applyMaskOperationForModifierState(mouse.modifiers, false) : ""
             maskGestureKind = "brush"
-            previewContext.beginActiveBrushStroke()
-            previewContext.addBrushPointWithPressure(point.x, point.y, 1.0)
+            previewContext.beginActiveBrushSourceStroke(strokeOperation)
+            maskGestureId = currentMaskIdentity()
+            previewContext.addBrushSourcePointWithPressure(point.x, point.y, 1.0)
             return true
         }
 
@@ -882,10 +974,7 @@ Rectangle {
 
         if (!previewContext.hasActiveMask || kind === "object") {
             const objectMode = workspaceContext.applyObjectPickModeForModifierState(mouse.modifiers)
-            if (objectMode === "selection-subtract")
-                previewContext.smartSelectSubtractAt(point.x, point.y, !previewContext.hasActiveMask)
-            else
-                previewContext.smartSelectAddAt(point.x, point.y, !previewContext.hasActiveMask)
+            previewContext.pickMaskAt(point.x, point.y, objectMode, !previewContext.hasActiveMask)
             return true
         }
 
@@ -907,14 +996,14 @@ Rectangle {
         if (maskGestureKind === "smart")
             return previewContext.updateSmartSelectStroke(point.x, point.y, paintedContentWidth, paintedContentHeight)
 
-        if (workspaceContext.brushToolReady() && previewContext.brushStrokeActive) {
-            previewContext.addBrushPointWithPressure(point.x, point.y, 1.0)
+        if (canvasBrushActive && previewContext.brushStrokeActive) {
+            previewContext.addBrushSourcePointWithPressure(point.x, point.y, 1.0)
             return true
         }
 
         if (workspaceContext.pixelExactToolReady() && pixelGridVisible && maskGestureKind === "pixel") {
             const operation = workspaceContext.applyMaskOperationForModifierState(mouse.modifiers)
-            return previewContext.applyActiveSelectionPixel(point.x, point.y, operation)
+            return previewContext.applyActiveSelectionSourcePixel(point.x, point.y, operation)
         }
 
         const kind = String(previewContext.activeMaskKind || "")
@@ -962,7 +1051,14 @@ Rectangle {
         }
     }
 
-    onResetKeyChanged: resetView()
+    onResetKeyChanged: {
+        const documentId = boardStageActive ? String(workspaceContext.editBoardDocumentId || "") : ""
+        if (!documentId.length || documentId !== viewportBoardDocumentId) {
+            viewportBoardDocumentId = documentId
+            resetView()
+        }
+        schedulePublishedPreviewViewportUpdate(true)
+    }
     onSyncViewportChanged: applySynchronizedView()
     onZoomChanged: {
         publishSynchronizedView()
@@ -1013,11 +1109,31 @@ Rectangle {
         }
     }
 
+    PhotoLayerOverflowPreview {
+        objectName: "editPhotoLayerOverflowPreview"
+        anchors.fill: parent
+        readonly property var photo: viewport.positioningLayer || ({})
+        readonly property real sx: viewport.paintedContentWidth / Math.max(1, viewport.positioningCanvasWidth)
+        readonly property real sy: viewport.paintedContentHeight / Math.max(1, viewport.positioningCanvasHeight)
+        imageSource: viewport.boardStageActive && !viewport.previewContext.compareMode &&
+                     photo.kind === "source" && photo.enabled !== false && !String(photo.parentId || "").length &&
+                     String(photo.sourcePath || "").length
+            ? "image://library-original/source?path=" + encodeURIComponent(photo.sourcePath) : ""
+        canvasRect: Qt.rect(viewport.imageFrameX, viewport.imageFrameY,
+            viewport.imageFrameWidth * viewport.zoom, viewport.boardUnitHeight * viewport.zoom)
+        photoRect: Qt.rect(viewport.paintedContentX + Number(photo.x || 0) * sx,
+            viewport.paintedContentY + Number(photo.y || 0) * sy,
+            Number(photo.pixelWidth || 0) * Number(photo.scale || 1) * sx,
+            Number(photo.pixelHeight || 0) * Number(photo.scale || 1) * sy)
+        photoRotation: Number(photo.rotation || 0)
+        photoOpacity: photo.opacity === undefined ? 1 : Number(photo.opacity)
+    }
+
     Item {
         id: activeImageFrame
-        x: viewport.boardStageActive ? viewport.imageFrameX + (viewport.boardFocusMode ? (viewport.boardStageIndex - viewport.imageSpanStart) * viewport.boardUnitWidth * viewport.zoom : 0) : 0
+        x: viewport.boardStageActive ? viewport.imageFrameX : 0
         y: viewport.boardStageActive ? viewport.imageFrameY : 0
-        width: viewport.boardStageActive ? viewport.boardUnitWidth * (viewport.boardFocusMode ? 1 : viewport.imageSpanCount) * viewport.zoom : viewport.width
+        width: viewport.boardStageActive ? viewport.boardUnitWidth * viewport.imageSpanCount * viewport.zoom : viewport.width
         height: viewport.boardStageActive ? viewport.boardUnitHeight * viewport.zoom : viewport.height
         clip: viewport.boardStageActive
         Image {
@@ -1032,7 +1148,7 @@ Rectangle {
             smooth: false
         }
 
-        Image {
+        ColorManagedImage {
             id: previewImage
             property string loadedAssetId: ""
             Component.onCompleted: {
@@ -1048,7 +1164,8 @@ Rectangle {
             y: viewport.boardStageActive ? viewport.paintedContentY - activeImageFrame.y : viewport.contentTopMargin + viewport.boardHeaderSpace
             width: viewport.boardStageActive ? viewport.paintedContentWidth : viewport.previewFitWidth
             height: viewport.boardStageActive ? viewport.paintedContentHeight : viewport.previewFitHeight
-            source: viewport.visible ? viewport.source : ""
+            imageSource: viewport.visible ? viewport.source : ""
+            displayController: previewContext
             fillMode: viewport.boardStageActive ? Image.Stretch : viewport.fitMode === "fill" ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             asynchronous: true
             cache: false
@@ -1095,28 +1212,36 @@ Rectangle {
             id: boardSurface
             required property int index
             readonly property var modelData: viewport.boardStageModel[index] || ({})
-            readonly property bool selectedBoard: index === viewport.boardStageIndex
-            readonly property bool highlightedBoard: index === workspaceContext.selectedEditBoardIndex
-            readonly property bool activeImage: index >= viewport.imageSpanStart && index < viewport.imageSpanStart + viewport.imageSpanCount
+            readonly property int canvasStart: viewport.boardCanvasStart(index)
+            readonly property int canvasCount: viewport.boardCanvasCount(index)
+            readonly property bool canvasHead: index === canvasStart
+            readonly property real chromeWidth: width * canvasCount
+            readonly property bool activeImage: viewport.boardInActiveCanvas(index)
+            readonly property bool selectedBoard: activeImage
+            readonly property bool highlightedBoard: workspaceContext.selectedEditBoardIndex >= canvasStart &&
+                workspaceContext.selectedEditBoardIndex < canvasStart + canvasCount
             readonly property string boardName: String(modelData.boardName || "").trim() || qsTr("Board %1").arg(index + 1)
+            readonly property string canvasName: canvasCount > 1
+                ? String((viewport.boardStageModel[canvasStart] || ({})).boardName || qsTr("Shared canvas"))
+                    .replace(/\s*\/\s*(I|II|III|IV)$/, "") + qsTr(" · Boards %1–%2").arg(canvasStart + 1).arg(canvasStart + canvasCount)
+                : boardName
             x: viewport.imageFrameX + viewport.boardOffset(index, viewport.boardUnitWidth * viewport.zoom, viewport.zoom)
                - viewport.boardOffset(viewport.imageSpanStart, viewport.boardUnitWidth * viewport.zoom, viewport.zoom)
             y: viewport.imageFrameY
             width: viewport.boardUnitWidth * viewport.zoom
             height: viewport.boardUnitHeight * viewport.zoom
-            z: 34
+            z: canvasHead ? 35 : 34
             objectName: "editCanvasBoard" + index
-            visible: (!viewport.boardFocusMode || selectedBoard) &&
-                     x + width > 0 && x < viewport.width && y + height > viewport.contentTopMargin
-            activeFocusOnTab: !selectedBoard
+            visible: x + (canvasHead ? chromeWidth : width) > 0 && x < viewport.width && y + height > viewport.contentTopMargin
+            activeFocusOnTab: canvasHead && !selectedBoard
             Accessible.role: Accessible.Button
             Accessible.name: boardName + qsTr(", board %1 of %2").arg(index + 1).arg(viewport.boardStageCount) +
-                             (selectedBoard ? qsTr(", active") : qsTr(", double-click to edit"))
+                             (selectedBoard ? qsTr(", active") : qsTr(", click to edit"))
             Accessible.selected: highlightedBoard
-            Accessible.onPressAction: workspaceContext.selectEditBoard(index)
-            Keys.onReturnPressed: workspaceContext.editBoardSelected(index)
-            Keys.onLeftPressed: workspaceContext.selectEditBoard(Math.max(0, index - 1))
-            Keys.onRightPressed: workspaceContext.selectEditBoard(Math.min(viewport.boardStageCount - 1, index + 1))
+            Accessible.onPressAction: viewport.activateBoardInPlace(index)
+            Keys.onReturnPressed: viewport.activateBoardInPlace(index)
+            Keys.onLeftPressed: viewport.activateBoardInPlace(Math.max(0, canvasStart - 1))
+            Keys.onRightPressed: viewport.activateBoardInPlace(Math.min(viewport.boardStageCount - 1, canvasStart + canvasCount))
             Image {
                 anchors.fill: parent
                 visible: !boardSurface.activeImage
@@ -1128,14 +1253,17 @@ Rectangle {
                 objectName: "editCanvasBoardPreview" + boardSurface.index
                 anchors.fill: parent
                 visible: !boardSurface.activeImage
-                source: visible ? String(boardSurface.modelData.previewSource || "") : ""
+                source: visible ? String((boardSurface.modelData.videoSequence || ({})).posterUrl || boardSurface.modelData.previewSource || "") : ""
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 smooth: true
                 mipmap: true
             }
             Rectangle {
-                anchors.fill: parent
+                objectName: "editCanvasGroupFrame" + boardSurface.index
+                width: boardSurface.chromeWidth
+                height: parent.height
+                visible: boardSurface.canvasHead
                 color: viewport.boardDragActive && boardSurface.index >= viewport.boardDragStart &&
                     boardSurface.index < viewport.boardDragStart + viewport.boardDragSpan ? themeContext.alpha(themeContext.primaryAccent, 0.08) : "transparent"
                 border.width: boardSurface.highlightedBoard || boardSurface.activeFocus ? 2 : 1
@@ -1149,15 +1277,32 @@ Rectangle {
                 width: 3
                 height: 12
                 color: themeContext.accentCool400
-                visible: boardSurface.selectedBoard
+                visible: boardSurface.canvasHead && boardSurface.selectedBoard
+            }
+            Rectangle {
+                x: -0.5
+                y: -5
+                width: 1
+                height: 10
+                color: themeContext.alpha(themeContext.textMuted, 0.5)
+                visible: !boardSurface.canvasHead
+            }
+            Rectangle {
+                x: -0.5
+                y: parent.height - 5
+                width: 1
+                height: 10
+                color: themeContext.alpha(themeContext.textMuted, 0.5)
+                visible: !boardSurface.canvasHead
             }
             Text {
                 objectName: "editCanvasBoardLabel" + boardSurface.index
+                visible: boardSurface.canvasHead
                 x: boardSurface.selectedBoard ? 9 : 0
                 y: -23
-                width: Math.max(1, parent.width - x - (boardActions.visible ? boardActions.width + 8 : 0))
+                width: Math.max(1, boardSurface.chromeWidth - x - (boardActions.visible ? boardActions.width + 8 : 0))
                 text: boardSurface.width < themeContext.scaled(90) ? String(boardSurface.index + 1)
-                      : boardSurface.boardName + (boardSurface.selectedBoard ? qsTr(" · Active") : "")
+                      : boardSurface.canvasName + (boardSurface.selectedBoard ? qsTr(" · Active") : "")
                 color: boardSurface.selectedBoard ? themeContext.textStrong : themeContext.textMuted
                 font.family: themeContext.fontUi
                 font.pixelSize: themeContext.scaled(12)
@@ -1169,11 +1314,12 @@ Rectangle {
                 objectName: "editCanvasBoardHeaderSelect" + boardSurface.index
                 x: 0
                 y: -30
-                width: Math.max(1, parent.width - 36)
+                width: Math.max(1, boardSurface.chromeWidth - 36)
                 height: 30
                 property point pressPoint: Qt.point(0, 0)
                 property bool dragged: false
                 readonly property bool canDrag: !viewport.boardFocusMode && Number(boardSurface.modelData.moveSpanCount) < viewport.boardStageCount
+                visible: boardSurface.canvasHead
                 enabled: !workspaceContext.editBoardSwitchBusy && !workspaceContext.editBoardExportBusy && !workspaceContext.spacePanActive
                 hoverEnabled: true
                 preventStealing: true
@@ -1199,26 +1345,25 @@ Rectangle {
                 onClicked: {
                     if (!dragged) {
                         boardSurface.forceActiveFocus()
-                        workspaceContext.selectEditBoard(boardSurface.index)
+                        viewport.activateBoardInPlace(boardSurface.index)
                     }
                 }
-                onDoubleClicked: if (!dragged) workspaceContext.editBoardSelected(boardSurface.index)
                 AppToolTip {
                     id: sharedTooltip1
                     targetItem: boardHeaderArea
                     visible: boardHeaderArea.visible && (boardHeaderArea.containsMouse && !boardHeaderArea.pressed && !viewport.boardDragActive)
                     delay: 800
                     text: boardHeaderArea.canDrag ? (Number(boardSurface.modelData.moveSpanCount) > 1
-                    ? qsTr("Drag to reorder. Connected boards move together.") : qsTr("Drag to reorder this board.")) : qsTr("Click to select. Double-click to edit.")
+                    ? qsTr("Drag to reorder. Connected boards move together.") : qsTr("Drag to reorder this board.")) : qsTr("Click to edit this board.")
                 }
             }
             MenuButton {
                 id: boardActions
                 objectName: "editCanvasBoardActions" + boardSurface.index
-                x: parent.width - width
+                x: boardSurface.chromeWidth - width
                 y: -30
                 width: height
-                visible: boardSurface.selectedBoard || boardSelectArea.containsMouse || boardSurface.activeFocus
+                visible: boardSurface.canvasHead && (boardSurface.selectedBoard || boardSelectArea.containsMouse || boardSurface.activeFocus)
                 enabled: !workspaceContext.editBoardSwitchBusy && !workspaceContext.editBoardExportBusy
                 compact: true
                 tone: "quiet"
@@ -1240,7 +1385,9 @@ Rectangle {
                     { key: "later", label: Number(boardSurface.modelData.imageSpanCount || 1) > 1 ? qsTr("Move image right") : qsTr("Move right"), icon: "chevron-right", enabled: Number(boardSurface.modelData.moveSpanStart) + Number(boardSurface.modelData.moveSpanCount) < viewport.boardStageCount,
                       disabledReason: qsTr("This is the last board.") },
                     { key: "remove", label: qsTr("Remove board…"), icon: "delete", danger: true, separatorBefore: true,
-                      enabled: viewport.boardStageCount > 1, disabledReason: qsTr("Keep at least one board in the document.") }
+                      tooltip: viewport.boardStageCount === 1
+                               ? qsTr("Remove the final board and return to its photo or collection. This can be undone.")
+                               : qsTr("Remove this board. Shared image content stays on surviving boards.") }
                 ]
                 onMenuItemTriggered: function(key) { workspaceContext.editBoardActionRequested(boardSurface.index, key) }
             }
@@ -1255,19 +1402,17 @@ Rectangle {
                 border.width: themeContext.hairlineWidth
                 border.color: themeContext.alpha(themeContext.primaryAccent, 0.4)
             }
-            MouseArea {
+            BoardCanvasTarget {
                 id: boardSelectArea
                 objectName: "editCanvasBoardSelect" + boardSurface.index
+                canvasViewport: viewport
                 anchors.fill: parent
-                enabled: !boardSurface.selectedBoard && !workspaceContext.editBoardSwitchBusy && !workspaceContext.spacePanActive
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                acceptedButtons: boardSurface.activeImage && workspaceContext.editTool !== "layers" ? Qt.NoButton : Qt.LeftButton
-                onClicked: {
+                enabled: !boardSurface.activeImage && !workspaceContext.editBoardSwitchBusy &&
+                         !workspaceContext.editBoardExportBusy && !workspaceContext.spacePanActive
+                onActivateRequested: {
                     boardSurface.forceActiveFocus()
-                    workspaceContext.selectEditBoard(boardSurface.index)
+                    viewport.activateBoardInPlace(boardSurface.index)
                 }
-                onDoubleClicked: workspaceContext.editBoardSelected(boardSurface.index)
             }
             DropArea {
                 id: boardImageDropArea
@@ -1347,7 +1492,7 @@ Rectangle {
         parent: viewport
         width: Math.min(popupAvailableWidth, Math.max(1, Math.min(themeContext.scaled(324), viewport.width - 24)))
         height: Math.min(popupAvailableHeight, Math.max(1, contentItem.implicitHeight + padding * 2))
-        padding: 16
+        padding: themeContext.popupPadding
         focus: true
         closePolicy: Controls.Popup.CloseOnEscape | Controls.Popup.CloseOnPressOutside
         readonly property var board: viewport.boardStageModel[viewport.pendingImageDropIndex] || ({})
@@ -1410,10 +1555,10 @@ Rectangle {
         objectName: "editActionFeedback"
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 48
+        anchors.bottomMargin: viewport.boardStageActive ? viewport.boardStatusSpace + 12 : 48
         width: Math.min(parent.width - 32, editActionFeedbackLabel.implicitWidth + 28)
         height: editActionFeedbackLabel.implicitHeight + 20
-        z: 50
+        z: 61
         enabled: false
         visible: opacity > 0
         opacity: viewport.editBoardSurface && workspaceContext.editActionFeedback.length > 0 ? 1 : 0
@@ -1438,6 +1583,58 @@ Rectangle {
         }
     }
 
+
+    Item {
+        objectName: "boardVideoSequencePreview"
+        visible: workspaceContext.boardSequencePreviewActive && viewport.editBoardSurface
+        x: viewport.paintedContentX
+        y: viewport.paintedContentY
+        width: viewport.paintedContentWidth
+        height: viewport.paintedContentHeight
+        z: 35
+        Image {
+            anchors.fill: parent
+            source: workspaceContext.boardVideoSequence.posterUrl || ""
+            fillMode: Image.PreserveAspectFit
+        }
+        VideoOutput {
+            id: boardSequenceVideoOutput
+            anchors.fill: parent
+            visible: boardSequencePlayer.hasVideo && (boardSequencePlayer.position > 0 || workspaceContext.boardSequencePlaying)
+            fillMode: VideoOutput.PreserveAspectFit
+        }
+        MediaPlayer {
+            id: boardSequencePlayer
+            objectName: "boardSequencePlayer"
+            source: viewport.editBoardSurface && workspaceContext.editBoardMode ? workspaceContext.boardVideoSequence.videoUrl || "" : ""
+            videoOutput: boardSequenceVideoOutput
+            audioOutput: AudioOutput {}
+            onPositionChanged: function(position) { if (viewport.editBoardSurface) workspaceContext.boardSequencePositionMs = position }
+            onDurationChanged: function(duration) { if (viewport.editBoardSurface) workspaceContext.boardSequenceDurationMs = duration }
+            onSourceChanged: { if (viewport.editBoardSurface) { workspaceContext.boardSequencePositionMs = 0; workspaceContext.boardSequenceDurationMs = 0 } }
+            onErrorOccurred: function(error, errorString) { if (viewport.editBoardSurface) workspaceContext.showEditActionFeedback(errorString || qsTr("The video preview could not be played. Open its sequence to check the original media."), true) }
+            onMediaStatusChanged: if (viewport.editBoardSurface && mediaStatus === MediaPlayer.EndOfMedia) workspaceContext.boardSequencePlaying = false
+            function syncPlayback() {
+                if (viewport.editBoardSurface && workspaceContext.boardSequencePlaying && workspaceContext.workspaceActive && workspaceContext.boardSequencePreviewActive) {
+                    if (mediaStatus === MediaPlayer.EndOfMedia) position = 0
+                    play()
+                } else pause()
+            }
+        }
+        Connections {
+            target: workspaceContext
+            function onBoardSequencePlayingChanged() { boardSequencePlayer.syncPlayback() }
+            function onWorkspaceActiveChanged() { boardSequencePlayer.syncPlayback() }
+            function onBoardSequencePreviewActiveChanged() { boardSequencePlayer.syncPlayback() }
+            function onBoardSequenceSeekRequested(milliseconds) { if (viewport.editBoardSurface) boardSequencePlayer.position = Math.round(milliseconds) }
+        }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: workspaceContext.boardSequencePlaying = !workspaceContext.boardSequencePlaying
+            onDoubleClicked: { workspaceContext.boardSequencePlaying = false; workspaceContext.boardVideoSequenceRequested() }
+        }
+    }
+
     MenuButton {
         objectName: "editCanvasAddBoardButton"
         visible: viewport.editBoardSurface && viewport.previewContentVisible && viewport.previewContext.hasAsset
@@ -1445,7 +1642,7 @@ Rectangle {
             (viewport.boardStageActive ? viewport.imageFrameX : viewport.paintedContentX) + viewport.boardOffset(viewport.boardFocusMode ? viewport.boardStageIndex : viewport.boardStageCount - 1,
                                                             viewport.boardUnitWidth * viewport.zoom, viewport.zoom) -
             viewport.boardOffset(viewport.imageSpanStart, viewport.boardUnitWidth * viewport.zoom, viewport.zoom) + viewport.boardUnitWidth * viewport.zoom + 12))
-        y: Math.max(viewport.contentTopMargin + 20, Math.min(viewport.height - height - 12,
+        y: Math.max(viewport.contentTopMargin + 20, Math.min(viewport.height - viewport.boardStatusSpace - height - 12,
             viewport.paintedContentY + (viewport.paintedContentHeight - height) / 2))
         z: 40
         iconName: "plus"
@@ -1456,42 +1653,73 @@ Rectangle {
         width: height
         tone: "quiet"
         enabled: !workspaceContext.editBoardSwitchBusy && !previewContext.processing && !previewContext.photoPaintBusy &&
-                 !workspaceContext.editBoardExportBusy && (!viewport.boardStageActive || workspaceContext.editBoardCanAdd)
-        disabledReason: workspaceContext.editBoardExportBusy ? qsTr("Wait for the current export to finish.")
-                        : viewport.boardStageActive && !workspaceContext.editBoardCanAdd ? qsTr("This document has reached its board limit.")
-                        : qsTr("Finish the current edit before adding a board.")
-        accessibleName: "Add board"
-        tooltipText: "Add a blank board or extend this canvas."
-        menuItems: [{ key: "blank", label: qsTr("New blank board"), icon: "plus", description: qsTr("An empty board with its own base image and layers.") },
-                    { key: "extend", label: qsTr("Extend this canvas"), icon: "chevron-right", description: qsTr("Span this image and its layers across another export tile.") },
-                    { key: "photo", label: qsTr("Add photo board…"), icon: "image", description: qsTr("A separate photo with the same board proportions and its own layers.") }]
+                 !workspaceContext.editBoardExportBusy && workspaceContext.editBoardCanAdd
+        accessibleName: qsTr("Add board")
+        tooltipText: qsTr("Add a blank board, extend this canvas, or add a photo board.")
+        menuItems: [{ key: "blank", label: qsTr("New blank board"), icon: "plus" },
+                    { key: "extend", label: qsTr("Extend this canvas"), icon: "chevron-right",
+                      enabled: !workspaceContext.boardVideoSequence.videoPath,
+                      disabledReason: qsTr("Use a new blank board for an independent video sequence.") },
+                    { key: "photo", label: qsTr("Add photo board…"), icon: "image" }]
         onMenuItemTriggered: function(key) {
             if (key === "photo") workspaceContext.editBoardActionRequested(viewport.boardStageIndex, "add-photo")
             else workspaceContext.editBoardAddRequested(key === "extend")
         }
     }
 
-    MiniButton {
-        id: boardViewModeButton
-        objectName: "editBoardViewModeButton"
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: 12
-        z: 40
-        visible: viewport.boardStageActive
-        text: viewport.boardFocusMode ? qsTr("All boards") : qsTr("Focus board")
-        iconName: viewport.boardFocusMode ? "grid" : "fullscreen"
-        role: "ghost"
-        enabled: !workspaceContext.editBoardSwitchBusy
-        tooltip: viewport.boardFocusMode ? qsTr("Fit the neighboring boards into the canvas.")
-                                        : qsTr("Fit the active board for detailed editing.")
-        onClicked: viewport.setBoardFocus(!viewport.boardFocusMode)
+    function boardIndexAtPoint(x, y) {
+        if (!boardStageActive || y < imageFrameY || y > imageFrameY + boardUnitHeight * zoom) return -1
+        const unit = boardUnitWidth * zoom
+        for (let index = 0; index < boardStageCount; ++index) {
+            const left = imageFrameX + boardOffset(index, unit, zoom) - boardOffset(imageSpanStart, unit, zoom)
+            if (x >= left && x <= left + unit) return index
+        }
+        return -1
     }
+
+    function activateBoardInPlace(index) {
+        if (!boardStageActive || workspaceContext.editBoardSwitchBusy || workspaceContext.editBoardExportBusy ||
+                index < 0 || index >= boardStageCount || index === boardStageIndex) return
+        if (boardInActiveCanvas(index)) return
+        // Editing a different board changes the preview owner, never the view.
+        const originX = boardBoundaryX(0)
+        const originY = imageFrameY
+        const worldScale = boardUnitWidth * zoom
+        const start = boardCanvasStart(index)
+        workspaceContext.selectEditBoard(start)
+        workspaceContext.editBoardSelected(start)
+        setZoom(worldScale / Math.max(1, boardUnitWidth))
+        panX += originX - boardBoundaryX(0)
+        panY += originY - imageFrameY
+    }
+
+    function handleViewportWheel(wheel, anchorX, anchorY) {
+        const pixel = wheel.pixelDelta || Qt.point(0, 0)
+        const angle = wheel.angleDelta || Qt.point(0, 0)
+        const action = BoardGestures.wheelAction(boardStageActive,
+            Boolean(wheel.modifiers & (Qt.ControlModifier | Qt.MetaModifier)),
+            pixel.x, pixel.y, angle.x, angle.y)
+        if (action.zoom) setZoom(zoom * wheelZoomFactor(wheel),
+                                anchorX === undefined ? wheel.x : anchorX,
+                                anchorY === undefined ? wheel.y : anchorY)
+        else { panX += action.x; panY += action.y }
+        wheel.accepted = true
+    }
+
+    PinchHandler {
+        target: null
+        rotationAxis.enabled: false
+        enabled: viewport.boardStageActive && !workspaceContext.editBoardSwitchBusy
+        onScaleChanged: function(delta) {
+            viewport.setZoom(viewport.zoom * delta, centroid.position.x, centroid.position.y)
+        }
+    }
+
     Text {
         objectName: "editBoardDocumentStatus"
         x: 12
-        y: parent.height - height - 19
-        width: Math.max(1, boardViewModeButton.x - x - 16 - (boardSaveRetry.visible ? boardSaveRetry.width + 8 : 0))
+        y: parent.height - boardStatusSpace + 4
+        width: Math.max(1, parent.width - x - 24 - (boardSaveRetry.visible ? boardSaveRetry.width + 8 : 0))
         z: 40
         visible: viewport.boardStageActive
         text: workspaceContext.editBoardDocumentName + "  ·  " + String(viewport.activeBoardData.boardPixelWidth || previewContext.sourceImageWidth) + " × " +
@@ -1508,10 +1736,10 @@ Rectangle {
     MiniButton {
         id: boardSaveRetry
         objectName: "editBoardSaveRetry"
-        anchors.right: boardViewModeButton.left
-        anchors.rightMargin: 8
-        anchors.verticalCenter: boardViewModeButton.verticalCenter
-        z: 40
+        anchors.right: parent.right
+        anchors.rightMargin: 12
+        y: parent.height - boardStatusSpace - 6
+        z: 61
         visible: viewport.boardStageActive && workspaceContext.editBoardSaveError.length > 0
         text: qsTr("Retry save")
         iconName: "retry"
@@ -1577,7 +1805,7 @@ Rectangle {
     StudioViewportStatusStack {
         anchors.fill: parent
         viewportObjectName: viewport.objectName
-        pixelInspectionRequested: viewport.pixelInspectionRequested
+        pixelInspectionRequested: viewport.publishPreviewViewport && viewport.pixelInspectionRequested
         pixelGridFullResolutionBacked: viewport.pixelGridFullResolutionBacked
         previewProcessing: previewContext.processing
         previewContentVisible: viewport.previewContentVisible
@@ -1585,6 +1813,12 @@ Rectangle {
         previewRenderFailed: workspaceContext.previewRenderFailed()
         previewUpdateBadgeText: workspaceContext.previewUpdateBadgeText()
         previewFailureDetail: previewContext.previewFailureDetail
+        savePending: previewContext.recipeSavePending
+        saveError: previewContext.recipeSaveError
+        saveRecoveryCount: previewContext.recipeSaveRecoveryAssetIds.length
+        saveRecoveryDetail: previewContext.recipeSaveRecoveryDetail
+        saveRecoveryEntries: previewContext.recipeSaveRecoveryEntries
+        archiveRecoveryHandler: function(assetId) { return previewContext.archiveConflictingRecipeRecovery(assetId) }
         maskActivityProgressValue: workspaceContext.maskActivityProgressValue()
         maskActivityChipVisible: workspaceContext.maskActivityChipVisible()
         maskActivityChipText: workspaceContext.maskActivityChipText()
@@ -1657,11 +1891,12 @@ Rectangle {
         y: viewport.paintedContentHeight > 1 ? viewport.paintedContentY : viewport.contentMargin
         width: viewport.paintedContentWidth > 1 ? viewport.paintedContentWidth : Math.max(1, viewport.width - viewport.contentMargin * 2)
         height: viewport.paintedContentHeight > 1 ? viewport.paintedContentHeight : Math.max(1, viewport.height - viewport.contentMargin * 2)
+        previewControllerOverride: viewport.previewContext
         objectNamePrefix: viewport.objectName
         masked: viewport.masked
         hasActiveMask: previewContext.hasActiveMask
         compareMode: previewContext.compareMode
-        activeBrushPainting: workspaceContext.brushToolReady() && previewContext.brushStrokeActive
+        activeBrushPainting: viewport.canvasBrushActive && previewContext.brushStrokeActive
         accentColor: workspaceContext.mint
         outlinePhase: workspaceContext.selectionOutlinePhase
         outlineAnimationEnabled: workspaceContext.selectionOutlineAnimationEnabled
@@ -1679,7 +1914,7 @@ Rectangle {
         cropHeight: previewContext.cropRectHeight
         transformRotation: previewContext.transformRotation
         enablePolygonHandles: !workspaceContext.polygonDrawArmed
-        enableOutlineSelection: !workspaceContext.brushToolReady() && !workspaceContext.pixelExactToolReady() &&
+        enableOutlineSelection: !viewport.canvasBrushActive && !workspaceContext.pixelExactToolReady() &&
                                 !workspaceContext.lassoDrawArmed && !workspaceContext.polygonDrawArmed &&
                                 !workspaceContext.objectPickArmed
         onActiveOutlineClicked: workspaceContext.selectMaskSetAndLayer(workspaceContext.activeMaskSetData(), false, true)
@@ -1691,6 +1926,7 @@ Rectangle {
 
     StudioViewportBrushCursors {
         anchors.fill: parent
+        previewController: viewport.previewContext
         viewportObjectName: viewport.objectName
         pixelBrushCell: viewport.pixelBrushCursorCellForViewport(viewport.pointerX, viewport.pointerY)
         pixelBrushVisible: workspaceContext.pixelExactToolReady() && viewport.pixelGridVisible
@@ -1704,7 +1940,7 @@ Rectangle {
         activeBrushSize: previewContext.activeMaskBrushSize
         activeBrushHardness: previewContext.activeMaskBrushHardness * (1 - previewContext.activeMaskFeather)
         activeMaskOperation: previewContext.activeMaskOperation
-        brushVisible: workspaceContext.brushToolReady() && viewport.previewContentVisible
+        brushVisible: viewport.canvasBrushActive && viewport.previewContentVisible
         brushOperationColor: workspaceContext.selectionOperationOverlayColor(previewContext.activeMaskOperation)
         brushSizeText: workspaceContext.brushSizeVisibleText()
         brushHardnessText: workspaceContext.brushHardnessValueText()

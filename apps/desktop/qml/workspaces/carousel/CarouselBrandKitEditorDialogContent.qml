@@ -477,6 +477,7 @@ ColumnLayout {
                                 elide: Text.ElideNone
                             }
                             ToneTextField {
+                                numericEntry: true
                                 onActiveFocusChanged: if (activeFocus) content.ensureControlVisible(this)
                                 Layout.preferredWidth: content.theme.scaled(112)
                                 inputMethodHints: Qt.ImhFormattedNumbersOnly
@@ -537,6 +538,7 @@ ColumnLayout {
                                 wrapMode: Text.WordWrap
                             }
                             ToneTextField {
+                                numericEntry: true
                                 onActiveFocusChanged: if (activeFocus) content.ensureControlVisible(this)
                                 Layout.preferredWidth: content.theme.scaled(112)
                                 objectName: "carouselBrandField_" + scaleField.modelData.key

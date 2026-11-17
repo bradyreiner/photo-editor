@@ -90,7 +90,8 @@ ColumnLayout {
                         color: modelData.tone === "danger" ? theme.error
                               : modelData.tone === "warning" ? theme.warning
                               : theme.textStrong
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 14
                         font.weight: Font.DemiBold
                     }
@@ -186,8 +187,8 @@ ColumnLayout {
                             Layout.fillWidth: true
                             text: String(mediaUsageCard.modelData.sourcePath || "")
                             color: theme.textFaint
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
                         }

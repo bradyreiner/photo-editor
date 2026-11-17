@@ -77,7 +77,8 @@ struct TimelineHistoryTestAccess {
     root.remove(QStringLiteral("projectBinding"));
     root.remove(QStringLiteral("markers"));
     root.remove(QStringLiteral("clips"));
-    root.insert(QStringLiteral("cacheVersion"), 4);
+    // The reference oracle hashes the same render-cache schema as production.
+    root.insert(QStringLiteral("cacheVersion"), 6);
     root.insert(QStringLiteral("rangeStart"), start_seconds);
     root.insert(QStringLiteral("rangeEnd"), end_seconds);
 
@@ -260,6 +261,8 @@ struct TimelineHistoryTestAccess {
       QStringLiteral("durationSeconds"),
       QStringLiteral("durationText"),
       QStringLiteral("effectivePlaybackRate"),
+      QStringLiteral("effectNames"),
+      QStringLiteral("enabledEffectMaskCount"),
       QStringLiteral("endSeconds"),
       QStringLiteral("effectCount"),
       QStringLiteral("effectsEnabled"),
@@ -276,6 +279,7 @@ struct TimelineHistoryTestAccess {
       QStringLiteral("hasAudio"),
       QStringLiteral("index"),
       QStringLiteral("isCompound"),
+      QStringLiteral("keyframeCount"),
       QStringLiteral("laneIndex"),
       QStringLiteral("mediaAnalysisStatus"),
       QStringLiteral("mediaOnline"),
@@ -296,8 +300,13 @@ struct TimelineHistoryTestAccess {
       QStringLiteral("seconds"),
       QStringLiteral("selected"),
       QStringLiteral("silentPlaceholder"),
+      QStringLiteral("sourceCropBottom"),
+      QStringLiteral("sourceCropLeft"),
+      QStringLiteral("sourceCropRight"),
+      QStringLiteral("sourceCropTop"),
       QStringLiteral("sourceUrl"),
       QStringLiteral("startSeconds"),
+      QStringLiteral("clipMaskEnabled"),
       QStringLiteral("trackId"),
       QStringLiteral("trackKind"),
       QStringLiteral("trackLabel"),
@@ -308,6 +317,7 @@ struct TimelineHistoryTestAccess {
       QStringLiteral("trimStartSeconds"),
       QStringLiteral("trimmedDurationSeconds"),
       QStringLiteral("trimmedDurationText"),
+      QStringLiteral("timelineLabel"),
       QStringLiteral("usingProxy"),
       QStringLiteral("waveformSource"),
   };
@@ -341,6 +351,12 @@ struct TimelineHistoryTestAccess {
       clip.trim_start_seconds = 0.25;
       clip.transition_in_name = variant == 0 ? QString{} : QStringLiteral("Dissolve");
       clip.transition_in_seconds = variant == 0 ? 0.0 : 0.5;
+      clip.display_label = variant == 2 ? QStringLiteral("Generic caption") : clip.display_label;
+      clip.title_text = variant == 2 ? QStringLiteral("Actual caption\ntext") : QString{};
+      clip.clip_mask = variant == 5
+          ? QVariantMap{{QStringLiteral("shape"), QStringLiteral("rectangle")}}
+          : QVariantMap{};
+      clip.effect_states[QStringLiteral("Blur")].mask.enabled = variant == 5;
       clip.keyframes = {{QStringLiteral("opacity"), 0.0, 0.2, QStringLiteral("linear")}};
       if (variant >= 4) {
         clip.keyframes.push_back({QStringLiteral("sourceTime"), 0.0, 0.25, QStringLiteral("linear")});
@@ -355,15 +371,185 @@ struct TimelineHistoryTestAccess {
         if (found != full.cend()) expected.insert(key, found.value());
       }
       const auto compact = controller.compactTimelineClipMap(clip, index, track, context);
-      require(compact == expected, "Compact timeline record changed field values or presence");
+      if (compact != expected) {
+        QStringList differences;
+        const auto describe_value = [](const QVariantMap& map, const QString& key) {
+          if (!map.contains(key)) {
+            return QStringLiteral("<absent>");
+          }
+          const auto wrapped = QJsonDocument::fromVariant(
+              QVariantMap{{QStringLiteral("value"), map.value(key)}});
+          return QString::fromUtf8(wrapped.toJson(QJsonDocument::Compact));
+        };
+        for (const auto& key : compact.keys()) {
+          if (!expected.contains(key)) {
+            differences.push_back(QStringLiteral("extra compact key %1=%2")
+                .arg(key, describe_value(compact, key)));
+          }
+        }
+        for (const auto& key : reference_keys) {
+          const auto compact_has_key = compact.contains(key);
+          const auto expected_has_key = expected.contains(key);
+          if (compact_has_key != expected_has_key ||
+              (compact_has_key && compact.value(key) != expected.value(key))) {
+            differences.push_back(QStringLiteral("%1 compact=%2 expected=%3")
+                .arg(key, describe_value(compact, key), describe_value(expected, key)));
+          }
+        }
+        throw std::runtime_error(
+            QStringLiteral("Compact timeline mismatch in variant %1 for %2: %3")
+                .arg(variant)
+                .arg(clip.clip_id, differences.join(QStringLiteral("; ")))
+                .toStdString());
+      }
+      require(compact.value(QStringLiteral("timelineLabel")).toString().size() <= 160,
+          "Timeline labels must stay bounded");
+      require(compact.value(QStringLiteral("keyframeCount")).toInt() == clip.keyframes.size(),
+          "Compact timeline record lost its keyframe count");
+      require(compact.value(QStringLiteral("clipMaskEnabled")).toBool() == (variant == 5),
+          "Compact timeline record changed the clip-mask summary");
+      require(compact.value(QStringLiteral("enabledEffectMaskCount")).toInt() == (variant == 5 ? 1 : 0),
+          "Compact timeline record changed the effect-mask summary");
+      require(compact.value(QStringLiteral("effectNames")).toStringList().size() <= 3,
+          "Compact timeline record must bound effect names");
+      if (variant == 2) {
+        require(compact.value(QStringLiteral("timelineLabel")).toString() ==
+                    QStringLiteral("Actual caption text"),
+            "Compact caption labels should expose a one-line title summary");
+      }
       const auto selected = controller.tracks_.at(0).clips.constFirst();
+      controller.timeline_tracks_projection_cache_valid_ = false;
       const auto active = controller.timelineTracks().at(0).toMap()
           .value(QStringLiteral("clips")).toList().constFirst().toMap();
-      const auto active_expected = controller.clipMap(selected, 0, controller.tracks_.at(0),
-          &context, true, false, true);
-      require(active == active_expected, "Active timeline clip lost inspector fields");
+      const auto active_expected = controller.compactTimelineClipMap(
+          selected, 0, controller.tracks_.at(0), context);
+      require(active == active_expected, "Selected timeline clip diverged from its compact strip projection");
+      const auto current_details = controller.currentClip();
+      require(current_details.value(QStringLiteral("keyframes")).toList().size() ==
+                  selected.keyframes.size() && current_details.contains(QStringLiteral("effectDetails")),
+          "The separate current-clip snapshot lost full inspector fields");
+      const auto program_details = controller.programClip();
+      require(program_details.value(QStringLiteral("keyframes")).toList().size() > 0 &&
+                  program_details.contains(QStringLiteral("effectDetails")),
+          "The separate Program snapshot lost full clip details");
+      const auto unselected_active = controller.timelineTracks().at(1).toMap()
+          .value(QStringLiteral("clips")).toList().constFirst().toMap();
+      require(!unselected_active.contains(QStringLiteral("keyframes")) &&
+                  !unselected_active.contains(QStringLiteral("effectDetails")) &&
+                  unselected_active.value(QStringLiteral("keyframeCount")).toInt() == 1,
+          "An unselected clip active at the playhead should stay compact while retaining its key count");
     }
   }
+  static void verifyDenseTimelineProjection(TimelineDocumentController& controller) {
+    constexpr int clip_count = 1222;
+    constexpr int lane_count = 192;
+    constexpr int keys_per_active_clip = 64;
+    seed(controller, clip_count, lane_count);
+
+    for (int lane = 0; lane < lane_count; ++lane) {
+      auto& clip = controller.tracks_[lane].clips[0];
+      clip.keyframes.clear();
+      for (int key_index = 0; key_index < keys_per_active_clip; ++key_index) {
+        const auto seconds = 4.0 * static_cast<double>(key_index) /
+                             static_cast<double>(keys_per_active_clip - 1);
+        clip.keyframes.push_back({
+            QStringLiteral("opacity"), seconds,
+            key_index % 2 == 0 ? 0.4 : 0.8, QStringLiteral("linear")});
+      }
+      if (lane == 1) {
+        clip.keyframes.push_back(
+            {QStringLiteral("sourceTime"), 0.0, 0.0, QStringLiteral("linear")});
+        clip.keyframes.push_back(
+            {QStringLiteral("sourceTime"), 4.0, 4.0, QStringLiteral("linear")});
+        clip.clip_mask = {
+            {QStringLiteral("shape"), QStringLiteral("rectangle")},
+            {QStringLiteral("left"), 0.1},
+            {QStringLiteral("top"), 0.1},
+            {QStringLiteral("right"), 0.9},
+            {QStringLiteral("bottom"), 0.9},
+            {QStringLiteral("cornerRadius"), 0.0},
+        };
+        clip.effect_states[QStringLiteral("Blur")].mask.enabled = true;
+        clip.effect_states[QStringLiteral("Grain")].mask.enabled = true;
+      } else if (lane == 2) {
+        clip.media_type = QStringLiteral("caption");
+        clip.display_label = QStringLiteral("Generic caption label");
+        clip.title_text = QStringLiteral("Actual caption title\ncontinues here");
+      } else if (lane == 3) {
+        clip.media_type = QStringLiteral("title");
+        clip.title_text = QString(220, QLatin1Char('T'));
+        clip.effect_stack[1] = QString(64, QLatin1Char('E'));
+      }
+    }
+
+    controller.timeline_tracks_projection_cache_valid_ = false;
+    const auto tracks = controller.timelineTracks();
+    require(tracks.size() == lane_count, "Dense projection lost timeline tracks");
+
+    auto projected_keyframe_arrays = 0;
+    for (int lane = 0; lane < lane_count; ++lane) {
+      const auto clip_rows = tracks.at(lane).toMap().value(QStringLiteral("clips")).toList();
+      require(!clip_rows.isEmpty(), "Dense projection lost an active clip");
+      const auto projected = clip_rows.constFirst().toMap();
+      const auto expected_key_count = keys_per_active_clip + (lane == 1 ? 2 : 0);
+      require(projected.value(QStringLiteral("keyframeCount")).toInt() == expected_key_count,
+          "Dense compact projection changed the keyframe count");
+      const auto effect_names = projected.value(QStringLiteral("effectNames")).toStringList();
+      require(effect_names.size() <= 3,
+          "Dense compact projection exceeded its effect-name bound");
+      for (const auto& effect_name : effect_names) {
+        require(effect_name.size() <= 48,
+            "Dense compact projection exceeded its effect-name text bound");
+      }
+
+      if (lane == 0) {
+        const auto keyframes = projected.value(QStringLiteral("keyframes")).toList();
+        require(keyframes.size() == expected_key_count,
+            "The selected clip lost its editable inline keyframes");
+        ++projected_keyframe_arrays;
+      } else {
+        require(!projected.contains(QStringLiteral("keyframes")) &&
+                    !projected.contains(QStringLiteral("effectDetails")) &&
+                    !projected.contains(QStringLiteral("captionWords")) &&
+                    !projected.contains(QStringLiteral("audioSilenceRanges")),
+            "An unselected active clip retained large detail arrays in the strip projection");
+      }
+
+      if (lane == 1) {
+        require(projected.value(QStringLiteral("clipMaskEnabled")).toBool() &&
+                    projected.value(QStringLiteral("enabledEffectMaskCount")).toInt() == 2,
+            "Dense projection lost clip/effect mask summaries");
+        const auto projected_retime = projected.value(QStringLiteral("retimePoints")).toList();
+        const auto& source_clip = controller.tracks_[lane].clips[0];
+        const auto context = controller.clipMapContext(controller.orderedSelectableClipRefs());
+        const auto detailed = controller.clipMap(
+            source_clip, context.flattened_index_by_clip_id.value(source_clip.clip_id),
+            controller.tracks_[lane], &context, true, false, true);
+        require(projected_retime == detailed.value(QStringLiteral("retimePoints")).toList(),
+            "Compacting a dense active clip changed source-time retime points");
+      } else if (lane == 2) {
+        require(projected.value(QStringLiteral("timelineLabel")).toString() ==
+                    QStringLiteral("Actual caption title continues here"),
+            "Dense caption projection should preserve its actual one-line title summary");
+      } else if (lane == 3) {
+        const auto label = projected.value(QStringLiteral("timelineLabel")).toString();
+        require(label.size() <= 160 && label.endsWith(QChar(0x2026)),
+            "Dense title projection should bound and mark a long label");
+      }
+    }
+
+    require(projected_keyframe_arrays == 1,
+        "Dense projection should retain keyframe arrays only for the selected strip clip");
+    const auto selected_details = controller.currentClip();
+    require(selected_details.value(QStringLiteral("keyframes")).toList().size() ==
+                keys_per_active_clip && selected_details.contains(QStringLiteral("effectDetails")),
+        "The current-clip snapshot lost full details after compacting the timeline rows");
+    const auto program_details = controller.programClip();
+    require(program_details.value(QStringLiteral("keyframes")).toList().size() ==
+                keys_per_active_clip && program_details.contains(QStringLiteral("effectDetails")),
+        "The Program snapshot lost full details after compacting the timeline rows");
+  }
+
   static void verifyMultiSelectionAndCheckpoint(TimelineDocumentController& controller) {
     seed(controller, 60, 3);
     const auto before = document(controller);
@@ -531,6 +717,7 @@ int main(int argc, char** argv) {
       photo_editor::desktop::TimelineDocumentController controller;
       photo_editor::desktop::TimelineHistoryTestAccess::verify(controller, workspace.path());
       photo_editor::desktop::TimelineHistoryTestAccess::verifyProjection(controller);
+      photo_editor::desktop::TimelineHistoryTestAccess::verifyDenseTimelineProjection(controller);
       photo_editor::desktop::TimelineHistoryTestAccess::verifyMultiSelectionAndCheckpoint(controller);
       photo_editor::desktop::TimelineHistoryTestAccess::verifyTrackPublication(controller);
       photo_editor::desktop::TimelineHistoryTestAccess::verifyRenderCacheSignatureParity(controller);

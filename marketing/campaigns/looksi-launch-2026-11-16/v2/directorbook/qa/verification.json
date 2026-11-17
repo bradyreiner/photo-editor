@@ -1,0 +1,19 @@
+{
+  "artifact": "creative-direction-book.pdf",
+  "sha256": "5beb428da4c84bc2cd6e49e46a3c9a0d9a97deaa5c9b26856d03f5457e99253a",
+  "bytes": 21138876,
+  "pages": 20,
+  "page_points": [
+    1200,
+    800
+  ],
+  "render_engine": "Poppler pdftoppm at72dpi",
+  "rendered_pages": 20,
+  "visual_review": "All20pages reviewed through contacts. Caption overlap and ledger-row collision fixed. Enlarged actual01film frames. Final frozen02/03/05assets embedded; affected artwork, scope and research pages reviewed at full size. No observed overlap, clipping or broken glyphs remains.",
+  "text_bounds_violations": 0,
+  "literal_escape_tokens": "none in extracted PDF text",
+  "clickable_primary_source_links": 5,
+  "embedded_source_hashes_match_current": true,
+  "embedded_source_count": 22,
+  "scope": "01finishedletter/founderoptional;02mixed-sessioncasebook,still from completed12s export plus separate dated source;03combinedendpointrecipe;04originalgraphicstory;05photographicmanifesto with genuinely dated sources/tool/board, artwork identified."
+}

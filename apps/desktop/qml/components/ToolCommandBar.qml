@@ -217,7 +217,8 @@ Rectangle {
             Layout.maximumWidth: root.adaptiveMenuMode ? 0 : 260
             text: root.statusText
             color: theme.textMain
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 10
             font.weight: Font.DemiBold
             fontSizeMode: Text.HorizontalFit

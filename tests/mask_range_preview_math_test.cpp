@@ -1,8 +1,11 @@
 #include "mask_range_preview_math.h"
+#include "edit_recipe_mask_schema.h"
+#include "photo_editor/pipeline/local_mask_sampling.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 #include <QByteArray>
 #include <QVariantList>
@@ -27,6 +30,125 @@ QVariantMap sample(std::initializer_list<std::pair<QString, QVariant>> fields) {
   return value;
 }
 
+bool check_engine_color_sample_union() {
+  using photo_editor::pipeline::ColorPixel;
+  using photo_editor::pipeline::LocalMask;
+  using photo_editor::pipeline::LocalMaskSet;
+  auto linear_srgb = photo_editor::pipeline::default_color_pipeline_config();
+  linear_srgb.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+
+  LocalMask mask;
+  mask.kind = "color";
+  mask.hue_center = 0.0;
+  mask.hue_range = 0.045;
+  mask.saturation_min = 0.55;
+  mask.saturation_max = 0.9;
+  mask.range_feather = 0.08;
+  mask.color_range_sample_union = true;
+  mask.color_range_sample_hues = {0.0, 1.0 / 3.0};
+  LocalMaskSet set;
+  set.sources.push_back(mask);
+  const std::vector<ColorPixel> pixels{
+      {0.8F, 0.24F, 0.24F, 1.0F},  // red, H=0
+      {0.24F, 0.8F, 0.24F, 1.0F},  // green, H=1/3
+      {0.24F, 0.24F, 0.8F, 1.0F},  // blue, H=2/3
+  };
+  const auto alpha = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, static_cast<int>(pixels.size()), 1, pixels, pixels,
+      linear_srgb);
+  if (alpha.size() != pixels.size() || alpha[0] < 250 || alpha[1] < 250 || alpha[2] > 2) {
+    return false;
+  }
+
+  // A pair of swatches straddling 0/1 must retain both windows across the
+  // circular hue boundary.
+  mask.hue_range = 0.045;
+  mask.color_range_sample_hues = {0.98, 0.02};
+  set.sources = {mask};
+  const std::vector<ColorPixel> wrapped_pixels{
+      {0.8F, 0.24F, 0.3072F, 1.0F},
+      {0.8F, 0.3072F, 0.24F, 1.0F},
+      {0.24F, 0.8F, 0.8F, 1.0F},
+  };
+  const auto wrapped = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, static_cast<int>(wrapped_pixels.size()), 1, wrapped_pixels, wrapped_pixels,
+      linear_srgb);
+  if (wrapped.size() != wrapped_pixels.size() || wrapped[0] < 250 || wrapped[1] < 250 ||
+      wrapped[2] > 2) {
+    return false;
+  }
+
+  // Two hue windows meet at this point. A max-combined soft union keeps the
+  // shared feather value instead of accumulating coverage twice.
+  mask.hue_range = 0.08;
+  mask.color_range_sample_hues = {0.0, 0.08};
+  set.sources = {mask};
+  const ColorPixel overlap_pixel{0.8F, 0.3744F, 0.24F, 1.0F};
+  const std::vector<ColorPixel> overlap_pixels{overlap_pixel};
+  const auto overlap = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, 1, 1, overlap_pixels, overlap_pixels,
+      linear_srgb);
+  if (overlap.size() != 1 || overlap[0] < 110 || overlap[0] > 145) {
+    return false;
+  }
+
+  // Removing one swatch leaves the other selected and drops the removed hue.
+  mask.hue_range = 0.045;
+  mask.color_range_sample_hues = {0.0};
+  set.sources = {mask};
+  const auto red_only = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, static_cast<int>(pixels.size()), 1, pixels, pixels,
+      linear_srgb);
+  if (red_only.size() != pixels.size() || red_only[0] < 250 || red_only[1] > 2) {
+    return false;
+  }
+
+  // Legacy masks without explicit union mode continue to evaluate one center.
+  mask.color_range_sample_union = false;
+  mask.color_range_sample_hues = {0.0, 1.0 / 3.0};
+  set.sources = {mask};
+  const auto legacy = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, static_cast<int>(pixels.size()), 1, pixels, pixels,
+      linear_srgb);
+  if (legacy.size() != pixels.size() || legacy[0] < 250 || legacy[1] > 2) {
+    return false;
+  }
+
+  // Saturation bounds at 0/1 are open-ended controls; vivid sample pixels at
+  // the 1.0 endpoint must remain selected.
+  mask.saturation_min = 0.0;
+  mask.saturation_max = 1.0;
+  mask.hue_range = 0.045;
+  mask.color_range_sample_union = true;
+  mask.color_range_sample_hues = {0.0};
+  set.sources = {mask};
+  const std::vector<ColorPixel> full_saturation{{1.0F, 0.0F, 0.0F, 1.0F}};
+  const auto endpoint = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, 1, 1, full_saturation, full_saturation, linear_srgb);
+  if (endpoint.size() != 1 || endpoint[0] < 250) {
+    return false;
+  }
+
+  // A newly created, explicitly union-capable Color Range still uses its
+  // editable scalar center until the first swatch is added.
+  mask.color_range_sample_hues.clear();
+  set.sources = {mask};
+  const auto empty_union = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, 1, 1, full_saturation, full_saturation, linear_srgb);
+  if (empty_union.size() != 1 || empty_union[0] < 250) {
+    return false;
+  }
+
+  // Existing recipes without the explicit mode retain their prior saturated
+  // endpoint behavior byte-for-byte.
+  mask.color_range_sample_union = false;
+  set.sources = {mask};
+  const auto legacy_endpoint = photo_editor::pipeline::rasterize_local_mask_set_alpha_with_context(
+      set, 1, 1, full_saturation, full_saturation, linear_srgb);
+  return legacy_endpoint.size() == 1 && legacy_endpoint[0] == 0;
+}
+
 }  // namespace
 
 int main() {
@@ -40,6 +162,9 @@ int main() {
       !close(circular_weight(0.2, 0.0, 0.2), 0.0) ||
       !close(circular_feathered_weight(0.0, 0.0, 0.2, 0.5), 1.0)) {
     return fail("circular mask-range math must wrap and feather exact unit-domain distances");
+  }
+  if (!check_engine_color_sample_union()) {
+    return fail("Color Range must soft-union disjoint samples, preserve feather, support removal, and retain legacy center mode");
   }
 
   const ColorPixel red{.red = 1.0F, .green = 0.0F, .blue = 0.0F, .alpha = 1.0F};
@@ -67,6 +192,35 @@ int main() {
       !close(color_mask.value(QStringLiteral("saturationMin")).toDouble(), 0.32) ||
       !close(color_mask.value(QStringLiteral("saturationMax")).toDouble(), 0.68)) {
     return fail("color samples must form a circular hue span and padded saturation bounds");
+  }
+
+  QVariantMap union_mask;
+  union_mask.insert(QStringLiteral("colorSampleMode"), QStringLiteral("union"));
+  union_mask.insert(QStringLiteral("hueRange"), 0.065);
+  union_mask.insert(
+      QStringLiteral("colorSamples"),
+      QVariantList{
+          sample({{QStringLiteral("hue"), 0.98}, {QStringLiteral("saturation"), 0.4}}),
+          sample({{QStringLiteral("hue"), 0.34}, {QStringLiteral("saturation"), 0.6}})});
+  update_color_range_constraints_from_samples(&union_mask);
+  if (!close(union_mask.value(QStringLiteral("hueRange")).toDouble(), 0.065) ||
+      union_mask.value(QStringLiteral("colorSamples")).toList().size() != 2) {
+    return fail("Additive Color Range samples must preserve the editable per-pick hue radius");
+  }
+  const auto normalized_union = normalized_mask_definition(QVariantMap{
+      {QStringLiteral("kind"), QStringLiteral("color")},
+      {QStringLiteral("colorSampleMode"), QStringLiteral("union")},
+      {QStringLiteral("hueRange"), 0.065},
+      {QStringLiteral("colorSamples"), union_mask.value(QStringLiteral("colorSamples"))}});
+  const auto normalized_legacy = normalized_mask_definition(QVariantMap{
+      {QStringLiteral("kind"), QStringLiteral("color")},
+      {QStringLiteral("hueRange"), 0.31},
+      {QStringLiteral("colorSamples"), union_mask.value(QStringLiteral("colorSamples"))}});
+  if (normalized_union.value(QStringLiteral("colorSampleMode")).toString() != QStringLiteral("union") ||
+      !close(normalized_union.value(QStringLiteral("hueRange")).toDouble(), 0.065) ||
+      normalized_legacy.contains(QStringLiteral("colorSampleMode")) ||
+      !close(normalized_legacy.value(QStringLiteral("hueRange")).toDouble(), 0.31)) {
+    return fail("Explicit union mode must survive normalization while old sample recipes retain scalar semantics");
   }
 
   QVariantMap luminance_mask;

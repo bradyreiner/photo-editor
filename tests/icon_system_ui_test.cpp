@@ -34,7 +34,10 @@ QQuickItem* find_item(QQuickItem* root, const QString& name) {
   return nullptr;
 }
 QImage crop_image(const QImage& shot, QQuickItem* item) {
-  const auto ratio = shot.devicePixelRatio();
+  const auto* window = item->window();
+  const auto ratio = window && window->width() > 0
+      ? static_cast<double>(shot.width()) / static_cast<double>(window->width())
+      : shot.devicePixelRatio();
   const auto origin = item->mapToScene(QPointF(0, 0));
   return shot.copy(QRect(qRound(origin.x() * ratio), qRound(origin.y() * ratio),
                         qRound(item->width() * ratio), qRound(item->height() * ratio)));
@@ -171,7 +174,32 @@ ApplicationWindow {
             }
         }
     }
-    AppIcon { objectName: "probe"; x: 1090; y: 850; width: 16; height: 16; name: "timeline"; color: "#e8ece9" }
+    Row {
+        x: 28; y: 790; spacing: 16
+        Repeater {
+            model: [{name: "adjust", label: "Adjust"}, {name: "presets", label: "Presets"},
+                    {name: "smart-select", label: "Selection"}, {name: "brush-tool", label: "Paint"},
+                    {name: "erase-tool", label: "Eraser"}, {name: "shape-tool", label: "Shapes"},
+                    {name: "text", label: "Text"}, {name: "crop", label: "Crop"}, {name: "export", label: "Export"}]
+            Column {
+                required property var modelData
+                width: 78; spacing: 6
+                ToolButton {
+                    objectName: "rail-tool-" + parent.modelData.name
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    label: parent.modelData.label; iconName: parent.modelData.name
+                    compact: true; toolIconSize: 20
+                    active: parent.modelData.name === "smart-select"
+                }
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: parent.modelData.label; color: "#84979c"; font.pixelSize: 11 }
+            }
+        }
+    }
+    Item {
+        objectName: "probeHost"; x: 1090; y: 850; width: 32; height: 24
+        AppIcon { objectName: "probe"; width: 16; height: 16; name: "timeline"; color: "#e8ece9" }
+    }
+    AppIcon { objectName: "freshProbe"; x: 1050; y: 850; width: 24; height: 24; name: "brush-tool"; color: "#69bdf1"; strokeScale: 2.4; visible: false }
 }
 )qml", QUrl::fromLocalFile(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/tests/icon-system-fixture.qml")));
   std::unique_ptr<QObject> fixture(component.create());
@@ -198,6 +226,11 @@ ApplicationWindow {
           }
         }
       }
+      for (const auto* name : {"adjust", "presets", "smart-select", "brush-tool", "erase-tool", "shape-tool", "text", "crop", "export"}) {
+        auto* tool = find_item(window->contentItem(), QStringLiteral("rail-tool-%1").arg(QString::fromLatin1(name)));
+        if (!tool || light_pixels(crop_image(shot, tool)) < 3)
+          return fail("Editor tool icons must remain visible in active and resting buttons");
+      }
       if (!output.isEmpty() && !shot.save(output + QStringLiteral("/%1-sheet-%2.png").arg(density).arg(page + 1)))
         return fail("Native sheet must save");
     }
@@ -221,6 +254,29 @@ ApplicationWindow {
   probe->setProperty("name", QString());
   settle();
   if (light_pixels(crop_item(window, probe)) != 0) return fail("Empty icons must remain blank");
+  auto* probe_host = find_item(window->contentItem(), QStringLiteral("probeHost"));
+  auto* fresh_probe = find_item(window->contentItem(), QStringLiteral("freshProbe"));
+  if (!probe_host || !fresh_probe) return fail("Hidden icon pixel fixtures must exist");
+  probe_host->setVisible(false);
+  probe->setProperty("name", QStringLiteral("brush-tool"));
+  probe->setProperty("color", QColor(QStringLiteral("#69bdf1")));
+  probe->setWidth(24);
+  probe->setHeight(24);
+  probe->setProperty("strokeScale", 2.4);
+  settle();
+  probe_host->setVisible(true);
+  fresh_probe->setVisible(true);
+  settle();
+  if (light_pixels(crop_item(window, probe)) < 3 || crop_item(window, probe) != crop_item(window, fresh_probe))
+    return fail("Icons changed under a hidden parent must repaint with exactly fresh pixels when shown");
+  probe->setVisible(false);
+  probe->setProperty("name", QString());
+  settle();
+  probe->setVisible(true);
+  settle();
+  if (light_pixels(crop_item(window, probe)) != 0)
+    return fail("Icons cleared while hidden must show no stale pixels");
+  fresh_probe->setVisible(false);
   auto* chip = find_item(window->contentItem(), QStringLiteral("errorChip"));
   if (!chip || chip->property("resolvedIconName").toString() != QStringLiteral("error"))
     return fail("Error notifications need a distinct error symbol");
@@ -239,10 +295,13 @@ ApplicationWindow {
   QQmlComponent board_source(&engine);
   board_source.setData(R"qml(import QtQml
 QtObject {
-    function recentDocuments() {
-        return [{ documentId: "sample-boards", name: "Sample / Five-board story", slideCount: 5, documentFormat: "4x5" },
+    signal documentStateChanged()
+    property bool recentBoardDocumentsLoading: false
+    property string recentBoardDocumentsError: ""
+    property var recentBoardDocuments: [{ documentId: "sample-boards", name: "Sample / Five-board story", slideCount: 5, documentFormat: "4x5" },
                 { documentId: "sample-wide", name: "Sample / Wide sequence", slideCount: 3, documentFormat: "16x9" }]
-    }
+    function refreshRecentBoardDocuments(force) {}
+    function requestBoardThumbnail(documentId) {}
 })qml", QUrl());
   std::unique_ptr<QObject> board_controller(board_source.create());
   if (!board_controller) return fail("Sample board source must load");

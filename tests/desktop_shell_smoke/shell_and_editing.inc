@@ -13,6 +13,11 @@
   if (root == nullptr) {
     return fail("desktop shell should expose a root object");
   }
+  const auto initial_style_errors = qml_popup_style_violations(root);
+  if (!initial_style_errors.isEmpty()) {
+    std::cerr << initial_style_errors.join('\n').toStdString() << '\n';
+    return fail("Application shell violates shared popup styling");
+  }
   auto* root_window = qobject_cast<QQuickWindow*>(root);
   if (root_window == nullptr) {
     return fail("desktop shell visual proof requires the root QML object to be a window");
@@ -234,6 +239,10 @@
         QStringLiteral("timelineTrackHeaderColumn"),
         QStringLiteral("timelineViewport"),
     };
+    auto collapsed_inspector_objects = required_timeline_objects;
+    collapsed_inspector_objects.replace(
+        collapsed_inspector_objects.indexOf(QStringLiteral("timelineEffectsRail")),
+        QStringLiteral("timelineCollapsedEffectsRail"));
     if (timeline_workspace == nullptr ||
         timeline_workspace->property("timelineUiConsistencyContract").toString().isEmpty()) {
       return fail("Timeline UI proof should expose the styled workspace contract");
@@ -271,6 +280,9 @@
     if (open_curve_button == nullptr) {
       return fail("an expanded audio automation lane should expose its full curve editor button");
     }
+    // This legacy assertion inspects the tool-window surface directly. Keep
+    // that coverage explicit now that the editor's normal home is docked.
+    timeline_workspace->setProperty("curveEditorDocked", false);
     if (!QMetaObject::invokeMethod(
             timeline_workspace,
             "openTrackAutomationCurveEditor",
@@ -303,30 +315,60 @@
         Q_ARG(QVariant, QVariant(QStringLiteral("audioGainDb"))));
     process_layout_events(8);
 
-    const auto settle_timeline_proof = [root_window]() {
-      auto frame_has_content = [](const QImage& frame) {
+    const auto settle_timeline_proof = [root_window, visual_proof_dir]() {
+      auto frame_has_content = [](const QImage& frame, bool report = false) {
         if (frame.isNull()) {
           return false;
         }
         qint64 luminance_sum = 0;
         qint64 sample_count = 0;
-        qint64 chrome_luminance_sum = 0;
         qint64 chrome_sample_count = 0;
+        auto chrome_minimum = 255;
+        auto chrome_maximum = 0;
+        qint64 chrome_bright_samples = 0;
         for (int y = 0; y < frame.height(); y += 16) {
           for (int x = 0; x < frame.width(); x += 16) {
             const auto luminance = qGray(frame.pixel(x, y));
             luminance_sum += luminance;
             ++sample_count;
-            if (y < 48) {
-              chrome_luminance_sum += luminance;
-              ++chrome_sample_count;
-            }
           }
         }
+        // Header glyphs are thinner than the coarse whole-image grid. Sample
+        // their pixels densely so valid text cannot disappear between samples.
+        for (auto y = 0; y < std::min(48, frame.height()); y += 2) {
+          for (auto x = 0; x < frame.width(); x += 2) {
+            const auto luminance = qGray(frame.pixel(x, y));
+            ++chrome_sample_count;
+            chrome_minimum = std::min(chrome_minimum, luminance);
+            chrome_maximum = std::max(chrome_maximum, luminance);
+            if (luminance >= 190) ++chrome_bright_samples;
+          }
+        }
+        if (report)
+          std::cerr << "Timeline frame readiness: pixels=" << frame.width() << 'x' << frame.height()
+                    << " mean=" << (sample_count ? luminance_sum / sample_count : -1)
+                    << " headerContrast=" << chrome_maximum - chrome_minimum
+                    << " headerBrightSamples=" << chrome_bright_samples << '\n';
         return sample_count > 0 && chrome_sample_count > 0 &&
                luminance_sum / sample_count >= 8 &&
-               chrome_luminance_sum / chrome_sample_count >= 80;
+               // Dark chrome intentionally has a low average luminance.
+               // Require real high-contrast header detail instead: black or
+               // flat placeholder frames cannot satisfy this check.
+               chrome_maximum - chrome_minimum >= 120 && chrome_bright_samples >= 8;
       };
+
+      // Keep the rendered-content guard honest across the supported dark
+      // appearance: uniform placeholders must fail and readable detail passes.
+      QImage guard_fixture(128, 96, QImage::Format_ARGB32);
+      for (const auto level : {0, 100, 255}) {
+        guard_fixture.fill(QColor(level, level, level));
+        if (frame_has_content(guard_fixture)) return false;
+      }
+      guard_fixture.fill(QColor(20, 20, 20));
+      for (auto y = 0; y < 32; ++y)
+        for (auto x = 0; x < 64; ++x)
+          guard_fixture.setPixelColor(x, y, Qt::white);
+      if (!frame_has_content(guard_fixture)) return false;
 
       auto ready_frames = 0;
       for (auto attempt = 0; attempt < 10; ++attempt) {
@@ -343,6 +385,9 @@
           return true;
         }
       }
+      const auto failed_frame = root_window->grabWindow();
+      frame_has_content(failed_frame, true);
+      failed_frame.save(QDir(visual_proof_dir).filePath("timeline-frame-settle-failure.png"));
       return false;
     };
 
@@ -350,10 +395,36 @@
                                  ? QString::fromUtf8(qgetenv("QT_SCALE_FACTOR"))
                                  : QStringLiteral("1.0");
     if (proof_scale == QStringLiteral("1.0")) {
-      auto* source_window = find_named_object(root, QStringLiteral("timelineDetachedSourceWindow"));
-      auto* inspector_window = find_named_object(root, QStringLiteral("timelineDetachedInspectorWindow"));
-      auto* source_rail = find_named_object(root, QStringLiteral("timelineSourceRail"));
-      auto* effects_rail = find_named_object(root, QStringLiteral("timelineEffectsRail"));
+      timeline_workspace->setProperty("sourcePanelDetached", false);
+      timeline_workspace->setProperty("effectsPanelDetached", false);
+      timeline_workspace->setProperty("sourcePanelCollapsed", false);
+      timeline_workspace->setProperty("effectsPanelCollapsed", false);
+      QObject* source_window = nullptr;
+      QObject* inspector_window = nullptr;
+      QQuickItem* source_rail = nullptr;
+      QQuickItem* effects_rail = nullptr;
+      if (!wait_for_condition([&]() {
+            source_window = find_named_object(root, QStringLiteral("timelineDetachedSourceWindow"));
+            inspector_window = find_named_object(root, QStringLiteral("timelineDetachedInspectorWindow"));
+            source_rail = qobject_cast<QQuickItem*>(
+                find_named_object(root, QStringLiteral("timelineSourceRail")));
+            effects_rail = qobject_cast<QQuickItem*>(
+                find_named_object(root, QStringLiteral("timelineEffectsRail")));
+            return source_window != nullptr && inspector_window != nullptr &&
+                   source_rail != nullptr && effects_rail != nullptr &&
+                   source_rail->window() == root_window && item_visible(source_rail) &&
+                   effects_rail->window() == root_window && item_visible(effects_rail) &&
+                   !source_window->property("visible").toBool() &&
+                   !inspector_window->property("visible").toBool();
+          }, 2500)) {
+        std::cerr << "Docked state: source window="
+                  << (source_window && source_window->property("visible").toBool())
+                  << " inspector window="
+                  << (inspector_window && inspector_window->property("visible").toBool())
+                  << " dock source=" << item_visible(source_rail)
+                  << " dock inspector=" << item_visible(effects_rail) << '\n';
+        return fail("Docked Source and Inspector must be visible before testing their detach transition");
+      }
       timeline_workspace->setProperty("sourcePanelDetached", true);
       timeline_workspace->setProperty("effectsPanelDetached", true);
       if (source_window == nullptr || inspector_window == nullptr || source_rail == nullptr ||
@@ -366,6 +437,10 @@
                        !effects_rail->property("visible").toBool();
               },
               2500)) {
+        std::cerr << "Detach state: source window=" << (source_window && source_window->property("visible").toBool())
+                  << " inspector window=" << (inspector_window && inspector_window->property("visible").toBool())
+                  << " dock source=" << (source_rail && source_rail->property("visible").toBool())
+                  << " dock inspector=" << (effects_rail && effects_rail->property("visible").toBool()) << '\n';
         return fail("Timeline Source and Inspector should detach into modular tool windows");
       }
       timeline_workspace->setProperty("sourcePanelDetached", false);
@@ -424,7 +499,7 @@
                 QStringLiteral("timeline-%1-calm-default").arg(theme_name),
                 1180,
                 768,
-                required_timeline_objects,
+                collapsed_inspector_objects,
                 &visual_proof_manifest,
                 QJsonObject{
                     {QStringLiteral("theme"), theme_name},
@@ -554,7 +629,7 @@
                 QStringLiteral("timeline-%1-panels-collapsed").arg(theme_name),
                 1180,
                 768,
-                required_timeline_objects,
+                collapsed_inspector_objects,
                 &visual_proof_manifest,
                 QJsonObject{
                     {QStringLiteral("theme"), theme_name},
@@ -647,6 +722,11 @@
     root->setProperty("width", 1440);
     root->setProperty("height", 900);
     process_layout_events(8);
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
+      activate_native_test_window(root_window);
+      if (!wait_for_condition([root_window]() { return root_window->isActive(); }, 2000))
+        return fail("Native accessibility proof must activate its window before keyboard navigation");
+    }
     const auto dialog_proof_dir = qEnvironmentVariable("PHOTO_EDITOR_DIALOG_SURFACE_PROOF_DIR");
     QJsonArray dialog_proof_manifest;
     if (!dialog_proof_dir.isEmpty() && !QDir().mkpath(dialog_proof_dir))
@@ -799,8 +879,21 @@
         !edit_button->property("enabled").toBool() || !send_activation_key(edit_button)) {
       return fail("first-run selected-photo Edit action should remain named and keyboard operable at maximum scale");
     }
+    if (!wait_for_condition([root]() { return !root->property("workspaceTransitionActive").toBool(); }, 5000))
+      return fail("The Edit route must settle before advancing the keyboard walkthrough");
+    const auto guide_step_before_reopen = first_run_guide->property("currentStep");
+    if (!QMetaObject::invokeMethod(root, "openFirstRunGuide") ||
+        first_run_guide->property("currentStep") != guide_step_before_reopen)
+      return fail("A deferred guide-open request must preserve the active walkthrough step");
     next_button = find_named_object(root, QStringLiteral("firstRunNextButton"));
-    if (!send_activation_key(next_button)) {
+    const auto next_ready = wait_for_condition([&] {
+      auto* next_item = qobject_cast<QQuickItem*>(next_button);
+      if (!next_item || !item_visible(next_item)) return false;
+      next_item->forceActiveFocus(Qt::TabFocusReason);
+      QCoreApplication::processEvents();
+      return next_item->hasActiveFocus();
+    }, 2000);
+    if (!next_ready || !send_activation_key(next_button)) {
       return fail("first-run workflow should advance to Export by keyboard");
     }
     auto* export_button = find_named_object(root, QStringLiteral("firstRunExportButton"));
@@ -808,6 +901,8 @@
         !send_activation_key(export_button)) {
       return fail("first-run Export action should remain named and keyboard operable at maximum scale");
     }
+    if (!wait_for_condition([root]() { return !root->property("workspaceTransitionActive").toBool(); }, 5000))
+      return fail("The Export route must settle before finishing the keyboard walkthrough");
     next_button = find_named_object(root, QStringLiteral("firstRunNextButton"));
     if (!send_activation_key(next_button)) {
       return fail("first-run workflow should advance to its completion page by keyboard");
@@ -922,7 +1017,7 @@
         root->setProperty("width", scale == 1.0 ? 1280 : 1024);
         root->setProperty("height", scale == 1.0 ? 800 : 760);
         process_layout_events(8);
-        for (int page = 0; page < 6; ++page) {
+        for (int page = 0; page < 7; ++page) {
           auto* nav = qobject_cast<QQuickItem*>(find_named_object(root, QStringLiteral("preferencesPageNav_%1").arg(page)));
           if (!nav) return fail("Every Preferences page should retain its navigation control");
           nav->forceActiveFocus(Qt::TabFocusReason);
@@ -1553,7 +1648,7 @@
       return fail("Keyboard Export routing should wait for its visible workspace content and settled transition");
     }
     auto* export_workspace = find_named_object(root, QStringLiteral("exportStudioWorkspaceContent"));
-    auto* export_destination_field = find_named_object(root, QStringLiteral("exportDestinationField"));
+    auto* export_destination_edit = find_named_object(root, QStringLiteral("exportDestinationMoreMenuButton"));
     auto* export_current_button = find_named_object(root, QStringLiteral("exportCurrentSplitButton"));
     auto* export_current_primary = find_named_object(root, QStringLiteral("exportCurrentSplitButtonPrimaryAction"));
     auto* export_current_primary_item = qobject_cast<QQuickItem*>(export_current_primary);
@@ -1592,7 +1687,8 @@
             {
                 QStringLiteral("exportStudioWorkspace"),
                 QStringLiteral("exportStudioWorkspaceContent"),
-                QStringLiteral("exportDestinationField"),
+                QStringLiteral("exportDestinationNameLabel"),
+                QStringLiteral("exportDestinationMoreMenuButton"),
                 QStringLiteral("exportCurrentSplitButton"),
                 QStringLiteral("exportCurrentSplitButtonPrimaryAction"),
             },
@@ -1604,7 +1700,7 @@
             })) {
       return fail("First-run Export should preserve a capture after destination readiness");
     }
-    const auto export_destination_named = require_named_control(QStringLiteral("exportDestinationField"));
+    const auto export_destination_named = require_named_control(QStringLiteral("exportDestinationMoreMenuButton"));
     const auto export_primary_named =
         require_named_control(QStringLiteral("exportCurrentSplitButtonPrimaryAction"));
     const auto export_primary_accessible_name = accessible_name_for_object(export_current_primary);
@@ -1649,7 +1745,7 @@
                 << '\n';
       return fail("Export should remain keyboard reachable with a named primary control at maximum scale");
     }
-    export_destination_field->setProperty("focus", true);
+    export_destination_edit->setProperty("focus", true);
     process_layout_events(2);
     if (!send_activation_key(export_current_primary)) {
       return fail("the first-run path should start its real export by keyboard");
@@ -8295,6 +8391,10 @@ ApplicationWindow {
         preflight.value(QStringLiteral("estimatedDiskBytes")).toLongLong() <= 0) {
       return fail("import safety visual proof should expose accurate mixed-media preflight facts");
     }
+    auto* import_file_handling = find_named_item(import_workspace, QStringLiteral("importStudioWorkflowButton"));
+    if (!import_file_handling || !QMetaObject::invokeMethod(import_file_handling, "clicked") ||
+        !wait_for_condition([&] { return import_workspace->property("advancedImportOptionsOpen").toBool(); }))
+      return fail("Advanced import policies should open through the File handling disclosure");
     if (!capture_visual_proof(
             root_window,
             root,
@@ -8312,7 +8412,7 @@ ApplicationWindow {
                 QStringLiteral("importPreflightFacts"),
                 QStringLiteral("importDuplicateSkipButton"),
                 QStringLiteral("importDuplicateReplaceButton"),
-                QStringLiteral("importPreflightConfirmButton"),
+                QStringLiteral("importPersistentPrimaryButton"),
             },
             &visual_proof_manifest,
             QJsonObject::fromVariantMap(preflight))) {
@@ -8343,7 +8443,7 @@ ApplicationWindow {
                 QStringLiteral("importDestinationPanel"),
                 QStringLiteral("importReferencedModeButton"),
                 QStringLiteral("importPreflightFacts"),
-                QStringLiteral("importPreflightConfirmButton"),
+                QStringLiteral("importPersistentPrimaryButton"),
             },
             &visual_proof_manifest,
             QJsonObject::fromVariantMap(referenced_preflight))) {
@@ -8652,6 +8752,9 @@ ApplicationWindow {
     if (!photo_editor::desktop::upsertPersistedJobRecord(completed_delivery, nullptr)) {
       return fail("delivery export visual proof should persist a completed delivery summary");
     }
+    if (!wait_for_condition([&] { return !job_queue.loading(); }))
+      return fail("Delivery layout fixture should wait for pending history reads");
+    photo_editor::desktop::JobQueueModelTestAccess::setHistoryFixture(job_queue, {completed_delivery});
     job_queue.refresh();
     process_layout_events(14);
     if (!capture_visual_proof(
@@ -8675,6 +8778,45 @@ ApplicationWindow {
             })) {
       return fail("delivery export visual proof should capture verified output summary and overall progress");
     }
+    auto failed_delivery = completed_delivery;
+    failed_delivery.job_id = QStringLiteral("delivery-visual-failed");
+    failed_delivery.display_label = QStringLiteral("DELIVERY_FAILED");
+    failed_delivery.status = QStringLiteral("Failed");
+    failed_delivery.error_message = QStringLiteral("Destination is unavailable. Reconnect the drive and retry.");
+    failed_delivery.progress = 0;
+    if (!photo_editor::desktop::upsertPersistedJobRecord(failed_delivery, nullptr))
+      return fail("Delivery review should preserve a failed job fixture");
+    photo_editor::desktop::JobQueueModelTestAccess::setHistoryFixture(job_queue, {completed_delivery, failed_delivery});
+    job_queue.refresh();
+    auto* review_failed = find_named_item(root, QStringLiteral("exportReviewFailedJobsButton"));
+    auto* queue_scroll = find_named_item(root, QStringLiteral("exportQueueScrollView"));
+    auto* delivery_scene = find_named_item(root, QStringLiteral("exportDeliveryLoadingScene"));
+    if (!wait_for_condition([&]() {
+          return review_failed && item_visible(review_failed) &&
+              queue_scroll && queue_scroll->height() >= 64 &&
+              delivery_scene && !item_visible(delivery_scene);
+        }, 5000)) {
+      std::cerr << "Failed job review: button=" << (review_failed && item_visible(review_failed))
+                << " queueHeight=" << (queue_scroll ? queue_scroll->height() : -1)
+                << " illustration=" << (delivery_scene && item_visible(delivery_scene))
+                << " jobs=" << job_queue.jobCount()
+                << " status=" << job_queue.status().toStdString() << '\n';
+      return fail("Completed delivery art must yield space to jobs and expose direct failed-job review");
+    }
+    QTest::mouseClick(root_window, Qt::LeftButton, Qt::NoModifier,
+                     review_failed->mapToScene(QPointF(review_failed->width() / 2,
+                                                       review_failed->height() / 2)).toPoint());
+    process_layout_events(8);
+    auto* failed_row = root_window->activeFocusItem();
+    if (!failed_row || failed_row->property("title").toString() != QStringLiteral("DELIVERY_FAILED") ||
+        !queue_scroll->mapRectToScene(queue_scroll->boundingRect()).intersects(
+            failed_row->mapRectToScene(failed_row->boundingRect())))
+      return fail("Review failed must scroll and move keyboard ownership to the actual failed job");
+    if (!capture_visual_proof(root_window, root, visual_proof_dir,
+                              QStringLiteral("delivery-export-failed-review"), 1280, 800,
+                              {QStringLiteral("exportQueueScrollView"), QStringLiteral("exportReviewFailedJobsButton")},
+                              &visual_proof_manifest))
+      return fail("Delivery review should capture the visible failed job and actions");
     QFile manifest_file(QDir(visual_proof_dir).filePath(QStringLiteral("delivery-export-manifest.json")));
     if (!manifest_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
         manifest_file.write(QJsonDocument(visual_proof_manifest).toJson(QJsonDocument::Indented)) <= 0) {
@@ -8691,15 +8833,25 @@ ApplicationWindow {
   catalog_assets.replaceAssetsForTesting(
       {make_asset(QStringLiteral("asset-1"), QStringLiteral("IMG_0001.jpg"))});
   catalog_assets.selectIndex(0);
-  QCoreApplication::processEvents();
-  if (editor_preview.assetId() != QStringLiteral("asset-1") || !editor_preview.hasAsset()) {
+  if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+    return fail("Catalog activation should invoke the production editor load route");
+  if (!wait_for_condition([&]() {
+        return editor_preview.assetId() == QStringLiteral("asset-1") && editor_preview.hasAsset();
+      }, 5000)) {
+    std::cerr << "Selected asset=" << editor_preview.assetId().toStdString()
+              << " hasAsset=" << editor_preview.hasAsset() << '\n';
     return fail("edit workspace should load the selected catalog asset");
   }
 
   catalog_assets.replaceAssetsForTesting({});
   QCoreApplication::processEvents();
+  if (editor_preview.assetId() != QStringLiteral("asset-1") || !editor_preview.hasAsset())
+    return fail("Catalog filtering should preserve the open editor document until activation");
+  if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+    return fail("Empty catalog activation should invoke the production editor load route");
+  process_layout_events(4);
   if (!editor_preview.assetId().isEmpty() || editor_preview.hasAsset()) {
-    return fail("edit workspace should clear the editor when the catalog selection disappears");
+    return fail("Explicit empty catalog activation should clear the editor");
   }
 
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_COLOR_ROUTING") &&
@@ -8709,10 +8861,12 @@ ApplicationWindow {
   }
   catalog_assets.replaceAssetsForTesting(
       {make_asset(QStringLiteral("asset-2"), QStringLiteral("IMG_0002.jpg"))});
+  if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+    return fail("Repopulated catalog activation should use the production load route");
   QCoreApplication::processEvents();
   if (catalog_assets.selectedAssetId() != QStringLiteral("asset-2") ||
       editor_preview.assetId() != QStringLiteral("asset-2")) {
-    return fail("edit workspace should follow the next visible asset after the gallery repopulates");
+    return fail("Explicit activation should open the selected asset after the gallery repopulates");
   }
 
 	  auto* edit_workspace = root->findChild<QObject*>(QStringLiteral("editStudioWorkspace"));
@@ -8724,6 +8878,12 @@ ApplicationWindow {
 	    edit_workspace = edit_workspace_content;
 	  }
 	  edit_workspace->setProperty("developerDiagnosticsEnabled", true);
+  // This focused journey creates and settles its own image and selection.
+  // General rail/layout/zoom checks remain in their separately registered shards.
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_MASK_RESELECTION_POINTER")) {
+#include "mask_reselection_pointer.inc"
+    return EXIT_SUCCESS;
+  }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_COLOR_ROUTING")) {
     if (!editor_preview.addFillLayer(QStringLiteral("#6a7480"), QStringLiteral("Routing Proof"))) {
       return fail("color routing proof should create a photo layer target");
@@ -9640,9 +9800,10 @@ ApplicationWindow {
 	      !studio_workspace_source.contains(QStringLiteral("function swapCropAspectOrientation()")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function retouchModeVisibilityState(modeName)")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function retouchHudModeMenuItems()")) ||
-      !studio_workspace_source.contains(QStringLiteral("ToolCommandBar {")) ||
+      !studio_workspace_source.contains(QStringLiteral("function retouchHudSecondaryModeMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("RetouchToolHud {")) ||
       !studio_workspace_source.contains(QStringLiteral("modeButtonObjectName: \"retouchHudModeMenuButton\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("modeMenuItems: root.retouchHudModeMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("modeMenuItems: root.retouchHudSecondaryModeMenuItems()")) ||
       !studio_workspace_source.contains(QStringLiteral("inlineActions: root.retouchHudInlineActions()")) ||
       !studio_workspace_source.contains(QStringLiteral("moreMenuItems: root.retouchHudMoreMenuItems()")) ||
       !studio_workspace_source.contains(QStringLiteral("disabledReason: \"Experimental skin cleanup is hidden until the workflow is production-ready.\"")) ||
@@ -9833,7 +9994,6 @@ ApplicationWindow {
     process_layout_events();
     const QStringList compact_named_buttons{
         QStringLiteral("fitToViewButton"),
-        QStringLiteral("fillViewButton"),
         QStringLiteral("zoomStepButton"),
         QStringLiteral("zoomOutButton"),
         QStringLiteral("zoomInButton"),
@@ -9854,8 +10014,7 @@ ApplicationWindow {
         QStringLiteral("scopesInspectorTabButton"),
         QStringLiteral("detailInspectorTabButton"),
         QStringLiteral("infoInspectorTabButton"),
-        QStringLiteral("editInspectorResetButton"),
-        QStringLiteral("editInspectorSavePresetButton"),
+        QStringLiteral("editInspectorActionsButtonPrimaryAction"),
     };
     const QStringList compact_named_labels{
         QStringLiteral("editAdjustmentFilterStatusLabel"),
@@ -10167,7 +10326,7 @@ ApplicationWindow {
             Q_ARG(QVariant, QStringLiteral("remove")),
             Q_ARG(QVariant, false)) ||
         focused_retouch_mode.toString() != QStringLiteral("remove")) {
-      return fail("adaptive command bar smoke should start Remove retouch directly");
+      return fail("responsive Retouch smoke should start Remove directly");
     }
     const bool retouch_hud_ready = wait_for_condition([&]() {
       auto* hud = find_named_object(edit_workspace, QStringLiteral("retouchToolHud"));
@@ -10179,46 +10338,92 @@ ApplicationWindow {
         find_named_object(edit_workspace, QStringLiteral("retouchHudStatusLabel"));
     auto* adaptive_retouch_more_menu_button =
         find_named_object(edit_workspace, QStringLiteral("retouchHudMoreMenuButton"));
+    auto* adaptive_retouch_tools_menu_button =
+        find_named_object(edit_workspace, QStringLiteral("retouchHudModeMenuButton"));
     auto* adaptive_retouch_add_button =
         find_named_object(edit_workspace, QStringLiteral("retouchHudRemoveAddButton"));
     auto* adaptive_retouch_subtract_button =
         find_named_object(edit_workspace, QStringLiteral("retouchHudRemoveSubtractButton"));
+    auto* adaptive_retouch_grid =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudModeGrid"));
+    auto* adaptive_retouch_remove_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudRemoveButton"));
+    auto* adaptive_retouch_heal_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudHealButton"));
+    auto* adaptive_retouch_patch_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudPatchButton"));
+    auto* adaptive_retouch_clone_button =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudCloneButton"));
+    auto* adaptive_retouch_guidance =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudGuidanceLabel"));
+    auto* adaptive_retouch_brush_size =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudBrushSizeSlider"));
+    auto* adaptive_retouch_review_before =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudReviewBeforeButton"));
+    auto* adaptive_retouch_review_after =
+        find_named_item(edit_workspace, QStringLiteral("retouchHudReviewAfterButton"));
     auto* adaptive_retouch_hud_item = qobject_cast<QQuickItem*>(adaptive_retouch_tool_hud);
     if (!retouch_hud_ready ||
         adaptive_retouch_tool_hud == nullptr ||
         adaptive_retouch_status_label == nullptr ||
         adaptive_retouch_more_menu_button == nullptr ||
+        adaptive_retouch_tools_menu_button == nullptr || adaptive_retouch_grid == nullptr ||
         adaptive_retouch_add_button == nullptr ||
         adaptive_retouch_subtract_button == nullptr ||
+        adaptive_retouch_remove_button == nullptr || adaptive_retouch_heal_button == nullptr ||
+        adaptive_retouch_patch_button == nullptr || adaptive_retouch_clone_button == nullptr ||
+        adaptive_retouch_guidance == nullptr || adaptive_retouch_brush_size == nullptr ||
+        adaptive_retouch_review_before == nullptr || adaptive_retouch_review_after == nullptr ||
         adaptive_retouch_hud_item == nullptr) {
-      return fail("adaptive command bar smoke should find retouch HUD and inline controls");
+      return fail("responsive Retouch smoke should find grouped mode, brush, review, and refine controls");
     }
     adaptive_retouch_hud_item->setWidth(520);
     QCoreApplication::processEvents();
     const auto adaptive_layout_contract =
-        adaptive_retouch_tool_hud->property("adaptiveLayoutContract").toString();
+        adaptive_retouch_tool_hud->property("visibilityContract").toString();
     const auto adaptive_more_menu =
         adaptive_retouch_more_menu_button->property("menuContract").toString();
-    if (!adaptive_retouch_tool_hud->property("adaptiveMenuMode").toBool() ||
-        adaptive_retouch_tool_hud->property("adaptiveInlineActionCount").toInt() != 2 ||
-        adaptive_retouch_tool_hud->property("effectiveMoreMenuItemCount").toInt() != 7 ||
-        !adaptive_layout_contract.contains(QStringLiteral("tool-command-bar-adaptive:v1")) ||
-        !adaptive_layout_contract.contains(QStringLiteral("|active:true|inline-to-more:2|more-count:7|status-visible:false|single-row:true|height:44")) ||
+    const auto adaptive_tools_menu =
+        adaptive_retouch_tools_menu_button->property("menuContract").toString();
+    const auto adaptive_width = adaptive_retouch_hud_item->width();
+    auto mode_fits_hud = [&](QQuickItem* mode_item) {
+      if (mode_item == nullptr) return false;
+      const auto rect = mode_item->mapRectToItem(adaptive_retouch_hud_item, mode_item->boundingRect());
+      return rect.left() >= -1.0 && rect.right() <= adaptive_width + 1.0;
+    };
+    if (!adaptive_layout_contract.contains(QStringLiteral("layout:grouped-workflow-panel")) ||
+        !adaptive_layout_contract.contains(QStringLiteral("mode-buttons:remove-heal-patch-clone")) ||
+        adaptive_retouch_grid->property("columns").toInt() != 2 ||
         adaptive_retouch_status_label->property("visible").toBool() ||
-        adaptive_retouch_add_button->property("visible").toBool() ||
-        adaptive_retouch_subtract_button->property("visible").toBool() ||
+        !adaptive_retouch_add_button->property("visible").toBool() ||
+        !adaptive_retouch_subtract_button->property("visible").toBool() ||
+        !adaptive_retouch_remove_button->property("showLeadingIcon").toBool() ||
+        !adaptive_retouch_heal_button->property("showLeadingIcon").toBool() ||
+        !adaptive_retouch_patch_button->property("showLeadingIcon").toBool() ||
+        !adaptive_retouch_clone_button->property("showLeadingIcon").toBool() ||
+        !adaptive_retouch_guidance->isVisible() || !adaptive_retouch_brush_size->isVisible() ||
+        !adaptive_retouch_review_before->isVisible() || !adaptive_retouch_review_after->isVisible() ||
+        !mode_fits_hud(adaptive_retouch_remove_button) || !mode_fits_hud(adaptive_retouch_heal_button) ||
+        !mode_fits_hud(adaptive_retouch_patch_button) || !mode_fits_hud(adaptive_retouch_clone_button) ||
+        adaptive_retouch_tools_menu_button->property("text").toString() != QStringLiteral("Tools") ||
+        !adaptive_tools_menu.contains(QStringLiteral("items:2")) ||
+        !adaptive_tools_menu.contains(QStringLiteral("disabled-reasons-complete:true")) ||
+        adaptive_retouch_more_menu_button->property("text").toString() != QStringLiteral("More") ||
         !adaptive_more_menu.contains(QStringLiteral("items:7")) ||
-        !adaptive_more_menu.contains(QStringLiteral("checked:1"))) {
-      std::cerr << "Adaptive command bar state: contract="
+        !adaptive_more_menu.contains(QStringLiteral("checked:1")) ||
+        !adaptive_more_menu.contains(QStringLiteral("disabled:1")) ||
+        !adaptive_more_menu.contains(QStringLiteral("disabled-reasons-complete:true"))) {
+      std::cerr << "Responsive Retouch state: contract="
                 << adaptive_layout_contract.toStdString()
-                << " more=" << adaptive_more_menu.toStdString()
+                << " tools=" << adaptive_tools_menu.toStdString()
+                << " options=" << adaptive_more_menu.toStdString()
                 << " statusVisible=" << adaptive_retouch_status_label->property("visible").toBool()
                 << " addVisible=" << adaptive_retouch_add_button->property("visible").toBool()
                 << " subtractVisible=" << adaptive_retouch_subtract_button->property("visible").toBool()
                 << '\n';
-      return fail("narrow command bars should move inline actions into More and avoid clipped status/actions");
+      return fail("narrow Retouch HUD should reflow modes while keeping refinement, brush, review, and menus usable");
     }
-    trace_smoke_progress("focused command bar adaptive checked");
+    trace_smoke_progress("focused retouch responsive layout checked");
     return EXIT_SUCCESS;
   }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_COMMAND_BAR_PLACEMENT")) {
@@ -10343,7 +10548,6 @@ ApplicationWindow {
     }
     const QStringList zoom_toolbar_items{
         QStringLiteral("fitToViewButton"),
-        QStringLiteral("fillViewButton"),
         QStringLiteral("zoomStepButton"),
         QStringLiteral("zoomOutButton"),
         QStringLiteral("zoomInButton"),
@@ -10699,6 +10903,8 @@ ApplicationWindow {
       viewport_asset_path,
       QUrl::fromLocalFile(viewport_asset_path).toString())});
   catalog_assets.selectIndex(0);
+  if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+    return fail("Viewport fixture activation should use the production load route");
   if (!wait_for_condition([&]() {
         return editor_preview.hasAsset() &&
                editor_preview.assetId() == QStringLiteral("viewport-qml-proof");
@@ -11086,6 +11292,8 @@ ApplicationWindow {
     editor_preview.setPreviewViewport(0, 0, 0, 0, 0, false);
     catalog_assets.replaceAssetsForTesting(
         {make_asset(QStringLiteral("asset-2"), QStringLiteral("IMG_0002.jpg"))});
+    if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+      return fail("Restoring the smoke fixture should use the production load route");
     if (!wait_for_condition([&]() {
           return editor_preview.assetId() == QStringLiteral("asset-2") &&
                  !editor_preview.processing();
@@ -11129,6 +11337,8 @@ ApplicationWindow {
       pixel_zoom_asset_path,
       QUrl::fromLocalFile(pixel_zoom_asset_path).toString())});
   catalog_assets.selectIndex(0);
+  if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+    return fail("Pixel zoom fixture activation should use the production load route");
   if (!wait_for_condition([&]() {
         return editor_preview.hasAsset() &&
                editor_preview.assetId() == QStringLiteral("pixel-zoom-proof") &&
@@ -11315,6 +11525,8 @@ ApplicationWindow {
       full_resolution_pixel_zoom_asset_path,
       QUrl::fromLocalFile(full_resolution_pixel_zoom_asset_path).toString())});
   catalog_assets.selectIndex(0);
+	  if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+	    return fail("Full-resolution fixture activation should use the production load route");
 	  if (!wait_for_condition([&]() {
 	        return editor_preview.hasAsset() &&
 	               editor_preview.assetId() == QStringLiteral("pixel-zoom-full-resolution-proof") &&
@@ -11511,6 +11723,8 @@ ApplicationWindow {
   editor_preview.setPreviewViewport(0, 0, 0, 0, 0, false);
   catalog_assets.replaceAssetsForTesting(
       {make_asset(QStringLiteral("asset-2"), QStringLiteral("IMG_0002.jpg"))});
+  if (!QMetaObject::invokeMethod(root, "loadSelectedAssetIntoEditor"))
+    return fail("Restoring the lightweight fixture should use the production load route");
   if (!wait_for_condition([&]() {
         return editor_preview.assetId() == QStringLiteral("asset-2") && !editor_preview.processing();
       }, 10000)) {
@@ -11588,1004 +11802,7 @@ ApplicationWindow {
       return fail("photo layer row hover should not instantiate legacy precision or structure controls");
     }
     trace_smoke_progress("layer hover lightweight row checked");
-        if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_MASK_RESELECTION_POINTER")) {
-          app_shell.completeFirstRunExperience();
-          auto* pointer_guide = find_named_object(root, QStringLiteral("firstRunGuideDialog"));
-          if (pointer_guide != nullptr && (!QMetaObject::invokeMethod(pointer_guide, "close") ||
-              !wait_for_condition([&]() { return !pointer_guide->property("visible").toBool(); })))
-            return fail("onboarding must be closed before native mask pointer checks");
 
-          const auto pointer_photo = runtime_root.filePath(QStringLiteral("mask-pointer-photo.png"));
-          const auto pointer_fixture_kind =
-              qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_REFINE_CANCEL")
-                  ? QStringLiteral("saturated")
-                  : QStringLiteral("saturated-small");
-          edit_workspace->setProperty("agentFocusedMaskId", QStringLiteral("previous-photo-mask"));
-          edit_workspace->setProperty("agentSpatialTargetMode", true);
-          if (!write_overlay_visual_fixture(pointer_photo, pointer_fixture_kind))
-            return fail("mask pointer proof must create a decodable image");
-          editor_preview.loadAsset(QStringLiteral("mask-pointer-photo"), pointer_photo,
-                                   QUrl::fromLocalFile(pointer_photo).toString(),
-                                   QStringLiteral("Pointer fixture"), {}, {}, {});
-          if (!edit_workspace->property("agentFocusedMaskId").toString().isEmpty() ||
-              edit_workspace->property("agentSpatialTargetMode").toBool())
-            return fail("switching photos must clear previous agent mask focus and point targeting");
-          if (!wait_for_condition([&]() { return !editor_preview.processing() &&
-                  !editor_preview.displayPreviewSource().isEmpty(); }, 10000))
-            return fail("mask pointer fixture must finish its initial preview render");
-
-          const auto pointer_kind = qEnvironmentVariable("PHOTO_EDITOR_MASK_POINTER_KIND", QStringLiteral("radial"));
-          const auto first_kind = pointer_kind == QStringLiteral("compound") ? QStringLiteral("radial") : pointer_kind;
-          if (pointer_kind == QStringLiteral("generated")) {
-            qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
-            if (!QMetaObject::invokeMethod(edit_workspace, "createGeneratedSelectionSource", Q_ARG(QVariant, QVariant(QStringLiteral("subject")))) ||
-                !editor_preview.hasActiveMask() ||
-                editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value(QStringLiteral("segmentationData")).toString().isEmpty())
-              return fail("generated pointer fixture must contain segmentation alpha data");
-            std::cout << "generated-mask-provider=test-stub; segmentation-quality-proof=false\n";
-          } else if (!QMetaObject::invokeMethod(edit_workspace, "createMaskSource", Q_ARG(QVariant, QVariant(first_kind))))
-            return fail("pointer fixture must create its requested mask");
-          if (pointer_kind == QStringLiteral("luminance")) {
-            editor_preview.setActiveMaskLuminanceMin(0.2);
-            editor_preview.setActiveMaskLuminanceMax(0.65);
-            editor_preview.setActiveMaskRangeFeather(0.08);
-            if (std::abs(editor_preview.activeMaskLuminanceMin() - 0.2) > 1e-6 ||
-                std::abs(editor_preview.activeMaskLuminanceMax() - 0.65) > 1e-6)
-              return fail("range refinement fixture must retain nondefault luminance bounds");
-          }
-          if (pointer_kind == QStringLiteral("compound")) {
-            editor_preview.addMask(QStringLiteral("linear"));
-            const auto sources = editor_preview.maskStack();
-            if (sources.size() != 2 || editor_preview.activeMaskIndex() != 1 ||
-                sources.at(0).toMap().value(QStringLiteral("maskSetId")) != sources.at(1).toMap().value(QStringLiteral("maskSetId")))
-              return fail("compound pointer fixture must have two sources in one mask set");
-          }
-          if (pointer_kind == QStringLiteral("brush")) {
-            editor_preview.beginActiveBrushStroke();
-            editor_preview.addBrushPoint(0.3, 0.4);
-            editor_preview.addBrushPoint(0.45, 0.5);
-            editor_preview.addBrushPoint(0.6, 0.6);
-            editor_preview.endActiveBrushStroke();
-            if (!wait_for_condition([&]() { return !editor_preview.processing() &&
-                    editor_preview.activeMaskCommitted(); }, 10000))
-              return fail("brush pointer fixture must finish committing its painted stroke");
-          }
-          const auto expected_component_id = editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value(QStringLiteral("id")).toString();
-          if (qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_REFINE_CANCEL")) {
-            const auto original_masks = editor_preview.maskStack();
-            const auto original_history = editor_preview.editHistoryEntries();
-            editor_preview.beginCoalescedEdit();
-            editor_preview.startSelectionEdgeBrush(false);
-            editor_preview.beginActiveBrushStroke();
-            // Make the worker long enough for this test to cancel it reliably
-            // even while neighboring UI shards are loading the machine.
-            for (int sweep = 0; sweep < 16; ++sweep) {
-              const auto y = 0.12 + 0.76 * static_cast<double>(sweep) / 15.0;
-              for (int step = 0; step <= 32; ++step) {
-                const auto progress = static_cast<double>(step) / 32.0;
-                const auto x = sweep % 2 == 0
-                                   ? 0.1 + 0.8 * progress
-                                   : 0.9 - 0.8 * progress;
-                editor_preview.addBrushPoint(x, y);
-              }
-            }
-            editor_preview.endActiveBrushStroke();
-            QElapsedTimer worker_start_wait;
-            worker_start_wait.start();
-            bool brush_worker_observed = false;
-            while (worker_start_wait.elapsed() < 10000) {
-              QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
-              if (photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(
-                      editor_preview)) {
-                brush_worker_observed = true;
-                break;
-              }
-              QThread::msleep(1);
-            }
-            if (!brush_worker_observed) {
-              std::cerr << "brush-refine cancellation fixture: kind="
-                        << editor_preview.activeMaskKind().toStdString()
-                        << " active=" << editor_preview.hasActiveMask()
-                        << " stroke=" << editor_preview.brushStrokeActive()
-                        << " committed=" << editor_preview.activeMaskCommitted()
-                        << " processing=" << editor_preview.processing()
-                        << " worker_active="
-                        << photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_active(
-                               editor_preview)
-                        << " worker_running="
-                        << photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(
-                               editor_preview)
-                        << " commit_scheduled="
-                        << photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_scheduled(
-                               editor_preview)
-                        << " pending_commits="
-                        << photo_editor::desktop::EditorPreviewControllerTestAccess::pending_brush_commit_count(
-                               editor_preview)
-                        << " status=" << editor_preview.status().toStdString() << '\n';
-              return fail("rollback race fixture must observe an active brush raster worker");
-            }
-            if (!editor_preview.cancelCoalescedEdit()) return fail("refinement transaction must cancel");
-            if (!wait_for_condition([&]() {
-                  return !photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview) &&
-                         !editor_preview.processing();
-                }, 10000)) return fail("canceled brush worker must finish without reviving the edit");
-            process_layout_events();
-            if (editor_preview.maskStack() != original_masks || editor_preview.editHistoryEntries() != original_history ||
-                editor_preview.brushStrokeActive())
-              return fail("late brush completion must preserve the canceled refinement's original state");
-            std::cout << "mask-refine-cancel-active-worker=passed\n";
-          }
-          edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-          for (int iteration = 0; iteration < 8; ++iteration) QCoreApplication::processEvents();
-          const auto visible_rect = [](QQuickItem* item) {
-            if (!item_visible(item) || item->window() == nullptr) return QRectF{};
-            auto rect = scene_rect(item).intersected(QRectF(0, 0, item->window()->width(), item->window()->height()));
-            for (auto* parent = item->parentItem(); parent != nullptr; parent = parent->parentItem()) {
-              if (!parent->isVisible()) return QRectF{};
-              if (parent->clip()) rect = rect.intersected(scene_rect(parent));
-            }
-            return rect;
-          };
-          qint64 last_dispatch_ns = 0;
-          const auto click_item = [&](QQuickItem* item) {
-            if (item == nullptr || !item->isVisible() || item->window() == nullptr) return false;
-            auto* window = item->window();
-            const auto rect = visible_rect(item);
-            if (rect.width() < 2 || rect.height() < 2) return false;
-            const auto point = rect.center();
-            const auto global = QPointF(window->mapToGlobal(point.toPoint()));
-            QElapsedTimer dispatch_timer;
-            dispatch_timer.start();
-            QMouseEvent press(QEvent::MouseButtonPress, point, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-            QCoreApplication::sendEvent(window, &press);
-            if (qEnvironmentVariableIsSet("PHOTO_EDITOR_REFINEMENT_RAPID_PAGES") && item->objectName().startsWith(QStringLiteral("maskRefinement"))) {
-              auto* grabber = window->mouseGrabberItem();
-              std::cerr << "pointer=" << item->objectName().toStdString() << " enabled=" << item->isEnabled()
-                        << " pressed=" << item->property("pressed").toBool() << " grabber="
-                        << (grabber ? grabber->objectName().toStdString() : "none") << '\n';
-            }
-            QMouseEvent release(QEvent::MouseButtonRelease, point, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-            QCoreApplication::sendEvent(window, &release);
-            last_dispatch_ns = dispatch_timer.nsecsElapsed();
-            QCoreApplication::processEvents();
-            return true;
-          };
-          const auto find_thumbnail = [&]() -> QQuickItem* {
-            for (const auto* name : {"photoLayerMaskSetThumbnailTargetArea", "photoLayerNestedMaskThumbnailTargetArea", "activeLayerMaskChildThumbnailTargetArea"}) {
-              for (auto* candidate : find_named_items(edit_workspace, QString::fromLatin1(name))) {
-                const auto rect = visible_rect(candidate);
-                if (rect.width() >= 2 && rect.height() >= 2) return candidate;
-              }
-            }
-            return nullptr;
-          };
-          QPointer<QQuickItem> thumbnail = find_thumbnail();
-          if (!click_item(thumbnail) || !editor_preview.hasActiveMask())
-            return fail("native mask thumbnail must be visible and selectable by pointer");
-          const auto selected_id = editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value(QStringLiteral("id")).toString();
-          if (selected_id != expected_component_id)
-            return fail("first thumbnail click must retain the last edited component, not select the first source");
-          const auto hidden_mask_case = qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_POINTER_HIDDEN");
-          if (qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_REFINE_UI_CANCEL")) {
-            const auto before_refine = editor_preview.maskStack();
-            const QImage alpha_source(pointer_photo);
-            const auto evaluate_refinement_alpha = [&]() {
-              return photo_editor::desktop::evaluate_canonical_composite_mask_alpha(
-                  alpha_source, editor_preview.maskStack(), 1.0, {1.0, 1.0, 1.0});
-            };
-            const auto original_alpha = evaluate_refinement_alpha();
-            if (!original_alpha.valid || original_alpha.alpha_mask.isEmpty())
-              return fail("refinement proof must evaluate the original matte");
-            auto before_history = editor_preview.editHistoryEntries();
-            const auto before_refine_history_index = editor_preview.editHistoryCurrentIndex();
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineViewSettingsButton"))) ||
-                edit_workspace->property("maskRefinementPage").toString() != QStringLiteral("view") ||
-                editor_preview.maskStack() != before_refine || editor_preview.editHistoryEntries() != before_history)
-              return fail("direct View must open without changing the existing mask or history");
-            process_layout_events();
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskFirstHiddenButton"))) ||
-                editor_preview.maskPreviewDisplayMode() != QStringLiteral("hidden") ||
-                !click_item(find_named_item(edit_workspace, QStringLiteral("maskCreationDoneButton"))) ||
-                editor_preview.maskStack() != before_refine || editor_preview.editHistoryEntries() != before_history)
-              return fail("view-only refinement must finish without a recipe history operation");
-            edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-            process_layout_events();
-            if (!click_item(find_thumbnail())) return fail("view-only refinement must preserve reselection");
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineEdgeSettingsButton"))))
-              return fail("geometric mask must open Edge before explicit brush addition");
-            process_layout_events();
-            auto* add_brush_page = find_named_item(edit_workspace, QStringLiteral("maskRefinementPaintPageButton"));
-            if (add_brush_page == nullptr || add_brush_page->property("text").toString() != QStringLiteral("Add Brush") ||
-                editor_preview.maskStack() != before_refine || !click_item(add_brush_page) ||
-                editor_preview.activeMaskKind() != QStringLiteral("brush") || editor_preview.maskStack().size() != before_refine.size() + 1)
-              return fail("geometric Paint entry must explicitly add one brush component");
-            process_layout_events();
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefinementCancelButton"))) ||
-                editor_preview.maskStack() != before_refine || editor_preview.editHistoryEntries() != before_history)
-              return fail("Cancel must discard an explicitly added brush component");
-            edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-            process_layout_events();
-            if (!click_item(find_thumbnail())) return fail("explicit brush cancellation must preserve reselection");
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineEdgeSettingsButton"))) ||
-                !edit_workspace->property("maskRefinementSessionActive").toBool() ||
-                edit_workspace->property("maskRefinementPage").toString() != QStringLiteral("edge") ||
-                editor_preview.maskStack() != before_refine || editor_preview.editHistoryEntries() != before_history)
-              return fail("opening edge settings must retain the existing selection without recipe or history changes");
-            editor_preview.setActiveMaskFeather(0.12);
-            if (editor_preview.maskStack() == before_refine || editor_preview.maskStack().size() != before_refine.size())
-              return fail("direct edge editing must change the existing component without adding another");
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefinementCancelButton"))) ||
-                editor_preview.maskStack() != before_refine || editor_preview.editHistoryEntries() != before_history)
-              return fail("canceling edited edge refinement must restore the existing selection");
-            const auto canceled_edge_alpha = evaluate_refinement_alpha();
-            if (!canceled_edge_alpha.valid ||
-                canceled_edge_alpha.alpha_mask != original_alpha.alpha_mask)
-              return fail("Cancel must restore every evaluated alpha byte after editing the existing edge");
-            edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-            process_layout_events();
-            if (!click_item(find_thumbnail())) return fail("edge refinement must leave the selection reselectable");
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineEdgeSettingsButton"))))
-              return fail("direct edge editing must reopen for commit");
-            editor_preview.setActiveMaskFeather(0.18);
-            editor_preview.setActiveMaskSelectionSmooth(23.0);
-            const auto completed_edge = editor_preview.maskStack();
-            const auto completed_edge_alpha = evaluate_refinement_alpha();
-            if (!completed_edge_alpha.valid || completed_edge_alpha.alpha_mask == original_alpha.alpha_mask)
-              return fail("edge edits must change evaluated alpha, not just recipe values");
-            if (completed_edge == before_refine || completed_edge.size() != before_refine.size() ||
-                !click_item(find_named_item(edit_workspace, QStringLiteral("maskCreationDoneButton"))))
-              return fail("Done must accept an existing-component edge edit");
-            if (!wait_for_condition([&]() { return !photo_editor::desktop::EditorPreviewControllerTestAccess::edit_transaction_active(editor_preview); }, 10000) ||
-                editor_preview.editHistoryEntries().size() != before_history.size() + 1)
-              return fail("direct edge Done must commit one history operation");
-            editor_preview.undo();
-            if (editor_preview.maskStack() != before_refine) return fail("direct edge undo must restore the original matte recipe");
-            const auto undone_edge_alpha = evaluate_refinement_alpha();
-            if (!undone_edge_alpha.valid || undone_edge_alpha.alpha_mask != original_alpha.alpha_mask)
-              return fail("direct edge undo must restore every evaluated alpha byte");
-            editor_preview.redo();
-            if (editor_preview.maskStack() != completed_edge) return fail("direct edge redo must restore the completed matte recipe");
-            const auto redone_edge_alpha = evaluate_refinement_alpha();
-            if (!redone_edge_alpha.valid || redone_edge_alpha.alpha_mask != completed_edge_alpha.alpha_mask)
-              return fail("direct edge redo must restore every completed alpha byte");
-            editor_preview.undo();
-            edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-            process_layout_events();
-            if (!click_item(find_thumbnail()) || editor_preview.maskStack() != before_refine)
-              return fail("direct edge undo must preserve reselection");
-            before_history = editor_preview.editHistoryEntries();
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineEdgeAddButton"))) ||
-                !edit_workspace->property("maskRefinementSessionActive").toBool() || editor_preview.maskStack().size() != before_refine.size() + 1)
-              return fail("pointer Add must start a refinement session");
-            process_layout_events();
-            if (qEnvironmentVariableIsSet("PHOTO_EDITOR_REFINEMENT_PAGES_NARROW")) {
-              qobject_cast<QQuickItem*>(edit_workspace)->window()->resize(1280, 900);
-              process_layout_events();
-            }
-            const auto refinement_masks = editor_preview.maskStack();
-            for (const auto& page : {QStringLiteral("Edge"), QStringLiteral("Strength"), QStringLiteral("View"), QStringLiteral("Paint")}) {
-              if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefinement") + page + QStringLiteral("PageButton"))))
-                return fail("refinement pages must be reachable by pointer");
-              process_layout_events();
-              const auto selected_page = page.toLower();
-              for (const auto& control : {std::pair{QStringLiteral("maskFirstBrushSettingsGroup"), QStringLiteral("paint")},
-                                          std::pair{QStringLiteral("maskFirstFeatherSlider"), QStringLiteral("edge")},
-                                          std::pair{QStringLiteral("maskFirstDensitySlider"), QStringLiteral("strength")},
-                                          std::pair{QStringLiteral("maskFirstPreviewModeRow"), QStringLiteral("view")}}) {
-                auto* item = find_named_item(edit_workspace, control.first);
-                if (item == nullptr || item->isVisible() != (selected_page == control.second))
-                  return fail("refinement page must show only its focused controls");
-              }
-              for (const auto& name : {QStringLiteral("maskRefinementPages"), QStringLiteral("maskRefinementCancelButton")}) {
-                auto* item = find_named_item(edit_workspace, name);
-                if (item == nullptr || visible_rect(item).width() < item->width() - 1 ||
-                    visible_rect(item).height() < item->height() - 1)
-                  return fail("refinement navigation and Cancel must remain fully visible");
-              }
-              if (selected_page == QStringLiteral("paint") || selected_page == QStringLiteral("edge")) {
-                const auto primary_name = selected_page == QStringLiteral("paint") ? QStringLiteral("maskFirstBrushSizeSlider") : QStringLiteral("maskFirstFeatherSlider");
-                const auto detail_name = selected_page == QStringLiteral("paint") ? QStringLiteral("maskFirstBrushHardnessSlider") : QStringLiteral("maskFirstRefineSmoothSlider");
-                auto* primary = find_named_item(edit_workspace, primary_name);
-                auto* detail = find_named_item(edit_workspace, detail_name);
-                auto* detail_button = find_named_item(edit_workspace, QStringLiteral("maskRefinementDetailPageButton"));
-                if (primary == nullptr || detail == nullptr || !primary->isVisible() || detail->isVisible() || !click_item(detail_button))
-                  return fail("refinement must start with focused primary settings and expose its detail page");
-                process_layout_events();
-                if (primary->isVisible() || !detail->isVisible())
-                  return fail("refinement detail must replace primary settings");
-                QElapsedTimer detail_presentation_timer;
-                detail_presentation_timer.start();
-                if (!wait_for_condition([&]() { return detail_presentation_timer.elapsed() >= 200; }, 2000))
-                  return fail("detail capture must settle after navigation");
-                const auto detail_capture = qEnvironmentVariable("PHOTO_EDITOR_REFINEMENT_CAPTURE_PATH");
-                if (!detail_capture.isEmpty() && !detail->window()->grabWindow().save(
-                        detail_capture + QStringLiteral(".") + selected_page + QStringLiteral("-detail.png")))
-                  return fail("refinement detail page must produce a native capture");
-                if (!click_item(detail_button)) return fail("refinement detail must provide Back");
-                process_layout_events();
-                if (!primary->isVisible() || detail->isVisible())
-                  return fail("Back must restore focused primary settings");
-                if (!click_item(detail_button)) return fail("detail page must reopen");
-                process_layout_events();
-                if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefinementViewPageButton"))))
-                  return fail("detail navigation must allow leaving for View");
-                QElapsedTimer primary_presentation_timer;
-                primary_presentation_timer.start();
-                if (!wait_for_condition([&]() { return primary_presentation_timer.elapsed() >= (qEnvironmentVariableIsSet("PHOTO_EDITOR_REFINEMENT_RAPID_PAGES") ? 0 : 200) &&
-                        edit_workspace->property("maskRefinementPage").toString() == QStringLiteral("view"); }, 2000))
-                  return fail("View must be presented before the next page-navigation gesture");
-                process_layout_events();
-                auto* return_page_button = find_named_item(edit_workspace, QStringLiteral("maskRefinement") + page + QStringLiteral("PageButton"));
-                const auto return_rect_before = visible_rect(return_page_button);
-                if (!click_item(return_page_button))
-                  return fail("detail navigation must allow returning to its primary page");
-                const auto return_rect_after = visible_rect(return_page_button);
-                process_layout_events();
-                if (edit_workspace->property("maskRefinementDetailPage").toBool() || !primary->isVisible() || detail->isVisible()) {
-                  std::cerr << "returnBefore=" << return_rect_before.x() << ',' << return_rect_before.y() << ',' << return_rect_before.width() << ',' << return_rect_before.height()
-                            << " returnAfter=" << return_rect_after.x() << ',' << return_rect_after.y() << ',' << return_rect_after.width() << ',' << return_rect_after.height() << '\n';
-                  std::cerr << "page=" << edit_workspace->property("maskRefinementPage").toString().toStdString()
-                            << " expected=" << selected_page.toStdString()
-                            << " detail=" << edit_workspace->property("maskRefinementDetailPage").toBool()
-                            << " primaryVisible=" << primary->isVisible() << " detailVisible=" << detail->isVisible() << '\n';
-                  return fail("switching primary pages must reset deeper navigation");
-                }
-              }
-              QElapsedTimer page_presentation_timer;
-              page_presentation_timer.start();
-              if (!wait_for_condition([&]() { return page_presentation_timer.elapsed() >= 200; }, 2000))
-                return fail("refinement page capture must settle after pointer navigation");
-              const auto page_capture = qEnvironmentVariable("PHOTO_EDITOR_REFINEMENT_CAPTURE_PATH");
-              if (!page_capture.isEmpty() && !qobject_cast<QQuickItem*>(edit_workspace)->window()->grabWindow().save(
-                      page_capture + QStringLiteral(".") + selected_page + QStringLiteral(".png")))
-                return fail("each refinement page must produce a native capture");
-              if (editor_preview.maskStack() != refinement_masks || editor_preview.editHistoryEntries().size() != before_history.size())
-                return fail("changing refinement pages must preserve masks and history");
-            }
-            const auto refinement_capture = qEnvironmentVariable("PHOTO_EDITOR_REFINEMENT_CAPTURE_PATH");
-            if (!refinement_capture.isEmpty()) {
-              auto* cancel_button = find_named_item(edit_workspace, QStringLiteral("maskRefinementCancelButton"));
-              if (cancel_button == nullptr || visible_rect(cancel_button).isEmpty() ||
-                  !cancel_button->window()->grabWindow().save(refinement_capture))
-                return fail("active refinement controls must be visible in the native capture");
-            }
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefinementCancelButton"))) ||
-                edit_workspace->property("maskRefinementSessionActive").toBool() || editor_preview.maskStack() != before_refine ||
-                editor_preview.editHistoryEntries() != before_history)
-              return fail("pointer Cancel must restore the original masks and history");
-            const auto canceled_pointer_alpha = evaluate_refinement_alpha();
-            if (!canceled_pointer_alpha.valid ||
-                canceled_pointer_alpha.alpha_mask != original_alpha.alpha_mask)
-              return fail("pointer Cancel must restore every evaluated alpha byte in the rendered mask");
-            edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-            process_layout_events();
-            if (!click_item(find_thumbnail())) return fail("canceled mask must remain reselectable");
-            std::cout << "mask-refine-pointer-cancel=passed\n";
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineEdgeAddButton"))))
-              return fail("Escape fixture must start refinement by pointer");
-            for (int stroke = 0; stroke < 2; ++stroke) {
-              const auto previous_stroke = editor_preview.maskStack();
-              editor_preview.beginActiveBrushStroke();
-              editor_preview.addBrushPoint(0.25 + 0.3 * stroke, 0.3);
-              editor_preview.addBrushPoint(0.35 + 0.3 * stroke, 0.5);
-              editor_preview.endActiveBrushStroke();
-              if (!wait_for_condition([&]() { return editor_preview.activeMaskCommitted() && !editor_preview.processing() &&
-                      !photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview); }, 10000) ||
-                  editor_preview.maskStack() == previous_stroke)
-                return fail("Escape fixture must rasterize each refinement stroke before canceling");
-            }
-            auto* escape_workspace = qobject_cast<QQuickItem*>(edit_workspace);
-            if (escape_workspace == nullptr) return fail("Escape fixture needs a focusable workspace");
-            escape_workspace->forceActiveFocus();
-            if (!send_window_key(escape_workspace->window(), Qt::Key_Escape, Qt::NoModifier))
-              return fail("refinement must accept the Escape key");
-            process_layout_events();
-            if (edit_workspace->property("maskRefinementSessionActive").toBool() ||
-                editor_preview.maskStack() != before_refine || editor_preview.editHistoryEntries() != before_history)
-              return fail("Escape must cancel refinement without committing it");
-            const auto canceled_brush_alpha = evaluate_refinement_alpha();
-            if (!canceled_brush_alpha.valid || canceled_brush_alpha.alpha_mask != original_alpha.alpha_mask)
-              return fail("Escape must restore every original alpha byte after committed brush strokes");
-            if (!click_item(find_thumbnail())) return fail("Escape must leave the original mask reselectable");
-            std::cout << "mask-refine-escape-cancel=passed\n";
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineEdgeAddButton"))))
-              return fail("pointer Add must restart refinement after Cancel");
-            editor_preview.beginActiveBrushStroke();
-            editor_preview.addBrushPoint(0.3, 0.4);
-            editor_preview.addBrushPoint(0.45, 0.5);
-            editor_preview.addBrushPoint(0.6, 0.6);
-            editor_preview.endActiveBrushStroke();
-            if (!wait_for_condition([&]() { return editor_preview.activeMaskCommitted() && !editor_preview.processing() &&
-                    !photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview); }, 10000))
-              return fail("first refinement stroke must commit before the next stroke");
-            if (editor_preview.editHistoryEntries().size() != before_history.size())
-              return fail("intermediate refinement strokes must not publish separate history entries");
-            const auto first_stroke_masks = editor_preview.maskStack();
-            editor_preview.beginActiveBrushStroke();
-            editor_preview.addBrushPoint(0.7, 0.3);
-            editor_preview.addBrushPoint(0.75, 0.45);
-            editor_preview.addBrushPoint(0.8, 0.6);
-            process_layout_events();
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskCreationDoneButton"))))
-              return fail("pointer Done must finish refinement with an active stroke");
-            if (!wait_for_condition([&]() { return !editor_preview.processing() &&
-                    !photo_editor::desktop::EditorPreviewControllerTestAccess::edit_transaction_active(editor_preview) &&
-                    !photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview); }, 10000))
-              return fail("Done must allow the final brush commit to finish");
-            if (edit_workspace->property("maskRefinementSessionActive").toBool() ||
-                editor_preview.maskStack().size() != before_refine.size() + 1 ||
-                editor_preview.editHistoryCurrentIndex() != before_refine_history_index + 1 ||
-                editor_preview.editHistoryEntries().size() != before_refine_history_index + 2) {
-              std::cerr << "refinement active=" << edit_workspace->property("maskRefinementSessionActive").toBool()
-                        << " masks=" << editor_preview.maskStack().size() << " history=" << editor_preview.editHistoryEntries().size()
-                        << " before=" << before_history.size() << '\n';
-              return fail("Done must retain refinement as exactly one history step");
-            }
-            const auto finished_masks = editor_preview.maskStack();
-            const auto finished_brush_alpha = evaluate_refinement_alpha();
-            if (!finished_brush_alpha.valid || finished_brush_alpha.alpha_mask == original_alpha.alpha_mask)
-              return fail("committed brush refinement must change evaluated matte alpha");
-            if (finished_brush_alpha.size != original_alpha.size ||
-                finished_brush_alpha.alpha_mask.size() != original_alpha.alpha_mask.size())
-              return fail("brush refinement must preserve matte dimensions");
-            // Both stroke paths lie in x=[0.3,0.8], y=[0.3,0.6]. A conservative
-            // 0.1 image-relative margin includes the brush footprint and feather.
-            QRect outside_change_bounds;
-            int outside_change_count = 0;
-            for (int y = 0; y < original_alpha.size.height(); ++y) {
-              for (int x = 0; x < original_alpha.size.width(); ++x) {
-                const auto nx = (static_cast<double>(x) + 0.5) / original_alpha.size.width();
-                const auto ny = (static_cast<double>(y) + 0.5) / original_alpha.size.height();
-                if (nx >= 0.2 && nx <= 0.9 && ny >= 0.2 && ny <= 0.7) continue;
-                const auto offset = y * original_alpha.size.width() + x;
-                if (finished_brush_alpha.alpha_mask.at(offset) != original_alpha.alpha_mask.at(offset)) {
-                  outside_change_bounds = outside_change_bounds.united(QRect(x, y, 1, 1));
-                  ++outside_change_count;
-                }
-              }
-            }
-            if (outside_change_count > 0) {
-              QVariantList brush_only_masks;
-              for (const auto& value : finished_masks) {
-                const auto mask = value.toMap();
-                std::cerr << "mask kind=" << mask.value(QStringLiteral("kind")).toString().toStdString()
-                          << " operation=" << mask.value(QStringLiteral("operation")).toString().toStdString()
-                          << " parent=" << mask.value(QStringLiteral("parentId")).toString().toStdString()
-                          << " set=" << mask.value(QStringLiteral("maskSetId")).toString().toStdString()
-                          << " invert=" << mask.value(QStringLiteral("selectionInvert")).toBool()
-                          << " maskInvert=" << mask.value(QStringLiteral("invert")).toBool()
-                          << " blend=" << mask.value(QStringLiteral("blendMode")).toString().toStdString()
-                          << " opacity=" << mask.value(QStringLiteral("opacity")).toDouble()
-                          << " density=" << mask.value(QStringLiteral("density")).toDouble()
-                          << " expand=" << mask.value(QStringLiteral("selectionExpand")).toDouble()
-                          << " grow=" << mask.value(QStringLiteral("selectionGrow")).toDouble()
-                          << " shrink=" << mask.value(QStringLiteral("selectionShrink")).toDouble()
-                          << " feather=" << mask.value(QStringLiteral("selectionFeather")).toDouble()
-                          << " blur=" << mask.value(QStringLiteral("selectionBlur")).toDouble()
-                          << " fill=" << mask.value(QStringLiteral("selectionFillHoles")).toDouble()
-                          << " remove=" << mask.value(QStringLiteral("selectionRemoveIslands")).toDouble()
-                          << '\n';
-                if (mask.value(QStringLiteral("kind")).toString() != QStringLiteral("brush")) continue;
-                brush_only_masks.append(mask);
-                const auto data = mask.value(QStringLiteral("segmentationData")).toByteArray();
-                const auto width = mask.value(QStringLiteral("segmentationWidth")).toInt();
-                const auto height = mask.value(QStringLiteral("segmentationHeight")).toInt();
-                QRect raster_bounds;
-                if (width > 0 && height > 0 && data.size() == width * height) {
-                  for (int y = 0; y < height; ++y)
-                    for (int x = 0; x < width; ++x)
-                      if (data.at(y * width + x) != 0) raster_bounds = raster_bounds.united(QRect(x, y, 1, 1));
-                }
-                std::cerr << "brush raster=" << width << 'x' << height << " bytes=" << data.size()
-                          << " bounds=" << raster_bounds.x() << ',' << raster_bounds.y() << ',' << raster_bounds.width() << ',' << raster_bounds.height()
-                          << " size=" << mask.value(QStringLiteral("brushSize")).toDouble() << '\n';
-              }
-              const auto original_mask_id = before_refine.isEmpty()
-                  ? QString()
-                  : before_refine.constFirst().toMap().value(QStringLiteral("id")).toString();
-              for (const auto& value : finished_masks) {
-                const auto after_mask = value.toMap();
-                if (after_mask.value(QStringLiteral("id")).toString() != original_mask_id) continue;
-                const auto before_mask = before_refine.constFirst().toMap();
-                for (auto iterator = before_mask.cbegin(); iterator != before_mask.cend(); ++iterator) {
-                  if (after_mask.value(iterator.key()) != iterator.value()) {
-                    std::cerr << "parent field changed=" << iterator.key().toStdString()
-                              << " from=" << iterator.value().toString().toStdString()
-                              << " to=" << after_mask.value(iterator.key()).toString().toStdString()
-                              << '\n';
-                  }
-                }
-                break;
-              }
-              std::cerr << "outside alpha pixels=" << outside_change_count << " bounds="
-                        << outside_change_bounds.x() << ',' << outside_change_bounds.y() << ','
-                        << outside_change_bounds.width() << ',' << outside_change_bounds.height() << '\n';
-              if (!outside_change_bounds.isNull()) {
-                const auto x = outside_change_bounds.x();
-                const auto y = outside_change_bounds.y();
-                const auto offset = y * original_alpha.size.width() + x;
-                const auto brush_only = photo_editor::desktop::evaluate_canonical_composite_mask_alpha(
-                    alpha_source, brush_only_masks, 1.0, {1.0, 1.0, 1.0});
-                const auto brush_only_offset = y * brush_only.size.width() + x;
-                std::cerr << "first outside pixel=" << x << ',' << y
-                          << " original=" << static_cast<int>(original_alpha.alpha_mask.at(offset))
-                          << " finished=" << static_cast<int>(finished_brush_alpha.alpha_mask.at(offset))
-                          << " brush-only="
-                          << (brush_only.valid && brush_only_offset < brush_only.alpha_mask.size()
-                                  ? static_cast<int>(brush_only.alpha_mask.at(brush_only_offset))
-                                  : -1)
-                          << '\n';
-              }
-              return fail("local brush strokes must preserve alpha outside the conservative stroke region");
-            }
-            if (finished_masks == first_stroke_masks)
-              return fail("second refinement stroke must change the committed mask");
-            editor_preview.undo();
-            if (editor_preview.maskStack() != before_refine)
-              return fail("one undo must remove the complete refinement");
-            const auto undone_brush_alpha = evaluate_refinement_alpha();
-            if (!undone_brush_alpha.valid || undone_brush_alpha.alpha_mask != original_alpha.alpha_mask)
-              return fail("brush undo must restore every original alpha byte");
-            editor_preview.redo();
-            if (editor_preview.maskStack() != finished_masks)
-              return fail("one redo must restore both refinement strokes exactly");
-            const auto redone_brush_alpha = evaluate_refinement_alpha();
-            if (!redone_brush_alpha.valid || redone_brush_alpha.alpha_mask != finished_brush_alpha.alpha_mask)
-              return fail("brush redo must restore every completed alpha byte");
-            editor_preview.undo();
-            if (editor_preview.maskStack() != before_refine)
-              return fail("repeated undo must restore the original mask");
-            process_layout_events();
-            if (!click_item(find_thumbnail())) return fail("undone refinement must restore the original selectable mask");
-            std::cout << "mask-refine-pointer-done-one-undo=passed\n";
-          }
-          const auto locked_mask_case = qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_POINTER_LOCKED");
-          const auto renamed_layer_case = qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_POINTER_RENAMED_LAYER");
-          if (renamed_layer_case) {
-            if (editor_preview.photoLayerCount() != 1 ||
-                !editor_preview.renamePhotoLayer(0, QStringLiteral("Renamed mask owner")))
-              return fail("rename fixture must rename the mask's owning layer");
-            process_layout_events();
-          }
-          const auto layer_identities = [&]() {
-            QVariantList result;
-            for (const auto& entry : editor_preview.photoLayers()) {
-              const auto layer = entry.toMap();
-              result.append(QVariantMap{{QStringLiteral("id"), layer.value(QStringLiteral("id"))},
-                                        {QStringLiteral("name"), layer.value(QStringLiteral("name"))}});
-            }
-            return result;
-          };
-          const auto layers_before_selection = layer_identities();
-          if (locked_mask_case) editor_preview.setActiveMaskLocked(true);
-          if (hidden_mask_case) {
-            editor_preview.setActiveMaskEnabled(false);
-            editor_preview.setMaskPreviewMode(QStringLiteral("none"));
-            process_layout_events();
-          }
-          const auto masks_before_selection = editor_preview.maskStack();
-          const auto history_before_selection = editor_preview.editHistoryEntries();
-          const auto history_index_before_selection = editor_preview.editHistoryCurrentIndex();
-          qint64 maximum_selection_ms = 0;
-          qint64 maximum_dispatch_ns = 0;
-          const bool layer_click_away = qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_POINTER_LAYER_AWAY");
-          const bool collapsed_group_case = qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_POINTER_COLLAPSED_GROUP");
-          for (int cycle = 0; cycle < 20; ++cycle) {
-            auto* base = find_named_item(edit_workspace, layer_click_away
-                ? QStringLiteral("photoLayerNameLabel") : QStringLiteral("baseImageLayerRowTargetArea"));
-            if (!click_item(base)) return fail("click-away row must be visible for pointer selection");
-            QVariant base_scope;
-            if (!QMetaObject::invokeMethod(edit_workspace, "selectedEditTargetScope", Q_RETURN_ARG(QVariant, base_scope)) ||
-                (layer_click_away ? base_scope.toString() != QStringLiteral("adjustment-layer")
-                                  : base_scope.toString() != QStringLiteral("base-image")))
-              return fail("pointer click-away must actually select the requested layer target");
-            if (collapsed_group_case) {
-              auto* toggle = find_named_item(edit_workspace, QStringLiteral("photoLayerNestedMaskSectionToggle"));
-              if (!click_item(toggle)) return fail("linked-mask group must be collapsible by pointer");
-              process_layout_events();
-              toggle = find_named_item(edit_workspace, QStringLiteral("photoLayerNestedMaskSectionToggle"));
-              if (toggle == nullptr || toggle->property("active").toBool())
-                return fail("pointer collapse must hide the nested mask group");
-              if (!click_item(toggle)) return fail("collapsed linked-mask group must reopen by pointer");
-              process_layout_events();
-              toggle = find_named_item(edit_workspace, QStringLiteral("photoLayerNestedMaskSectionToggle"));
-              if (toggle == nullptr || !toggle->property("active").toBool())
-                return fail("pointer expand must restore the nested mask group");
-            }
-            thumbnail = find_thumbnail();
-            QElapsedTimer selection_timer;
-            selection_timer.start();
-            const auto click_dispatched = click_item(thumbnail);
-            const auto selection_restored = click_dispatched && wait_for_condition([&]() {
-              return editor_preview.hasActiveMask() &&
-                  editor_preview.activeMaskIndex() >= 0 &&
-                  editor_preview.activeMaskIndex() < editor_preview.maskStack().size() &&
-                  editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
-                      .value(QStringLiteral("id")).toString() == selected_id;
-            }, 1000);
-            if (!selection_restored) {
-              const auto actual_id = editor_preview.hasActiveMask()
-                  ? editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
-                        .value(QStringLiteral("id")).toString()
-                  : QString{};
-              std::cerr << "cycle=" << cycle << " thumbnail=" << (thumbnail ? thumbnail->objectName().toStdString() : "destroyed")
-                        << " visible=" << (thumbnail && thumbnail->isVisible()) << " active=" << editor_preview.activeMaskIndex()
-                        << " click_dispatched=" << click_dispatched
-                        << " expected_id=" << selected_id.toStdString() << " actual_id=" << actual_id.toStdString()
-                        << " mask_count=" << editor_preview.maskStack().size() << '\n';
-              const auto failure_capture = qEnvironmentVariable("PHOTO_EDITOR_MASK_POINTER_CAPTURE_PATH");
-              auto* workspace_item = qobject_cast<QQuickItem*>(edit_workspace);
-              if (!failure_capture.isEmpty() && workspace_item != nullptr && workspace_item->window() != nullptr)
-                workspace_item->window()->grabWindow().save(failure_capture);
-              return fail("native pointer reselection changed the selected component identity");
-            }
-            maximum_selection_ms = std::max(maximum_selection_ms, selection_timer.elapsed());
-            maximum_dispatch_ns = std::max(maximum_dispatch_ns, last_dispatch_ns);
-          }
-          std::cout << "mask pointer cycles=20 component=" << selected_id.toStdString()
-                    << " kind=" << pointer_kind.toStdString()
-                    << " maximum-controller-selection-ms=" << maximum_selection_ms
-                    << " maximum-event-dispatch-ms=" << static_cast<double>(maximum_dispatch_ns) / 1000000.0 << '\n';
-          if (editor_preview.maskStack() != masks_before_selection ||
-              layer_identities() != layers_before_selection ||
-              editor_preview.editHistoryEntries() != history_before_selection ||
-              editor_preview.editHistoryCurrentIndex() != history_index_before_selection)
-            return fail("pointer selection alone must preserve mask data and edit history");
-          if (hidden_mask_case && (editor_preview.activeMaskEnabled() ||
-              editor_preview.maskPreviewMode() != QStringLiteral("none")))
-            return fail("reselecting a hidden mask must preserve its disabled effect and overlay preference");
-          if (!editor_preview.previewFailureStage().isEmpty())
-            return fail("mask pointer fixture must render without a preview failure");
-          if (qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_LASSO_SWITCH")) {
-            auto* viewport = find_named_item(edit_workspace, QStringLiteral("editImageViewport"));
-            if (!viewport || !viewport->window()) return fail("selection gestures need the actual Studio viewport");
-            const auto send_pointer = [&](QEvent::Type type, double nx, double ny) {
-              const QPointF local(viewport->property("paintedContentX").toDouble() + nx * viewport->property("paintedContentWidth").toDouble(),
-                  viewport->property("paintedContentY").toDouble() + ny * viewport->property("paintedContentHeight").toDouble());
-              const auto scene = viewport->mapToScene(local);
-              const auto global = QPointF(viewport->window()->mapToGlobal(scene.toPoint()));
-              QMouseEvent event(type, scene, global, type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
-                  type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
-              QCoreApplication::sendEvent(viewport->window(), &event);
-              QCoreApplication::processEvents();
-            };
-            auto lasso_cycles = qEnvironmentVariableIntValue("PHOTO_EDITOR_MASK_LASSO_CYCLES");
-            if (lasso_cycles <= 0) lasso_cycles = 8;
-            if (lasso_cycles > 100) return fail("selection-switch stress cycles must be between 1 and 100");
-            for (int cycle = 0; cycle < lasso_cycles; ++cycle) {
-              QElapsedTimer cycle_timer;
-              cycle_timer.start();
-              if (!QMetaObject::invokeMethod(edit_workspace, "startMaskBrushSource", Q_ARG(QVariant, QVariant("add"))))
-                return fail("smart selection must accept brush extension");
-              const auto brush_id = editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value("id").toString();
-              send_pointer(QEvent::MouseButtonPress, 0.3, 0.35);
-              send_pointer(QEvent::MouseMove, 0.45, 0.45);
-              send_pointer(QEvent::MouseButtonRelease, 0.5, 0.45);
-              if (editor_preview.brushStrokeActive()) return fail("released selection brush must finish");
-              if (!wait_for_condition([&]() {
-                    return !photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview) &&
-                           !editor_preview.processing();
-                  }, 10000))
-                return fail("brush refinement must settle before the selection can be reselected");
-              edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-              process_layout_events();
-              if (!click_item(find_named_item(edit_workspace, QStringLiteral("baseImageLayerRowTargetArea"))))
-                return fail("extended selection must survive clicking away to the base image");
-              QPointer<QQuickItem> extension_thumbnail;
-              const auto extension_thumbnail_ready = wait_for_condition([&]() {
-                extension_thumbnail = find_thumbnail();
-                return !extension_thumbnail.isNull();
-              }, 1000);
-              if (!extension_thumbnail_ready)
-                return fail("committed brush selection must remain visible in the layer panel");
-              const auto extension_click_dispatched = click_item(extension_thumbnail);
-              const auto extension_reselected = extension_click_dispatched && wait_for_condition([&]() {
-                return editor_preview.hasActiveMask() &&
-                    editor_preview.activeMaskIndex() >= 0 &&
-                    editor_preview.activeMaskIndex() < editor_preview.maskStack().size() &&
-                    editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
-                        .value(QStringLiteral("id")).toString() == brush_id;
-              }, 1000);
-              if (!extension_reselected) {
-                const auto actual_id = editor_preview.hasActiveMask() &&
-                        editor_preview.activeMaskIndex() >= 0 &&
-                        editor_preview.activeMaskIndex() < editor_preview.maskStack().size()
-                    ? editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
-                          .value(QStringLiteral("id")).toString()
-                    : QString{};
-                std::cerr << "lasso-cycle=" << cycle << " extension-thumbnail="
-                          << (extension_thumbnail ? extension_thumbnail->objectName().toStdString() : "destroyed")
-                          << " click_dispatched=" << extension_click_dispatched
-                          << " active=" << editor_preview.activeMaskIndex()
-                          << " expected_id=" << selected_id.toStdString()
-                          << " actual_id=" << actual_id.toStdString()
-                          << " mask_count=" << editor_preview.maskStack().size() << '\n';
-                for (const auto* target_name : {"photoLayerMaskSetThumbnailTargetArea",
-                                                "photoLayerNestedMaskThumbnailTargetArea",
-                                                "activeLayerMaskChildThumbnailTargetArea"}) {
-                  const auto targets = find_named_items(edit_workspace, QString::fromLatin1(target_name));
-                  std::cerr << "target=" << target_name << " count=" << targets.size();
-                  for (auto* target : targets) {
-                    const auto rect = visible_rect(target);
-                    std::cerr << " [visible=" << target->isVisible() << " rect="
-                              << rect.x() << ',' << rect.y() << ',' << rect.width() << ',' << rect.height() << ']';
-                  }
-                  std::cerr << '\n';
-                }
-                for (const auto& mask_value : editor_preview.maskStack()) {
-                  const auto mask = mask_value.toMap();
-                  std::cerr << "mask id=" << mask.value(QStringLiteral("id")).toString().toStdString()
-                            << " kind=" << mask.value(QStringLiteral("kind")).toString().toStdString()
-                            << " set=" << mask.value(QStringLiteral("maskSetId")).toString().toStdString()
-                            << " name=" << mask.value(QStringLiteral("name")).toString().toStdString() << '\n';
-                }
-                const auto failure_capture = qEnvironmentVariable("PHOTO_EDITOR_MASK_POINTER_CAPTURE_PATH");
-                auto* workspace_item = qobject_cast<QQuickItem*>(edit_workspace);
-                if (!failure_capture.isEmpty() && workspace_item != nullptr && workspace_item->window() != nullptr)
-                  workspace_item->window()->grabWindow().save(failure_capture);
-                return fail("extended selection must survive clicking away and reselecting its stable component");
-              }
-              if (!QMetaObject::invokeMethod(edit_workspace, "startMaskLassoFromShortcut") ||
-                  !edit_workspace->property("lassoDrawArmed").toBool()) return fail("lasso must arm after brush reselection");
-              process_layout_events();
-              send_pointer(QEvent::MouseButtonPress, 0.65, 0.5);
-              for (int step = 1; step <= 48; ++step) {
-                const auto angle = step * 6.283185307179586 / 48;
-                send_pointer(QEvent::MouseMove, 0.5 + 0.15 * std::cos(angle), 0.5 + 0.15 * std::sin(angle));
-              }
-              send_pointer(QEvent::MouseButtonRelease, 0.65, 0.5);
-              if (!editor_preview.hasActiveMask() || editor_preview.activeMaskKind() != "lasso" ||
-                  editor_preview.activeMaskPolygonPointCount() < 24 ||
-                  !editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value("lassoClosed").toBool() ||
-                  edit_workspace->property("lassoDrawArmed").toBool() ||
-                  edit_workspace->property("maskShapeEditTransactionActive").toBool())
-                return fail("native lasso drag must retain detail, close, and release its undo transaction");
-              if (!wait_for_condition([&]() {
-                    for (const auto& value : editor_preview.maskStack()) {
-                      const auto mask = value.toMap();
-                      if (mask.value("id").toString() == brush_id)
-                        return !mask.value("brushStrokes").toList().isEmpty();
-                    }
-                    return false;
-                  }, 10000)) return fail("switching to lasso must preserve the released brush extension");
-              const auto closed = editor_preview.maskStack();
-              send_pointer(QEvent::MouseButtonPress, 0.3, 0.5);
-              send_pointer(QEvent::MouseMove, 0.4, 0.6);
-              send_pointer(QEvent::MouseButtonRelease, 0.4, 0.6);
-              if (editor_preview.maskStack() != closed) return fail("completed lasso must ignore stray drags");
-              // Keep stress iterations independent: first prove the accepted
-              // brush/lasso edits, then undo both so contour complexity does
-              // not grow with the iteration count.
-              if (cycle + 1 < lasso_cycles) {
-                int undo_count = 0;
-                while (editor_preview.editHistoryCurrentIndex() > history_index_before_selection && undo_count < 10) {
-                  editor_preview.undo();
-                  ++undo_count;
-                }
-                process_layout_events();
-                if (undo_count == 0 || editor_preview.editHistoryCurrentIndex() != history_index_before_selection ||
-                    editor_preview.maskStack() != masks_before_selection ||
-                    !editor_preview.hasActiveMask() ||
-                    editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
-                        .value(QStringLiteral("id")).toString() != selected_id)
-                  return fail("stress iteration undo must restore the original selected mask exactly");
-              }
-              std::cout << "selection-switch-cycle=" << (cycle + 1)
-                        << " elapsed-ms=" << cycle_timer.elapsed() << std::endl;
-            }
-            const auto retained_lasso_index = editor_preview.activeMaskIndex();
-            editor_preview.setActiveMaskIndex(-1);
-            if (!QMetaObject::invokeMethod(edit_workspace, "createMaskSource", Q_ARG(QVariant, QVariant("object"))))
-              return fail("Smart Select must arm without an existing active mask");
-            send_pointer(QEvent::MouseButtonPress, 0.3, 0.4);
-            if (!editor_preview.smartSelectStrokeActive())
-              return fail("Smart Select must receive its first press without an active mask");
-            const auto initial_prompt = editor_preview.smartSelectStrokePromptPayload();
-            send_pointer(QEvent::MouseMove, 0.6, 0.6);
-            if (editor_preview.smartSelectStrokePromptPayload() == initial_prompt)
-              return fail("Smart Select must collect drag input before a mask exists");
-            editor_preview.resetSmartSelectStroke();
-            viewport->setProperty("maskGestureKind", QString());
-            send_pointer(QEvent::MouseButtonRelease, 0.6, 0.6);
-            QMetaObject::invokeMethod(edit_workspace, "clearTransientMaskTools");
-            editor_preview.setActiveMaskIndex(retained_lasso_index);
-            process_layout_events();
-            auto* lasso_hud = find_named_item(edit_workspace, QStringLiteral("polygonToolHud"));
-            auto* selection_chip = find_named_item(edit_workspace, QStringLiteral("activeCanvasToolChip"));
-            if (!lasso_hud || !selection_chip || scene_rect(lasso_hud).intersects(scene_rect(selection_chip)))
-              return fail("lasso actions and selection completion controls must not overlap");
-            const auto lasso_capture = qEnvironmentVariable("PHOTO_EDITOR_MASK_LASSO_CAPTURE_PATH");
-            if (!lasso_capture.isEmpty() && !viewport->window()->grabWindow().save(lasso_capture))
-              return fail("selection switch proof must save its visible canvas");
-            std::cout << "smart-selection-brush-reselection-lasso-pointer-cycles=" << lasso_cycles
-                      << "; lasso-detail=passed\n";
-            return 0;
-          }
-          if (pointer_kind == QStringLiteral("compound")) {
-            const auto reselect_at_index = [&](int expected_index) {
-              process_layout_events();
-              if (editor_preview.maskStack().at(expected_index).toMap().value(QStringLiteral("id")).toString() != selected_id)
-                return false;
-              if (!click_item(find_named_item(edit_workspace, QStringLiteral("baseImageLayerRowTargetArea"))))
-                return false;
-              return click_item(find_thumbnail()) && editor_preview.activeMaskIndex() == expected_index &&
-                     editor_preview.maskStack().at(expected_index).toMap().value(QStringLiteral("id")).toString() == selected_id;
-            };
-            editor_preview.moveActiveMask(-1);
-            if (!reselect_at_index(0)) return fail("reordered component must reselect by stable ID");
-            editor_preview.undo();
-            if (!reselect_at_index(1)) return fail("undo must restore component order and stable reselection");
-            editor_preview.redo();
-            if (!reselect_at_index(0)) return fail("redo must preserve stable component reselection");
-            std::cout << "mask-pointer-component-reorder-undo-redo=passed\n";
-          }
-          if (qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_POINTER_ASSET_RETURN")) {
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("baseImageLayerRowTargetArea"))))
-              return fail("asset-return fixture must deselect the mask by pointer");
-            QFile saved_recipe(runtime_root.filePath(QStringLiteral("mask-pointer-recipe.json")));
-            const auto recipe = photo_editor::desktop::EditorPreviewControllerTestAccess::recipe_json(editor_preview).toUtf8();
-            if (!saved_recipe.open(QIODevice::WriteOnly) || saved_recipe.write(recipe) != recipe.size())
-              return fail("asset-return fixture must save its recipe");
-            saved_recipe.close();
-            if (!saved_recipe.open(QIODevice::ReadOnly)) return fail("saved mask recipe must reopen");
-            const auto restored_recipe = QString::fromUtf8(saved_recipe.readAll());
-            saved_recipe.close();
-            editor_preview.loadAsset(QStringLiteral("mask-pointer-other-photo"), pointer_photo,
-                                     QUrl::fromLocalFile(pointer_photo).toString(), {}, {}, {}, restored_recipe);
-            if (!wait_for_condition([&]() { return !editor_preview.processing(); }, 10000) ||
-                editor_preview.maskStack().size() != 2)
-              return fail("second photo must load the same compound mask IDs");
-            editor_preview.setActiveMaskIndex(1);
-            const auto other_component_id = editor_preview.maskStack().at(1).toMap().value(QStringLiteral("id")).toString();
-            if (other_component_id == selected_id)
-              return fail("asset-isolation fixture must choose different components on each photo");
-            process_layout_events();
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("baseImageLayerRowTargetArea"))) ||
-                !click_item(find_thumbnail()) || editor_preview.activeMaskIndex() != 1)
-              return fail("second photo must reselect its own component through its thumbnail");
-            editor_preview.loadAsset(QStringLiteral("mask-pointer-photo"), pointer_photo,
-                                     QUrl::fromLocalFile(pointer_photo).toString(), {}, {}, {}, restored_recipe);
-            if (!wait_for_condition([&]() { return !editor_preview.processing(); }, 10000))
-              return fail("returned photo must finish rendering");
-            thumbnail = find_thumbnail();
-            if (!click_item(thumbnail) || !editor_preview.hasActiveMask() ||
-                editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value(QStringLiteral("id")).toString() != selected_id)
-              return fail("pointer reselection after asset return must retain the last component");
-            std::cout << "mask-pointer-asset-return=passed; recipe-roundtrip=disk; colliding-asset-mask-ids=passed\n";
-          }
-          if (locked_mask_case) {
-            const auto locked_stack = editor_preview.maskStack();
-            const auto locked_history = editor_preview.editHistoryEntries();
-            editor_preview.setActiveMaskDensity(0.31);
-            if (!editor_preview.activeMaskLocked() || editor_preview.activeMaskEditDisabledReason().isEmpty() ||
-                editor_preview.maskStack() != locked_stack || editor_preview.editHistoryEntries() != locked_history)
-              return fail("locked mask must remain selectable, explain editing unavailability, and reject density edits");
-            process_layout_events();
-            auto* lock_reason = find_named_item(edit_workspace, QStringLiteral("selectedMaskLockReason"));
-            if (!item_visible(lock_reason) || lock_reason->property("text").toString() != editor_preview.activeMaskEditDisabledReason())
-              return fail("selected locked mask must visibly explain its edit restriction");
-            const auto lock_capture = qEnvironmentVariable("PHOTO_EDITOR_MASK_LOCK_CAPTURE_PATH");
-            if (!lock_capture.isEmpty() && !lock_reason->window()->grabWindow().save(lock_capture))
-              return fail("locked selection proof must save its screenshot");
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefineViewSettingsButton"))) ||
-                edit_workspace->property("maskRefinementPage").toString() != QStringLiteral("view"))
-              return fail("locked masks must still allow View inspection");
-            process_layout_events();
-            for (const auto& name : {QStringLiteral("maskRefinementPaintPageButton"), QStringLiteral("maskRefinementEdgePageButton"),
-                                     QStringLiteral("maskRefinementStrengthPageButton"), QStringLiteral("maskFirstVisibilityButton"), QStringLiteral("maskFirstInvertButton")}) {
-              auto* control = find_named_item(edit_workspace, name);
-              if (control == nullptr || control->isEnabled()) return fail("locked View must keep matte-changing controls disabled");
-            }
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskFirstHiddenButton"))) ||
-                editor_preview.maskPreviewDisplayMode() != QStringLiteral("hidden") ||
-                !click_item(find_named_item(edit_workspace, QStringLiteral("maskCreationDoneButton"))) ||
-                !editor_preview.activeMaskLocked() || editor_preview.maskStack() != locked_stack || editor_preview.editHistoryEntries() != locked_history)
-              return fail("locked View inspection must preserve the lock, mask and history");
-            edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
-            process_layout_events();
-            if (!click_item(find_thumbnail())) return fail("locked View must preserve mask reselection");
-            if (!click_item(find_named_item(edit_workspace, QStringLiteral("selectedMaskUnlockButton"))) || editor_preview.activeMaskLocked())
-              return fail("visible Unlock action must unlock the selected mask by pointer");
-            std::cout << "locked-mask-reselection-and-write-guard=passed\n";
-          }
-          editor_preview.setActiveMaskDensity(0.63);
-          if (std::abs(editor_preview.activeMaskDensity() - 0.63) > 1e-6 ||
-              editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value(QStringLiteral("id")).toString() != selected_id)
-            return fail("density edit after pointer selection must reach the selected stable component");
-          const auto name = QStringLiteral("Pointer reselected mask");
-          editor_preview.setActiveMaskName(name);
-          const auto edited = editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap();
-          if (edited.value(QStringLiteral("id")).toString() != selected_id || edited.value(QStringLiteral("name")).toString() != name)
-            return fail("edit after native pointer reselection must modify the selected stable ID");
-          const auto capture_path = qEnvironmentVariable("PHOTO_EDITOR_MASK_POINTER_CAPTURE_PATH");
-          if (!wait_for_condition([&]() { return !editor_preview.processing(); }, 10000))
-            return fail("mask edit must finish rendering before its proof capture");
-          process_layout_events();
-          auto* capture_workspace = qobject_cast<QQuickItem*>(edit_workspace);
-          if (qEnvironmentVariableIsSet("PHOTO_EDITOR_FONT_ENTRY_PROOF")) {
-            if (!editor_preview.addTextLayer(QStringLiteral("Font proof"), QStringLiteral("Font proof")))
-              return fail("font proof must create a text layer");
-            const auto text_index = 0;
-            if (!QMetaObject::invokeMethod(edit_workspace, "setActivePhotoLayerSelection",
-                  Q_ARG(QVariant, QVariant(text_index)), Q_ARG(QVariant, QVariant(true))))
-              return fail("font proof must select the text layer");
-            process_layout_events();
-            auto* panel = find_named_object(edit_workspace, QStringLiteral("photoLayerPropertiesPanel"));
-            if (panel == nullptr || !panel->setProperty("detailsExpanded", true)) return fail("font details must expand");
-            process_layout_events();
-            auto* field = find_named_item(edit_workspace, QStringLiteral("photoLayerTextFontField"));
-            if (field == nullptr) return fail("editable font picker must exist");
-            for (auto* parent = field->parentItem(); parent != nullptr; parent = parent->parentItem()) {
-              if (parent->property("contentY").isValid()) {
-                parent->setProperty("contentY", std::max(0.0, parent->property("contentY").toDouble() +
-                    scene_rect(field).top() - scene_rect(parent).top() - 40.0));
-                process_layout_events();
-              }
-            }
-            const auto fonts = editor_preview.availablePhotoTextFonts();
-            if (fonts.isEmpty() || !click_item(field)) return fail("font picker must accept a visible pointer click");
-            const auto desired_font = fonts.first();
-            auto* window = field->window();
-            if (!send_window_key(window, Qt::Key_A, QKeySequence(QKeySequence::SelectAll)[0].keyboardModifiers())) return fail("font input must select its text");
-            for (const auto character : desired_font) {
-              QKeyEvent press(QEvent::KeyPress, 0, Qt::NoModifier, QString(character));
-              QCoreApplication::sendEvent(window, &press);
-              QKeyEvent release(QEvent::KeyRelease, 0, Qt::NoModifier, QString(character));
-              QCoreApplication::sendEvent(window, &release);
-            }
-            if (!send_window_key(window, Qt::Key_Return, Qt::NoModifier)) return fail("typed font must be accepted");
-            process_layout_events();
-            if (editor_preview.photoLayers().at(text_index).toMap().value(QStringLiteral("fontFamily")).toString() != desired_font)
-              return fail("typed font picker value must reach the text layer");
-            std::cout << "editable-font-pointer-and-keyboard=passed\n";
-          }
-          if (qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_REFINE_NARROW")) {
-            if (capture_workspace == nullptr || capture_workspace->window() == nullptr)
-              return fail("refinement layout proof needs a native window");
-            capture_workspace->window()->resize(1280, 900);
-            process_layout_events();
-            if (!capture_path.isEmpty() && !capture_workspace->window()->grabWindow().save(capture_path + QStringLiteral(".immediate.png")))
-              return fail("immediate resize capture must be saved");
-            QElapsedTimer resize_settle;
-            resize_settle.start();
-            if (!wait_for_condition([&]() { return resize_settle.elapsed() >= 500 && !editor_preview.processing(); }, 10000))
-              return fail("resized preview must settle before the layout capture");
-            for (const auto* flow_name : {"maskCreationFlow", "maskRefineFlow"}) {
-              auto* flow = find_named_item(edit_workspace, QString::fromLatin1(flow_name));
-              if (flow == nullptr || !flow->isVisible() || capture_workspace->window()->width() != 1280)
-                return fail("refinement layout must be tested at the requested narrow width");
-              if (flow->parentItem() == nullptr || flow->y() + flow->height() > flow->parentItem()->height() + 1)
-                return fail("mask toolbar must allocate enough height for its wrapped controls");
-              QList<QRectF> occupied;
-              for (auto* child : flow->childItems()) {
-                if (!child->isVisible() || child->width() <= 0 || child->height() <= 0) continue;
-                const QRectF bounds(child->x(), child->y(), child->width(), child->height());
-                if (bounds.left() < -1 || bounds.right() > flow->width() + 1 ||
-                    bounds.bottom() > flow->height() + 1)
-                  return fail("mask toolbar controls must remain inside the narrow toolbar");
-                for (const auto& prior : occupied)
-                  if (prior.intersected(bounds).width() > 1 && prior.intersected(bounds).height() > 1)
-                    return fail("mask toolbar controls must not overlap at narrow width");
-                occupied.append(bounds);
-              }
-              const auto minimum_visible_controls =
-                  QString::fromLatin1(flow_name) == QStringLiteral("maskRefineFlow") ? 7 : 6;
-              if (occupied.size() < minimum_visible_controls) {
-                std::cerr << flow_name << " visible controls=" << occupied.size() << " names=";
-                for (auto* child : flow->childItems()) {
-                  if (child != nullptr && child->isVisible() && child->width() > 0 && child->height() > 0)
-                    std::cerr << child->objectName().toStdString() << ",";
-                }
-                std::cerr << '\n';
-                return fail("refinement layout proof must include its visible navigation and action controls");
-              }
-              std::cout << flow_name << "-layout=passed; window=1280x900; controls=" << occupied.size() << '\n';
-            }
-          }
-          if (!capture_path.isEmpty() && (capture_workspace == nullptr || capture_workspace->window() == nullptr ||
-              !capture_workspace->window()->grabWindow().save(capture_path)))
-            return fail("native mask pointer proof screenshot must be saved");
-        }
     return EXIT_SUCCESS;
   }
 
@@ -12813,11 +12030,8 @@ ApplicationWindow {
   auto* hsl_channel_button_row = find_named_object(edit_workspace, QStringLiteral("hslChannelButtonRow"));
   auto* hsl_reds_button = find_named_object(edit_workspace, QStringLiteral("hslChannelRedsButton"));
   auto* hsl_magentas_button = find_named_object(edit_workspace, QStringLiteral("hslChannelMagentasButton"));
-  auto* edit_inspector_footer = find_named_object(edit_workspace, QStringLiteral("editInspectorFooter"));
   auto* initial_edit_filmstrip = find_named_item(edit_workspace, QStringLiteral("editFilmstrip"));
-  auto* edit_inspector_reset_button = find_named_object(edit_workspace, QStringLiteral("editInspectorResetButton"));
-  auto* edit_inspector_save_preset_button =
-      find_named_object(edit_workspace, QStringLiteral("editInspectorSavePresetButton"));
+  auto* edit_inspector_actions = find_named_object(edit_workspace, QStringLiteral("editInspectorActionsButton"));
   auto* light_panel_before_after_button =
       find_named_object(edit_workspace, QStringLiteral("lightPanelBeforeAfterButton"));
   auto* color_panel_before_after_button =
@@ -12901,8 +12115,7 @@ ApplicationWindow {
   if (white_balance_group == nullptr || light_group == nullptr || tone_curve_group == nullptr ||
       color_group == nullptr || color_grading_group == nullptr || presence_group == nullptr ||
       adjust_detail_group == nullptr || adjust_lens_group == nullptr || raw_group == nullptr ||
-      edit_inspector_footer == nullptr || edit_inspector_reset_button == nullptr ||
-      edit_inspector_save_preset_button == nullptr ||
+      edit_inspector_actions == nullptr ||
       !white_balance_group->property("visible").toBool() || !light_group->property("visible").toBool() ||
       !tone_curve_group->property("visible").toBool() || !color_group->property("visible").toBool() ||
       !color_grading_group->property("visible").toBool() ||
@@ -12950,8 +12163,8 @@ ApplicationWindow {
           QStringLiteral("active-target-breadcrumbs:v2|inspector-visible:true|queryable:true|max-visible:1|duplicate-visible:false") ||
       active_edit_target_bar->property("targetScope").toString() != QStringLiteral("base-image") ||
       active_adjustment_layer_target_bar->property("visible").toBool() ||
-      edit_inspector_reset_button->property("text").toString() != QStringLiteral("Reset") ||
-      edit_inspector_save_preset_button->property("text").toString() != QStringLiteral("Save Preset") ||
+      !edit_inspector_actions->property("secondaryActionMenu").toBool() ||
+      edit_inspector_actions->property("showText").toBool() ||
       white_balance_group->property("title").toString() != QStringLiteral("White Balance") ||
       tone_curve_group->property("title").toString() != QStringLiteral("Tone Curve")) {
     std::cerr << "Adjust inspector baseline: panel="
@@ -12978,14 +12191,7 @@ ApplicationWindow {
               << (active_adjustment_layer_target_bar != nullptr &&
                   active_adjustment_layer_target_bar->property("visible").toBool())
               << " baseGuard=" << (base_adjustment_target_guard == nullptr ? "null" : "present")
-              << " resetText="
-              << (edit_inspector_reset_button == nullptr
-                      ? std::string("null")
-                      : edit_inspector_reset_button->property("text").toString().toStdString())
-              << " saveText="
-              << (edit_inspector_save_preset_button == nullptr
-                      ? std::string("null")
-                      : edit_inspector_save_preset_button->property("text").toString().toStdString())
+              << " adjustmentActions=" << (edit_inspector_actions == nullptr ? "null" : "present")
               << " wbTitle="
               << (white_balance_group == nullptr
                       ? std::string("null")

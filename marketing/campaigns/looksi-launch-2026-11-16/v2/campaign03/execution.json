@@ -1,0 +1,48 @@
+{
+  "title": "Keep the gold. Keep the quiet blues.",
+  "role": "A welcoming recipe breakdown",
+  "duration_seconds": 33,
+  "fps": 30,
+  "dimensions": [
+    1080,
+    1920
+  ],
+  "sources": "../media/provenance.json",
+  "scene_plan": [
+    {
+      "start": 0,
+      "end": 4,
+      "title": "Show the chosen treatment"
+    },
+    {
+      "start": 4,
+      "end": 9,
+      "title": "Look before touching"
+    },
+    {
+      "start": 9,
+      "end": 17,
+      "title": "Three deliberate choices"
+    },
+    {
+      "start": 17,
+      "end": 24,
+      "title": "Compare the combined result"
+    },
+    {
+      "start": 24,
+      "end": 29,
+      "title": "Keep the file"
+    },
+    {
+      "start": 29,
+      "end": 33,
+      "title": "Invite the first question"
+    }
+  ],
+  "audio": "Original sample-free sine/harmonic synthesis with authored scene accents; archived source audio muted.",
+  "source_scope": "Actual same-source native photo exports; three combined adjustment choices; no single-control animation stands in for app response.",
+  "public_caption": "Keep the gold. Keep the quiet blues. For this Nepal photograph I chose 5900 K, contrast+12%, and exposure+0.15 EV. The comparison shows the combined treatment, using actual Looksy PNG exports from the same source. Your photograph may need different choices. I\u2019m building LOOKSi for photo and video, and I\u2019d like the learning to feel approachable. What would you like to learn to change in your own photos?",
+  "alt_text": "Keep the gold. Keep the quiet blues. Three small choices for this photograph.",
+  "remaining": "Creative review, media publication permissions and current placement check. Optional continuous current-build demo and founder narration are tracked separately."
+}

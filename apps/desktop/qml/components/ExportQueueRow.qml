@@ -45,7 +45,8 @@ Rectangle {
                                             rowHover.hovered ||
                                             activeFocus ||
                                             actionZone.activeFocus
-    readonly property int actionZoneWidth: (menuVisible || showRemoveButton) ? 172 : 0
+    readonly property bool narrowRow: width < theme.scaled(680)
+    readonly property int actionZoneWidth: (menuVisible || showRemoveButton) ? (narrowRow ? theme.scaled(showRemoveButton && menuVisible ? 76 : 36) : 172) : 0
     readonly property string exportQueueRowContract: "export-queue-row:v1|preview:" +
                                                      String(showPreview) +
                                                      "|status-chip:true|progress:" +
@@ -56,9 +57,9 @@ Rectangle {
                                                      String(showRemoveButton) +
                                                      "|readable-text:true|status-surface:true|calm-row:true|destination:" +
                                                      String(destination.length > 0)
-    readonly property string readableTextContract: "readable-text:v1|ellipsis:none|title-wrap:true|destination-wrap:true|metadata-fit:true|tooltip-full:true"
+    readonly property string readableTextContract: "readable-text:v2|ellipsis:destination-basename-only|title-wrap:true|destination:tooltip-full|metadata-fit:true|accessibility-full:true"
     readonly property string statusSurfaceContract: "status-surface:v2|export-queue|preview-status-progress-actions|status-before-actions:true|error-diagnostic:true|retry-menu:true|actions-hover-focus:true|attention-actions-visible:true|fixed-action-zone:true"
-    readonly property string queueActionVisibilityContract: "queue-row-actions:v1|visibility:hover-focus-or-attention|fixed-width:172|no-layout-shift:true|keyboard-row-focus:true|remove-preserved:true|menu-preserved:true"
+    readonly property string queueActionVisibilityContract: "queue-row-actions:v2|visibility:hover-focus-or-attention|reserved-width:responsive|no-layout-shift:true|keyboard-row-focus:true|remove-preserved:true|menu-preserved:true"
 
     signal primaryActionRequested()
     signal menuItemTriggered(string key)
@@ -107,10 +108,18 @@ Rectangle {
         return theme.textMuted
     }
 
+    function destinationDisplayName(path) {
+        const normalizedPath = String(path || "").replace(/[\\/]+$/, "")
+        if (normalizedPath.length === 0)
+            return ""
+        const parts = normalizedPath.split(/[\\/]/)
+        return parts.length > 0 ? parts[parts.length - 1] : normalizedPath
+    }
+
     Layout.fillWidth: true
-    implicitHeight: Math.max(64, rowContent.implicitHeight + theme.space24)
+    implicitHeight: Math.max(theme.scaled(60), rowContent.implicitHeight + theme.space16)
     radius: theme.radiusPanel
-    color: alternate ? theme.alpha(theme.ink850, 0.62) : theme.alpha(theme.ink900, 0.72)
+    color: rowHover.hovered ? theme.editorControlHover : "transparent"
     border.width: activeFocus ? theme.focusBorderWidth : 0
     border.color: theme.focusRing
     clip: true
@@ -135,7 +144,7 @@ Rectangle {
         id: rowContent
         anchors.fill: parent
         anchors.margins: theme.space8
-        anchors.bottomMargin: theme.space16
+        anchors.bottomMargin: theme.space8
         spacing: theme.space6
 
         RowLayout {
@@ -209,7 +218,7 @@ Rectangle {
 
                 Label {
                     Layout.fillWidth: true
-                    visible: root.subtitle.length > 0
+                    visible: !root.narrowRow && root.subtitle.length > 0
                     text: root.subtitle
                     color: theme.textMuted
                     font.family: theme.fontUi
@@ -221,7 +230,7 @@ Rectangle {
             }
 
             ColumnLayout {
-                visible: root.preset.length > 0 || root.format.length > 0 || root.sizeLabel.length > 0
+                visible: !root.narrowRow && (root.preset.length > 0 || root.format.length > 0 || root.sizeLabel.length > 0)
                 Layout.preferredWidth: 150
                 spacing: 2
 
@@ -233,8 +242,6 @@ Rectangle {
                     font.family: theme.fontUi
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignRight
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 8
                     elide: Text.ElideNone
                 }
 
@@ -246,8 +253,6 @@ Rectangle {
                     font.family: theme.fontUi
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignRight
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 8
                     elide: Text.ElideNone
                 }
             }
@@ -285,7 +290,10 @@ Rectangle {
                     visible: root.menuVisible
                     enabled: root.menuEnabled && root.actionsRevealed
                     text: root.menuText
-                    iconName: "menu"
+                    showText: !root.narrowRow
+                    showMenuIndicator: !root.narrowRow
+                    primaryOpensMenu: root.narrowRow
+                    iconName: "more"
                     compact: true
                     menuItems: root.menuItems
                     menuWidth: root.menuWidth
@@ -302,6 +310,8 @@ Rectangle {
                     objectName: "exportQueueRowRemoveButton"
                     visible: root.showRemoveButton
                     text: root.removeText
+                    showText: !root.narrowRow
+                    iconName: "close"
                     enabled: root.removeEnabled && root.actionsRevealed
                     helperText: root.removeHelperText
                     onConfirmed: root.removeRequested()
@@ -310,18 +320,27 @@ Rectangle {
         }
 
         Label {
+            id: destinationLabel
+            objectName: "exportQueueDestinationLabel"
             Layout.fillWidth: true
             visible: root.destination.length > 0
-            text: root.destination
+            text: root.destinationDisplayName(root.destination)
             color: theme.textMuted
             font.family: theme.fontUi
-            font.pixelSize: 11
-            wrapMode: Text.WrapAnywhere
-            maximumLineCount: 2
-            elide: Text.ElideNone
+            font.pixelSize: theme.typeCaption
+            wrapMode: Text.NoWrap
+            elide: Text.ElideMiddle
+
+            HoverHandler { id: destinationHover }
+            AppToolTip {
+                targetItem: destinationLabel
+                visible: destinationHover.hovered
+                text: root.destination
+            }
         }
 
         ProgressStrip {
+            Layout.preferredHeight: 2
             Layout.fillWidth: true
             visible: root.showProgress
             progress: Math.max(0.0, Math.min(1.0, root.progressValue))

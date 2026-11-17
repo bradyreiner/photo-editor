@@ -1,0 +1,77 @@
+{
+  "objective": "Substantially improve the entire Looksi campaign program through at least one hour of work, preserving five styles, boards/images/videos and production tracking.",
+  "requirements": [
+    {
+      "requirement": "At least one hour of substantive rework",
+      "evidence": "qa/work-log.json",
+      "status": "proved",
+      "elapsed_minutes": 62.9
+    },
+    {
+      "requirement": "Five researched styles",
+      "evidence": [
+        "research/research-v2.md",
+        "research/research-v2.json"
+      ],
+      "status": "proved",
+      "cases": 20,
+      "styles": 5
+    },
+    {
+      "requirement": "Five boards, images and videos",
+      "evidence": [
+        "campaigns.json",
+        "qa/final-verification.json"
+      ],
+      "status": "proved",
+      "primary_deliverables": 15,
+      "hero_films": 5,
+      "alternate_openings": 10,
+      "silent_masters": 15,
+      "carousel_slides": 31
+    },
+    {
+      "requirement": "More distinctive and polished executions",
+      "evidence": [
+        "creative-direction-book.pdf",
+        "qa/creative-review-round1.md",
+        "qa/creative-review-round2.md",
+        "qa/resolved-review-notes.md",
+        "qa/five-directions-v2.jpg"
+      ],
+      "status": "proved as rendered creative review deliverables; human taste approval remains open"
+    },
+    {
+      "requirement": "Genuine product work and accurate claims",
+      "evidence": [
+        "media/provenance.json",
+        "qa/final-verification.json",
+        "strategy.md"
+      ],
+      "status": "proved for fresh same-source native photo exports and dated native board/Timeline artifacts; current continuous workflow is not claimed"
+    },
+    {
+      "requirement": "Production tracking and founder requirements",
+      "evidence": [
+        "production-tracker.xlsx",
+        "campaign01/self-shoot-director.md",
+        "planning/"
+      ],
+      "status": "proved",
+      "human_approvals": "Pending",
+      "filming": "Optional separate production versions; no primary founder placeholder"
+    },
+    {
+      "requirement": "Reviewable professional handoff",
+      "evidence": [
+        "index.html",
+        "creative-direction-book.pdf",
+        "copybook.md",
+        "START-HERE.txt"
+      ],
+      "status": "proved",
+      "limitations": "Local HTML browser automation unavailable; actual PDF/image layouts and encoded films inspected directly."
+    }
+  ],
+  "publication": "None. No outreach, posting, spending, product rename or commercial-offer change."
+}

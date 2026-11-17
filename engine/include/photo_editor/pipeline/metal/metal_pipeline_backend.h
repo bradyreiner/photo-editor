@@ -118,6 +118,15 @@ class MetalPipelineBackend final {
   [[nodiscard]] MetalColorLutCacheStats
   curve_lut_cache_stats() const;
 
+  // Retain CPU-composited scene pixels for native output without applying a
+  // second working-color or geometry transform.
+  [[nodiscard]] std::shared_ptr<const MetalWorkingSurface>
+  upload_working_surface(
+      std::span<const ColorPixel> pixels,
+      const RenderSurfaceDescriptor& descriptor,
+      ColorAdjustmentTelemetry* telemetry = nullptr,
+      CancellationToken cancellation = {});
+
   [[nodiscard]] bool apply_aces2_output_lut_target(
       std::vector<ColorPixel>* pixels,
       int width,

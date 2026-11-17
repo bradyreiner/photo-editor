@@ -8,15 +8,26 @@
 #include "hdr_avif_image_encoder.h"
 #include "export_image_settings.h"
 #include "edit_adjustment_patch.h"
+#include "mask_workflow_ownership.h"
 #include "observability.h"
 #include "timeline_asset_store.h"
 #include "timeline_document_controller.h"
+#include "timeline_mcp_export.h"
+#include "timeline_review_output_verification.h"
 #include "worker_queue_registry.h"
 #include "photo_cache_budget.h"
 #if defined(Q_OS_MACOS)
 #include <sys/sysctl.h>
-#elif defined(Q_OS_UNIX)
+#include <sys/stat.h>
 #include <unistd.h>
+#elif defined(Q_OS_UNIX)
+#include <sys/stat.h>
+#include <unistd.h>
+#elif defined(Q_OS_WIN)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 #include "photo_editor/io/openexr_io.h"
@@ -36,13 +47,16 @@
 #include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonParseError>
 #include <QJsonObject>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSaveFile>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTimer>
 #include <QThread>
 #include <QUuid>
@@ -173,6 +187,97 @@ bool remove_delivery_artifact(const QString& output_path) {
   return removed;
 }
 
+// The worker captures this stable identity immediately after atomic publication.
+// GUI-side late cancellation can then prove ownership without hashing a possibly
+// very large export while the event loop is handling completion.
+QString export_file_identity_token(const QString& path) {
+  if (path.isEmpty() || QFileInfo(path).isSymLink() || !QFileInfo(path).isFile()) {
+    return {};
+  }
+
+#if defined(Q_OS_WIN)
+  const auto native_path = path.toStdWString();
+  const auto file = CreateFileW(
+      native_path.c_str(), 0,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return {};
+  BY_HANDLE_FILE_INFORMATION info{};
+  const auto available = GetFileInformationByHandle(file, &info) != 0;
+  CloseHandle(file);
+  if (!available || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return {};
+  return QStringList{
+      QString::number(info.dwVolumeSerialNumber),
+      QString::number(info.nFileIndexHigh),
+      QString::number(info.nFileIndexLow),
+      QString::number(info.nFileSizeHigh),
+      QString::number(info.nFileSizeLow),
+      QString::number(info.ftLastWriteTime.dwHighDateTime),
+      QString::number(info.ftLastWriteTime.dwLowDateTime)}
+      .join(QLatin1Char(':'));
+#elif defined(Q_OS_UNIX)
+  struct stat info {};
+  const auto native_path = QFile::encodeName(path);
+  if (::stat(native_path.constData(), &info) != 0) return {};
+#if defined(Q_OS_MACOS)
+  const auto mtime_nsec = info.st_mtimespec.tv_nsec;
+  const auto ctime_nsec = info.st_ctimespec.tv_nsec;
+#else
+  const auto mtime_nsec = info.st_mtim.tv_nsec;
+  const auto ctime_nsec = info.st_ctim.tv_nsec;
+#endif
+  return QStringList{
+      QString::number(static_cast<qulonglong>(info.st_dev)),
+      QString::number(static_cast<qulonglong>(info.st_ino)),
+      QString::number(static_cast<qlonglong>(info.st_size)),
+      QString::number(static_cast<qlonglong>(info.st_mtime)),
+      QString::number(static_cast<qlonglong>(mtime_nsec)),
+      QString::number(static_cast<qlonglong>(info.st_ctime)),
+      QString::number(static_cast<qlonglong>(ctime_nsec))}
+      .join(QLatin1Char(':'));
+#else
+  Q_UNUSED(path);
+  return {};
+#endif
+}
+
+bool remove_export_delivery_artifact_if_owned(
+    const QString& output_path,
+    const QString& expected_sha256,
+    const QString& expected_output_identity,
+    const QString& expected_sidecar_identity) {
+  if (expected_sha256.isEmpty() || expected_output_identity.isEmpty() ||
+      export_file_identity_token(output_path) != expected_output_identity) {
+    return false;
+  }
+  if (!QFile::remove(output_path)) return false;
+
+  const auto sidecar_path = output_path + QStringLiteral(".integrity.json");
+  if (expected_sidecar_identity.isEmpty() ||
+      export_file_identity_token(sidecar_path) != expected_sidecar_identity) {
+    return true;
+  }
+  QFile sidecar(sidecar_path);
+  if (sidecar.open(QIODevice::ReadOnly)) {
+    constexpr qint64 kMaximumIntegrityManifestBytes = 64 * 1024;
+    const auto manifest_bytes = sidecar.read(kMaximumIntegrityManifestBytes + 1);
+    const auto manifest = manifest_bytes.size() <= kMaximumIntegrityManifestBytes
+                              ? QJsonDocument::fromJson(manifest_bytes).object()
+                              : QJsonObject{};
+    if (manifest.value(QStringLiteral("schema")).toString() ==
+            QStringLiteral("delivery-integrity:v1") &&
+        manifest.value(QStringLiteral("algorithm")).toString() ==
+            QStringLiteral("sha256-full-v1") &&
+        manifest.value(QStringLiteral("outputPath")).toString() ==
+            QFileInfo(output_path).absoluteFilePath() &&
+        manifest.value(QStringLiteral("sha256")).toString() == expected_sha256) {
+      sidecar.close();
+      QFile::remove(sidecar_path);
+    }
+  }
+  return true;
+}
+
 QVariantMap write_delivery_integrity(
     const QString& output_path,
     photo_editor::pipeline::CancellationToken cancellation = {},
@@ -196,13 +301,30 @@ QVariantMap write_delivery_integrity(
   }
   const auto sidecar_path = output.absoluteFilePath() + QStringLiteral(".integrity.json");
   QSaveFile sidecar(sidecar_path);
-  if (sidecar.open(QIODevice::WriteOnly)) {
-    const auto manifest = QJsonObject::fromVariantMap(result);
-    sidecar.write(QJsonDocument(manifest).toJson(QJsonDocument::Compact));
-    if (!cancellation.cancelled() && sidecar.commit()) {
-      result.insert(QStringLiteral("sidecarPath"), published_path.isEmpty() ? sidecar_path : published_path + QStringLiteral(".integrity.json"));
-    }
+  if (!sidecar.open(QIODevice::WriteOnly)) {
+    result.insert(QStringLiteral("valid"), false);
+    result.insert(QStringLiteral("failureReason"), sidecar.errorString());
+    return result;
   }
+  const auto manifest = QJsonObject::fromVariantMap(result);
+  const auto manifest_bytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
+  if (sidecar.write(manifest_bytes) != manifest_bytes.size()) {
+    sidecar.cancelWriting();
+    result.insert(QStringLiteral("valid"), false);
+    result.insert(QStringLiteral("failureReason"), sidecar.errorString());
+    return result;
+  }
+  if (cancellation.cancelled() || !sidecar.commit()) {
+    const auto error = cancellation.cancelled()
+                           ? QStringLiteral("Delivery integrity write was canceled.")
+                           : sidecar.errorString();
+    result.insert(QStringLiteral("valid"), false);
+    result.insert(QStringLiteral("failureReason"), error);
+    return result;
+  }
+  result.insert(QStringLiteral("sidecarPath"), published_path.isEmpty()
+      ? sidecar_path
+      : published_path + QStringLiteral(".integrity.json"));
   return result;
 }
 
@@ -2271,6 +2393,17 @@ QVariantMap run_export_work(
     const QJsonObject& export_render_job,
     const QJsonObject& export_preview_job,
     const std::shared_ptr<std::atomic_bool>& cancellation_requested) {
+  // Persisted jobs from older versions can bypass today's admission preflight.
+  // Check again before creating even a staging file.
+  if (render_photo) {
+    const auto decoded = parse_adjustment_payload_or_legacy_recipe(recipe_json);
+    const auto repair_id = decoded.state.has_value()
+        ? unfinished_inpaint_repair_id(decoded.state->mask_stack) : QString{};
+    if (!repair_id.isEmpty())
+      return {{QStringLiteral("success"), false}, {QStringLiteral("canceled"), false},
+          {QStringLiteral("outputPath"), output_path},
+          {QStringLiteral("errorMessage"), QStringLiteral("Repair %1 needs final resolution. In Edit, select it and choose Finalize, then retry export.").arg(repair_id)}};
+  }
   QElapsedTimer timer;
   timer.start();
   const auto resource_policy = export_metadata
@@ -2291,6 +2424,7 @@ QVariantMap run_export_work(
   result.insert(QStringLiteral("fallbackReason"), QString());
   result.insert(QStringLiteral("exportRenderJob"), export_render_job.toVariantMap());
   result.insert(QStringLiteral("exportPreviewJob"), export_preview_job.toVariantMap());
+  result.insert(QStringLiteral("outputPublishedByAttempt"), false);
   const auto cancellation = photo_editor::pipeline::CancellationToken{
       .cancellation_requested = cancellation_requested.get(),
   };
@@ -2408,28 +2542,90 @@ QVariantMap run_export_work(
             : (render_photo ? QStringLiteral("Unable to render the exported photo.")
                             : QStringLiteral("Unable to write the exported file.")));
   }
+  QVariantMap output_integrity;
+  bool output_published_by_attempt = false;
+  QString output_identity;
+  QString sidecar_identity;
   if (success && !cancellation.cancelled()) {
-    if (QFileInfo::exists(output_path) ||
-        !QFile::rename(staging_path, output_path)) {
-      success = false;
-      result.insert(QStringLiteral("success"), false);
-      result.insert(
-          QStringLiteral("errorMessage"),
-          QStringLiteral("The completed export could not be published atomically."));
-    }
-  }
-  if (success && !cancellation.cancelled()) {
-    const auto output_integrity =
-        write_delivery_integrity(output_path, cancellation);
-    result.insert(QStringLiteral("outputIntegrity"), output_integrity);
+    output_integrity =
+        write_delivery_integrity(staging_path, cancellation, output_path);
     if (!output_integrity.value(QStringLiteral("valid")).toBool()) {
       success = false;
-      result.insert(QStringLiteral("success"), false);
       result.insert(
           QStringLiteral("errorMessage"),
-          QStringLiteral("The output was written but could not be checksum-verified."));
+          QStringLiteral("The output integrity manifest could not be published: %1")
+              .arg(output_integrity.value(QStringLiteral("failureReason")).toString()));
+    } else {
+      const auto final_sidecar_path =
+          output_path + QStringLiteral(".integrity.json");
+      if (cancellation.cancelled()) {
+        success = false;
+        output_integrity.insert(QStringLiteral("valid"), false);
+        output_integrity.remove(QStringLiteral("sidecarPath"));
+        output_integrity.insert(
+            QStringLiteral("failureReason"),
+            QStringLiteral("Delivery publication was canceled."));
+      } else if (QFileInfo::exists(output_path) ||
+                 QFileInfo(output_path).isSymLink() ||
+                 QFileInfo::exists(final_sidecar_path) ||
+                 QFileInfo(final_sidecar_path).isSymLink()) {
+        success = false;
+        output_integrity.insert(QStringLiteral("valid"), false);
+        output_integrity.remove(QStringLiteral("sidecarPath"));
+        output_integrity.insert(
+            QStringLiteral("failureReason"),
+            QStringLiteral("The final output or integrity manifest path is already occupied."));
+        result.insert(
+            QStringLiteral("errorMessage"),
+            QStringLiteral("A delivery file already exists. Its contents were preserved."));
+      } else if (!QFile::rename(staging_path, output_path)) {
+        success = false;
+        output_integrity.insert(QStringLiteral("valid"), false);
+        output_integrity.remove(QStringLiteral("sidecarPath"));
+        output_integrity.insert(
+            QStringLiteral("failureReason"),
+            QStringLiteral("The final output could not be published."));
+        result.insert(
+            QStringLiteral("errorMessage"),
+            QStringLiteral("The completed export could not be published atomically."));
+      } else {
+        output_published_by_attempt = true;
+        output_identity = export_file_identity_token(output_path);
+        if (cancellation.cancelled() ||
+            !QFile::rename(
+                staging_path + QStringLiteral(".integrity.json"),
+                final_sidecar_path)) {
+          success = false;
+          output_integrity.insert(QStringLiteral("valid"), false);
+          output_integrity.remove(QStringLiteral("sidecarPath"));
+          output_integrity.insert(
+              QStringLiteral("failureReason"),
+              cancellation.cancelled()
+                  ? QStringLiteral("Delivery publication was canceled.")
+                  : QStringLiteral("The integrity manifest could not be published."));
+          const auto expected_sha256 =
+              output_integrity.value(QStringLiteral("sha256")).toString();
+          const auto output_rolled_back =
+              remove_export_delivery_artifact_if_owned(
+                  output_path, expected_sha256, output_identity, {});
+          if (output_rolled_back) {
+            output_published_by_attempt = false;
+          }
+          if (result.value(QStringLiteral("errorMessage")).toString().isEmpty()) {
+            result.insert(
+                QStringLiteral("errorMessage"),
+                output_rolled_back
+                    ? QStringLiteral("The integrity manifest could not be published; the output was rolled back.")
+                    : QStringLiteral("The integrity manifest could not be published; the output could not be rolled back safely."));
+          }
+        } else {
+          sidecar_identity = export_file_identity_token(final_sidecar_path);
+        }
+      }
     }
+    result.insert(QStringLiteral("outputIntegrity"), output_integrity);
   }
+  result.insert(QStringLiteral("success"), success);
   if (cancellation.cancelled()) {
     success = false;
     result.insert(QStringLiteral("success"), false);
@@ -2438,10 +2634,22 @@ QVariantMap run_export_work(
         QStringLiteral("errorMessage"),
         QStringLiteral("Canceled before the export artifact was published."));
     discard_staging();
-    remove_delivery_artifact(output_path);
+    if (output_published_by_attempt) {
+      const auto expected_sha256 =
+          output_integrity.value(QStringLiteral("sha256")).toString();
+      if (remove_export_delivery_artifact_if_owned(
+              output_path, expected_sha256, output_identity, sidecar_identity)) {
+        output_published_by_attempt = false;
+      }
+    }
   } else if (!success) {
     discard_staging();
   }
+  result.insert(
+      QStringLiteral("outputPublishedByAttempt"),
+      output_published_by_attempt);
+  result.insert(QStringLiteral("outputFileIdentity"), output_identity);
+  result.insert(QStringLiteral("sidecarFileIdentity"), sidecar_identity);
   result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
   result.insert(QStringLiteral("resourcePolicy"), resource_policy);
   result.insert(QStringLiteral("resourcePolicyAffectsQuality"), false);
@@ -2452,32 +2660,211 @@ QVariantMap run_export_work(
   return result;
 }
 
+QVariantMap probe_timeline_review_excerpt(
+    const QString& output_path,
+    qint64 start_frame,
+    qint64 end_frame_exclusive,
+    double frame_rate,
+    int expected_width,
+    int expected_height,
+    const std::function<bool()>& canceled) {
+  const auto fail = [](const QString& error) {
+    return QVariantMap{{QStringLiteral("ok"), false},
+                       {QStringLiteral("error"), error}};
+  };
+  const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+  if (ffprobe.isEmpty()) return fail(QStringLiteral("ffprobe is required to verify a review excerpt."));
+
+  QProcess process;
+  process.setProcessChannelMode(QProcess::SeparateChannels);
+  process.start(ffprobe, {
+      QStringLiteral("-v"), QStringLiteral("error"),
+      QStringLiteral("-count_frames"), QStringLiteral("-show_format"),
+      QStringLiteral("-show_streams"), QStringLiteral("-show_entries"),
+      QStringLiteral("format=format_name,duration:stream=codec_type,codec_name,width,height,avg_frame_rate,start_time,duration,nb_read_frames,channels,sample_rate"),
+      QStringLiteral("-of"), QStringLiteral("json"), output_path});
+  if (!process.waitForStarted(5000)) {
+    return fail(QStringLiteral("Unable to start ffprobe for the rendered review excerpt."));
+  }
+  QElapsedTimer probe_timer;
+  probe_timer.start();
+  while (process.state() != QProcess::NotRunning) {
+    if (canceled && canceled()) {
+      process.kill();
+      (void)process.waitForFinished(5000);
+      return {{QStringLiteral("ok"), false},
+              {QStringLiteral("canceled"), true},
+              {QStringLiteral("error"), QStringLiteral("Review excerpt verification canceled.")}};
+    }
+    if (probe_timer.elapsed() > 120000) {
+      process.kill();
+      (void)process.waitForFinished(5000);
+      return fail(QStringLiteral("ffprobe timed out while counting review excerpt frames."));
+    }
+    (void)process.waitForFinished(100);
+  }
+  const auto stdout_bytes = process.readAllStandardOutput();
+  const auto stderr_text = QString::fromUtf8(process.readAllStandardError()).trimmed();
+  if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    return fail(stderr_text.isEmpty()
+                    ? QStringLiteral("ffprobe could not decode the review excerpt.")
+                    : stderr_text.left(1200));
+  }
+  QJsonParseError parse_error;
+  const auto parsed = QJsonDocument::fromJson(stdout_bytes, &parse_error);
+  if (parse_error.error != QJsonParseError::NoError || !parsed.isObject()) {
+    return fail(QStringLiteral("ffprobe returned invalid review excerpt metadata."));
+  }
+  return timeline_review::verify_excerpt_probe_document(
+      parsed, start_frame, end_frame_exclusive, frame_rate,
+      expected_width, expected_height);
+}
+
 QVariantMap run_timeline_render_work(
     const QString& document_path,
     const QString& output_path,
     const QString& timeline_id,
     const QString& resource_policy,
-    const std::shared_ptr<std::atomic_bool>& cancellation) {
+    const std::shared_ptr<std::atomic_bool>& cancellation,
+    const QVariantMap& standalone_export,
+    const std::function<void(const QVariantMap&)>& progress_callback = {}) {
   QElapsedTimer timer;
   timer.start();
   QVariantMap result;
   result.insert(QStringLiteral("success"), false);
 
+  const auto standalone_mcp_export = !standalone_export.isEmpty();
+  const auto canceled = [&]() { return cancellation && cancellation->load(std::memory_order_relaxed); };
+  const auto has_review_range =
+      standalone_mcp_export && standalone_export.contains(QStringLiteral("range"));
+  const auto review_range = QJsonObject::fromVariantMap(
+      standalone_export.value(QStringLiteral("range")).toMap());
+  auto review_start_frame = qint64{0};
+  auto review_end_frame_exclusive = qint64{0};
+  auto review_frame_rate = 0.0;
+  auto verified_source_manifest = QVariantList{};
+  auto standalone_snapshot_document = QJsonObject{};
+  auto current_stage = QString{};
+  const auto report_progress = [&progress_callback](const QString& stage,
+                                                    int job_progress,
+                                                    const QVariantMap& details = {}) {
+    if (!progress_callback) return;
+    auto update = details;
+    update.insert(QStringLiteral("stage"), stage);
+    update.insert(QStringLiteral("jobProgress"), qBound(0, job_progress, 99));
+    progress_callback(update);
+  };
+  const auto set_stage = [&current_stage, &report_progress](
+                             const QString& stage,
+                             int job_progress,
+                             const QVariantMap& details = QVariantMap{}) {
+    current_stage = stage;
+    report_progress(stage, job_progress, details);
+  };
+  const auto fail = [&](const QString& message) {
+    result.insert(QStringLiteral("canceled"), canceled());
+    result.insert(QStringLiteral("errorMessage"), message);
+    if (!current_stage.isEmpty()) result.insert(QStringLiteral("stage"), current_stage);
+    result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
+    return result;
+  };
+  if (standalone_mcp_export) {
+    const auto expected_snapshot_hash = standalone_export.value(QStringLiteral("snapshotSha256")).toString();
+    const auto expected_document_hash = standalone_export.value(QStringLiteral("documentHash")).toString();
+    const auto maximum_output_bytes = standalone_export.value(QStringLiteral("maximumOutputBytes")).toLongLong();
+    const auto expected_snapshot_bytes = standalone_export.value(QStringLiteral("snapshotBytes")).toLongLong();
+    if ((has_review_range &&
+         !timeline_mcp_export_review_range(
+             review_range, &review_start_frame, &review_end_frame_exclusive,
+             &review_frame_rate)) ||
+        maximum_output_bytes != timeline_mcp_export_maximum_output_bytes(
+                                    has_review_range ? review_range : QJsonObject{})) {
+      return fail(QStringLiteral("The queued Timeline export range or size limit is invalid."));
+    }
+    QFile snapshot_file(document_path);
+    if (!timeline_mcp_export_canonical_sha256(expected_snapshot_hash) ||
+        !timeline_mcp_export_canonical_sha256(expected_document_hash) ||
+        expected_snapshot_bytes <= 0 ||
+        expected_snapshot_bytes > kMaximumTimelineMcpExportSnapshotBytes ||
+        QFileInfo(document_path).size() <= 0 ||
+        QFileInfo(document_path).size() != expected_snapshot_bytes ||
+        !snapshot_file.open(QIODevice::ReadOnly)) {
+      return fail(QStringLiteral("The queued Timeline export snapshot or size limit is invalid."));
+    }
+    const auto snapshot_bytes = snapshot_file.readAll();
+    if (snapshot_file.error() != QFileDevice::NoError ||
+        QString::fromLatin1(QCryptographicHash::hash(snapshot_bytes, QCryptographicHash::Sha256).toHex()) !=
+            expected_snapshot_hash) {
+      return fail(QStringLiteral("The immutable Timeline export snapshot failed its checksum check."));
+    }
+    QJsonParseError snapshot_error;
+    const auto snapshot_document = QJsonDocument::fromJson(snapshot_bytes, &snapshot_error);
+    if (snapshot_error.error != QJsonParseError::NoError || !snapshot_document.isObject() ||
+        snapshot_document.object().value(QStringLiteral("timelineId")).toString() !=
+            standalone_export.value(QStringLiteral("timelineId")).toString() ||
+        snapshot_document.object().value(QStringLiteral("exportContainer")).toString() != QStringLiteral("mp4") ||
+        snapshot_document.object().value(QStringLiteral("exportCodec")).toString() != QStringLiteral("h264") ||
+        snapshot_document.object().value(QStringLiteral("exportAlpha")).toBool() ||
+        snapshot_document.object().value(QStringLiteral("exportAudioStems")).toBool() ||
+        snapshot_document.object().value(QStringLiteral("exportImageSequence")).toBool()) {
+      return fail(QStringLiteral("The standalone Timeline snapshot is outside the accepted MP4/H.264 export contract."));
+    }
+    standalone_snapshot_document = snapshot_document.object();
+    const auto snapshot_sources = timeline_mcp_export_source_manifest(
+        snapshot_bytes, has_review_range ? review_range : QJsonObject{});
+    const auto source_manifest = standalone_export.value(QStringLiteral("sourceManifest")).toList();
+    if (!snapshot_sources.value(QStringLiteral("ok")).toBool() ||
+        QJsonDocument(QJsonArray::fromVariantList(snapshot_sources.value(QStringLiteral("sources")).toList()))
+                .toJson(QJsonDocument::Compact) !=
+            QJsonDocument(QJsonArray::fromVariantList(source_manifest)).toJson(QJsonDocument::Compact)) {
+      return fail(QStringLiteral("The queued Timeline source manifest does not match its immutable snapshot."));
+    }
+    const auto source_verification = timeline_mcp_export_verify_source_manifest(
+        source_manifest, canceled, [&](const QVariantMap& update) {
+          const auto percent = update.value(QStringLiteral("progressPercent")).toInt();
+          set_stage(QStringLiteral("verifying-source-media-before-render"),
+                    20 + percent * 12 / 100, update);
+        }, QStringLiteral("before-render"));
+    if (!source_verification.value(QStringLiteral("ok")).toBool()) {
+      auto diagnostic = source_verification;
+      diagnostic.remove(QStringLiteral("verifiedSources"));
+      result.insert(QStringLiteral("sourceVerificationDiagnostic"), diagnostic);
+      return fail(source_verification.value(QStringLiteral("error")).toString());
+    }
+    verified_source_manifest =
+        source_verification.value(QStringLiteral("verifiedSources")).toList();
+    auto diagnostic = source_verification;
+    diagnostic.remove(QStringLiteral("verifiedSources"));
+    result.insert(QStringLiteral("sourceVerificationDiagnostic"), diagnostic);
+    set_stage(QStringLiteral("loading-timeline-snapshot"), 34,
+              QVariantMap{{QStringLiteral("phase"), QStringLiteral("snapshot-ready")}});
+  }
+
   TimelineDocumentController controller;
-  if (!controller.loadTimeline(document_path)) {
+  const auto loaded_timeline = standalone_mcp_export
+      ? controller.loadVerifiedExportSnapshotForRender(
+            document_path, standalone_snapshot_document,
+            standalone_export.value(QStringLiteral("documentHash")).toString())
+      : controller.loadTimeline(document_path);
+  if (!loaded_timeline) {
     result.insert(QStringLiteral("errorMessage"), controller.status());
     result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
     return result;
   }
   controller.setBackgroundRenderResourcePolicy(resource_policy);
   controller.setRenderCancellationToken(cancellation);
-  const auto canceled = [&]() { return cancellation && cancellation->load(std::memory_order_relaxed); };
-  const auto fail = [&](const QString& message) {
-    result.insert(QStringLiteral("canceled"), canceled());
-    result.insert(QStringLiteral("errorMessage"), message);
-    result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
-    return result;
-  };
+  if (standalone_mcp_export) {
+    if (controller.deterministicDocumentHash() !=
+        standalone_export.value(QStringLiteral("documentHash")).toString()) {
+      return fail(QStringLiteral("The loaded Timeline no longer matches the accepted documentHash."));
+    }
+    if (has_review_range &&
+        std::abs(controller.framesPerSecond() - review_frame_rate) > 1.0e-9) {
+      return fail(QStringLiteral("The loaded Timeline frame clock no longer matches the accepted review range."));
+    }
+    controller.setRenderOutputByteLimit(
+        standalone_export.value(QStringLiteral("maximumOutputBytes")).toLongLong());
+  }
   if (canceled()) return fail(QStringLiteral("Timeline render canceled before staging."));
   if (!QDir().mkpath(QFileInfo(output_path).absolutePath()))
     return fail(QStringLiteral("Unable to create the timeline delivery folder."));
@@ -2485,22 +2872,76 @@ QVariantMap run_timeline_render_work(
   if (!delivery.valid()) return fail(QStringLiteral("Unable to stage timeline delivery."));
   const auto staged_output = delivery.stagedPath(QFileInfo(output_path).fileName());
 
-  if (!controller.renderCurrentTimeline(staged_output)) {
+  set_stage(has_review_range ? QStringLiteral("rendering-review-excerpt")
+                             : QStringLiteral("rendering-timeline-export"),
+            40, QVariantMap{{QStringLiteral("phase"), QStringLiteral("native-compositor")}});
+  if (has_review_range) {
+    QString excerpt_error;
+    if (!controller.renderTimelineReviewExcerpt(
+            staged_output, review_start_frame, review_end_frame_exclusive,
+            &excerpt_error)) {
+      return fail(canceled() ? QStringLiteral("Timeline excerpt render canceled.")
+                             : (excerpt_error.isEmpty() ? controller.status() : excerpt_error));
+    }
+  } else if (!controller.renderCurrentTimeline(staged_output)) {
     return fail(canceled() ? QStringLiteral("Timeline render canceled.") : controller.status());
+  }
+  if (standalone_mcp_export &&
+      (!QFileInfo::exists(staged_output) ||
+       QFileInfo(staged_output).size() >=
+           standalone_export.value(QStringLiteral("maximumOutputBytes")).toLongLong())) {
+    return fail(QStringLiteral("The Timeline export reached its configured output-size limit."));
+  }
+  if (has_review_range) {
+    set_stage(QStringLiteral("verifying-review-output"), 82,
+              QVariantMap{{QStringLiteral("phase"), QStringLiteral("ffprobe")}});
+    const auto review_verification = probe_timeline_review_excerpt(
+        staged_output, review_start_frame, review_end_frame_exclusive,
+        review_frame_rate, controller.sequenceWidth(), controller.sequenceHeight(), canceled);
+    if (!review_verification.value(QStringLiteral("ok")).toBool()) {
+      result.insert(QStringLiteral("reviewOutputVerification"), review_verification);
+      return fail(review_verification.value(QStringLiteral("error")).toString());
+    }
+    result.insert(QStringLiteral("reviewOutputVerification"), review_verification);
   }
   const auto output_integrity = write_delivery_integrity(staged_output,
       {.cancellation_requested = cancellation.get()}, output_path);
   if (!output_integrity.value(QStringLiteral("valid")).toBool())
     return fail(QStringLiteral("The staged timeline output could not be checksum-verified."));
+  if (standalone_mcp_export) {
+    set_stage(QStringLiteral("verifying-source-media-before-publish"), 88,
+              QVariantMap{{QStringLiteral("phase"), QStringLiteral("source-checksum")}});
+    const auto source_verification = timeline_mcp_export_verify_source_manifest(
+        verified_source_manifest, canceled, [&](const QVariantMap& update) {
+          const auto percent = update.value(QStringLiteral("progressPercent")).toInt();
+          set_stage(QStringLiteral("verifying-source-media-before-publish"),
+                    88 + percent * 8 / 100, update);
+        }, QStringLiteral("before-publish"));
+    if (!source_verification.value(QStringLiteral("ok")).toBool()) {
+      auto diagnostic = source_verification;
+      diagnostic.remove(QStringLiteral("verifiedSources"));
+      result.insert(QStringLiteral("sourceVerificationDiagnostic"), diagnostic);
+      return fail(source_verification.value(QStringLiteral("error")).toString());
+    }
+    auto diagnostic = source_verification;
+    diagnostic.remove(QStringLiteral("verifiedSources"));
+    result.insert(QStringLiteral("sourceVerificationDiagnostic"), diagnostic);
+  }
   if (canceled()) return fail(QStringLiteral("Timeline render canceled before publication."));
+  set_stage(QStringLiteral("publishing-timeline-export"), 98,
+            QVariantMap{{QStringLiteral("phase"), QStringLiteral("atomic-publish")}});
   const auto publication = delivery.publish(canceled);
   if (!publication.value("ok").toBool()) return fail(publication.value("error").toString());
   result.insert(QStringLiteral("outputPath"), output_path);
   result.insert(QStringLiteral("deliveryArtifacts"), delivery.artifacts());
 
-  const auto poster_source = controller.generateVideoPoster(output_path, timeline_id);
-  if (!poster_source.isEmpty()) {
-    result.insert(QStringLiteral("posterPath"), QUrl(poster_source).toLocalFile());
+  if (!standalone_mcp_export) {
+    const auto poster_source = controller.generateVideoPoster(output_path, timeline_id);
+    if (!poster_source.isEmpty()) {
+      result.insert(QStringLiteral("posterPath"), QUrl(poster_source).toLocalFile());
+    }
+  } else {
+    result.insert(QStringLiteral("standaloneMcpExport"), true);
   }
   result.insert(QStringLiteral("outputIntegrity"), output_integrity);
   if (canceled()) {
@@ -2516,6 +2957,7 @@ QVariantMap run_timeline_render_work(
     return result;
   }
   result.insert(QStringLiteral("success"), true);
+  result.insert(QStringLiteral("stage"), QStringLiteral("completed"));
   result.insert(QStringLiteral("resourcePolicy"), resource_policy);
   result.insert(QStringLiteral("resourcePolicyAffectsQuality"), false);
   result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
@@ -2611,19 +3053,28 @@ bool update_timeline_render_artifacts(
     return false;
   }
 
-  // Snapshot jobs must never overwrite either the immutable render input or
-  // a newer canonical edit/backup when the older render finishes.
-  if (!canonical_path.isEmpty()) return true;
-
   QJsonObject document;
-  QFile file(job.source_path);
+  const auto document_path = canonical_path.isEmpty() ? job.source_path : canonical_path;
+  QFile file(document_path);
   if (file.exists() && file.open(QIODevice::ReadOnly)) {
-    const auto parsed = QJsonDocument::fromJson(file.readAll());
+    const auto document_bytes = file.readAll();
+    const auto expected_hash = job.metadata_json
+                                   .value(QStringLiteral("renderDocumentSha256"))
+                                   .toString();
+    const auto actual_hash = QString::fromLatin1(
+        QCryptographicHash::hash(document_bytes, QCryptographicHash::Sha256).toHex());
+    // A render may finish after the user has saved newer edits. Publish the
+    // verified render in the library, while leaving that newer document intact.
+    if (!canonical_path.isEmpty() &&
+        (expected_hash.isEmpty() || expected_hash != actual_hash)) {
+      return true;
+    }
+    const auto parsed = QJsonDocument::fromJson(document_bytes);
     if (parsed.isObject()) {
       document = parsed.object();
     }
   }
-  if (document.isEmpty()) {
+  if (document.isEmpty() && canonical_path.isEmpty()) {
     document = loadTimelineDocumentBackup(timeline_id);
   }
   if (document.isEmpty()) {
@@ -2640,7 +3091,7 @@ bool update_timeline_render_artifacts(
   document.insert(QStringLiteral("updatedAt"), updated_at);
 
   QString document_error;
-  if (!save_document_object(job.source_path, document, &document_error)) {
+  if (!save_document_object(document_path, document, &document_error)) {
     if (error_message != nullptr) {
       *error_message = document_error;
     }
@@ -2780,13 +3231,13 @@ QVariantMap run_import_work(
       reviewed_preflight.value(QStringLiteral("organizationTemplate")).toString().trimmed();
   const auto raw_jpeg_policy =
       reviewed_preflight.value(QStringLiteral("rawJpegPolicy")).toString().trimmed();
-  const auto duplicate_policy =
-      metadata_json.value(QStringLiteral("duplicatePolicy")).toString().trimmed();
   arguments.push_back(photo_library_root.isEmpty() ? QStringLiteral("-") : photo_library_root);
   arguments.push_back(backup_root.isEmpty() ? QStringLiteral("-") : backup_root);
   arguments.push_back(organization_template.isEmpty() ? QStringLiteral("source") : organization_template);
   arguments.push_back(raw_jpeg_policy.isEmpty() ? QStringLiteral("both") : raw_jpeg_policy);
-  arguments.push_back(duplicate_policy.isEmpty() ? QStringLiteral("skip") : duplicate_policy);
+  arguments.push_back(import_worker_duplicate_policy(metadata_json));
+  const auto project_name = metadata_json.value(QStringLiteral("projectName")).toString().trimmed();
+  arguments.push_back(project_name.isEmpty() ? QStringLiteral("-") : project_name);
 
   QProcess process;
   process.setWorkingDirectory(QDir::currentPath());
@@ -3467,11 +3918,44 @@ void JobRunner::handleAsyncJobFinished(const AttemptPtr& attempt) {
         QStringLiteral("artifactVerification"),
         QJsonObject::fromVariantMap(artifact_verification));
   }
-  const auto output_integrity = result.value(QStringLiteral("outputIntegrity")).toMap();
+  auto output_integrity = result.value(QStringLiteral("outputIntegrity")).toMap();
   if (!output_integrity.isEmpty()) {
     job.metadata_json.insert(
         QStringLiteral("outputIntegrity"),
         QJsonObject::fromVariantMap(output_integrity));
+  }
+  const auto invalidate_output_integrity = [&](const QString& reason) {
+    if (output_integrity.isEmpty()) {
+      output_integrity = job.metadata_json
+                             .value(QStringLiteral("outputIntegrity"))
+                             .toObject()
+                             .toVariantMap();
+    }
+    if (output_integrity.isEmpty()) return;
+    output_integrity.insert(QStringLiteral("valid"), false);
+    output_integrity.remove(QStringLiteral("sidecarPath"));
+    output_integrity.insert(QStringLiteral("failureReason"), reason);
+    job.metadata_json.insert(
+        QStringLiteral("outputIntegrity"),
+        QJsonObject::fromVariantMap(output_integrity));
+  };
+  const auto source_verification_diagnostic =
+      result.value(QStringLiteral("sourceVerificationDiagnostic")).toMap();
+  if (!source_verification_diagnostic.isEmpty()) {
+    job.metadata_json.insert(
+        QStringLiteral("sourceVerificationDiagnostic"),
+        QJsonObject::fromVariantMap(source_verification_diagnostic));
+  }
+  const auto completed_stage = result.value(QStringLiteral("stage")).toString();
+  if (!completed_stage.isEmpty()) {
+    job.metadata_json.insert(QStringLiteral("stage"), completed_stage);
+  }
+  const auto review_output_verification =
+      result.value(QStringLiteral("reviewOutputVerification")).toMap();
+  if (!review_output_verification.isEmpty()) {
+    job.metadata_json.insert(
+        QStringLiteral("reviewOutputVerification"),
+        QJsonObject::fromVariantMap(review_output_verification));
   }
   const auto delivery_artifacts = result.value(QStringLiteral("deliveryArtifacts")).toList();
   if (!delivery_artifacts.isEmpty())
@@ -3501,13 +3985,20 @@ void JobRunner::handleAsyncJobFinished(const AttemptPtr& attempt) {
          job.job_kind == QStringLiteral("timeline_render")) &&
         !output_path.isEmpty()) {
       if (job.job_kind == QStringLiteral("timeline_render")) revoke_timeline_delivery();
-      else remove_delivery_artifact(output_path);
+      else if (result.value(QStringLiteral("outputPublishedByAttempt")).toBool())
+        static_cast<void>(remove_export_delivery_artifact_if_owned(
+            output_path,
+            output_integrity.value(QStringLiteral("sha256")).toString(),
+            result.value(QStringLiteral("outputFileIdentity")).toString(),
+            result.value(QStringLiteral("sidecarFileIdentity")).toString()));
     }
     const auto poster_path = result.value(QStringLiteral("posterPath")).toString().trimmed();
     if (job.job_kind == QStringLiteral("timeline_render") && !poster_path.isEmpty()) {
       remove_delivery_artifact(poster_path);
     }
     job.status = QStringLiteral("Paused");
+    invalidate_output_integrity(
+        QStringLiteral("The export artifact was revoked because the job was paused."));
     job.error_message = job.job_kind == QStringLiteral("catalog_import")
                             ? QStringLiteral("Paused safely. Resume to replay the reviewed import.")
                             : job.job_kind == QStringLiteral("timeline_render")
@@ -3519,13 +4010,20 @@ void JobRunner::handleAsyncJobFinished(const AttemptPtr& attempt) {
     const auto output_path = result.value(QStringLiteral("outputPath")).toString().trimmed();
     if (!output_path.isEmpty()) {
       if (job.job_kind == QStringLiteral("timeline_render")) revoke_timeline_delivery();
-      else remove_delivery_artifact(output_path);
+      else if (result.value(QStringLiteral("outputPublishedByAttempt")).toBool())
+        static_cast<void>(remove_export_delivery_artifact_if_owned(
+            output_path,
+            output_integrity.value(QStringLiteral("sha256")).toString(),
+            result.value(QStringLiteral("outputFileIdentity")).toString(),
+            result.value(QStringLiteral("sidecarFileIdentity")).toString()));
     }
     const auto poster_path = result.value(QStringLiteral("posterPath")).toString().trimmed();
     if (!poster_path.isEmpty()) {
       remove_delivery_artifact(poster_path);
     }
     job.status = QStringLiteral("Canceled");
+    invalidate_output_integrity(
+        QStringLiteral("The export artifact was revoked because the job was canceled."));
     job.error_message = QStringLiteral("Canceled before completion.");
     job.progress = 0;
     job.metadata_json.insert(QStringLiteral("canceled"), true);
@@ -3535,10 +4033,16 @@ void JobRunner::handleAsyncJobFinished(const AttemptPtr& attempt) {
         cancellation_reason.isEmpty() ? QStringLiteral("cooperative_cancel_requested") : cancellation_reason);
   } else if (stale_export_render_result || stale_export_preview_result) {
     const auto output_path = result.value(QStringLiteral("outputPath")).toString().trimmed();
-    if (!output_path.isEmpty()) {
-      remove_delivery_artifact(output_path);
-    }
+    if (!output_path.isEmpty() &&
+        result.value(QStringLiteral("outputPublishedByAttempt")).toBool())
+      static_cast<void>(remove_export_delivery_artifact_if_owned(
+          output_path,
+          output_integrity.value(QStringLiteral("sha256")).toString(),
+          result.value(QStringLiteral("outputFileIdentity")).toString(),
+          result.value(QStringLiteral("sidecarFileIdentity")).toString()));
     job.status = QStringLiteral("Failed");
+    invalidate_output_integrity(
+        QStringLiteral("The export artifact was revoked because the render result was stale."));
     job.error_message =
         stale_export_preview_result
             ? QStringLiteral("Export preview result was discarded because the job changed.")
@@ -3588,18 +4092,32 @@ void JobRunner::handleAsyncJobFinished(const AttemptPtr& attempt) {
       job.progress = 100;
     } else if (job.job_kind == QStringLiteral("timeline_render")) {
       const auto poster_path = result.value(QStringLiteral("posterPath")).toString().trimmed();
-      QString finalize_error;
-      if (!update_timeline_render_artifacts(job, poster_path, &finalize_error)) {
-        job.status = QStringLiteral("Failed");
-        job.error_message = finalize_error;
-        job.progress = 0;
-      } else {
-        if (!poster_path.isEmpty()) {
-          job.metadata_json.insert(QStringLiteral("posterPath"), poster_path);
+      const auto standalone_mcp_export =
+          job.metadata_json.value(QStringLiteral("standaloneMcpExport")).toBool();
+      if (standalone_mcp_export) {
+        if (!result.value(QStringLiteral("standaloneMcpExport")).toBool()) {
+          job.status = QStringLiteral("Failed");
+          job.error_message = QStringLiteral("The standalone Timeline export worker did not return its isolation receipt.");
+          job.progress = 0;
+        } else {
+          job.status = QStringLiteral("Completed");
+          job.error_message.clear();
+          job.progress = 100;
         }
-        job.status = QStringLiteral("Completed");
-        job.error_message.clear();
-        job.progress = 100;
+      } else {
+        QString finalize_error;
+        if (!update_timeline_render_artifacts(job, poster_path, &finalize_error)) {
+          job.status = QStringLiteral("Failed");
+          job.error_message = finalize_error;
+          job.progress = 0;
+        } else {
+          if (!poster_path.isEmpty()) {
+            job.metadata_json.insert(QStringLiteral("posterPath"), poster_path);
+          }
+          job.status = QStringLiteral("Completed");
+          job.error_message.clear();
+          job.progress = 100;
+        }
       }
     } else {
       const auto delivery_plan = job.metadata_json.value(QStringLiteral("deliveryPlan")).toObject();
@@ -3820,6 +4338,46 @@ void JobRunner::runTimelineRenderJob(const AttemptPtr& attempt) {
   }
   if (!refreshAttemptResources(attempt, job)) return;
 
+  const auto standalone_mcp_export =
+      job.metadata_json.value(QStringLiteral("standaloneMcpExport")).toBool();
+  auto standalone_export = QVariantMap{};
+  if (standalone_mcp_export) {
+    const auto export_metadata =
+        job.metadata_json.value(QStringLiteral("mcpTimelineExport")).toObject();
+    const auto resource_id = export_metadata.value(QStringLiteral("resourceId")).toString();
+    const auto request_id = export_metadata.value(QStringLiteral("requestId")).toString();
+    const auto document_hash = export_metadata.value(QStringLiteral("documentHash")).toString();
+    const auto documents_root = QFileInfo(timelineDocumentsRootPath()).canonicalFilePath();
+    const auto renders_root = QFileInfo(timelineRendersRootPath()).canonicalFilePath();
+    const auto export_range = export_metadata.value(QStringLiteral("range")).toObject();
+    auto maximum_output_bytes = qint64{0};
+    auto snapshot_bytes = qint64{0};
+    QString ownership_error;
+    if (!timeline_mcp_export_owned_job(
+            job, resource_id, request_id, document_hash,
+            documents_root, renders_root, &ownership_error) ||
+        job.status != QStringLiteral("Queued") ||
+        job.metadata_json.value(QStringLiteral("exportContainer")).toString() != QStringLiteral("mp4") ||
+        job.metadata_json.value(QStringLiteral("exportCodec")).toString() != QStringLiteral("h264") ||
+        !timeline_mcp_export_json_integer(
+            export_metadata.value(QStringLiteral("maximumOutputBytes")), &maximum_output_bytes) ||
+        maximum_output_bytes != timeline_mcp_export_maximum_output_bytes(export_range) ||
+        !timeline_mcp_export_json_integer(
+            export_metadata.value(QStringLiteral("snapshotBytes")), &snapshot_bytes) ||
+        snapshot_bytes <= 0 || snapshot_bytes > kMaximumTimelineMcpExportSnapshotBytes) {
+      job.status = QStringLiteral("Failed");
+      job.error_message = QStringLiteral("The queued standalone Timeline export failed its ownership or format checks.");
+      job.progress = 0;
+      job.updated_at = iso_now();
+      (void)upsertPersistedJobRecord(job, nullptr);
+      releaseAttempt(attempt);
+      return;
+    }
+    standalone_export = export_metadata.toVariantMap();
+    standalone_export.insert(QStringLiteral("maximumOutputBytes"), maximum_output_bytes);
+    standalone_export.insert(QStringLiteral("snapshotBytes"), snapshot_bytes);
+  }
+
   const auto source_path = normalized_local_path(job.source_path);
   if (source_path.isEmpty()) {
     job.status = QStringLiteral("Failed");
@@ -3849,6 +4407,37 @@ void JobRunner::runTimelineRenderJob(const AttemptPtr& attempt) {
   job.updated_at = iso_now();
   (void)upsertPersistedJobRecord(job, nullptr);
 
+  const QPointer<JobRunner> runner(this);
+  std::function<void(const QVariantMap&)> report_runtime_progress;
+  if (standalone_mcp_export) {
+    report_runtime_progress = [runner, attempt](const QVariantMap& diagnostic) {
+      if (!runner) return;
+      QMetaObject::invokeMethod(
+          runner.data(),
+          [runner, attempt, diagnostic]() {
+            if (!runner || !runner->isCurrentAttempt(attempt)) return;
+            auto records = loadPersistedJobRecords();
+            const auto job_it = std::find_if(
+                records.begin(), records.end(),
+                [&attempt](const auto& record) { return record.job_id == attempt->job_id; });
+            if (job_it == records.end() || job_it->status != QStringLiteral("Running")) return;
+            const auto stage = diagnostic.value(QStringLiteral("stage")).toString();
+            if (!stage.isEmpty()) job_it->metadata_json.insert(QStringLiteral("stage"), stage);
+            job_it->metadata_json.insert(
+                QStringLiteral("runtimeDiagnostic"),
+                QJsonObject::fromVariantMap(diagnostic));
+            const auto reported_progress =
+                diagnostic.value(QStringLiteral("jobProgress"), -1).toInt();
+            if (reported_progress >= 0) {
+              job_it->progress = qMax(job_it->progress, qBound(20, reported_progress, 99));
+            }
+            job_it->updated_at = iso_now();
+            (void)upsertPersistedJobRecord(*job_it, nullptr);
+            runner->wake();
+          },
+          Qt::QueuedConnection);
+    };
+  }
   attempt->watcher->setFuture(QtConcurrent::run(
       run_timeline_render_work,
       source_path,
@@ -3856,7 +4445,9 @@ void JobRunner::runTimelineRenderJob(const AttemptPtr& attempt) {
       job.metadata_json.value(QStringLiteral("timelineId")).toString().trimmed(),
       job.metadata_json.value(QStringLiteral("resourcePolicy"))
           .toString(QStringLiteral("playback-first")),
-      attempt->cancellation));
+      attempt->cancellation,
+      standalone_export,
+      report_runtime_progress));
   wake();
 }
 

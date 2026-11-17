@@ -22,6 +22,57 @@ int main() {
     }
     return result;
   };
+  {
+    const auto render_movable_base = [&](const std::vector<PhotoLayer>& layers) {
+      std::vector<ColorPixel> result{{0.0F, 0.0F, 1.0F, 1.0F}};
+      std::string error;
+      if (!apply_standard_photo_layers(&result, 1, 1, context, model, layers, {}, &error)) {
+        std::cerr << error << '\n';
+        return std::vector<ColorPixel>{};
+      }
+      return result;
+    };
+    PhotoLayer base_source;
+    base_source.id = "base-source";
+    base_source.kind = "pixel";
+    base_source.copy_base_image = true;
+    base_source.erase_base_image = true;
+    base_source.pixel_width = 1;
+    base_source.pixel_height = 1;
+    base_source.opacity = 0.5;
+    base_source.pixels = {{1.0F, 1.0F, 1.0F, 0.0F}};
+    PhotoLayer translucent_red;
+    translucent_red.kind = "fill";
+    translucent_red.fill_color = {1.0F, 0.0F, 0.0F, 0.5F};
+    const auto base_above_fill = render_movable_base({translucent_red, base_source});
+    const auto base_below_fill = render_movable_base({base_source, translucent_red});
+    if (base_above_fill.size() != 1U || base_below_fill.size() != 1U ||
+        std::abs(base_above_fill.front().alpha - 0.75F) > 1.0e-6F ||
+        std::abs(base_below_fill.front().alpha - 0.75F) > 1.0e-6F ||
+        !(base_above_fill.front().blue > base_below_fill.front().blue) ||
+        !(base_below_fill.front().red > base_above_fill.front().red)) {
+      std::cerr << "Movable Base Image must render once at its stack position over a transparent destination\n";
+      return 1;
+    }
+
+    base_source.enabled = false;
+    const auto hidden_base = render_movable_base({translucent_red, base_source});
+    if (hidden_base.size() != 1U || std::abs(hidden_base.front().alpha - 0.5F) > 1.0e-6F ||
+        std::abs(hidden_base.front().red - 1.0F) > 1.0e-6F) {
+      std::cerr << "A hidden movable Base Image must not remain as an implicit underlay\n";
+      return 1;
+    }
+    base_source.enabled = true;
+
+    base_source.opacity = 1.0;
+    base_source.pixels.front().alpha = 0.5F;
+    const auto erased_base_above_fill = render_movable_base({translucent_red, base_source});
+    if (erased_base_above_fill.size() != 1U ||
+        std::abs(erased_base_above_fill.front().alpha - 0.75F) > 1.0e-6F) {
+      std::cerr << "Base eraser coverage must modify only the detached source pixels before stack compositing\n";
+      return 1;
+    }
+  }
   for (const auto* kind : {"pixel", "source"}) {
     for (bool transformed : {false, true}) {
       for (bool grouped : {false, true}) {

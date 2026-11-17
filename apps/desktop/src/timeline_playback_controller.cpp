@@ -2,7 +2,9 @@
 
 #include "timeline_document_controller.h"
 #include "timeline_foreground_matte.h"
+#include "timeline_hdr_sdr.h"
 #include "timeline_processed_frame_cache.h"
+#include "timeline_source_crop.h"
 #include "timeline_video_grade_runtime.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_lut_program.h"
@@ -16,10 +18,13 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QImageReader>
+#include <QMetaObject>
 #include <QMutexLocker>
 #include <QQuickWindow>
 #include <QSet>
 #include <QStringList>
+#include <QThread>
 #include <QTransform>
 #include <QUrl>
 #include <qrgba64.h>
@@ -52,6 +57,10 @@ namespace {
 
 constexpr qint64 kSeekToleranceMs = 20;
 constexpr qint64 kPositionSyncToleranceMs = 250;
+constexpr int kInactivePlaybackResourceReleaseGraceMs = 2000;
+constexpr int kNativePausedPrerollTimeoutMs = 2000;
+constexpr qint64 kNativePausedPrerollFrameToleranceMs = 100;
+constexpr int kNativePausedPrerollRetargetIntervalMs = 50;
 constexpr double kMaximumShuttleRate = 8.0;
 constexpr int kFallbackPreviewWidth = 1920;
 constexpr int kFallbackPreviewHeight = 1080;
@@ -118,6 +127,63 @@ QString timeline_video_source_revision(const QString& source_url) {
       .arg(file.lastModified().toMSecsSinceEpoch())
       .arg(file.metadataChangeTime().toMSecsSinceEpoch())
       .arg(file.birthTime().toMSecsSinceEpoch());
+}
+
+QPair<QImage, QString> load_still_photo_grade_source(
+    const QString& path,
+    const QSize& requested_size) {
+  static const QSet<QString> kRawCameraExtensions{
+      QStringLiteral("3fr"), QStringLiteral("arw"), QStringLiteral("cr2"),
+      QStringLiteral("cr3"), QStringLiteral("dcr"), QStringLiteral("dng"),
+      QStringLiteral("erf"), QStringLiteral("fff"), QStringLiteral("iiq"),
+      QStringLiteral("kdc"), QStringLiteral("mef"), QStringLiteral("mos"),
+      QStringLiteral("mrw"), QStringLiteral("nef"), QStringLiteral("nrw"),
+      QStringLiteral("orf"), QStringLiteral("pef"), QStringLiteral("raf"),
+      QStringLiteral("raw"), QStringLiteral("rw2"), QStringLiteral("rwl"),
+      QStringLiteral("srw"), QStringLiteral("x3f")};
+  if (kRawCameraExtensions.contains(QFileInfo(path).suffix().toLower())) {
+    return {{}, QStringLiteral("RAW-camera decoding is not available in Timeline photo grading yet.")};
+  }
+  QImageReader reader(path);
+  const auto source_size = reader.size();
+  if (!reader.canRead() || !source_size.isValid() || source_size.isEmpty()) {
+    return {{}, QStringLiteral("The still photo source could not be decoded for Timeline preview.")};
+  }
+  constexpr qint64 kMaximumStillSourcePixels = 100'000'000;
+  if (static_cast<qint64>(source_size.width()) * source_size.height() >
+      kMaximumStillSourcePixels) {
+    return {{}, QStringLiteral("This still photo exceeds the current Timeline preview decode limit.")};
+  }
+  const auto preview_bounds = requested_size.isValid() && !requested_size.isEmpty()
+                                  ? requested_size
+                                  : QSize(1280, 720);
+  const auto bounded_bounds = preview_bounds.scaled(
+      QSize(1920, 1920), Qt::KeepAspectRatio);
+  const auto decode_size = source_size.width() > bounded_bounds.width() ||
+                                   source_size.height() > bounded_bounds.height()
+                               ? source_size.scaled(bounded_bounds, Qt::KeepAspectRatio)
+                               : source_size;
+  reader.setScaledSize(decode_size);
+  auto image = reader.read();
+  if (image.isNull()) {
+    return {{}, QStringLiteral("The still photo source could not be decoded for Timeline preview.")};
+  }
+  if (image.width() > bounded_bounds.width() ||
+      image.height() > bounded_bounds.height()) {
+    image = image.scaled(
+        bounded_bounds, Qt::KeepAspectRatio, Qt::FastTransformation);
+  }
+  const auto rec709 = timeline_video_rec709_color_space();
+  if (image.colorSpace().isValid() && image.colorSpace() != rec709) {
+    image.convertToColorSpace(rec709);
+  }
+  image.setColorSpace(rec709);
+  image = image.convertToFormat(QImage::Format_RGBA8888);
+  if (image.isNull()) {
+    return {{}, QStringLiteral("The still photo preview could not be normalized to Rec.709.")};
+  }
+  image.setColorSpace(rec709);
+  return {std::move(image), {}};
 }
 
 std::uint16_t encode_rgba64_channel(double value) {
@@ -774,6 +840,9 @@ QString video_frame_color_settings_key(const VideoFrameColorSettings& settings) 
 }
 
 QString video_foreground_cutout_settings_key(const QVariantMap& clip) {
+  // This identity also guards the per-clip snapshot captured by an async frame
+  // worker. Include source crop edges so crop-only edits refresh that snapshot
+  // and invalidate frames queued with the previous geometry.
   const auto metadata = clip.value(QStringLiteral("foregroundCutout")).toMap();
   const auto enabled = clip.contains(QStringLiteral("foregroundCutoutEnabled"))
                            ? clip.value(QStringLiteral("foregroundCutoutEnabled")).toBool()
@@ -789,6 +858,10 @@ QString video_foreground_cutout_settings_key(const QVariantMap& clip) {
       QString::number(metadata.value(QStringLiteral("trimStart")).toDouble(), 'g', 17),
       QString::number(metadata.value(QStringLiteral("trimEnd")).toDouble(), 'g', 17),
       QString::number(metadata.value(QStringLiteral("frameCount")).toInt()),
+      QString::number(clip.value(QStringLiteral("sourceCropLeft"), 0.0).toDouble(), 'g', 17),
+      QString::number(clip.value(QStringLiteral("sourceCropTop"), 0.0).toDouble(), 'g', 17),
+      QString::number(clip.value(QStringLiteral("sourceCropRight"), 1.0).toDouble(), 'g', 17),
+      QString::number(clip.value(QStringLiteral("sourceCropBottom"), 1.0).toDouble(), 'g', 17),
   };
   return QString::fromLatin1(QCryptographicHash::hash(
       fields.join(QLatin1Char('\n')).toUtf8(), QCryptographicHash::Sha256).toHex());
@@ -1021,6 +1094,10 @@ QString processed_video_frame_cache_key(
       QString::number(frame.mirrored()),
       video_frame_color_settings_key(color_settings),
       video_foreground_cutout_settings_key(clip),
+      QString::number(clip.value(QStringLiteral("sourceCropLeft"), 0.0).toDouble(), 'g', 17),
+      QString::number(clip.value(QStringLiteral("sourceCropTop"), 0.0).toDouble(), 'g', 17),
+      QString::number(clip.value(QStringLiteral("sourceCropRight"), 1.0).toDouble(), 'g', 17),
+      QString::number(clip.value(QStringLiteral("sourceCropBottom"), 1.0).toDouble(), 'g', 17),
   };
   return QString::fromLatin1(QCryptographicHash::hash(
       fields.join(QLatin1Char('\n')).toUtf8(), QCryptographicHash::Sha256).toHex());
@@ -1469,10 +1546,6 @@ QImage convert_yuv_video_frame_to_image(
   const auto is_hdr_transfer =
       format.colorTransfer() == QVideoFrameFormat::ColorTransfer_ST2084 ||
       format.colorTransfer() == QVideoFrameFormat::ColorTransfer_STD_B67;
-  if (is_hdr_transfer && !camera_input_transform_selected) {
-    return source.toImage();
-  }
-
   auto layout = YuvFrameLayout::Planar420;
   auto bit_depth = 8;
   auto bytes_per_sample = 1;
@@ -1597,7 +1670,8 @@ QImage convert_yuv_video_frame_to_image(
     return source.toImage();
   }
 
-  const auto high_precision_output = bit_depth > 8 || camera_input_transform_selected;
+  const auto high_precision_output =
+      bit_depth > 8 || camera_input_transform_selected || is_hdr_transfer;
   auto image = QImage(
       output_width,
       output_height,
@@ -1831,6 +1905,7 @@ TimelineProcessedVideoFrame process_video_frame(
     QVariantMap clip,
     double source_seconds,
     QSize target_size,
+    bool continuous_playback,
     photo_editor::pipeline::CancellationToken cancellation) {
   QElapsedTimer processing_timer;
   processing_timer.start();
@@ -1846,8 +1921,13 @@ TimelineProcessedVideoFrame process_video_frame(
   auto timeline_effects_ms = 0.0;
   auto creative_lut_ms = 0.0;
   auto frame_cache_lookup_ms = 0.0;
+  // Without decoder timestamps, cache identity requires hashing every source
+  // pixel. During continuous playback each new frame is normally a miss, so
+  // render it directly. Paused seeks retain exact decoded-content reuse.
+  const auto bypass_live_content_cache = continuous_playback && frame.startTime() < 0;
   const auto frame_cache_enabled =
-      !qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_FRAME_CACHE_DISABLE");
+      !qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_FRAME_CACHE_DISABLE") &&
+      !bypass_live_content_cache;
   const auto attach_processing_metrics = [&](QImage* output) {
     if (output == nullptr || output->isNull()) {
       return;
@@ -1925,7 +2005,9 @@ TimelineProcessedVideoFrame process_video_frame(
       ? processed_video_frame_cache_key_ineligibility_reason(
             color_settings.source_identity, frame, source_seconds, target_size,
             decoded_content_identity)
-      : QStringLiteral("processed frame cache disabled");
+      : bypass_live_content_cache
+          ? QStringLiteral("decoded-content cache bypassed during continuous playback")
+          : QStringLiteral("processed frame cache disabled");
   const auto cache_key_eligible =
       frame_cache_enabled && cache_key_unavailable_reason.isEmpty();
   const auto cache_identity_kind = !frame_cache_enabled
@@ -1982,12 +2064,20 @@ TimelineProcessedVideoFrame process_video_frame(
   }
   const auto source_is_rec709 = source_signal.source_is_rec709;
   const auto source_is_hdr = source_signal.source_is_hdr;
+  const auto hdr_to_sdr_applied = source_is_hdr && !profile.has_value()
+                                      ? timeline_hdr_sdr::apply_to_rec709_sdr(
+                                            &image,
+                                            source_signal.transfer == "arib-std-b67",
+                                            source_signal.primaries == "bt2020",
+                                            rec709_video_signal_color_space())
+                                      : false;
   if (source_is_hdr) {
     conversion_warning = profile.has_value()
         ? QStringLiteral(
               "The decoder reports PQ/HLG while a manual Sony S-Log transform is selected; verify that the clip's tags are wrong before overriding them.")
-        : QStringLiteral(
-              "PQ/HLG preview relies on Qt's HDR-to-SDR frame conversion, which is not shared with timeline delivery; preview and export can differ.");
+        : hdr_to_sdr_applied
+            ? conversion_warning
+            : QStringLiteral("The shared PQ/HLG to SDR Rec.709 conversion could not be applied to this frame.");
   }
   const auto color_conversion_status = metadata_aware_conversion_used
       ? profile.has_value()
@@ -1996,7 +2086,9 @@ TimelineProcessedVideoFrame process_video_frame(
                   : QStringLiteral("Decoder matrix/range normalized before Sony S-Log transform")
             : QStringLiteral("Decoder matrix/range normalized to Rec.709")
       : source_is_hdr
-            ? QStringLiteral("Qt HDR frame conversion")
+            ? hdr_to_sdr_applied
+                  ? QStringLiteral("PQ/HLG to SDR Rec.709 using shared Hable mapping")
+                  : QStringLiteral("HDR frame conversion unavailable")
         : !conversion_warning.isEmpty()
             ? QStringLiteral("Qt frame conversion fallback")
             : QStringLiteral("Qt frame conversion");
@@ -2039,6 +2131,17 @@ TimelineProcessedVideoFrame process_video_frame(
           .cache_lookup_ms = frame_cache_lookup_ms,
           .total_ms = total_ms,
       };
+    }
+  }
+  const TimelineSourceCrop source_crop{
+      clip.value(QStringLiteral("sourceCropLeft"), 0.0).toDouble(),
+      clip.value(QStringLiteral("sourceCropTop"), 0.0).toDouble(),
+      clip.value(QStringLiteral("sourceCropRight"), 1.0).toDouble(),
+      clip.value(QStringLiteral("sourceCropBottom"), 1.0).toDouble()};
+  if (source_crop.isValid() && !source_crop.isDefault()) {
+    image = source_crop.apply(image);
+    if (image.isNull()) {
+      return {};
     }
   }
   decode_normalize_ms =
@@ -2555,6 +2658,18 @@ void TimelinePlaybackFrameImageState::setImage(QImage image) {
   image_ = std::move(image);
 }
 
+QVariantMap TimelinePlaybackFrameImageState::resourceDiagnostics() const {
+  const QMutexLocker lock(&mutex_);
+  const auto image_bytes = image_.sizeInBytes();
+  return {
+      {QStringLiteral("processedFrameImagePresent"), !image_.isNull()},
+      {QStringLiteral("processedFrameImageBytes"),
+       static_cast<qulonglong>(image_bytes > 0 ? image_bytes : 0)},
+      {QStringLiteral("processedFrameImageWidth"), image_.width()},
+      {QStringLiteral("processedFrameImageHeight"), image_.height()},
+  };
+}
+
 QImage TimelinePlaybackFrameImageState::requestImage(
     QSize* size,
     const QSize& requested_size) const {
@@ -2599,11 +2714,14 @@ TimelinePlaybackController::TimelinePlaybackController(
   if (native_media_enabled_) {
     player_.setAudioBufferOutput(audio_output_.bufferOutput());
     player_.setVideoSink(&video_sink_);
-    connect(
+    native_video_frame_connection_ = connect(
         &video_sink_,
         &QVideoSink::videoFrameChanged,
         this,
-        [this](const QVideoFrame& frame) { handleVideoFrame(frame); });
+        [this](const QVideoFrame& frame) {
+          dispatchNativeVideoFrame(frame);
+        },
+        Qt::DirectConnection);
   }
   connect(
       &frame_processing_watcher_,
@@ -2889,6 +3007,33 @@ TimelinePlaybackController::TimelinePlaybackController(
               next_scene_preview_identity);
         }
       });
+  connect(
+      &still_photo_source_watcher_,
+      &QFutureWatcher<QPair<QImage, QString>>::finished,
+      this,
+      [this]() {
+        const auto decoded_source_key = still_photo_decoding_source_key_;
+        const auto decoded = still_photo_source_watcher_.result();
+        still_photo_decoding_source_key_.clear();
+        if (decoded_source_key == still_photo_requested_source_key_) {
+          if (decoded.first.isNull()) {
+            still_photo_grade_preview_active_ = false;
+            still_photo_grade_request_key_.clear();
+            color_grade_error_ = decoded.second.isEmpty()
+                                     ? QStringLiteral("The still photo preview could not be decoded.")
+                                     : decoded.second;
+            clearProcessedFrame();
+            emit stateChanged();
+            return;
+          }
+          still_photo_cached_source_key_ = decoded_source_key;
+          still_photo_source_image_ = decoded.first;
+          submitStillPhotoGradePreviewFrame();
+          emit stateChanged();
+          return;
+        }
+        syncStillPhotoGradePreview(current_program_clip_);
+      });
   connect(&audio_output_, &TimelineAudioOutput::meterChanged, this, [this]() {
     emit stateChanged();
   });
@@ -2902,6 +3047,11 @@ TimelinePlaybackController::TimelinePlaybackController(
   gap_timer_.setInterval(15);
   gap_timer_.setTimerType(Qt::PreciseTimer);
   connect(&gap_timer_, &QTimer::timeout, this, [this]() { tickGapPlayback(); });
+  native_paused_preroll_timer_.setSingleShot(true);
+  native_paused_preroll_timer_.setInterval(kNativePausedPrerollTimeoutMs);
+  connect(&native_paused_preroll_timer_, &QTimer::timeout, this, [this]() {
+    finishNativePausedPreroll(true);
+  });
   prefetch_timer_.setSingleShot(true);
   prefetch_timer_.setInterval(18);
   connect(
@@ -2974,6 +3124,23 @@ TimelinePlaybackController::TimelinePlaybackController(
           if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia ||
               status == QMediaPlayer::BufferingMedia || status == QMediaPlayer::StalledMedia) {
             setErrorString(QString{});
+            const auto paused_source_is_waiting_for_native_frame =
+                awaiting_media_source_ && pending_position_ms_ >= 0 &&
+                !timeline_document_.isNull() &&
+                !timeline_document_->sequencePlaying();
+            if (paused_source_is_waiting_for_native_frame) {
+              const auto target_position_ms = pending_position_ms_;
+              if (startNativePausedPreroll(target_position_ms)) {
+                pending_position_ms_ = -1;
+              } else {
+                armNativePausedPrerollOutputRetry();
+              }
+              // Keep the source's target pending until a seekable native item,
+              // known duration, and exposed output are all available. Darwin
+              // can report BufferingMedia or LoadedMedia before those gates.
+              emit stateChanged();
+              return;
+            }
             awaiting_media_source_ = false;
             if (scene_preview_cache_active_) {
               pending_position_ms_ = -1;
@@ -2984,13 +3151,14 @@ TimelinePlaybackController::TimelinePlaybackController(
                         (using_render_cache_
                              ? timeline_document_->sequencePlayheadSeconds() -
                                    render_cache_range_start_seconds_
-                             : timeline_document_->currentClipPlayheadSeconds()) *
+                             : timeline_document_->programClipPlayheadSeconds()) *
                         1000.0);
               const auto scene_audio_should_play =
                   !timeline_document_.isNull() &&
                   timeline_document_->sequencePlaying() && shuttle_rate_ >= 0.0 &&
                   active_playback_rate_ > 0.0001;
               if (scene_audio_should_play) {
+                attachAudioBufferOutputForPlayback();
                 if (player_.playbackState() != QMediaPlayer::PlayingState &&
                     !play_when_ready_) {
                   player_.setPosition(target_position_ms);
@@ -3027,6 +3195,7 @@ TimelinePlaybackController::TimelinePlaybackController(
             }
             if (play_when_ready_ && !scene_preview_cache_active_) {
               play_when_ready_ = false;
+              attachAudioBufferOutputForPlayback();
               player_.play();
             }
             if (scene_preview_cache_active_) {
@@ -3055,11 +3224,33 @@ TimelinePlaybackController::TimelinePlaybackController(
         });
     connect(
         &player_,
+        &QMediaPlayer::durationChanged,
+        this,
+        [this](qint64) {
+          if (tryStartPendingNativePausedPreroll()) {
+            emit stateChanged();
+          }
+        });
+    connect(
+        &player_,
+        &QMediaPlayer::seekableChanged,
+        this,
+        [this](bool seekable) {
+          if (seekable && tryStartPendingNativePausedPreroll()) {
+            emit stateChanged();
+          }
+        });
+    connect(
+        &player_,
         &QMediaPlayer::positionChanged,
         this,
         [this](qint64 position) {
           if (!workspace_active_ || timeline_document_.isNull()) {
             return;
+          }
+
+          if (native_paused_preroll_active_) {
+            observeNativePausedPrerollSeekPosition(position);
           }
 
           if (awaiting_media_source_) {
@@ -3119,7 +3310,8 @@ TimelinePlaybackController::TimelinePlaybackController(
             }
           }
 
-          if (player_.playbackState() == QMediaPlayer::PlayingState) {
+          if (player_.playbackState() == QMediaPlayer::PlayingState &&
+              !native_paused_preroll_active_) {
             if (playback_sample_clock_.isValid() &&
                 last_playback_sample_position_ms_ >= 0) {
               recordPlaybackTimingSample(
@@ -3131,13 +3323,18 @@ TimelinePlaybackController::TimelinePlaybackController(
             last_playback_sample_position_ms_ = position;
           }
 
-          updateAudioVolume(position);
+          const auto program_audio_position = timeline_document_.isNull() ? position
+              : qRound64((using_render_cache_
+                    ? timeline_document_->sequencePlayheadSeconds() - render_cache_range_start_seconds_
+                    : timeline_document_->programClipPlayheadSeconds()) * 1000.0);
+          updateAudioVolume(program_audio_position);
         });
     connect(
         &player_,
         &QMediaPlayer::errorOccurred,
         this,
         [this](QMediaPlayer::Error, const QString& error_string) {
+          cancelNativePausedPreroll();
           const auto detail = error_string.trimmed();
           setErrorString(detail);
           publishPlaybackDiagnostic(QStringLiteral("decoder"), 1, detail);
@@ -3345,6 +3542,101 @@ void TimelinePlaybackController::resetAudioMeters() {
 
 QVariantMap TimelinePlaybackController::playbackDiagnostics() const {
   return playback_diagnostics_;
+}
+
+QVariantMap TimelinePlaybackController::playbackResourceDiagnostics() const {
+  const auto sink_frame_retained = video_sink_.videoFrame().isValid();
+  const auto latest_pending_frame_retained = latest_pending_frame_.isValid();
+  const auto pending_seek_frame_retained = pending_seek_video_frame_.isValid();
+  const auto processed_frame_cache = processed_video_frame_cache().statistics();
+  auto diagnostics = QVariantMap{
+      {QStringLiteral("hibernated"), playback_hibernated_},
+      {QStringLiteral("resourceReleaseAttemptCount"),
+       static_cast<qulonglong>(playback_resource_release_attempt_count_)},
+      {QStringLiteral("resourceReleaseCompletedCount"),
+       static_cast<qulonglong>(playback_resource_release_completed_count_)},
+      {QStringLiteral("workspaceActive"), workspace_active_},
+      {QStringLiteral("playerSourceLoaded"), !player_.source().isEmpty()},
+      {QStringLiteral("playerMediaReady"), mediaReady()},
+      {QStringLiteral("nativePrerollActive"), native_paused_preroll_active_},
+      {QStringLiteral("nativePrerollFirstFrameSeen"),
+       native_paused_preroll_first_frame_seen_},
+      {QStringLiteral("nativePrerollSeekIssued"),
+       native_paused_preroll_seek_issued_},
+      {QStringLiteral("nativePrerollSeekQueued"),
+       native_paused_preroll_seek_queued_},
+      {QStringLiteral("nativePrerollRetargetPending"),
+       native_paused_preroll_retarget_pending_},
+      {QStringLiteral("nativePrerollSeekCount"),
+       native_paused_preroll_seek_count_},
+      {QStringLiteral("nativePrerollSeekAcknowledged"),
+       native_paused_preroll_seek_acknowledged_},
+      {QStringLiteral("nativePrerollAckPositionMs"),
+       native_paused_preroll_ack_position_ms_},
+      {QStringLiteral("nativePrerollFrameGeneration"),
+       static_cast<qulonglong>(
+           native_paused_preroll_frame_generation_.load(
+               std::memory_order_acquire))},
+      {QStringLiteral("nativePrerollPlayPending"),
+       native_paused_preroll_play_pending_},
+      {QStringLiteral("nativePrerollTargetMs"),
+       native_paused_preroll_target_ms_},
+      {QStringLiteral("nativePrerollLastTargetTimestampUs"),
+       native_paused_preroll_last_target_timestamp_us_},
+      {QStringLiteral("nativePrerollStartCount"),
+       native_paused_preroll_start_count_},
+      {QStringLiteral("nativePrerollTimeoutCount"),
+       native_paused_preroll_timeout_count_},
+      {QStringLiteral("nativePrerollStatus"),
+       native_paused_preroll_status_},
+      {QStringLiteral("audioBufferOutputDetached"),
+       native_audio_buffer_output_detached_},
+      {QStringLiteral("audioOutputSuspended"),
+       audio_output_.outputSuspended()},
+      {QStringLiteral("audioDecoder"), audio_output_.decoderDiagnostics()},
+      {QStringLiteral("videoOutputWindowExposed"),
+       !video_frame_item_.isNull() && video_frame_item_->window() != nullptr &&
+           video_frame_item_->window()->isExposed()},
+      {QStringLiteral("documentSequencePlaying"),
+       !timeline_document_.isNull() && timeline_document_->sequencePlaying()},
+      {QStringLiteral("scenePreviewCacheActive"), scene_preview_cache_active_},
+      {QStringLiteral("prefetchPlayerSourceLoaded"),
+       !prefetch_player_.source().isEmpty()},
+      {QStringLiteral("videoSinkFrameRetained"), sink_frame_retained},
+      {QStringLiteral("latestPendingFrameRetained"),
+       latest_pending_frame_retained},
+      {QStringLiteral("pendingSeekFrameRetained"), pending_seek_frame_retained},
+      {QStringLiteral("retainedVideoFrameCount"),
+       static_cast<int>(sink_frame_retained) +
+           static_cast<int>(latest_pending_frame_retained) +
+           static_cast<int>(pending_seek_frame_retained)},
+      {QStringLiteral("frameProcessingInFlight"),
+       frame_processing_watcher_.isRunning()},
+      {QStringLiteral("videoGradeRenderSessionCacheCount"),
+       video_grade_render_sessions_.size()},
+      {QStringLiteral("activeGradeRenderSessionRetained"),
+       active_video_grade_session_ != nullptr},
+      {QStringLiteral("adjustmentGradeRenderSessionCount"),
+       static_cast<int>(std::count_if(
+           active_video_adjustment_grades_.cbegin(),
+           active_video_adjustment_grades_.cend(),
+           [](const auto& grade) { return grade.session != nullptr; }))},
+      {QStringLiteral("sharedProcessedFrameCacheEntries"),
+       static_cast<qulonglong>(processed_frame_cache.entries)},
+      {QStringLiteral("sharedProcessedFrameCacheBytes"),
+       static_cast<qulonglong>(processed_frame_cache.resident_bytes)},
+      {QStringLiteral("resourceReleaseGraceMs"),
+       kInactivePlaybackResourceReleaseGraceMs},
+  };
+  if (frame_image_state_ != nullptr) {
+    const auto image_diagnostics = frame_image_state_->resourceDiagnostics();
+    for (auto image_diagnostic = image_diagnostics.cbegin();
+         image_diagnostic != image_diagnostics.cend();
+         ++image_diagnostic) {
+      diagnostics.insert(image_diagnostic.key(), image_diagnostic.value());
+    }
+  }
+  return diagnostics;
 }
 
 QVariantMap TimelinePlaybackController::frameProcessingMetrics() const {
@@ -3568,6 +3860,10 @@ bool TimelinePlaybackController::processedFrameTimestampEstimated() const {
   return processed_frame_timestamp_estimated_;
 }
 
+bool TimelinePlaybackController::stillPhotoGradePreviewActive() const {
+  return still_photo_grade_preview_active_ && processed_frame_available_;
+}
+
 QString TimelinePlaybackController::colorGradeError() const {
   return color_grade_error_;
 }
@@ -3582,6 +3878,18 @@ QVariantMap TimelinePlaybackController::colorSignalMetadata() const {
 
 QQuickImageProvider* TimelinePlaybackController::createImageProvider() {
   return new TimelinePlaybackImageProvider(frame_image_state_);
+}
+
+bool TimelinePlaybackController::sourceCropPreviewEnabled() const {
+  return source_crop_preview_enabled_;
+}
+
+void TimelinePlaybackController::setSourceCropPreviewEnabled(bool enabled) {
+  if (source_crop_preview_enabled_ == enabled) {
+    return;
+  }
+  source_crop_preview_enabled_ = enabled;
+  syncToDocument();
 }
 
 void TimelinePlaybackController::setPreviewQualityMode(const QString& mode) {
@@ -3607,22 +3915,60 @@ void TimelinePlaybackController::setInteractionActive(bool active) {
     return;
   }
   interaction_active_ = active;
+  if (!interaction_active_ && native_paused_preroll_active_ &&
+      native_paused_preroll_seek_issued_) {
+    // The decoder keeps moving during the gesture. Always seek once more to
+    // freeze the exact final target before completing or handing off Play.
+    native_paused_preroll_retarget_pending_ = true;
+    native_paused_preroll_seek_acknowledged_ = false;
+    native_paused_preroll_ack_position_ms_ = -1;
+  }
   syncToDocument();
 }
 
 void TimelinePlaybackController::attachVideoOutput(QObject* output) {
   const auto output_changed = video_frame_item_.data() != qobject_cast<QQuickItem*>(output);
-  if (output_changed)
+  if (output_changed) {
+    const auto preroll_needs_restart = native_paused_preroll_active_ ||
+        native_paused_preroll_resume_pending_;
+    cancelNativePausedPreroll();
+    native_paused_preroll_resume_pending_ = preroll_needs_restart;
     invalidateFrameProcessing();
+  }
   video_frame_item_ = qobject_cast<QQuickItem*>(output);
+  if (!video_frame_item_.isNull() && active_program_clip_id_.isEmpty()) {
+    syncToDocument();
+  }
   if (video_frame_item_.isNull()) {
     clearProcessedFrame();
-  } else if (output_changed && !awaiting_media_source_ && !awaiting_position_sync_) {
-    // Asynchronous QML can attach after the decoder has delivered its paused frame.
-    handleVideoFrame(video_sink_.videoFrame());
+  } else {
+    if (awaiting_media_source_ && pending_position_ms_ >= 0 &&
+        tryStartPendingNativePausedPreroll()) {
+      return;
+    }
+    if (!awaiting_media_source_ &&
+        (awaiting_position_sync_ || native_paused_preroll_resume_pending_) &&
+        !timeline_document_.isNull() &&
+        !timeline_document_->sequencePlaying() && mediaReady()) {
+      const auto target_position_ms = nativePausedTargetPositionMs();
+      if (startNativePausedPreroll(target_position_ms)) {
+        return;
+      }
+    }
+    if (native_paused_preroll_resume_pending_ ||
+        (awaiting_media_source_ && pending_position_ms_ >= 0)) {
+      armNativePausedPrerollOutputRetry();
+    }
+    if (output_changed && !native_paused_preroll_resume_pending_ &&
+        !awaiting_media_source_ &&
+        !awaiting_position_sync_ && canReplayCachedVideoFrame()) {
+      // Asynchronous QML can attach after the decoder has delivered its paused frame.
+      handleVideoFrame(video_sink_.videoFrame());
+    }
   }
   if (!video_frame_item_.isNull()) {
     syncScenePreviewFrame();
+    syncStillPhotoGradePreview(current_program_clip_);
   }
 }
 
@@ -3630,20 +3976,34 @@ bool TimelinePlaybackController::workspaceActive() const {
   return workspace_active_;
 }
 
+bool TimelinePlaybackController::playbackStartPending() const {
+  return native_paused_preroll_play_pending_;
+}
+
 void TimelinePlaybackController::setWorkspaceActive(bool active) {
   if (workspace_active_ == active)
     return;
+  const auto suspend_generation = ++playback_suspend_generation_;
   // Gate callbacks before pausing: pauseSequence emits playbackStateChanged.
-  // Keep the loaded source and document, but never synchronize or grade a
-  // hidden workspace. In-flight grading exits through its cancellation token.
+  // Keep the document and playhead, but never synchronize or grade a hidden
+  // workspace. Native decode resources are released after a short grace period
+  // so quick workspace switches can reuse the already loaded source.
   workspace_active_ = active;
   if (!active) {
+    native_paused_preroll_resume_pending_ = native_paused_preroll_active_ ||
+        (native_media_enabled_ && !current_source_url_.isEmpty() &&
+         !processed_frame_available_ && !scene_preview_cache_active_);
+    cancelNativePausedPreroll(false);
     interaction_active_ = false;
     shuttle_rate_ = 0.0;
     play_when_ready_ = false;
     pending_position_ms_ = -1;
     awaited_position_ms_ = -1;
     awaiting_position_sync_ = false;
+    if (native_paused_preroll_resume_pending_) {
+      awaited_position_ms_ = nativePausedTargetPositionMs();
+      awaiting_position_sync_ = awaited_position_ms_ >= 0;
+    }
     invalidateFrameProcessing();
     stopGapPlayback();
     prefetch_timer_.stop();
@@ -3652,16 +4012,79 @@ void TimelinePlaybackController::setWorkspaceActive(bool active) {
     if (!timeline_document_.isNull())
       timeline_document_->pauseSequence();
     if (native_media_enabled_) {
+      audio_output_.setOutputSuspended(true);
+      if (!native_audio_buffer_output_detached_) {
+        player_.setAudioBufferOutput(nullptr);
+        native_audio_buffer_output_detached_ = true;
+      }
       player_.pause();
       prefetch_player_.stop();
       prefetch_player_.setSource(QUrl());
     }
+    // The grace is a minimum retention period. A coarse timer may expire
+    // before it, discarding the decoder during a quick workspace return.
+    QTimer::singleShot(
+        kInactivePlaybackResourceReleaseGraceMs,
+        Qt::PreciseTimer,
+        this,
+        [this, suspend_generation]() {
+          releaseSuspendedPlaybackResources(suspend_generation);
+        });
   } else {
     syncToDocument();
+    if (native_paused_preroll_resume_pending_ &&
+        !timeline_document_.isNull() &&
+        !timeline_document_->sequencePlaying()) {
+      if (!startNativePausedPreroll(nativePausedTargetPositionMs())) {
+        armNativePausedPrerollOutputRetry();
+      }
+    }
     schedulePrefetchRefresh();
-    if (!awaiting_media_source_ && !awaiting_position_sync_)
+    if (!awaiting_media_source_ && !awaiting_position_sync_ &&
+        canReplayCachedVideoFrame()) {
       handleVideoFrame(video_sink_.videoFrame());
+    }
   }
+  emit stateChanged();
+}
+
+void TimelinePlaybackController::releaseSuspendedPlaybackResources(
+    quint64 generation) {
+  ++playback_resource_release_attempt_count_;
+  if (workspace_active_ || generation != playback_suspend_generation_) {
+    return;
+  }
+
+  invalidateFrameProcessing();
+  stopGapPlayback();
+  prefetch_timer_.stop();
+  prefetch_plan_.clear();
+  prefetched_source_url_.clear();
+  scene_preview_frame_key_.clear();
+  scene_preview_cache_active_ = false;
+
+  clearProcessedFrame();
+  video_sink_.setVideoFrame(QVideoFrame{});
+  active_video_grade_session_.reset();
+  active_video_adjustment_grades_.clear();
+  video_grade_render_sessions_.clear();
+  active_video_frame_color_key_.clear();
+  active_video_foreground_cutout_key_.clear();
+
+  player_.pause();
+  player_.stop();
+  player_.setSource(QUrl());
+  prefetch_player_.stop();
+  prefetch_player_.setSource(QUrl());
+  audio_output_.resetForDiscontinuity();
+
+  pending_position_ms_ = -1;
+  awaited_position_ms_ = -1;
+  awaiting_media_source_ = false;
+  awaiting_position_sync_ = false;
+  play_when_ready_ = false;
+  playback_hibernated_ = true;
+  ++playback_resource_release_completed_count_;
   emit stateChanged();
 }
 
@@ -3678,13 +4101,144 @@ QSize TimelinePlaybackController::frameTargetSize() const {
   return QSize(kFallbackPreviewWidth, kFallbackPreviewHeight);
 }
 
-void TimelinePlaybackController::handleVideoFrame(const QVideoFrame& frame) {
+void TimelinePlaybackController::dispatchNativeVideoFrame(
+    const QVideoFrame& frame) {
+  const auto decoder_frame_generation =
+      native_paused_preroll_frame_generation_.load(
+          std::memory_order_acquire);
+  const auto callback_work_generation =
+      latest_frame_work_generation_->load(std::memory_order_relaxed);
+  const auto deliver_frame =
+      [this, frame, decoder_frame_generation,
+       callback_work_generation]() {
+        if (callback_work_generation !=
+            latest_frame_work_generation_->load(std::memory_order_relaxed)) {
+          // A seek, source change, output detach, or suspension invalidated
+          // this decoder callback while it waited in the controller queue.
+          return;
+        }
+        handleVideoFrame(frame, decoder_frame_generation);
+      };
+  if (QThread::currentThread() == thread()) {
+    deliver_frame();
+    return;
+  }
+  QMetaObject::invokeMethod(
+      this, deliver_frame, Qt::QueuedConnection);
+}
+
+void TimelinePlaybackController::handleVideoFrame(
+    const QVideoFrame& frame,
+    quint64 decoder_frame_generation) {
+  if (decoder_frame_generation != 0U &&
+      decoder_frame_generation !=
+          native_paused_preroll_frame_generation_.load(
+              std::memory_order_acquire)) {
+    // videoFrameChanged can already be queued in the multimedia pipeline when
+    // a scrub, source switch, or hibernation invalidates the corresponding
+    // decoder output generation.
+    return;
+  }
+  if (!workspace_active_ && playback_hibernated_ && frame.isValid()) {
+    // A queued decoder callback can arrive after setSource() has released its
+    // media. Do not let QVideoSink retain that late frame during hibernation.
+    video_sink_.setVideoFrame(QVideoFrame{});
+    return;
+  }
   const auto is_scene_preview_frame = injecting_scene_preview_frame_;
   if (!workspace_active_ || (!native_media_enabled_ && !is_scene_preview_frame) ||
       video_frame_item_.isNull() || !frame.isValid() ||
       (scene_preview_cache_active_ && !is_scene_preview_frame) ||
       (awaiting_media_source_ && !is_scene_preview_frame)) {
     return;
+  }
+  auto start_user_play_after_frame = false;
+  if (native_paused_preroll_active_ && !is_scene_preview_frame) {
+    const auto preroll_is_current =
+        workspace_active_ && timeline_document_ != nullptr &&
+        !timeline_document_->sequencePlaying() &&
+        current_source_url_ == native_paused_preroll_source_url_ &&
+        !current_source_url_.isEmpty() &&
+        player_.source() == QUrl(native_paused_preroll_source_url_);
+    if (!preroll_is_current) {
+      cancelNativePausedPreroll();
+      return;
+    }
+    const auto latest_target_ms = nativePausedTargetPositionMs();
+    if (latest_target_ms < 0) {
+      cancelNativePausedPreroll();
+      return;
+    }
+    if (latest_target_ms != native_paused_preroll_target_ms_) {
+      native_paused_preroll_target_ms_ = latest_target_ms;
+      native_paused_preroll_seek_acknowledged_ = false;
+      native_paused_preroll_ack_position_ms_ = -1;
+      if (native_paused_preroll_seek_issued_) {
+        native_paused_preroll_retarget_pending_ = true;
+      }
+      // Keep long drags alive while retaining a timeout for a stalled gesture.
+      if (interaction_active_) {
+        native_paused_preroll_timer_.start();
+      }
+    }
+    if (!native_paused_preroll_seek_issued_) {
+      if (!native_paused_preroll_first_frame_seen_) {
+        native_paused_preroll_first_frame_seen_ = true;
+        native_paused_preroll_status_ = QStringLiteral("first decoder frame received");
+      }
+      queueNativePausedPrerollSeek(native_paused_preroll_generation_);
+      // The initial decoder frame only warms AVFoundation. It is never
+      // published as the paused Program frame.
+      return;
+    }
+    if (native_paused_preroll_retarget_pending_) {
+      queueNativePausedPrerollSeek(native_paused_preroll_generation_);
+      return;
+    }
+
+    const auto frame_timestamp_ms = frame.startTime() < 0
+        ? -1
+        : frame.startTime() / 1000;
+    const auto frame_position_ms = player_.position();
+    if (frame_timestamp_ms >= 0) {
+      if (qAbs(frame_timestamp_ms - native_paused_preroll_target_ms_) >
+          kNativePausedPrerollFrameToleranceMs) {
+        return;
+      }
+    } else {
+      if (!native_paused_preroll_seek_acknowledged_) {
+        observeNativePausedPrerollSeekPosition(frame_position_ms);
+      }
+      const auto current_frame_generation =
+          native_paused_preroll_frame_generation_.load(
+              std::memory_order_acquire);
+      if (!native_paused_preroll_seek_acknowledged_ ||
+          decoder_frame_generation == 0U ||
+          decoder_frame_generation != current_frame_generation ||
+          frame_position_ms <= native_paused_preroll_target_ms_ ||
+          frame_position_ms - native_paused_preroll_target_ms_ >
+              kNativePausedPrerollFrameToleranceMs) {
+        return;
+      }
+    }
+    // With unknown PTS, handleVideoFrame records the backend's acknowledged
+    // frame position as an estimated source timestamp. During a scrub, publish
+    // matching target frames but keep the silent decoder warm; release reissues
+    // the final target before completing the preroll.
+    native_paused_preroll_last_target_timestamp_us_ = frame.startTime() >= 0
+        ? frame.startTime()
+        : frame_position_ms * 1000;
+    if (interaction_active_) {
+      native_paused_preroll_status_ =
+          QStringLiteral("live scrub target frame received");
+    } else {
+      start_user_play_after_frame = native_paused_preroll_play_pending_;
+      finishNativePausedPreroll(false);
+      awaiting_media_source_ = false;
+      awaiting_position_sync_ = false;
+      awaited_position_ms_ = -1;
+      pending_position_ms_ = -1;
+    }
   }
   if (awaiting_position_sync_ && !is_scene_preview_frame) {
     pending_seek_video_frame_ = frame;
@@ -3705,7 +4259,7 @@ void TimelinePlaybackController::handleVideoFrame(const QVideoFrame& frame) {
         ? 0.0
         : native_source_clock_available
               ? static_cast<double>(player_.position()) / 1000.0
-              : timeline_document_->currentClipPlayheadSeconds();
+              : timeline_document_->programClipPlayheadSeconds();
     source_timestamp_us = std::isfinite(source_clock_seconds)
         ? qRound64(qMax(0.0, source_clock_seconds) * 1'000'000.0)
         : 0;
@@ -3780,6 +4334,12 @@ void TimelinePlaybackController::handleVideoFrame(const QVideoFrame& frame) {
       source_timestamp_estimated,
       is_scene_preview_frame,
       is_scene_preview_frame ? scene_preview_frame_key_ : QString{});
+  if (start_user_play_after_frame && native_paused_preroll_play_pending_ &&
+      workspace_active_ && !timeline_document_.isNull() &&
+      !timeline_document_->sequencePlaying()) {
+    native_paused_preroll_play_pending_ = false;
+    play();
+  }
 }
 
 void TimelinePlaybackController::reprocessCurrentPausedFrameIfNeeded() {
@@ -3799,7 +4359,7 @@ void TimelinePlaybackController::reprocessCurrentPausedFrameIfNeeded() {
       (using_render_cache_
            ? timeline_document_->sequencePlayheadSeconds() -
                  render_cache_range_start_seconds_
-           : timeline_document_->currentClipPlayheadSeconds()) *
+           : timeline_document_->programClipPlayheadSeconds()) *
       1000.0);
   if (qAbs(player_.position() - expected_position_ms) > kSeekToleranceMs) {
     return;
@@ -3837,7 +4397,7 @@ void TimelinePlaybackController::reprocessCurrentPausedFrameIfNeeded() {
       ? 0.0
       : native_source_clock_available
             ? static_cast<double>(player_.position()) / 1000.0
-            : timeline_document_->currentClipPlayheadSeconds();
+            : timeline_document_->programClipPlayheadSeconds();
   const auto source_timestamp_us = timestamp_estimated
       ? std::isfinite(source_clock_seconds)
             ? qRound64(qMax(0.0, source_clock_seconds) * 1'000'000.0)
@@ -3850,6 +4410,406 @@ void TimelinePlaybackController::reprocessCurrentPausedFrameIfNeeded() {
   }
 
   handleVideoFrame(frame);
+}
+
+qint64 TimelinePlaybackController::nativePausedTargetPositionMs() const {
+  if (timeline_document_.isNull()) {
+    return -1;
+  }
+  const auto source_position_seconds = using_render_cache_
+      ? timeline_document_->sequencePlayheadSeconds() -
+            render_cache_range_start_seconds_
+      : timeline_document_->programClipPlayheadSeconds();
+  return std::isfinite(source_position_seconds)
+      ? qRound64(qMax(0.0, source_position_seconds) * 1000.0)
+      : -1;
+}
+
+bool TimelinePlaybackController::canStartNativePausedPreroll(
+    qint64 target_position_ms) const {
+  const auto media_status = player_.mediaStatus();
+  if (!native_media_enabled_ || !workspace_active_ || timeline_document_.isNull() ||
+      timeline_document_->sequencePlaying() || scene_preview_cache_active_ ||
+      target_position_ms < 0 || current_source_url_.isEmpty() ||
+      player_.source() != QUrl(current_source_url_) || !mediaReady() ||
+      (media_status != QMediaPlayer::LoadedMedia &&
+       media_status != QMediaPlayer::BufferedMedia) ||
+      !player_.isSeekable() || player_.duration() <= target_position_ms ||
+      video_frame_item_.isNull()) {
+    return false;
+  }
+  const auto* window = video_frame_item_->window();
+  return window != nullptr && window->isExposed();
+}
+
+void TimelinePlaybackController::observeNativePausedPrerollSeekPosition(
+    qint64 position_ms) {
+  if (!native_paused_preroll_active_ ||
+      !native_paused_preroll_seek_issued_ ||
+      current_source_url_ != native_paused_preroll_source_url_ ||
+      player_.source() != QUrl(native_paused_preroll_source_url_) ||
+      native_paused_preroll_target_ms_ < 0 ||
+      position_ms <= native_paused_preroll_target_ms_) {
+    return;
+  }
+
+  const auto delta_ms = position_ms - native_paused_preroll_target_ms_;
+  native_paused_preroll_ack_position_ms_ = position_ms;
+  if (delta_ms > kNativePausedPrerollFrameToleranceMs) {
+    // AVFoundation's public clock now proves that the requested seek finished,
+    // but it advanced too far to truthfully timestamp an unknown-PTS frame.
+    // Reissue the latest target while playback is still warming the decoder.
+    native_paused_preroll_seek_acknowledged_ = false;
+    native_paused_preroll_retarget_pending_ = true;
+    native_paused_preroll_status_ =
+        QStringLiteral("seek passed frame tolerance; retrying target");
+    queueNativePausedPrerollSeek(native_paused_preroll_generation_);
+    emit stateChanged();
+    return;
+  }
+
+  if (!native_paused_preroll_seek_acknowledged_) {
+    native_paused_preroll_seek_acknowledged_ = true;
+    // Invalidate frame callbacks emitted before AVFoundation's live clock
+    // advanced beyond its optimistic requested-position value. Only a later
+    // QVideoSink emission can supply the unknown-PTS image for this seek.
+    native_paused_preroll_frame_generation_.fetch_add(
+        1U, std::memory_order_acq_rel);
+    native_paused_preroll_status_ =
+        QStringLiteral("native seek acknowledged past target");
+    emit stateChanged();
+  }
+}
+
+bool TimelinePlaybackController::startNativePausedPreroll(
+    qint64 target_position_ms) {
+  if (native_paused_preroll_active_) {
+    const auto latest_target_ms = nativePausedTargetPositionMs();
+    if (latest_target_ms >= 0 &&
+        latest_target_ms != native_paused_preroll_target_ms_) {
+      native_paused_preroll_target_ms_ = latest_target_ms;
+      native_paused_preroll_seek_acknowledged_ = false;
+      native_paused_preroll_ack_position_ms_ = -1;
+      native_paused_preroll_retarget_pending_ =
+          native_paused_preroll_seek_issued_;
+    }
+    return true;
+  }
+  ++native_paused_preroll_start_count_;
+  const auto latest_target_position_ms = nativePausedTargetPositionMs();
+  if (target_position_ms < 0 || latest_target_position_ms < 0) {
+    native_paused_preroll_status_ = QStringLiteral("skipped: invalid target");
+    return false;
+  }
+  target_position_ms = latest_target_position_ms;
+  if (!canStartNativePausedPreroll(target_position_ms)) {
+    if (!native_media_enabled_) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: native media disabled");
+    } else if (!workspace_active_) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: workspace inactive");
+    } else if (timeline_document_.isNull() || timeline_document_->sequencePlaying()) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: no paused document");
+    } else if (scene_preview_cache_active_) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: scene preview active");
+    } else if (current_source_url_.isEmpty() ||
+               player_.source() != QUrl(current_source_url_)) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: source mismatch");
+    } else if (!mediaReady() ||
+               (player_.mediaStatus() != QMediaPlayer::LoadedMedia &&
+                player_.mediaStatus() != QMediaPlayer::BufferedMedia)) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: media not loaded");
+    } else if (!player_.isSeekable() ||
+               player_.duration() <= target_position_ms) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: duration or seekability not ready");
+    } else if (video_frame_item_.isNull()) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: video output missing");
+    } else if (video_frame_item_->window() == nullptr) {
+      native_paused_preroll_status_ = QStringLiteral("skipped: output has no window");
+    } else {
+      native_paused_preroll_status_ = QStringLiteral("skipped: output window not exposed");
+      armNativePausedPrerollOutputRetry();
+    }
+    return false;
+  }
+
+  disarmNativePausedPrerollOutputRetry();
+  native_paused_preroll_active_ = true;
+  native_paused_preroll_first_frame_seen_ = false;
+  native_paused_preroll_seek_issued_ = false;
+  native_paused_preroll_seek_queued_ = false;
+  native_paused_preroll_retarget_pending_ = false;
+  native_paused_preroll_seek_acknowledged_ = false;
+  native_paused_preroll_seek_count_ = 0;
+  native_paused_preroll_target_ms_ = target_position_ms;
+  native_paused_preroll_ack_position_ms_ = -1;
+  native_paused_preroll_last_target_timestamp_us_ = -1;
+  native_paused_preroll_elapsed_.restart();
+  native_paused_preroll_last_seek_elapsed_ms_ = -1;
+  native_paused_preroll_source_url_ = current_source_url_;
+  native_paused_preroll_resume_pending_ = false;
+  native_paused_preroll_status_ = QStringLiteral("playing first decoder frame");
+  ++native_paused_preroll_generation_;
+  native_paused_preroll_frame_generation_.fetch_add(
+      1U, std::memory_order_acq_rel);
+
+  pending_position_ms_ = -1;
+  awaited_position_ms_ = -1;
+  awaiting_media_source_ = false;
+  awaiting_position_sync_ = false;
+  clearPendingSeekFrame();
+  invalidateFrameProcessing();
+  video_sink_.setVideoFrame(QVideoFrame{});
+  if (!native_audio_buffer_output_detached_) {
+    audio_output_.setOutputSuspended(true);
+    player_.setAudioBufferOutput(nullptr);
+    native_audio_buffer_output_detached_ = true;
+  } else {
+    audio_output_.setOutputSuspended(true);
+  }
+  player_.setPlaybackRate(1.0);
+  native_paused_preroll_timer_.start();
+  player_.play();
+  emit stateChanged();
+  return true;
+}
+
+void TimelinePlaybackController::cancelNativePausedPreroll(
+    bool clear_resume_request) {
+  disarmNativePausedPrerollOutputRetry();
+  native_paused_preroll_timer_.stop();
+  const auto was_active = native_paused_preroll_active_;
+  native_paused_preroll_active_ = false;
+  native_paused_preroll_first_frame_seen_ = false;
+  native_paused_preroll_seek_issued_ = false;
+  native_paused_preroll_seek_queued_ = false;
+  native_paused_preroll_retarget_pending_ = false;
+  native_paused_preroll_play_pending_ = false;
+  native_paused_preroll_seek_count_ = 0;
+  native_paused_preroll_seek_acknowledged_ = false;
+  native_paused_preroll_last_seek_elapsed_ms_ = -1;
+  native_paused_preroll_target_ms_ = -1;
+  native_paused_preroll_ack_position_ms_ = -1;
+  native_paused_preroll_source_url_.clear();
+  ++native_paused_preroll_generation_;
+  native_paused_preroll_frame_generation_.fetch_add(
+      1U, std::memory_order_acq_rel);
+  if (clear_resume_request) {
+    native_paused_preroll_resume_pending_ = false;
+  }
+  if (was_active && player_.playbackState() == QMediaPlayer::PlayingState &&
+      (timeline_document_.isNull() || !timeline_document_->sequencePlaying())) {
+    player_.pause();
+  }
+  if (was_active) {
+    native_paused_preroll_status_ = QStringLiteral("cancelled");
+  }
+}
+
+void TimelinePlaybackController::finishNativePausedPreroll(bool timed_out) {
+  if (!native_paused_preroll_active_) {
+    return;
+  }
+  const auto target_position_ms = native_paused_preroll_target_ms_;
+  native_paused_preroll_timer_.stop();
+  native_paused_preroll_active_ = false;
+  native_paused_preroll_first_frame_seen_ = false;
+  native_paused_preroll_seek_issued_ = false;
+  native_paused_preroll_seek_queued_ = false;
+  native_paused_preroll_retarget_pending_ = false;
+  native_paused_preroll_seek_acknowledged_ = false;
+  native_paused_preroll_target_ms_ = -1;
+  native_paused_preroll_ack_position_ms_ = -1;
+  native_paused_preroll_source_url_.clear();
+  ++native_paused_preroll_generation_;
+  native_paused_preroll_frame_generation_.fetch_add(
+      1U, std::memory_order_acq_rel);
+  native_paused_preroll_status_ = timed_out
+      ? QStringLiteral("timed out")
+      : QStringLiteral("decoded target frame");
+  if (player_.playbackState() == QMediaPlayer::PlayingState) {
+    player_.pause();
+  }
+  if (timed_out) {
+    native_paused_preroll_play_pending_ = false;
+    ++native_paused_preroll_timeout_count_;
+    invalidateFrameProcessing();
+    video_sink_.setVideoFrame(QVideoFrame{});
+    clearPendingSeekFrame();
+    pending_position_ms_ = -1;
+    awaited_position_ms_ = target_position_ms;
+    awaiting_position_sync_ = target_position_ms >= 0;
+    awaiting_media_source_ = false;
+  }
+  emit stateChanged();
+}
+
+void TimelinePlaybackController::attachAudioBufferOutputForPlayback() {
+  if (!native_media_enabled_) {
+    return;
+  }
+  if (native_audio_buffer_output_detached_) {
+    audio_output_.setOutputSuspended(true);
+    player_.setAudioBufferOutput(audio_output_.bufferOutput());
+    native_audio_buffer_output_detached_ = false;
+  }
+  if (!audio_output_.outputSuspended()) {
+    return;
+  }
+  const auto source_url = current_source_url_;
+  const auto resume_generation = ++native_audio_output_resume_generation_;
+  QTimer::singleShot(0, this, [this, resume_generation, source_url]() {
+    if (native_audio_output_resume_generation_ != resume_generation ||
+        native_audio_buffer_output_detached_ || !workspace_active_ ||
+        timeline_document_.isNull() ||
+        !timeline_document_->sequencePlaying() ||
+        player_.playbackState() != QMediaPlayer::PlayingState ||
+        current_source_url_ != source_url ||
+        player_.source() != QUrl(source_url)) {
+      return;
+    }
+    audio_output_.setOutputSuspended(false);
+  });
+}
+
+void TimelinePlaybackController::queueNativePausedPrerollSeek(
+    quint64 generation) {
+  if (!native_paused_preroll_active_ ||
+      native_paused_preroll_seek_queued_ ||
+      (native_paused_preroll_seek_count_ > 0 &&
+       !native_paused_preroll_retarget_pending_)) {
+    return;
+  }
+  native_paused_preroll_seek_queued_ = true;
+  const auto source_url = native_paused_preroll_source_url_;
+  auto queue_delay_ms = 0;
+  if (native_paused_preroll_seek_count_ > 0 &&
+      native_paused_preroll_last_seek_elapsed_ms_ >= 0) {
+    const auto elapsed_since_last_seek =
+        native_paused_preroll_elapsed_.elapsed() -
+        native_paused_preroll_last_seek_elapsed_ms_;
+    queue_delay_ms = qMax(
+        0,
+        kNativePausedPrerollRetargetIntervalMs -
+            static_cast<int>(elapsed_since_last_seek));
+    const auto remaining_preroll_ms = native_paused_preroll_timer_.remainingTime();
+    if (remaining_preroll_ms > 0) {
+      // Flush the last coalesced target before the current idle deadline.
+      queue_delay_ms = qMin(
+          queue_delay_ms,
+          qMax(0, static_cast<int>(remaining_preroll_ms - 1)));
+    }
+  }
+  QTimer::singleShot(queue_delay_ms, this, [this, generation, source_url]() {
+    if (!native_paused_preroll_active_ ||
+        native_paused_preroll_generation_ != generation ||
+        !workspace_active_ || timeline_document_.isNull() ||
+        timeline_document_->sequencePlaying() ||
+        current_source_url_ != source_url || player_.source() != QUrl(source_url) ||
+        !native_paused_preroll_first_frame_seen_) {
+      if (native_paused_preroll_generation_ == generation) {
+        native_paused_preroll_seek_queued_ = false;
+      }
+      return;
+    }
+    const auto latest_target_ms = nativePausedTargetPositionMs();
+    if (!canStartNativePausedPreroll(latest_target_ms)) {
+      native_paused_preroll_seek_queued_ = false;
+      finishNativePausedPreroll(true);
+      return;
+    }
+    if (native_paused_preroll_seek_count_ > 0 &&
+        !native_paused_preroll_retarget_pending_) {
+      native_paused_preroll_seek_queued_ = false;
+      return;
+    }
+    native_paused_preroll_target_ms_ = latest_target_ms;
+    native_paused_preroll_seek_issued_ = true;
+    native_paused_preroll_seek_queued_ = false;
+    native_paused_preroll_retarget_pending_ = false;
+    ++native_paused_preroll_seek_count_;
+    native_paused_preroll_seek_acknowledged_ = false;
+    native_paused_preroll_ack_position_ms_ = -1;
+    native_paused_preroll_last_seek_elapsed_ms_ =
+        native_paused_preroll_elapsed_.elapsed();
+    native_paused_preroll_status_ = native_paused_preroll_seek_count_ == 1
+        ? QStringLiteral("seek issued while prerolling")
+        : QStringLiteral("latest scrub target issued while prerolling");
+    clearPendingSeekFrame();
+    native_paused_preroll_frame_generation_.fetch_add(
+        1U, std::memory_order_acq_rel);
+    // AVFoundation can reset a seek issued from LoadedMedia while it is still
+    // constructing its paused item. The first playing frame marks the end of
+    // that construction; a single seek while warm-up playback is active then
+    // lands on the requested frame without advancing the document clock.
+    player_.setPosition(latest_target_ms);
+    emit stateChanged();
+  });
+}
+
+bool TimelinePlaybackController::tryStartPendingNativePausedPreroll() {
+  const auto pending_source_load = awaiting_media_source_ &&
+      pending_position_ms_ >= 0;
+  const auto pending_workspace_resume = native_paused_preroll_resume_pending_;
+  if (!workspace_active_ || timeline_document_.isNull() ||
+      timeline_document_->sequencePlaying() ||
+      (!pending_source_load && !pending_workspace_resume) ||
+      scene_preview_cache_active_ ||
+      current_source_url_.isEmpty() ||
+      player_.source() != QUrl(current_source_url_) ||
+      (player_.mediaStatus() != QMediaPlayer::LoadedMedia &&
+       player_.mediaStatus() != QMediaPlayer::BufferedMedia) ||
+      !player_.isSeekable() ||
+      player_.duration() <= (pending_source_load
+                                 ? pending_position_ms_
+                                 : nativePausedTargetPositionMs())) {
+    return false;
+  }
+  const auto target_position_ms = pending_source_load
+      ? pending_position_ms_
+      : nativePausedTargetPositionMs();
+  if (!startNativePausedPreroll(target_position_ms)) {
+    return false;
+  }
+  if (pending_source_load) {
+    pending_position_ms_ = -1;
+  }
+  return true;
+}
+
+void TimelinePlaybackController::armNativePausedPrerollOutputRetry() {
+  if (native_paused_preroll_output_connection_ || video_frame_item_.isNull()) {
+    return;
+  }
+  auto* const window = video_frame_item_->window();
+  if (window == nullptr || window->isExposed()) {
+    return;
+  }
+  native_paused_preroll_output_connection_ = connect(
+      window,
+      &QQuickWindow::frameSwapped,
+      this,
+      [this, window]() {
+        if (video_frame_item_.isNull() || video_frame_item_->window() != window) {
+          disarmNativePausedPrerollOutputRetry();
+          return;
+        }
+        if (tryStartPendingNativePausedPreroll()) {
+          emit stateChanged();
+          return;
+        }
+        if (!awaiting_media_source_ &&
+            !native_paused_preroll_resume_pending_) {
+          disarmNativePausedPrerollOutputRetry();
+        }
+      });
+}
+
+void TimelinePlaybackController::disarmNativePausedPrerollOutputRetry() {
+  if (!native_paused_preroll_output_connection_) {
+    return;
+  }
+  QObject::disconnect(native_paused_preroll_output_connection_);
+  native_paused_preroll_output_connection_ = {};
 }
 
 void TimelinePlaybackController::startFrameProcessing(
@@ -3885,9 +4845,7 @@ void TimelinePlaybackController::startFrameProcessing(
   const auto color_settings = VideoFrameColorSettings{
       .clip_id = timeline_document_.isNull()
                      ? QString{}
-                     : timeline_document_->programClip()
-                           .value(QStringLiteral("clipId"))
-                           .toString(),
+                     : active_program_clip_id_,
       .source_identity = scene_preview_frame
           ? active_video_source_identity_ + QStringLiteral("|scene-preview:") +
                 scene_preview_identity
@@ -3913,19 +4871,27 @@ void TimelinePlaybackController::startFrameProcessing(
   const auto source_seconds =
       static_cast<double>(source_timestamp_us) / 1'000'000.0;
   const auto work_generation_state = latest_frame_work_generation_;
+  const auto continuous_playback = !timeline_document_.isNull() && timeline_document_->sequencePlaying();
   frame_processing_watcher_.setFuture(QtConcurrent::run(
       [frame, color_settings, clip, source_seconds, target_size, work_generation,
-       work_generation_state]() mutable {
+       work_generation_state, continuous_playback]() mutable {
         const auto cancellation = photo_editor::pipeline::CancellationToken{
             .latest_generation = work_generation_state.get(),
             .generation = work_generation,
         };
         return process_video_frame(
-            frame, color_settings, clip, source_seconds, target_size, cancellation);
+            frame, color_settings, clip, source_seconds, target_size, continuous_playback, cancellation);
       }));
 }
 
 TimelinePlaybackController::~TimelinePlaybackController() {
+  native_paused_preroll_frame_generation_.fetch_add(
+      1U, std::memory_order_acq_rel);
+  QObject::disconnect(native_video_frame_connection_);
+  player_.stop();
+  prefetch_player_.stop();
+  player_.setAudioBufferOutput(nullptr);
+  player_.setVideoSink(nullptr);
   invalidateFrameProcessing();
 }
 
@@ -3995,6 +4961,20 @@ void TimelinePlaybackController::play() {
     return;
   }
 
+  const auto native_source_load_pending = native_media_enabled_ &&
+      awaiting_media_source_ && pending_position_ms_ >= 0;
+  if (native_paused_preroll_active_ ||
+      native_paused_preroll_resume_pending_ || native_source_load_pending) {
+    native_paused_preroll_play_pending_ = true;
+    native_paused_preroll_status_ =
+        QStringLiteral("user Play waits for the requested decoded frame");
+    if (!native_paused_preroll_active_) {
+      tryStartPendingNativePausedPreroll();
+    }
+    emit stateChanged();
+    return;
+  }
+  attachAudioBufferOutputForPlayback();
   shuttle_rate_ = 1.0;
   timeline_document_->playSequence();
   gap_start_sequence_seconds_ = timeline_document_->sequencePlayheadSeconds();
@@ -4006,10 +4986,24 @@ void TimelinePlaybackController::pause() {
     return;
   }
 
+  const auto previous_pause_frame_preservation =
+      preserve_last_processed_frame_during_pause_;
+  preserve_last_processed_frame_during_pause_ =
+      timeline_document_->sequencePlaying();
+  if (native_paused_preroll_play_pending_) {
+    native_paused_preroll_play_pending_ = false;
+    native_paused_preroll_status_ =
+        QStringLiteral("pending user Play cancelled");
+    emit stateChanged();
+  } else {
+    cancelNativePausedPreroll();
+  }
   shuttle_rate_ = 0.0;
   timeline_document_->pauseSequence();
   resetAdaptivePlaybackDetail();
   syncToDocument();
+  preserve_last_processed_frame_during_pause_ =
+      previous_pause_frame_preservation;
 }
 
 void TimelinePlaybackController::togglePlayback() {
@@ -4017,7 +5011,8 @@ void TimelinePlaybackController::togglePlayback() {
     return;
   }
 
-  if (timeline_document_->sequencePlaying()) {
+  if (timeline_document_->sequencePlaying() ||
+      native_paused_preroll_play_pending_) {
     stopShuttle();
   } else {
     play();
@@ -4076,6 +5071,7 @@ void TimelinePlaybackController::stepFrames(int direction) {
 }
 
 void TimelinePlaybackController::seekSequenceSeconds(double seconds) {
+  audio_output_.resetForDiscontinuity();
   if (timeline_document_.isNull()) {
     return;
   }
@@ -4085,10 +5081,13 @@ void TimelinePlaybackController::seekSequenceSeconds(double seconds) {
   }
   shuttle_rate_ = 0.0;
   timeline_document_->seekSequenceSeconds(seconds);
-  syncToDocument();
+  // seekSequenceSeconds always emits playbackStateChanged; that connection
+  // synchronizes the decoder once. Repeating it here rebuilds the Program
+  // projection and can issue the same native seek twice per scrub sample.
 }
 
 void TimelinePlaybackController::seekCurrentClipSeconds(double seconds) {
+  audio_output_.resetForDiscontinuity();
   if (timeline_document_.isNull()) {
     return;
   }
@@ -4325,10 +5324,17 @@ void TimelinePlaybackController::syncToDocument() {
                                           ? timeline_document_->renderCachePlaybackStartSeconds()
                                           : 0.0;
   using_proxy_ = !proxy_source_url.isEmpty() && next_source_url == proxy_source_url;
-  const auto current_clip = timeline_document_->currentClip();
   // Decoder frames follow Program. Inspector selection can be an audio or
   // adjustment clip, so it must not choose the color pipeline for these frames.
   const auto program_clip = timeline_document_->programClip();
+  current_program_clip_ = program_clip;
+  const auto program_media_type =
+      program_clip.value(QStringLiteral("mediaType")).toString();
+  // programClip() builds a QVariant projection that includes the clip's
+  // keyframes. Playback synchronization already resolves that projection; keep
+  // its stable ID for decoded frames instead of rebuilding it at frame rate.
+  active_program_clip_id_ =
+      program_clip.value(QStringLiteral("clipId")).toString();
   VideoFrameColorSettings next_color_settings;
   next_color_settings.source_identity = next_source_url;
   next_color_settings.source_revision = next_source_revision;
@@ -4360,17 +5366,25 @@ void TimelinePlaybackController::syncToDocument() {
     return session;
   };
   if (!using_render_cache_ &&
-      program_clip.value(QStringLiteral("mediaType")).toString() ==
-          QStringLiteral("video")) {
+      (program_media_type == QStringLiteral("video") ||
+       program_media_type == QStringLiteral("photo"))) {
     next_color_settings.clip_id =
         program_clip.value(QStringLiteral("clipId")).toString();
-    next_color_settings.input_transform_key =
-        program_clip.value(QStringLiteral("videoInputTransform"))
-            .toString()
-            .trimmed()
-            .toLower();
+    if (program_media_type == QStringLiteral("photo")) {
+      const auto still_source_path =
+          program_clip.value(QStringLiteral("filePath")).toString().trimmed();
+      next_color_settings.source_identity = still_source_path;
+      next_color_settings.source_revision =
+          timeline_video_source_revision(still_source_path);
+    } else {
+      next_color_settings.input_transform_key =
+          program_clip.value(QStringLiteral("videoInputTransform"))
+              .toString()
+              .trimmed()
+              .toLower();
+    }
     next_color_settings.grade_recipe_json =
-        timeline_document_->colorGradeRecipeJsonForClip(
+        timeline_document_->previewColorGradeRecipeJsonForClip(
             program_clip.value(QStringLiteral("clipId")).toString());
     next_color_settings.animated_grade_parameters =
         program_clip.value(QStringLiteral("animatedColorGradeParameters")).toMap();
@@ -4506,14 +5520,22 @@ void TimelinePlaybackController::syncToDocument() {
   auto next_foreground_cutout_clip = using_render_cache_
                                          ? QVariantMap{}
                                          : program_clip;
+  // Source-crop authoring shows the full source, independent of the final
+  // framing. Keep the document crop intact and key the preview with this copy.
+  if (source_crop_preview_enabled_ && !timeline_document_->sequencePlaying()) {
+    next_foreground_cutout_clip.insert(QStringLiteral("sourceCropLeft"), 0.0);
+    next_foreground_cutout_clip.insert(QStringLiteral("sourceCropTop"), 0.0);
+    next_foreground_cutout_clip.insert(QStringLiteral("sourceCropRight"), 1.0);
+    next_foreground_cutout_clip.insert(QStringLiteral("sourceCropBottom"), 1.0);
+  }
   const auto next_foreground_cutout_key =
       video_foreground_cutout_settings_key(next_foreground_cutout_clip);
   const auto color_settings_changed =
       next_color_key != active_video_frame_color_key_ ||
       next_foreground_cutout_key != active_video_foreground_cutout_key_;
   if (color_settings_changed) {
-    active_video_source_identity_ = next_source_url;
-    active_video_source_revision_ = next_source_revision;
+    active_video_source_identity_ = next_color_settings.source_identity;
+    active_video_source_revision_ = next_color_settings.source_revision;
     active_video_input_transform_ = next_color_settings.input_transform_key;
     active_video_grade_recipe_json_ = next_color_settings.grade_recipe_json;
     active_video_grade_parameters_ =
@@ -4548,24 +5570,60 @@ void TimelinePlaybackController::syncToDocument() {
     active_video_foreground_cutout_clip_ = std::move(next_foreground_cutout_clip);
     active_video_foreground_cutout_key_ = next_foreground_cutout_key;
     invalidateFrameProcessing();
-    clearProcessedFrame();
+    // Keep the last complete Program image during the synchronous transition
+    // from playback to pause while replacement settings render. A paused edit
+    // still clears the prior image so it cannot be mistaken for the edited
+    // frame. Source changes still clear the image below.
+    if (!preserve_last_processed_frame_during_pause_ ||
+        !processed_frame_available_) {
+      clearProcessedFrame();
+    }
   }
   active_playback_rate_ = using_render_cache_
                               ? 1.0
                               : qBound(
                                     -8.0,
-                                    current_clip
+                                    program_clip
                                         .value(
                                             QStringLiteral("effectivePlaybackRate"),
-                                            current_clip.value(QStringLiteral("playbackRate"), 1.0))
+                                            program_clip.value(QStringLiteral("playbackRate"), 1.0))
                                         .toDouble(),
                                     8.0);
   const auto target_position_ms =
       qRound64((using_render_cache_
                     ? timeline_document_->sequencePlayheadSeconds() -
                           render_cache_range_start_seconds_
-                    : timeline_document_->currentClipPlayheadSeconds()) *
+                    : timeline_document_->programClipPlayheadSeconds()) *
                1000.0);
+  if (native_paused_preroll_active_) {
+    if (timeline_document_->sequencePlaying() ||
+        next_source_url != native_paused_preroll_source_url_ ||
+        player_.source() != QUrl(native_paused_preroll_source_url_)) {
+      // A direct document Play or Program source switch invalidates the
+      // silent warm-up and any user Play request waiting on its frame.
+      cancelNativePausedPreroll();
+    } else {
+      if (target_position_ms != native_paused_preroll_target_ms_) {
+        native_paused_preroll_target_ms_ = target_position_ms;
+        native_paused_preroll_seek_acknowledged_ = false;
+        native_paused_preroll_ack_position_ms_ = -1;
+        native_paused_preroll_retarget_pending_ =
+            native_paused_preroll_seek_issued_;
+        native_paused_preroll_status_ =
+            QStringLiteral("latest scrub target pending");
+        if (interaction_active_) {
+          native_paused_preroll_timer_.start();
+        }
+      }
+      if (native_paused_preroll_first_frame_seen_ &&
+          (!native_paused_preroll_seek_issued_ ||
+           native_paused_preroll_retarget_pending_)) {
+        queueNativePausedPrerollSeek(native_paused_preroll_generation_);
+      }
+      emit stateChanged();
+      return;
+    }
+  }
   const auto player_was_already_at_target =
       qAbs(player_.position() - target_position_ms) <= kSeekToleranceMs;
 
@@ -4578,11 +5636,34 @@ void TimelinePlaybackController::syncToDocument() {
     }
     setErrorString(QString{});
     syncScenePreviewFrame();
+    syncStillPhotoGradePreview(program_clip);
     emit stateChanged();
     return;
   }
 
   updateAudioVolume(target_position_ms);
+  // QAudioBufferOutput is unavailable in Qt's Darwin backend. Its PCM
+  // fallback follows the same Program source/clock and never paused preroll.
+  const auto forward_audio_rate = qAbs(active_playback_rate_) *
+      (shuttle_rate_ > 0.0 ? shuttle_rate_ : 1.0);
+  audio_output_.synchronizeDecodedAudio(
+      next_source_url, target_position_ms, forward_audio_rate,
+      using_render_cache_ ? 2 : qMax(1, program_clip.value(
+          QStringLiteral("sourceAudioChannels"), 2).toInt()),
+      timeline_document_->sequencePlaying() && shuttle_rate_ >= 0.0 &&
+          active_playback_rate_ > 0.0001 && !native_paused_preroll_active_ &&
+          player_.source() == QUrl(next_source_url) && player_.hasAudio() &&
+          player_.playbackState() == QMediaPlayer::PlayingState);
+  const auto audio_decode_error = audio_output_.decoderDiagnostics()
+      .value(QStringLiteral("pcmFallbackError")).toString();
+  if (!audio_decode_error.isEmpty()) {
+    setErrorString(QStringLiteral("Audio preview is unavailable: %1").arg(audio_decode_error));
+  } else if (error_string_.startsWith(QStringLiteral("Audio preview is unavailable:"))) {
+    setErrorString(QString{});
+  }
+  if (timeline_document_->sequencePlaying()) {
+    attachAudioBufferOutputForPlayback();
+  }
   const auto forward_shuttle_multiplier = shuttle_rate_ > 0.0 ? shuttle_rate_ : 1.0;
   player_.setPlaybackRate(
       qMax(0.01, qAbs(active_playback_rate_)) * forward_shuttle_multiplier);
@@ -4592,8 +5673,11 @@ void TimelinePlaybackController::syncToDocument() {
     stopGapPlayback();
   }
 
-  if (current_source_url_ != next_source_url) {
+  if (current_source_url_ != next_source_url || playback_hibernated_) {
+    audio_output_.resetForDiscontinuity();
+    last_audio_source_position_ms_ = target_position_ms;
     current_source_url_ = next_source_url;
+    playback_hibernated_ = false;
     invalidateFrameProcessing();
     clearProcessedFrame();
     playback_sample_clock_.invalidate();
@@ -4626,6 +5710,7 @@ void TimelinePlaybackController::syncToDocument() {
       awaited_position_ms_ = -1;
       awaiting_position_sync_ = false;
     }
+    syncStillPhotoGradePreview(program_clip);
     play_when_ready_ = timeline_document_->sequencePlaying() &&
                        shuttle_rate_ >= 0.0 &&
                        !scene_preview_cache_active_;
@@ -4645,6 +5730,7 @@ void TimelinePlaybackController::syncToDocument() {
     }
     setErrorString(QString{});
     syncScenePreviewFrame();
+    syncStillPhotoGradePreview(program_clip);
     emit stateChanged();
     return;
   }
@@ -4653,6 +5739,7 @@ void TimelinePlaybackController::syncToDocument() {
   // frames come from an exact source-time cache, while Qt's Darwin position
   // can report a different decoded frame for the same seek.
   syncScenePreviewFrame();
+  syncStillPhotoGradePreview(program_clip);
   if (awaiting_media_source_) {
     if (scene_preview_cache_active_) {
       pending_position_ms_ = -1;
@@ -4744,7 +5831,125 @@ void TimelinePlaybackController::syncToDocument() {
   if (!timeline_document_->sequencePlaying() && player_was_already_at_target) {
     reprocessCurrentPausedFrameIfNeeded();
   }
+  syncStillPhotoGradePreview(program_clip);
   emit stateChanged();
+}
+
+void TimelinePlaybackController::syncStillPhotoGradePreview(
+    const QVariantMap& program_clip) {
+  if (timeline_document_.isNull() || !workspace_active_) {
+    return;
+  }
+  const auto clear_still_request = [this]() {
+    const auto was_active = still_photo_grade_preview_active_;
+    still_photo_grade_preview_active_ = false;
+    still_photo_requested_source_key_.clear();
+    still_photo_grade_request_key_.clear();
+    if (was_active && !using_render_cache_) {
+      clearProcessedFrame();
+    } else if (was_active) {
+      emit processedFrameSourceChanged();
+    }
+  };
+  if (using_render_cache_ ||
+      program_clip.value(QStringLiteral("mediaType")).toString() !=
+          QStringLiteral("photo")) {
+    clear_still_request();
+    return;
+  }
+
+  const auto clip_id = program_clip.value(QStringLiteral("clipId")).toString().trimmed();
+  const auto source_path = program_clip.value(QStringLiteral("filePath")).toString().trimmed();
+  const auto recipe = timeline_document_->previewColorGradeRecipeJsonForClip(clip_id);
+  if (clip_id.isEmpty() || source_path.isEmpty() || recipe.trimmed().isEmpty()) {
+    clear_still_request();
+    return;
+  }
+  const auto animated_parameters =
+      program_clip.value(QStringLiteral("animatedColorGradeParameters")).toMap();
+  QString pointwise_error;
+  if (!animated_parameters.isEmpty() ||
+      !timeline_video_grade_can_use_lut(recipe, QSize(33, 33), &pointwise_error)) {
+    const auto unsupported = animated_parameters.isEmpty()
+        ? QStringLiteral("Still-photo Timeline preview currently requires a static pointwise grade. %1")
+              .arg(pointwise_error)
+        : QStringLiteral("Animated shared grades on still photos are not supported yet.");
+    const auto had_request = still_photo_grade_preview_active_ ||
+                             !still_photo_grade_request_key_.isEmpty();
+    still_photo_grade_preview_active_ = false;
+    still_photo_requested_source_key_.clear();
+    still_photo_grade_request_key_.clear();
+    color_grade_error_ = unsupported;
+    if (had_request && !using_render_cache_) {
+      clearProcessedFrame();
+    } else {
+      emit processedFrameSourceChanged();
+      emit stateChanged();
+    }
+    return;
+  }
+  if (video_frame_item_.isNull()) {
+    return;
+  }
+
+  const auto target_size = frameTargetSize();
+  const auto source_revision = timeline_video_source_revision(source_path);
+  const auto source_key = QStringLiteral("%1|%2|%3x%4")
+                              .arg(source_path, source_revision)
+                              .arg(target_size.width())
+                              .arg(target_size.height());
+  const auto request_key = QStringLiteral("%1|%2|%3")
+                               .arg(clip_id, source_key, active_video_frame_color_key_);
+  const auto request_changed = request_key != still_photo_grade_request_key_;
+  if (!request_changed && processed_frame_available_ &&
+      still_photo_grade_preview_active_) {
+    return;
+  }
+  still_photo_requested_source_key_ = source_key;
+  still_photo_grade_request_key_ = request_key;
+  if (request_changed) {
+    still_photo_grade_preview_active_ = true;
+    clearProcessedFrame();
+  }
+  if (still_photo_cached_source_key_ == source_key &&
+      !still_photo_source_image_.isNull()) {
+    submitStillPhotoGradePreviewFrame();
+    return;
+  }
+  if (still_photo_source_watcher_.isRunning()) {
+    return;
+  }
+  still_photo_decoding_source_key_ = source_key;
+  still_photo_source_watcher_.setFuture(QtConcurrent::run(
+      load_still_photo_grade_source, source_path, target_size));
+}
+
+void TimelinePlaybackController::submitStillPhotoGradePreviewFrame() {
+  if (!workspace_active_ || video_frame_item_.isNull() ||
+      still_photo_source_image_.isNull() ||
+      still_photo_requested_source_key_.isEmpty() ||
+      still_photo_grade_request_key_.isEmpty() ||
+      still_photo_cached_source_key_ != still_photo_requested_source_key_ ||
+      using_render_cache_ || timeline_document_.isNull() ||
+      timeline_document_->scenePreviewFrame().value(QStringLiteral("active")).toBool()) {
+    return;
+  }
+  auto frame = QVideoFrame(
+      still_photo_source_image_.convertToFormat(QImage::Format_RGBA8888));
+  if (!frame.isValid()) {
+    color_grade_error_ = QStringLiteral("The still photo could not be placed in the shared Timeline preview pipeline.");
+    still_photo_grade_preview_active_ = false;
+    clearProcessedFrame();
+    emit stateChanged();
+    return;
+  }
+  frame.setStartTime(qRound64(
+      qMax(0.0, timeline_document_->programClipPlayheadSeconds()) * 1'000'000.0));
+  scene_preview_frame_key_ = still_photo_grade_request_key_;
+  const auto was_injecting = injecting_scene_preview_frame_;
+  injecting_scene_preview_frame_ = true;
+  handleVideoFrame(frame);
+  injecting_scene_preview_frame_ = was_injecting;
 }
 
 void TimelinePlaybackController::syncScenePreviewFrame() {
@@ -4769,6 +5974,10 @@ void TimelinePlaybackController::syncScenePreviewFrame() {
       }
     }
     return;
+  }
+
+  if (native_paused_preroll_active_) {
+    cancelNativePausedPreroll();
   }
 
   if (!scene_preview_cache_active_) {
@@ -4865,9 +6074,13 @@ QString TimelinePlaybackController::preferredSourceUrl() const {
   }
 
   const auto original = timeline_document_->originalPlaybackSourceUrl();
+  if (timeline_document_->hasColorGradePreview()) return original;
   // Scene-cache images are ungraded source frames. Keep the original clip's
   // color/effect pipeline active instead of treating them as a rendered cache.
   if (timeline_document_->scenePreviewFrame().value(QStringLiteral("active")).toBool()) {
+    return original;
+  }
+  if (source_crop_preview_enabled_ && !timeline_document_->sequencePlaying()) {
     return original;
   }
   const auto proxy = timeline_document_->proxyPlaybackSourceUrl();
@@ -4894,6 +6107,15 @@ QString TimelinePlaybackController::preferredSourceUrl() const {
     return original;
   }
   return needs_responsive_source && !proxy.isEmpty() ? proxy : original;
+}
+
+bool TimelinePlaybackController::canReplayCachedVideoFrame() const {
+  return !timeline_document_.isNull() && !current_source_url_.isEmpty() &&
+      !active_program_clip_id_.isEmpty() &&
+      current_program_clip_.value(QStringLiteral("mediaType")).toString() ==
+          QStringLiteral("video") &&
+      current_program_clip_.value(QStringLiteral("clipId")).toString() ==
+          active_program_clip_id_;
 }
 
 void TimelinePlaybackController::startGapPlayback() {
@@ -4955,38 +6177,112 @@ void TimelinePlaybackController::tickGapPlayback() {
 }
 
 void TimelinePlaybackController::updateAudioVolume(qint64 source_position_ms) {
-  Q_UNUSED(source_position_ms)
   if (timeline_document_.isNull()) {
     return;
+  }
+  if (source_position_ms >= 0) {
+    // Ordinary playback notifications can be more than one frame apart. They
+    // are not seeks and must not flush DSP/sink state or restart PCM decoding.
+    // Explicit seek entrypoints and source changes reset independently.
+    if (!timeline_document_->sequencePlaying() &&
+        last_audio_source_position_ms_ >= 0 &&
+        qAbs(source_position_ms - last_audio_source_position_ms_) > kSeekToleranceMs) {
+      audio_output_.resetForDiscontinuity();
+    }
+    last_audio_source_position_ms_ = source_position_ms;
   }
   if (using_render_cache_) {
     audio_output_.setVolume(1.0);
     audio_output_.setPanEnabled(false);
+    audio_output_.setProcessingEnabled(false);
+    audio_output_.setEqualizerEnabled(false);
     audio_output_.setEqLowDb(0.0);
     audio_output_.setEqMidDb(0.0);
     audio_output_.setEqHighDb(0.0);
     audio_output_.setCompressorEnabled(false);
+    audio_output_.setLimiterEnabled(false);
+    audio_output_.setGateEnabled(false);
+    audio_output_.setDeEsserEnabled(false);
+    audio_output_.setHighPassEnabled(false);
+    audio_output_.setLowPassEnabled(false);
+    audio_output_.setDialogueCleanupEnabled(false);
     audio_output_.setDuckingGainDb(0.0);
     return;
   }
   audio_output_.setPanEnabled(true);
-  const auto clip = timeline_document_->currentClip();
-  audio_output_.setEqLowDb(clip.value(QStringLiteral("trackAudioEqLowDb"), 0.0).toDouble());
-  audio_output_.setEqMidDb(clip.value(QStringLiteral("trackAudioEqMidDb"), 0.0).toDouble());
-  audio_output_.setEqHighDb(clip.value(QStringLiteral("trackAudioEqHighDb"), 0.0).toDouble());
+  // QMediaPlayer is decoding the Program video source. The inspector may be
+  // focused on a voiceover or another audio clip, so its clip and track state
+  // cannot control this decoded buffer's output.
+  const auto clip = timeline_document_->programClip();
+  const auto track_settings = timeline_document_->audioTrackPlaybackSettings(
+      clip.value(QStringLiteral("audioTrackId")).toString(),
+      timeline_document_->sequencePlayheadSeconds());
+  audio_output_.setProcessingEnabled(
+      !track_settings.value(QStringLiteral("audioProcessingBypassed"), false).toBool());
+  audio_output_.setEqualizerEnabled(
+      track_settings.value(QStringLiteral("audioEqEnabled"), true).toBool());
+  audio_output_.setEqLowDb(
+      track_settings.value(QStringLiteral("audioEqLowDb"), 0.0).toDouble());
+  audio_output_.setEqMidDb(
+      track_settings.value(QStringLiteral("audioEqMidDb"), 0.0).toDouble());
+  audio_output_.setEqHighDb(
+      track_settings.value(QStringLiteral("audioEqHighDb"), 0.0).toDouble());
   audio_output_.setCompressorEnabled(
-      clip.value(QStringLiteral("trackAudioCompressorEnabled"), false).toBool());
+      track_settings.value(QStringLiteral("audioCompressorEnabled"), false).toBool());
   audio_output_.setCompressorThresholdDb(
-      clip.value(QStringLiteral("trackAudioCompressorThresholdDb"), -18.0).toDouble());
+      track_settings.value(QStringLiteral("audioCompressorThresholdDb"), -18.0).toDouble());
   audio_output_.setCompressorRatio(
-      clip.value(QStringLiteral("trackAudioCompressorRatio"), 4.0).toDouble());
+      track_settings.value(QStringLiteral("audioCompressorRatio"), 4.0).toDouble());
   audio_output_.setCompressorMakeupDb(
-      clip.value(QStringLiteral("trackAudioCompressorMakeupDb"), 0.0).toDouble());
+      track_settings.value(QStringLiteral("audioCompressorMakeupDb"), 0.0).toDouble());
+  audio_output_.setLimiterEnabled(
+      track_settings.value(QStringLiteral("audioLimiterEnabled"), false).toBool());
+  audio_output_.setLimiterCeilingDb(
+      track_settings.value(QStringLiteral("audioLimiterCeilingDb"), -1.0).toDouble());
+  audio_output_.setGateEnabled(
+      track_settings.value(QStringLiteral("audioGateEnabled"), false).toBool());
+  audio_output_.setGateThresholdDb(
+      track_settings.value(QStringLiteral("audioGateThresholdDb"), -48.0).toDouble());
+  audio_output_.setDeEsserEnabled(
+      track_settings.value(QStringLiteral("audioDeEsserEnabled"), false).toBool());
+  audio_output_.setDeEsserAmount(
+      track_settings.value(QStringLiteral("audioDeEsserAmount"), 0.35).toDouble());
+  audio_output_.setHighPassEnabled(
+      track_settings.value(QStringLiteral("audioHighPassEnabled"), false).toBool());
+  audio_output_.setHighPassHz(
+      track_settings.value(QStringLiteral("audioHighPassHz"), 80.0).toDouble());
+  audio_output_.setLowPassEnabled(
+      track_settings.value(QStringLiteral("audioLowPassEnabled"), false).toBool());
+  audio_output_.setLowPassHz(
+      track_settings.value(QStringLiteral("audioLowPassHz"), 16000.0).toDouble());
+  const auto cleanup_enabled =
+      clip.value(QStringLiteral("trackDialogueCleanupEnabled"), false).toBool();
+  audio_output_.setDialogueCleanupEnabled(cleanup_enabled);
+  audio_output_.setVoiceIsolationAmount(
+      clip.value(QStringLiteral("trackDialogueVoiceIsolationAmount"), 0.65).toDouble());
+  audio_output_.setNoiseReductionAmount(
+      clip.value(QStringLiteral("trackDialogueNoiseReductionAmount"), 0.35).toDouble());
+  audio_output_.setDereverbAmount(
+      clip.value(QStringLiteral("trackDialogueDereverbAmount"), 0.25).toDouble());
+  audio_output_.setHumRemovalAmount(
+      clip.value(QStringLiteral("trackDialogueHumRemovalAmount"), 0.50).toDouble());
+  audio_output_.setHumFrequencyHz(
+      clip.value(QStringLiteral("trackDialogueHumFrequencyHz"), 60).toInt());
+  audio_output_.setArtifactSmoothing(
+      clip.value(QStringLiteral("trackDialogueArtifactSmoothing"), 0.65).toDouble());
+  audio_output_.setAmbiencePreservation(
+      clip.value(QStringLiteral("trackDialogueAmbiencePreservation"), 0.35).toDouble());
   audio_output_.setDuckingGainDb(
-      clip.value(QStringLiteral("trackAudioDuckingGainDb"), 0.0).toDouble());
+      track_settings.value(
+          QStringLiteral("audioDuckingGainDb"),
+          clip.value(QStringLiteral("trackAudioDuckingGainDb"), 0.0)).toDouble());
   const auto enabled = (!clip.contains(QStringLiteral("audioPlaybackEnabled")) ||
                         clip.value(QStringLiteral("audioPlaybackEnabled")).toBool()) &&
-                       !clip.value(QStringLiteral("retimeAudioMuted"), false).toBool();
+                       !clip.value(QStringLiteral("retimeAudioMuted"), false).toBool() &&
+                       track_settings.value(QStringLiteral("visible"), true).toBool() &&
+                       !track_settings.value(QStringLiteral("muted"), false).toBool() &&
+                       !(track_settings.value(QStringLiteral("anyAudioSolo"), false).toBool() &&
+                         !track_settings.value(QStringLiteral("solo"), false).toBool());
   if (!enabled || clip.isEmpty()) {
     audio_output_.setVolume(0.0);
     return;
@@ -5008,11 +6304,23 @@ void TimelinePlaybackController::updateAudioVolume(qint64 source_position_ms) {
     envelope = qMin(
         envelope, qBound(0.0, (timeline_duration - timeline_offset) / fade_out, 1.0));
   }
+  const auto matched_bypass_gain_db =
+      track_settings.value(QStringLiteral("audioProcessingBypassed"), false).toBool() &&
+              track_settings.value(
+                  QStringLiteral("audioLoudnessMatchedBypass"), false).toBool()
+          ? track_settings.value(
+                QStringLiteral("audioLoudnessMatchedBypassGainDb"), 0.0).toDouble()
+          : 0.0;
   const auto total_gain_db = clip.value(QStringLiteral("audioGainDb")).toDouble() +
-                             clip.value(QStringLiteral("trackAudioGainDb")).toDouble();
+                             track_settings.value(
+                                 QStringLiteral("audioGainDb"),
+                                 clip.value(QStringLiteral("trackAudioGainDb"))).toDouble() +
+                             matched_bypass_gain_db;
   const auto linear_gain = qPow(10.0, total_gain_db / 20.0);
-  audio_output_.setPan(clip.value(QStringLiteral("trackAudioPan")).toDouble());
-  audio_output_.setVolume(qBound(0.0, linear_gain * envelope, 1.0));
+  audio_output_.setPan(
+      track_settings.value(
+          QStringLiteral("audioPan"), clip.value(QStringLiteral("trackAudioPan"))).toDouble());
+  audio_output_.setVolume(qBound(0.0, linear_gain * envelope, 4096.0));
 }
 
 void TimelinePlaybackController::setErrorString(const QString& error_string) {

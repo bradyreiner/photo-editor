@@ -125,12 +125,11 @@ bool raw_metadata_cache_key(
       .arg(info.metadataChangeTime().toMSecsSinceEpoch());
 #endif
 
-  // Metadata depends on settings as well as the source revision. Use enough
-  // precision to keep distinct floating-point settings from sharing an entry.
-  const auto settings_key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9")
+  // Metadata depends on settings as well as the source revision. Deferred
+  // float EV changes neither decoder pixels nor metadata and shares entries.
+  const auto settings_key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8")
       .arg(settings.input_transform_enabled ? 1 : 0)
       .arg(settings.demosaic_quality.trimmed().toLower())
-      .arg(settings.exposure, 0, 'g', 17)
       .arg(settings.hot_dead_pixel_cleanup_amount, 0, 'g', 17)
       .arg(settings.false_color_suppression_amount, 0, 'g', 17)
       .arg(settings.highlight_recovery_enabled ? 1 : 0)
@@ -772,8 +771,7 @@ void populate_metadata(const libraw_data_t& raw,
   populated.lens_correction_applied = false;
   populated.baseline_exposure_applied = false;
   populated.camera_transform_applied = !camera_linear;
-  populated.decoder_rendering_applied = std::abs(settings.exposure) > 1.0e-9 ||
-                                        settings.highlight_recovery_enabled;
+  populated.decoder_rendering_applied = settings.highlight_recovery_enabled;
   populated.input_profile_name =
       photo_editor::pipeline::normalize_input_color_profile_name(
           settings.input_color_profile.toStdString());
@@ -834,9 +832,13 @@ void populate_metadata(const libraw_data_t& raw,
   params.user_qual =
       uses_draft_demosaic(settings, params.half_size != 0) ? 0 : 3;
   params.highlight = settings.highlight_recovery_enabled ? 1 : 0;
-  params.exp_correc = std::abs(settings.exposure) > 1.0e-9 ? 1 : 0;
-  params.exp_shift =
-      static_cast<float>(std::exp2(std::clamp(settings.exposure, -5.0, 5.0)));
+  // Both decoded contracts defer RAW EV to the float scene-exposure stage.
+  // LibRaw applies EV to ushort samples before characterization: that loses
+  // highlight ratios and prevents equal/opposite RAW and Light EV from
+  // cancelling. Decoder-characterized RGB needs the same unexposed boundary
+  // so canonical save/reopen cannot change exposure ownership or pixels.
+  params.exp_correc = 0;
+  params.exp_shift = 1.0F;
   params.exp_preser = 0.0F;
   params.use_auto_wb = 0;
   params.use_camera_wb = camera_linear ? 0 : 1;
@@ -890,10 +892,10 @@ RawCameraLinearDecoderCapability raw_camera_linear_decoder_capability() {
           QStringLiteral("camera-linear-rgb:black-subtracted:unbalanced:"
                          "demosaiced:normalized:no-camera-matrix"),
       .applied_controls = QStringLiteral(
-          "demosaic-quality,exposure,highlight-recovery,hot-dead-pixel,"
+          "demosaic-quality,highlight-recovery,hot-dead-pixel,"
           "false-color"),
       .deferred_controls = QStringLiteral(
-          "white-balance,camera-characterization,gamut-mapping,"
+          "exposure,white-balance,camera-characterization,gamut-mapping,"
           "lens-correction,boost,shadow-boost,detail,chroma-noise,moire"),
       .maximum_raw_memory_bytes = kMaximumRawMemoryBytes,
   };
@@ -921,10 +923,9 @@ bool raw_decode_requests_camera_linear_backend(
 
 QString raw_decode_settings_cache_key(
     const RawDecodeSettings& settings) {
-  return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9")
+  return QStringLiteral("raw-unexposed-v2|%1|%2|%3|%4|%5|%6|%7|%8")
       .arg(settings.input_transform_enabled ? 1 : 0)
       .arg(settings.demosaic_quality.trimmed().toLower())
-      .arg(settings.exposure, 0, 'f', 6)
       .arg(settings.hot_dead_pixel_cleanup_amount, 0, 'f', 6)
       .arg(settings.false_color_suppression_amount, 0, 'f', 6)
       .arg(settings.highlight_recovery_enabled ? 1 : 0)
@@ -1230,7 +1231,8 @@ QVariantMap read_libraw_capture_camera_metadata(const QString& file_path) {
   return {{"available", true}, {"backend", "LibRaw"}, {"make", text(raw->idata.make)},
       {"model", text(raw->idata.model)}, {"lens", text(raw->lens.Lens)},
       {"bodySerial", text(raw->shootinginfo.BodySerial)}, {"focalMm", number(raw->other.focal_len)},
-      {"focal35Mm", number(raw->lens.FocalLengthIn35mmFormat)}};
+      {"focal35Mm", number(raw->lens.FocalLengthIn35mmFormat)},
+      {"captureTime", raw->other.timestamp > 0 ? QDateTime::fromSecsSinceEpoch(static_cast<qint64>(raw->other.timestamp)).toString(Qt::ISODate) : QString{}}};
 #else
   (void)file_path;
   return {{"available", false}, {"backend", "unavailable"}};

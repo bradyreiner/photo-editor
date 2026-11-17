@@ -23,25 +23,26 @@ Item {
     activeFocusOnTab: true
     Accessible.role: Accessible.Button
     Accessible.name: root.label
+    Accessible.onPressAction: if (root.enabled) root.triggered()
 
-    Keys.onReturnPressed: root.triggered()
-    Keys.onEnterPressed: root.triggered()
-    Keys.onSpacePressed: root.triggered()
+    Keys.onReturnPressed: if (root.enabled) root.triggered()
+    Keys.onEnterPressed: if (root.enabled) root.triggered()
+    Keys.onSpacePressed: if (root.enabled) root.triggered()
 
-    Rectangle {
+    property Item background: CommandButtonSurface {
+        id: railSurface
+        parent: root
         anchors.fill: parent
-        radius: theme.radiusControl
-        color: theme.commandFill("secondary", root.active, buttonMouse.containsMouse,
-                                 buttonMouse.pressed, root.enabled, true)
-        border.width: theme.commandBorderWidth(root.activeFocus)
-        border.color: root.activeFocus ? theme.focusRing : theme.controlEdge
-
-        Behavior on color {
-            ColorAnimation { duration: theme.reducedMotion ? 0 : theme.durationFast; easing.type: Easing.OutCubic }
-        }
+        hovered: buttonMouse.containsMouse
+        pressed: buttonMouse.pressed
+        selected: root.active
+        focused: root.activeFocus
+        interactiveEnabled: root.enabled
+        fillColor: theme.commandFill("secondary", root.active, buttonMouse.containsMouse, buttonMouse.pressed, root.enabled, true)
     }
 
     AppIcon {
+        objectName: "sharedCommandIcon"
         anchors.centerIn: parent
         name: root.iconName
         width: theme.scaled(18)

@@ -21,7 +21,7 @@ only the explicitly recorded checks have fresh runtime evidence.
 | --- | --- | --- | --- |
 | 1 | Playback, render caching, resolution | Program has bounded processed-frame reuse, four-second composite cache ranges, proxies, Auto/Full/Half/Quarter modes, and measured adaptive detail. Composite caches use a fixed 1280-pixel longest-edge cap. Half/Quarter previously bypassed ready composites; the first correction below addresses that mismatch. | Qualify actual decoded playback, repeated scrubbing, effects, and cache-boundary crossings with representative 1080p and 4K media. Make cache resolution and preview-source selection understandable. Verify paused and playing composites agree for edits that depend on cache rendering. |
 | 2 | Timeline usability | Track targeting, snapping, precision trims, linked A/V, insert/overwrite, ripple, and layout presets exist. Important quality/cache actions are in the View menu; their presence does not prove discoverability. | Walk through a real cut using pointer and keyboard. Check destination tracks, trim feedback, zoom/pan, linked selection, locked tracks, cancellation, and Undo. Keep picture and sound feedback responsive while editing. Decide UI changes from observed friction. |
-| 3 | Crop and transform | The Motion inspector offers Fit/Fill/Stretch under “Crop mode,” scale, offsets, rotation, and keyframes. Program now has direct placement handles, recorded in the animation workflow. There is no explicit per-clip source crop rectangle. | Define a true source crop with direct monitor handles, aspect constraints, reset, and precise values. Keep crop distinct from sequence aspect ratio and placement transforms. Prove the same edges and transforms in Program, cache, export, Undo, and reopened projects. |
+| 3 | Crop and transform | Explicit per-clip source crop edges, precise inspector percentages, aspect presets, reset, and Program handles are implemented alongside Fit/Fill/Stretch and placement transforms. Controller/export fixtures cover oriented and odd-sized crops, Undo, copy, and save/reopen. Cocoa/Metal fixtures pass direct dragging, typed entry, Undo/Reset and primary/secondary video and still crop pixels. | Qualify crop with stabilization, cache, grading and representative footage. Source spatial-grade combinations remain explicitly limited. The full native animation/keyboard route is still unqualified; see the hardening report. |
 | 4 | Music and audio | Typed music/dialogue/effects roles, waveforms, clip fades/gain, track mixing/routing, EQ, dynamics, cleanup, and editable ducking are implemented. | Prove adding independent music under dialogue, trimming to picture, fades, gain/pan automation, mute/solo, processors, and ducking through audible native playback and a measured exported mix. Check sync across seeks, cuts, rate changes, and render-cache boundaries. |
 | 5 | Stabilization | Motion exposes cancellable two-pass analysis, smoothing/crop protection, rolling-shutter settings, preview artifacts, and full-resolution lossless delivery media. | Use actual handheld footage; inspect residual shake, edge reveal, crop, source-time mapping, and before/after. Check cancellation, stale analysis after edits, rebuild, save/reopen, audio sync, and export. Filter availability and artifact readiness must produce actionable states. |
 | 6 | Color and effects | Shared photo-engine grades, camera input transforms, creative CUBEs, adjustment clips, keyframes, scopes, and comparisons exist. Live preview and delivery use several different routes. Spatial-grade delivery explicitly rejects some source-layer/overlap/effect combinations. | Compare decoded Program/cache/export frames with named tolerances. Check camera transform, creative look, adjustment ordering, spatial grades, animation, stabilization, and overlays together. Report unsupported combinations before a user invests in the edit; measure frame time and memory on the accepted combinations. |
@@ -33,28 +33,31 @@ describes the remaining renderer and color-fidelity boundaries in more detail.
 
 ## Confirmed gaps and limits
 
-Items 1-6 are source-backed gaps. Item 7 is an open runtime qualification gate.
-The cache correction below is implemented; these items remain open.
+The implementation status below includes the subsequent
+[professional hardening work](timeline-professional-hardening-2026-10-22.md).
+Implemented controls and focused checks retain separate native qualification gates.
 
-1. **True per-clip crop.** Fit/Fill/Stretch and placement transforms do not supply
-   editable source crop edges. The timeline API has no explicit crop rectangle.
-2. **Live audio processor coverage.** Track settings and FFmpeg delivery include
-   limiter, gate, de-esser, high-pass, and low-pass processing. `TimelineAudioOutput`
-   exposes EQ, compression, cleanup, and duck gain, but no properties or DSP for
-   those five processors. The Program audio-layer bindings do not route them.
-   Users therefore cannot audition these settings through the ordinary live
-   path. A completed render cache can contain the exported processing.
-3. **Positive audio gain in Program.** `TimelineAudioOutput::setVolume()` accepts
-   gains up to 4.0, but both `TimelinePlaybackController::updateAudioVolume()` and
-   `TimelineView.programAudioVolume()` clamp the combined clip/track/fade gain to
-   1.0. A positive track boost produced by loudness normalization is discarded
-   before reaching DSP. Track deserialization also clamps gain to a maximum of
-   0 dB, so positive normalization gains do not survive reopen. The clip Gain
-   control itself currently allows attenuation only, from -36 to 0 dB.
-4. **Processor automation in live audio.** The clip projection evaluates track
-   gain and pan at the playhead, but publishes EQ and compressor values from the
-   static track fields. Export evaluates processor automation per segment.
-   Broader processor controls and automation need one consistent playback path.
+1. **True per-clip crop.** Implemented with normalized source edges distinct from
+   placement and Fit/Fill/Stretch, precise percentages, aspect presets, monitor
+   handles, reset, undo and persistence. Encoded fixtures verify odd pixel edges,
+   orientation and exported pictures. Native interaction and combined-workflow
+   qualification are tracked in the hardening report.
+2. **Live audio processor coverage.** Implemented for live Timeline preview:
+   `TimelineAudioOutput` now routes limiter, gate, de-esser, high-pass, and
+   low-pass settings from the same playhead-evaluated track settings used for
+   automation. These are custom preview processors, not measured equivalents to
+   FFmpeg delivery; see `timeline-professional-hardening-2026-10-22.md` for the
+   limiter and de-esser scope. Encoded comparison and native listening remain
+   open qualification gates.
+3. **Positive audio gain in Program.** Implemented through the live path and
+   persistence: clip and track gain allow +24 dB each, their combined gain is
+   retained through Program DSP up to the corresponding +48 dB linear range, and
+   finite output samples saturate at the device's representable range. The
+   limiter can be enabled to control peaks before output saturation.
+4. **Processor automation in live audio.** Implemented for the mixer processor
+   settings through playhead-evaluated track playback settings; audio gains and
+   processors survive save/reopen. Export and preview processor equivalence
+   remains an open measured qualification gate.
 5. **Spatial grade combinations in delivery.** `frameStreamGradeClipIds()` rejects
    source spatial grades with stabilization, camera input transforms, creative
    LUTs, ordinary visual effects, transitions, changed geometry/opacity, or an
@@ -72,7 +75,7 @@ The cache correction below is implemented; these items remain open.
    native boundary and sync tests. They do not establish seamless or
    sample-accurate playback by themselves.
 
-Address audible preview/export disagreement and missing crop before expanding
+Address audible preview/export disagreement and crop qualification before expanding
 the effects catalog. Keep the unfinished color combinations visible in the
 readiness assessment even when their rejection is correctly reported by export.
 
@@ -169,7 +172,7 @@ duration to cross multiple cache ranges and exercise a sequence gap.
    exact source identities, codecs, frame rates, dimensions, and build identity.
 2. Trim, split, ripple, move linked A/V, undo/redo, and seek forward/backward.
    Check destinations and resulting pictures/sound directly.
-3. Transform and reframe shots; test true crop once implemented. Stabilize the
+3. Transform and reframe shots; test source crop edges and resets. Stabilize the
    handheld shot, compare before/after, and verify timing and edges.
 4. Grade clips, add an adjustment layer, and verify effects ordering. Review
    supported and rejected export combinations before rendering the whole edit.

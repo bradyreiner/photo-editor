@@ -4,6 +4,7 @@ import QtQuick
 Item {
     id: root
     required property var theme
+    property CanvasGuideState guideState: null
     property bool active: false
     property bool locked: false
     property real sourceAspect: 1
@@ -25,8 +26,8 @@ Item {
 
     visible: active && width > 1 && height > 1
     enabled: visible && !locked
-    readonly property real innerWidth: Math.max(1, width - 18)
-    readonly property real innerHeight: Math.max(1, height - 18)
+    readonly property real innerWidth: Math.max(1, width)
+    readonly property real innerHeight: Math.max(1, height)
     readonly property real baseWidth: frameMode === "fit"
         ? Math.min(innerWidth, innerHeight * Math.max(0.01, sourceAspect)) : innerWidth
     readonly property real baseHeight: frameMode === "fit"
@@ -97,12 +98,25 @@ Item {
             if (!(modifiers & Qt.AltModifier)) {
                 if (Math.abs(center.x - width / 2) < 6) center.x = width / 2
                 if (Math.abs(center.y - height / 2) < 6) center.y = height / 2
+                if (guideState) {
+                    const sx = width / Math.max(1, guideState.canvasWidth)
+                    const sy = height / Math.max(1, guideState.canvasHeight)
+                    const angle = (rotation + groupRotation) * Math.PI / 180
+                    const extentX = (Math.abs(Math.cos(angle)) * baseWidth + Math.abs(Math.sin(angle)) * baseHeight) * scale * groupScale / 2
+                    const extentY = (Math.abs(Math.sin(angle)) * baseWidth + Math.abs(Math.cos(angle)) * baseHeight) * scale * groupScale / 2
+                    const horizontalOnly = (modifiers & Qt.ShiftModifier) && Math.abs(dx) >= Math.abs(dy)
+                    const verticalOnly = (modifiers & Qt.ShiftModifier) && !horizontalOnly
+                    if (!verticalOnly)
+                        center.x += guideState.snapDelta([center.x / sx, (center.x - extentX) / sx, (center.x + extentX) / sx], true, sx, 6) * sx
+                    if (!horizontalOnly)
+                        center.y += guideState.snapDelta([center.y / sy, (center.y - extentY) / sy, (center.y + extentY) / sy], false, sy, 6) * sy
+                }
             }
         } else if (gesture.mode === "resize") {
             const vx = gesture.diagonal.x + dx
             const vy = gesture.diagonal.y + dy
             const length = Math.max(1, gesture.diagonal.x ** 2 + gesture.diagonal.y ** 2)
-            scale = Math.max(0.05, Math.min(4, gesture.scale
+            scale = Math.max(0.000001, Math.min(4, gesture.scale
                 * (vx * gesture.diagonal.x + vy * gesture.diagonal.y) / length))
             center = Qt.point(gesture.anchor.x + gesture.diagonal.x * scale / gesture.scale / 2,
                               gesture.anchor.y + gesture.diagonal.y * scale / gesture.scale / 2)
@@ -141,8 +155,17 @@ Item {
         gestureChanged = false
     }
 
+    function pointerWithinViewport(area, x, y) {
+        const point = area.mapToItem(root, x, y)
+        const tolerance = 1
+        return point.x >= -tolerance && point.y >= -tolerance
+            && point.x <= root.width + tolerance && point.y <= root.height + tolerance
+    }
+
     Timer { id: publishTimer; interval: 16; onTriggered: root.flush() }
     Keys.onEscapePressed: function(event) { root.finish(true); event.accepted = true }
+    // Tool switches commit a completed transform. Escape and pointer cancellation
+    // remain explicit rollback paths in the handlers below.
     onActiveChanged: if (!active) finish(false)
 
     Item {
@@ -161,10 +184,18 @@ Item {
             border.color: root.locked ? root.theme.textMuted : root.theme.accentCool400
         }
         MouseArea {
+            id: movePointer
             objectName: "timelineProgramTransformMoveArea"
             anchors.fill: parent
-            cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
-            onPressed: function(mouse) { root.begin("move", mapToItem(root, mouse.x, mouse.y), 0, 0) }
+            cursorShape: pressed ? Qt.ClosedHandCursor
+                : root.pointerWithinViewport(movePointer, mouseX, mouseY) ? Qt.OpenHandCursor : Qt.ArrowCursor
+            onPressed: function(mouse) {
+                if (!root.pointerWithinViewport(movePointer, mouse.x, mouse.y)) {
+                    mouse.accepted = false
+                    return
+                }
+                root.begin("move", mapToItem(root, mouse.x, mouse.y), 0, 0)
+            }
             onPositionChanged: function(mouse) { if (pressed) root.update(mapToItem(root, mouse.x, mouse.y), mouse.modifiers) }
             onReleased: root.finish(false)
             onCanceled: root.finish(true)
@@ -176,16 +207,27 @@ Item {
                 required property point modelData
                 required property int index
                 objectName: "timelineProgramResizeHandle" + index
-                width: 9; height: 9; radius: 1
+                width: root.theme.scaled(10); height: root.theme.scaled(10); radius: root.theme.radius4
                 x: (modelData.x + 1) * frame.width / 2 - width / 2
                 y: (modelData.y + 1) * frame.height / 2 - height / 2
-                color: root.theme.textStrong
+                color: resizePointer.pressed ? root.theme.accentCool300
+                    : resizePointer.containsMouse ? root.theme.accentCool400 : root.theme.textStrong
                 border.color: root.theme.ink950
                 MouseArea {
+                    id: resizePointer
+                    objectName: "timelineProgramResizeHandlePointer" + corner.index
                     anchors.fill: parent
-                    anchors.margins: -7
-                    cursorShape: corner.modelData.x === corner.modelData.y ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor
+                    anchors.margins: -root.theme.scaled(8)
+                    hoverEnabled: true
+                    cursorShape: pressed ? (corner.modelData.x === corner.modelData.y ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor)
+                        : root.pointerWithinViewport(resizePointer, mouseX, mouseY)
+                          ? (corner.modelData.x === corner.modelData.y ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor)
+                          : Qt.ArrowCursor
                     onPressed: function(mouse) {
+                        if (!root.pointerWithinViewport(resizePointer, mouse.x, mouse.y)) {
+                            mouse.accepted = false
+                            return
+                        }
                         root.begin("resize", mapToItem(root, mouse.x, mouse.y), corner.modelData.x, corner.modelData.y)
                     }
                     onPositionChanged: function(mouse) { if (pressed) root.update(mapToItem(root, mouse.x, mouse.y), mouse.modifiers) }
@@ -201,16 +243,28 @@ Item {
             color: root.theme.accentCool400
         }
         Rectangle {
+            id: rotationHandle
             objectName: "timelineProgramRotationHandle"
             anchors.horizontalCenter: parent.horizontalCenter
             y: frame.y >= 32 ? -29 : 12
-            width: 10; height: 10; radius: 5
-            color: root.theme.textStrong
+            width: root.theme.scaled(10); height: root.theme.scaled(10); radius: width / 2
+            color: rotationPointer.pressed ? root.theme.accentCool300
+                : rotationPointer.containsMouse ? root.theme.accentCool400 : root.theme.textStrong
             MouseArea {
+                id: rotationPointer
+                objectName: "timelineProgramRotationHandlePointer"
                 anchors.fill: parent
-                anchors.margins: -7
-                cursorShape: Qt.CrossCursor
-                onPressed: function(mouse) { root.begin("rotate", mapToItem(root, mouse.x, mouse.y), 0, 0) }
+                anchors.margins: -root.theme.scaled(8)
+                hoverEnabled: true
+                cursorShape: pressed ? Qt.CrossCursor
+                    : root.pointerWithinViewport(rotationPointer, mouseX, mouseY) ? Qt.CrossCursor : Qt.ArrowCursor
+                onPressed: function(mouse) {
+                    if (!root.pointerWithinViewport(rotationPointer, mouse.x, mouse.y)) {
+                        mouse.accepted = false
+                        return
+                    }
+                    root.begin("rotate", mapToItem(root, mouse.x, mouse.y), 0, 0)
+                }
                 onPositionChanged: function(mouse) { if (pressed) root.update(mapToItem(root, mouse.x, mouse.y), mouse.modifiers) }
                 onReleased: root.finish(false)
                 onCanceled: root.finish(true)

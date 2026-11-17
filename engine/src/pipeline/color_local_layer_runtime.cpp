@@ -344,6 +344,217 @@ bool apply_local_adjustments_to_look_pixels(
       cancellation);
 }
 
+namespace {
+
+bool apply_retouch_operations(
+    std::vector<ColorPixel>* pixels, int width, int height,
+    const PipelineColorContext& color_context,
+    std::span<const LocalMask> retouch_masks, RemovalQuality removal_quality,
+    CancellationToken cancellation) {
+  const auto normalized_coordinate=[](int value,int extent) {
+    return extent>1 ? static_cast<double>(value)/static_cast<double>(extent-1) : 0.5;
+  };
+  if (has_local_inpaint_patch(retouch_masks)) {
+    apply_local_inpaint_patches(
+        pixels,
+        width,
+        height,
+        color_context,
+        retouch_masks);
+  }
+  if (has_local_mask_clone(retouch_masks)) {
+    apply_local_clone(
+        pixels,
+        width,
+        height,
+        color_context,
+        retouch_masks);
+  }
+  if (has_local_mask_red_eye(retouch_masks)) {
+    apply_local_red_eye(
+        pixels,
+        width,
+        height,
+        color_context,
+        retouch_masks);
+  }
+  if (has_local_mask_skin_cleanup(retouch_masks)) {
+    apply_local_skin_cleanup(
+        pixels,
+        width,
+        height,
+        color_context,
+        retouch_masks);
+  }
+  if (has_local_mask_frequency_smoothing(
+          retouch_masks)) {
+    apply_local_frequency_smoothing(
+        pixels,
+        width,
+        height,
+        color_context,
+        retouch_masks);
+  }
+  if (cancellation.cancelled()) return false;
+
+  if (has_local_mask_heal(retouch_masks)) {
+    std::vector<double> heal_mask(
+        pixels->size(),
+        0.0);
+    auto has_nonzero_heal = false;
+    auto texture_sum = 0.0;
+    auto color_sum = 0.0;
+    auto weight_sum = 0.0;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const auto index =
+            static_cast<std::size_t>(
+                y * width + x);
+        const auto heal = composite_local_heal(
+            normalized_coordinate(x, width),
+            normalized_coordinate(y, height),
+            (*pixels)[index],
+            color_context,
+            retouch_masks);
+        heal_mask[index] = heal.weight;
+        has_nonzero_heal =
+            has_nonzero_heal ||
+            heal.weight > 1.0e-4;
+        if (heal.weight > 1.0e-4) {
+          texture_sum +=
+              heal.weight *
+              heal.texture_blend;
+          color_sum +=
+              heal.weight *
+              heal.color_blend;
+          weight_sum += heal.weight;
+        }
+      }
+    }
+    if (has_nonzero_heal) {
+      const auto texture_blend =
+          weight_sum > 1.0e-6
+              ? texture_sum / weight_sum
+              : 0.68;
+      const auto color_blend =
+          weight_sum > 1.0e-6
+              ? color_sum / weight_sum
+              : 0.46;
+      apply_local_removal(
+          pixels,
+          width,
+          height,
+          heal_mask,
+          0.35 +
+              clamp_unit(texture_blend) *
+                  0.30,
+          removal_quality,
+          texture_blend,
+          color_blend,
+          cancellation);
+    }
+  }
+  if (has_local_mask_removal(retouch_masks)) {
+    std::vector<double> removal_mask(
+        pixels->size(),
+        0.0);
+    auto has_nonzero_removal = false;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const auto index =
+            static_cast<std::size_t>(
+                y * width + x);
+        removal_mask[index] =
+            composite_local_removal_weight(
+                normalized_coordinate(
+                    x,
+                    width),
+                normalized_coordinate(
+                    y,
+                    height),
+                (*pixels)[index],
+                color_context,
+                retouch_masks,
+                "");
+        has_nonzero_removal =
+            has_nonzero_removal ||
+            removal_mask[index] > 1.0e-4;
+      }
+    }
+    if (has_nonzero_removal) {
+      apply_local_removal(
+          pixels,
+          width,
+          height,
+          removal_mask,
+          0.0,
+          removal_quality,
+          1.0,
+          1.0,
+          cancellation);
+    }
+  }
+  return !cancellation.cancelled();
+}
+
+bool apply_retouch_with_source_context(
+    std::vector<ColorPixel>* pixels, int width, int height,
+    const PipelineColorContext& color_context, const ColorAdjustmentState& state,
+    const std::vector<LocalMask>& masks, RemovalQuality removal_quality,
+    CancellationToken cancellation) {
+  const auto* source=state.retouch_source_context.get();
+  const auto contextual=source && !source->masks.empty() && source->width>0 && source->height>0 &&
+      source->pixels.size()==static_cast<std::size_t>(source->width)*static_cast<std::size_t>(source->height) &&
+      source->crop_width==width && source->crop_height==height && source->crop_x>=0 && source->crop_y>=0 &&
+      source->crop_x<=source->width-width && source->crop_y<=source->height-height &&
+      (source->width!=width || source->height!=height || source->crop_x!=0 || source->crop_y!=0);
+  if (!contextual) return apply_retouch_operations(pixels,width,height,color_context,masks,removal_quality,cancellation);
+  if (cancellation.cancelled()) return false;
+  // One operation-level copy, shared by every retouch tool and stroke. Overlay
+  // current crop pixels so earlier local adjustments remain part of the source.
+  auto full=source->pixels;
+  for (int y=0;y<height;++y) {
+    if (cancellation.cancelled()) return false;
+    std::copy_n(pixels->begin()+static_cast<std::ptrdiff_t>(y)*width,width,
+        full.begin()+static_cast<std::ptrdiff_t>(y+source->crop_y)*source->width+source->crop_x);
+  }
+  if (!apply_retouch_operations(&full,source->width,source->height,color_context,
+          source->masks,removal_quality,cancellation)) return false;
+  for (int y=0;y<height;++y) {
+    if (cancellation.cancelled()) return false;
+    std::copy_n(full.begin()+static_cast<std::ptrdiff_t>(y+source->crop_y)*source->width+source->crop_x,width,
+        pixels->begin()+static_cast<std::ptrdiff_t>(y)*width);
+  }
+  return true;
+}
+
+}  // namespace
+
+bool apply_component_retouch_operations(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const PipelineColorContext& color_context,
+    const std::vector<LocalMask>& retouch_masks,
+    RemovalQuality removal_quality,
+    CancellationToken cancellation) {
+  if (pixels == nullptr || width <= 0 || height <= 0 ||
+      pixels->size() != static_cast<std::size_t>(width) *
+                            static_cast<std::size_t>(height) ||
+      retouch_masks.empty() || cancellation.cancelled()) {
+    return false;
+  }
+  for (const auto& mask : retouch_masks) {
+    if (cancellation.cancelled()) return false;
+    const std::span<const LocalMask> one_mask(&mask, 1);
+    if (!apply_retouch_operations(pixels, width, height, color_context,
+            one_mask, removal_quality, cancellation)) {
+      return false;
+    }
+  }
+  return !cancellation.cancelled();
+}
+
 bool apply_color_layers_stage(
     std::vector<ColorPixel>* pixels,
     int width,
@@ -367,7 +578,8 @@ bool apply_color_layers_stage(
   // empty. Retain the stage's finite-output contract for invalid upstream
   // data while making the common exposure-only path effectively free.
   if (state.local_mask_sets.empty() && state.local_masks.empty() &&
-      state.retouch_masks.empty() && state.photo_layers.empty() &&
+      state.retouch_masks.empty() && state.post_composite_retouch_masks.empty() &&
+      state.photo_layers.empty() &&
       (!include_display_referred_text_layers ||
        state.display_referred_text_layers.empty()) &&
       !state.linear_mask_enabled && !state.radial_mask_enabled) {
@@ -612,151 +824,14 @@ bool apply_color_layers_stage(
   }
 
   const auto retouch_timer = StageClock::now();
-  const auto& retouch_masks =
+  const auto& all_retouch_masks =
       state.retouch_masks.empty()
           ? state.local_masks
           : state.retouch_masks;
-  if (has_local_inpaint_patch(retouch_masks)) {
-    apply_local_inpaint_patches(
-        pixels,
-        width,
-        height,
-        color_context,
-        retouch_masks);
-  }
-  if (has_local_mask_clone(retouch_masks)) {
-    apply_local_clone(
-        pixels,
-        width,
-        height,
-        color_context,
-        retouch_masks);
-  }
-  if (has_local_mask_red_eye(retouch_masks)) {
-    apply_local_red_eye(
-        pixels,
-        width,
-        height,
-        color_context,
-        retouch_masks);
-  }
-  if (has_local_mask_skin_cleanup(retouch_masks)) {
-    apply_local_skin_cleanup(
-        pixels,
-        width,
-        height,
-        color_context,
-        retouch_masks);
-  }
-  if (has_local_mask_frequency_smoothing(
-          retouch_masks)) {
-    apply_local_frequency_smoothing(
-        pixels,
-        width,
-        height,
-        color_context,
-        retouch_masks);
-  }
-  if (cancellation.cancelled()) {
+  if (!all_retouch_masks.empty() &&
+      !apply_retouch_with_source_context(pixels, width, height, color_context, state,
+          all_retouch_masks, removal_quality, cancellation)) {
     return false;
-  }
-
-  if (has_local_mask_heal(retouch_masks)) {
-    std::vector<double> heal_mask(
-        pixels->size(),
-        0.0);
-    auto has_nonzero_heal = false;
-    auto texture_sum = 0.0;
-    auto color_sum = 0.0;
-    auto weight_sum = 0.0;
-    for (int y = 0; y < height; ++y) {
-      for (int x = 0; x < width; ++x) {
-        const auto index =
-            static_cast<std::size_t>(
-                y * width + x);
-        const auto heal = composite_local_heal(
-            normalized_coordinate(x, width),
-            normalized_coordinate(y, height),
-            (*pixels)[index],
-            color_context,
-            retouch_masks);
-        heal_mask[index] = heal.weight;
-        has_nonzero_heal =
-            has_nonzero_heal ||
-            heal.weight > 1.0e-4;
-        if (heal.weight > 1.0e-4) {
-          texture_sum +=
-              heal.weight *
-              heal.texture_blend;
-          color_sum +=
-              heal.weight *
-              heal.color_blend;
-          weight_sum += heal.weight;
-        }
-      }
-    }
-    if (has_nonzero_heal) {
-      const auto texture_blend =
-          weight_sum > 1.0e-6
-              ? texture_sum / weight_sum
-              : 0.68;
-      const auto color_blend =
-          weight_sum > 1.0e-6
-              ? color_sum / weight_sum
-              : 0.46;
-      apply_local_removal(
-          pixels,
-          width,
-          height,
-          heal_mask,
-          0.35 +
-              clamp_unit(texture_blend) *
-                  0.30,
-          removal_quality,
-          texture_blend,
-          color_blend,
-          cancellation);
-    }
-  }
-  if (has_local_mask_removal(retouch_masks)) {
-    std::vector<double> removal_mask(
-        pixels->size(),
-        0.0);
-    auto has_nonzero_removal = false;
-    for (int y = 0; y < height; ++y) {
-      for (int x = 0; x < width; ++x) {
-        const auto index =
-            static_cast<std::size_t>(
-                y * width + x);
-        removal_mask[index] =
-            composite_local_removal_weight(
-                normalized_coordinate(
-                    x,
-                    width),
-                normalized_coordinate(
-                    y,
-                    height),
-                (*pixels)[index],
-                color_context,
-                retouch_masks,
-                "");
-        has_nonzero_removal =
-            has_nonzero_removal ||
-            removal_mask[index] > 1.0e-4;
-      }
-    }
-    if (has_nonzero_removal) {
-      apply_local_removal(
-          pixels,
-          width,
-          height,
-          removal_mask,
-          0.0,
-          removal_quality,
-          1.0,
-          1.0,
-          cancellation);
-    }
   }
   if (telemetry != nullptr) {
     telemetry->retouch_ms +=
@@ -780,6 +855,16 @@ bool apply_color_layers_stage(
           state.display_referred_text_layers, cancellation, &layer_error)) {
     if (telemetry != nullptr) telemetry->failure_reason = layer_error;
     return false;
+  }
+  if (!state.post_composite_retouch_masks.empty()) {
+    const auto component_retouch_timer = StageClock::now();
+    if (!apply_component_retouch_operations(pixels, width, height, color_context,
+            state.post_composite_retouch_masks, removal_quality, cancellation)) {
+      return false;
+    }
+    if (telemetry != nullptr) {
+      telemetry->retouch_ms += elapsed_stage_ms(component_retouch_timer);
+    }
   }
   return !cancellation.cancelled() &&
          std::ranges::all_of(

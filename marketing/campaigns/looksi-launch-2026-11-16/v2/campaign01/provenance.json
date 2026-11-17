@@ -1,0 +1,74 @@
+{
+  "campaign": "01",
+  "assets": [
+    {
+      "copy": "sources/before-native-export.png",
+      "original_source": "marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/baseline/nepal-mountain-working-copy-full-resolution.png",
+      "source_sha256": "01672a9a65bc0f84241b85095d506cb20b8bbdcbb8e3eae493d55a1e2ce7608f",
+      "copy_sha256": "01672a9a65bc0f84241b85095d506cb20b8bbdcbb8e3eae493d55a1e2ce7608f",
+      "kind": "native current still export",
+      "note": "Baseline actual native export; not a RAW-processing claim.",
+      "source_copy_unmodified": true
+    },
+    {
+      "copy": "sources/chosen-native-export.png",
+      "original_source": "marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+      "source_sha256": "ed9c980585ae74e18ab2f9dbd383e988f5b79c7329da69b9878ccc9099054830",
+      "copy_sha256": "ed9c980585ae74e18ab2f9dbd383e988f5b79c7329da69b9878ccc9099054830",
+      "kind": "native current still export",
+      "note": "Corrected second finish file.5900K/+12%contrast/+0.15EV per root current native capture; pixels differ from baseline.",
+      "source_copy_unmodified": true
+    },
+    {
+      "copy": "sources/first-light-native-board.png",
+      "original_source": ".photo-editor/nepal-near-far/foreground-export/nepal-near-far-05.png",
+      "source_sha256": "8c8f5684e8d013bc47dbc83659ac5fc042e82c52d47bed965286dffc79d87151",
+      "copy_sha256": "8c8f5684e8d013bc47dbc83659ac5fc042e82c52d47bed965286dffc79d87151",
+      "kind": "native board export",
+      "note": "Actual FIRST LIGHT board from NEPAL / NEAR & FAR; delivery manifest exportedAt2026-11-16T16:23:22.989Z.",
+      "source_copy_unmodified": true
+    },
+    {
+      "copy": "sources/archive-native-tone-12-20s.mp4",
+      "original_source": "marketing/animated-trailer/public/media/desktop-action/tone-curve.mp4",
+      "source_sha256": "70f6f0ae68b30048fb1bc51c806f5f8c756bb62fe4d2b297336dfe9ea9edc756",
+      "copy_sha256": "1b676f22e7b5ac5cab3cb39d30d96194d8c62aac547f3d539c04c84d88772b70",
+      "kind": "historical native action recording",
+      "note": "Source12\u201320s, true8s at normal speed; actual action, no simulated response. On-screen25Oct2026 date from historical archive context/file date. Source provenance copied alongside.",
+      "source_copy_unmodified": false
+    },
+    {
+      "copy": "sources/archive-tone-still.png",
+      "original_source": "marketing/animated-trailer/public/media/desktop-action/tone-curve.mp4",
+      "source_sha256": "70f6f0ae68b30048fb1bc51c806f5f8c756bb62fe4d2b297336dfe9ea9edc756",
+      "copy_sha256": "e1dbdb7d8a17654f6560ac071f01310af6a54943f87b236ae9c0dd2f88b19f2a",
+      "kind": "historical native frame",
+      "note": "Frame20s for storyboard/static design; date label historical25Oct2026.",
+      "source_copy_unmodified": false
+    }
+  ],
+  "fonts": [
+    {
+      "family": "instrumentserif",
+      "license_source": "apps/desktop/assets/fonts/instrumentserif/OFL.txt",
+      "sha256": "129ed7618959716959f2941fdd5b49e0ad6e6c1d78726761786a00253d865521"
+    },
+    {
+      "family": "spacegrotesk",
+      "license_source": "apps/desktop/assets/fonts/spacegrotesk/OFL.txt",
+      "sha256": "564ce565c371c5e5bbf286006565a7c9aa55a9f56e7ca58d56e05d649dd61a72"
+    },
+    {
+      "family": "spacemono",
+      "license_source": "apps/desktop/assets/fonts/spacemono/OFL.txt",
+      "sha256": "8e4ee42b2553e1e01504e61cb0d46d148cd8c9e5eacaa3622a7df2d4f2955b9f"
+    }
+  ],
+  "audio": {
+    "path": "audio/01-original-letter-bed.wav",
+    "authorship": "Original deterministic additive sine synthesis and synthesized noise ticks in tools/build.py; no samples, voice or borrowed composition."
+  },
+  "graphic_work": "Original paper layout, hand-style annotations, lines, image framing and editorial comparison wipe; all identified as campaign design. No UI reconstructed or simulated.",
+  "temporal_scope": "Current16Nov2026 still exports plus historical25Oct2026 app action montage; not a continuous current source-to-export recording.",
+  "founder": "Text speaks as builder; no simulated founder face or voice. Optional self-shoot is separate."
+}

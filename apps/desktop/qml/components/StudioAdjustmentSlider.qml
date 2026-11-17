@@ -9,13 +9,20 @@ InspectorSlider {
     property string targetSupport: "base-image,adjustment-layer"
     readonly property string targetSupportContract: workspace.adjustmentControlTargetSupportContract
     readonly property string targetSupportSignature: workspace.adjustmentControlTargetSupportSignature(targetSupport)
-    readonly property string studioAdjustmentSliderContract: "studio-adjustment-slider:v2|shared-inspector-slider:true|wide-rail:true|fixed-value:true|fixed-reset:true|modified-marker:false|double-click-reset:true|coalesced-drag:true|target-aware:true|disabled-reason:true|no-elide:true"
+    readonly property string studioAdjustmentSliderContract: "studio-adjustment-slider:v2|shared-inspector-slider:true|compact-row:true|fixed-value:true|fixed-reset:true|modified-marker:false|double-click-reset:true|coalesced-drag:true|target-aware:true|disabled-reason:true|no-elide:true"
     readonly property string studioAdjustmentSliderSignature: studioAdjustmentSliderContract +
                                                              "|target-support:" + targetSupport +
                                                              "|target-supported:" + String(supportsActiveEditTarget) +
                                                              "|slider:" + sliderContract +
                                                              "|target:" + targetSupportSignature
     readonly property bool supportsActiveEditTarget: workspace.adjustmentControlCanWriteActiveTarget(targetSupport)
+
+    // All Edit adjustments share one aligned, compact row.
+    forceCompact: width >= themeRow.scaled(300)
+    controlHeight: themeRow.scaled(forceCompact
+                                 ? (themeRow.densityComfortable ? 34 : themeRow.densityCompact ? 28 : 30)
+                                 : (themeRow.densityComfortable ? 62 : themeRow.densityCompact ? 50 : 56))
+    Theme { id: themeRow }
 
     Layout.fillWidth: true
     disabledReason: supportsActiveEditTarget ? "" : workspace.adjustmentControlDisabledReason(targetSupport)

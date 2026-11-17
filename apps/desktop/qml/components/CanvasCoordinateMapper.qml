@@ -12,6 +12,22 @@ QtObject {
     property real cropWidth: 1
     property real cropHeight: 1
     property real rotationDegrees: 0
+    // The controller delegates to the exact engine sampler. Keep the standalone
+    // affine fallback for components/tests without a loaded image.
+    property var geometryMapper: null
+    property string coordinateSpace: "source"
+    property string inputCoordinateSpace: coordinateSpace
+    // Invokable C++ calls are opaque to QML's dependency tracker. Publish a
+    // revision so bound handles/outlines move when geometry or the mask changes.
+    property int geometryRevision: 0
+    property Connections geometryChanges: Connections {
+        target: root.geometryMapper
+        ignoreUnknownSignals: true
+        function onControlsChanged() { root.geometryRevision += 1 }
+        function onPreviewChanged() { root.geometryRevision += 1 }
+        function onActiveBrushStrokeChanged() { root.geometryRevision += 1 }
+    }
+
     property real devicePixelRatio: 1
     property string fitMode: "fit"
 
@@ -24,19 +40,32 @@ QtObject {
 
     function rotateUnitPoint(x, y, degrees) {
         const radians = Number(degrees) * Math.PI / 180.0
-        const dx = Number(x) - 0.5
-        const dy = Number(y) - 0.5
+        const aspectWidth = Math.max(1, Number(contentWidth))
+        const aspectHeight = Math.max(1, Number(contentHeight))
+        const dx = (Number(x) - 0.5) * aspectWidth
+        const dy = (Number(y) - 0.5) * aspectHeight
         const cosValue = Math.cos(radians)
         const sinValue = Math.sin(radians)
         return {
-            x: 0.5 + dx * cosValue - dy * sinValue,
-            y: 0.5 + dx * sinValue + dy * cosValue
+            x: 0.5 + (dx * cosValue - dy * sinValue) / aspectWidth,
+            y: 0.5 + (dx * sinValue + dy * cosValue) / aspectHeight
         }
     }
 
     function imageToViewPoint(normalizedX, normalizedY) {
         if (!contentValid)
             return { valid: false, x: 0, y: 0, normalizedX: 0, normalizedY: 0 }
+        if (geometryRevision >= 0 && geometryMapper && geometryMapper.mapCanvasCoordinate && coordinateSpace !== "output") {
+            const mapped = geometryMapper.mapCanvasCoordinate(Number(normalizedX), Number(normalizedY), true, coordinateSpace)
+            return { valid: mapped.valid === true,
+                     x: contentX + Number(mapped.x) * contentWidth,
+                     y: contentY + Number(mapped.y) * contentHeight,
+                     normalizedX: Number(normalizedX), normalizedY: Number(normalizedY) }
+        }
+        if (coordinateSpace === "output")
+            return { valid: normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1,
+                     x: contentX + Number(normalizedX) * contentWidth, y: contentY + Number(normalizedY) * contentHeight,
+                     normalizedX: Number(normalizedX), normalizedY: Number(normalizedY) }
         const imageX = Number(normalizedX)
         const imageY = Number(normalizedY)
         const cropLocalX = (imageX - cropX) / cropWidth
@@ -56,6 +85,14 @@ QtObject {
             return { valid: false, x: 0, y: 0, viewX: 0, viewY: 0 }
         const viewLocalX = (Number(viewX) - contentX) / contentWidth
         const viewLocalY = (Number(viewY) - contentY) / contentHeight
+        if (geometryRevision >= 0 && geometryMapper && geometryMapper.mapCanvasCoordinate && inputCoordinateSpace !== "output") {
+            const mapped = geometryMapper.mapCanvasCoordinate(viewLocalX, viewLocalY, false, inputCoordinateSpace)
+            return { valid: mapped.valid === true, x: Number(mapped.x), y: Number(mapped.y),
+                     viewX: Number(viewX), viewY: Number(viewY) }
+        }
+        if (inputCoordinateSpace === "output")
+            return { valid: viewLocalX >= 0 && viewLocalX <= 1 && viewLocalY >= 0 && viewLocalY <= 1,
+                     x: clamp(viewLocalX, 0, 1), y: clamp(viewLocalY, 0, 1), viewX: Number(viewX), viewY: Number(viewY) }
         const unrotated = rotateUnitPoint(viewLocalX, viewLocalY, -rotationDegrees)
         const imageX = cropX + unrotated.x * cropWidth
         const imageY = cropY + unrotated.y * cropHeight

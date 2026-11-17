@@ -114,8 +114,8 @@ ColumnLayout {
                             Layout.fillWidth: true
                             text: String(modelData.originalPath || "")
                             color: theme.textFaint
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
                         }
@@ -125,8 +125,8 @@ ColumnLayout {
                             visible: String(modelData.candidatePath || "").length > 0
                             text: "Candidate  " + String(modelData.candidatePath || "")
                             color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
                         }

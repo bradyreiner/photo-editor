@@ -1,4 +1,5 @@
 #include "segmentation_result_schema.h"
+#include "sam2_mask_coverage.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -51,14 +52,22 @@ int main() {
       static_cast<qsizetype>(sizeof(refinement_logits)));
   refinement_result.refinement_logits_width = 2;
   refinement_result.refinement_logits_height = 2;
+  refinement_result.refinement_logits_contract = "sam2-square-1024:v2";
   const auto refinement_variant =
       segmentation_mask_variant(refinement_result, QStringLiteral("object"));
   const auto refinement_restored =
       segmentation_result_from_mask_variant(refinement_variant);
   if (refinement_restored.refinement_logits != refinement_result.refinement_logits ||
       refinement_restored.refinement_logits_width != 2 ||
-      refinement_restored.refinement_logits_height != 2) {
+      refinement_restored.refinement_logits_height != 2 ||
+      refinement_restored.refinement_logits_contract != refinement_result.refinement_logits_contract) {
     return fail("Smart Select preview variants must preserve exact decoder logits for iterative refinement");
+  }
+
+  if (sam2_mask_coverage(2.0, 0.1, 0.1) != 255 || sam2_mask_coverage(-2.0, 0.1, 0.1) != 0 ||
+      sam2_mask_coverage(0.0, 1.0, 0.0) != 128 || sam2_mask_coverage(0.25, 1.0, 0.0) != 191 ||
+      sam2_mask_coverage(0.2, 0.0, 0.0) != 255 || sam2_mask_coverage(-0.2, 0.0, 0.0) != 0) {
+    return fail("SAM2 coverage must preserve solid interiors, clear backgrounds, and antialias only the boundary");
   }
 
   if (segmentation_result_nonzero_count(square) != 4 ||

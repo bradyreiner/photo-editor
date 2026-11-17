@@ -48,6 +48,7 @@ class BrushPreviewCompositor {
   [[nodiscard]] virtual QSize nativeTextureSize() const { return {}; }
 
   [[nodiscard]] static std::unique_ptr<BrushPreviewCompositor> create();
+  [[nodiscard]] static std::unique_ptr<BrushPreviewCompositor> createCpu();
 };
 
 }  // namespace photo_editor::desktop

@@ -1,0 +1,10 @@
+{
+  "schema": "looksy-catalog-snapshot-candidate-v1",
+  "operation": "catalog_snapshot 0 --library",
+  "elapsed_seconds": 0.5564570419955999,
+  "stdout_bytes": 88892,
+  "sha256": "8e019cbfcb7838cde61a3a7c464d42028abbfdb8038e7eb2087cbf085f34375f",
+  "exit_code": 0,
+  "assets": 171,
+  "recipes_loaded": false
+}

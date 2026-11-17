@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <utility>
 
@@ -8,6 +9,7 @@
 
 #if defined(Q_OS_MACOS)
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #elif defined(Q_OS_LINUX)
 #include <unistd.h>
 #elif defined(Q_OS_WIN)
@@ -23,6 +25,7 @@
 #include <QFutureWatcher>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDataStream>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -31,10 +34,14 @@
 #include <QImage>
 #include <QProcess>
 #include <QPromise>
+#include <QSaveFile>
 #include <QSet>
 #include <QSettings>
+#include <QSemaphore>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 
@@ -55,9 +62,57 @@ struct TimelineHistoryTestAccess final {
     return controller.working_session_generation_;
   }
 
+  static quint64 autosaveGenerationToken(
+      const TimelineDocumentController& controller) {
+    return controller.autosave_generation_token_;
+  }
+
+  static bool isDirty(const TimelineDocumentController& controller) {
+    return controller.dirty_;
+  }
+
   static quint64 documentEditRevision(
       const TimelineDocumentController& controller) {
     return controller.document_edit_revision_;
+  }
+
+  static bool backgroundWorkPaused(const TimelineDocumentController& controller) {
+    return controller.agent_task_background_work_paused_;
+  }
+
+  static bool clearAudioPreviewSources(
+      TimelineDocumentController& controller,
+      const QString& clip_id) {
+    for (auto& track : controller.tracks_) {
+      for (auto& clip : track.clips) {
+        if (clip.clip_id != clip_id || clip.media_type != QStringLiteral("audio")) {
+          continue;
+        }
+        clip.poster_source.clear();
+        clip.waveform_source.clear();
+        clip.source_integrity_status = QStringLiteral("pending");
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void setBackgroundWorkPausedForTest(
+      TimelineDocumentController& controller,
+      const bool paused) {
+    controller.agent_task_background_work_paused_ = paused;
+  }
+
+  static bool hydrationQueueEmpty(const TimelineDocumentController& controller) {
+    return controller.deferred_media_hydration_queue_.isEmpty() &&
+        controller.source_integrity_queue_.isEmpty() &&
+        controller.media_analysis_queue_.isEmpty() &&
+        controller.waveform_request_queue_.isEmpty() &&
+        controller.poster_request_queue_.isEmpty();
+  }
+
+  static void stopEditJournalTimer(TimelineDocumentController& controller) {
+    controller.edit_journal_timer_.stop();
   }
 
   static QFuture<bool> queueJournalEntry(
@@ -70,6 +125,99 @@ struct TimelineHistoryTestAccess final {
   static QFutureWatcher<bool>* editJournalWatcher(
       TimelineDocumentController& controller) {
     return &controller.edit_journal_watcher_;
+  }
+
+  static QFuture<bool> editJournalFuture(
+      const TimelineDocumentController& controller) {
+    return controller.edit_journal_future_;
+  }
+
+  static void scheduleAutosave(TimelineDocumentController& controller) {
+    controller.scheduleAutosaveSnapshot();
+  }
+
+  static QFutureWatcher<bool>* autosaveWatcher(
+      TimelineDocumentController& controller) {
+    return &controller.autosave_watcher_;
+  }
+
+  static QJsonObject recoveryDocumentForCandidate(
+      const TimelineDocumentController& controller,
+      const QString& candidate_id,
+      QVariantMap* metadata,
+      bool* journal_scan_started) {
+    return controller.recoveryDocumentForCandidate(
+        candidate_id, metadata, journal_scan_started);
+  }
+
+  static QFuture<void> scheduleRecoveryStorageTask(std::function<void()> task) {
+    return TimelineDocumentController::scheduleRecoveryStorageTestTask(std::move(task));
+  }
+
+  static QVariantMap readTimelineJournal(const QString& path) {
+    return TimelineDocumentController::timelineJournalCacheReadForTesting(path);
+  }
+
+  static QVariantMap timelineJournalCacheDiagnostics() {
+    return TimelineDocumentController::timelineJournalCacheDiagnosticsForTesting();
+  }
+
+  static void clearTimelineJournalCache() {
+    TimelineDocumentController::clearTimelineJournalCacheForTesting();
+  }
+
+  static void holdTimelineJournalValidation(const QString& path) {
+    TimelineDocumentController::holdTimelineJournalValidationForTesting(path);
+  }
+
+  static void releaseTimelineJournalValidation(const QString& path) {
+    TimelineDocumentController::releaseTimelineJournalValidationForTesting(path);
+  }
+
+  static void holdAutosaveCommit(const QString& path, const QString& hash) {
+    TimelineDocumentController::holdTimelineAutosaveCommitForTesting(path, hash);
+  }
+
+  static bool waitAutosaveCommitGate(
+      const QString& path, const QString& hash, const int timeout_ms) {
+    return TimelineDocumentController::waitTimelineAutosaveCommitGateForTesting(
+        path, hash, timeout_ms);
+  }
+
+  static void releaseAutosaveCommit(const QString& path, const QString& hash) {
+    TimelineDocumentController::releaseTimelineAutosaveCommitForTesting(path, hash);
+  }
+
+  static void cancelTimelineStorage() {
+    TimelineDocumentController::cancelTimelineStorageForTesting();
+  }
+
+  static qint64 timelineJournalCacheCostEstimate(
+      const qint64 document_bytes, const qint64 entry_bytes = 0) {
+    return TimelineDocumentController::timelineJournalCacheCostEstimateForTesting(
+        document_bytes, entry_bytes);
+  }
+
+  static QVariantList discoverTimelineRecoveries() {
+    return TimelineDocumentController::discoverTimelineRecoveriesForTesting();
+  }
+
+  static QString journalRoot(const TimelineDocumentController& controller) {
+    return controller.editJournalRootPath();
+  }
+
+  static QString journalPath(const TimelineDocumentController& controller) {
+    return controller.editJournalPath();
+  }
+
+  static bool flushEditJournal(TimelineDocumentController& controller) {
+    return controller.flushEditJournal();
+  }
+
+  static bool persistTimelineJournalEntry(
+      const QString& path, QJsonObject entry) {
+    return TimelineDocumentController::persistTimelineJournalEntryForTesting(
+        path, std::move(entry));
   }
 };
 }  // namespace photo_editor::desktop
@@ -106,6 +254,39 @@ class JournalFutureGate final {
   bool released_ = false;
 };
 
+class JournalValidationGateRelease final {
+ public:
+  explicit JournalValidationGateRelease(QString path) : path_(std::move(path)) {}
+  ~JournalValidationGateRelease() {
+    if (!path_.isEmpty())
+      photo_editor::desktop::TimelineHistoryTestAccess::releaseTimelineJournalValidation(path_);
+  }
+  void release() {
+    if (path_.isEmpty()) return;
+    photo_editor::desktop::TimelineHistoryTestAccess::releaseTimelineJournalValidation(path_);
+    path_.clear();
+  }
+
+ private:
+  QString path_;
+};
+
+class AutosaveCommitGateRelease final {
+ public:
+  AutosaveCommitGateRelease(QString path, QString hash)
+      : path_(std::move(path)), hash_(std::move(hash)) {}
+  ~AutosaveCommitGateRelease() { release(); }
+  void release() {
+    if (path_.isEmpty()) return;
+    photo_editor::desktop::TimelineHistoryTestAccess::releaseAutosaveCommit(path_, hash_);
+    path_.clear();
+  }
+
+ private:
+  QString path_;
+  QString hash_;
+};
+
 qint64 current_resident_bytes() {
 #if defined(Q_OS_MACOS)
   mach_task_basic_info_data_t info{};
@@ -140,6 +321,24 @@ qint64 current_resident_bytes() {
 #endif
 }
 
+struct AllocatorMemorySnapshot final {
+  qint64 bytes_in_use = -1;
+  qint64 bytes_allocated = -1;
+};
+
+AllocatorMemorySnapshot current_allocator_memory() {
+#if defined(Q_OS_MACOS)
+  malloc_statistics_t statistics{};
+  malloc_zone_statistics(malloc_default_zone(), &statistics);
+  return {
+      static_cast<qint64>(statistics.size_in_use),
+      static_cast<qint64>(statistics.size_allocated),
+  };
+#else
+  return {};
+#endif
+}
+
 qint64 percentile_95(QVector<qint64> samples) {
   if (samples.isEmpty()) {
     return 0;
@@ -163,6 +362,1199 @@ QString hash_object(const QJsonObject& object) {
 QByteArray read_file(const QString& path) {
   QFile file(path);
   return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+}
+
+QString json_value_summary(const QJsonValue& value) {
+  switch (value.type()) {
+    case QJsonValue::Null:
+      return QStringLiteral("null");
+    case QJsonValue::Bool:
+      return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case QJsonValue::Double:
+      return QString::number(value.toDouble(), 'g', 16);
+    case QJsonValue::String: {
+      const auto string = value.toString();
+      return QStringLiteral("string(len=%1, prefix=%2)")
+          .arg(string.size())
+          .arg(string.left(48));
+    }
+    case QJsonValue::Array:
+      return QStringLiteral("array(len=%1)").arg(value.toArray().size());
+    case QJsonValue::Object:
+      return QStringLiteral("object(keys=%1)").arg(value.toObject().size());
+    case QJsonValue::Undefined:
+      return QStringLiteral("missing");
+  }
+  return QStringLiteral("unknown");
+}
+
+void collect_json_differences(
+    const QJsonValue& expected,
+    const QJsonValue& actual,
+    const QString& path,
+    QStringList* differences,
+    const qsizetype maximum_differences = 24) {
+  if (differences == nullptr || differences->size() >= maximum_differences ||
+      expected == actual) {
+    return;
+  }
+  if (expected.isObject() && actual.isObject()) {
+    const auto expected_object = expected.toObject();
+    const auto actual_object = actual.toObject();
+    QSet<QString> keys;
+    for (const auto& key : expected_object.keys()) keys.insert(key);
+    for (const auto& key : actual_object.keys()) keys.insert(key);
+    QStringList ordered_keys = keys.values();
+    std::sort(ordered_keys.begin(), ordered_keys.end());
+    for (const auto& key : ordered_keys) {
+      collect_json_differences(
+          expected_object.value(key), actual_object.value(key),
+          path + QLatin1Char('.') + key, differences, maximum_differences);
+      if (differences->size() >= maximum_differences) return;
+    }
+    return;
+  }
+  if (expected.isArray() && actual.isArray()) {
+    const auto expected_array = expected.toArray();
+    const auto actual_array = actual.toArray();
+    if (expected_array.size() != actual_array.size()) {
+      differences->push_back(QStringLiteral("%1.length expected=%2 actual=%3")
+                                 .arg(path)
+                                 .arg(expected_array.size())
+                                 .arg(actual_array.size()));
+    }
+    const auto shared_size = qMin(expected_array.size(), actual_array.size());
+    for (auto index = 0; index < shared_size; ++index) {
+      collect_json_differences(
+          expected_array.at(index), actual_array.at(index),
+          QStringLiteral("%1[%2]").arg(path).arg(index), differences,
+          maximum_differences);
+      if (differences->size() >= maximum_differences) return;
+    }
+    return;
+  }
+  differences->push_back(QStringLiteral("%1 expected=%2 actual=%3")
+                             .arg(path, json_value_summary(expected),
+                                  json_value_summary(actual)));
+}
+
+int run_exact_autosave_recovery_diagnostic(
+    const QString& input_path,
+    const QString& cache_dir) {
+  const QFileInfo input_info(input_path);
+  if (!input_info.exists() || !input_info.isFile() || input_info.isSymLink() ||
+      !input_info.isReadable() || input_info.canonicalFilePath().isEmpty()) {
+    return fail("exact recovery diagnostic input must be an existing readable regular autosave file");
+  }
+  const auto source_bytes = read_file(input_info.canonicalFilePath());
+  constexpr qint64 kMaximumRecoveryFixtureBytes = 256LL * 1024LL * 1024LL;
+  if (source_bytes.isEmpty() || source_bytes.size() > kMaximumRecoveryFixtureBytes) {
+    return fail("exact recovery diagnostic could not read a bounded autosave fixture");
+  }
+  QJsonParseError parse_error;
+  const auto expected_document = QJsonDocument::fromJson(source_bytes, &parse_error).object();
+  const auto timeline_id = expected_document.value(QStringLiteral("timelineId")).toString();
+  const auto parsed_id = QUuid(timeline_id);
+  if (parse_error.error != QJsonParseError::NoError || expected_document.isEmpty() ||
+      parsed_id.isNull() || parsed_id.toString(QUuid::WithoutBraces) != timeline_id ||
+      expected_document.value(QStringLiteral("version")).toInt(-1) != 8 ||
+      !expected_document.value(QStringLiteral("sequenceFormat")).isObject() ||
+      !expected_document.value(QStringLiteral("tracks")).isArray() ||
+      !expected_document.value(QStringLiteral("markers")).isArray()) {
+    return fail("exact recovery diagnostic input must contain a canonical Timeline ID");
+  }
+
+  auto expected_stable_document = expected_document;
+  expected_stable_document.remove(QStringLiteral("updatedAt"));
+  const auto expected_hash = hash_object(expected_stable_document);
+  const auto documents_root = photo_editor::desktop::timelineDocumentsRootPath();
+  if (!QDir().mkpath(documents_root)) {
+    return fail("exact recovery diagnostic could not create its isolated documents folder");
+  }
+  const auto canonical_documents_root = QFileInfo(documents_root).canonicalFilePath();
+  const auto canonical_path = QDir(canonical_documents_root).filePath(
+      QStringLiteral("%1.json").arg(timeline_id));
+  const auto primary_autosave = QDir(canonical_documents_root).filePath(
+      QStringLiteral("%1.json.autosave").arg(timeline_id));
+  const auto completed_temp = primary_autosave + QStringLiteral(".A1b2C3");
+  const auto paths_are_unused = [&]() {
+    for (const auto& path : {canonical_path, primary_autosave, completed_temp}) {
+      const QFileInfo info(path);
+      if (info.exists() || info.isSymLink()) return false;
+    }
+    return true;
+  };
+  const auto write_new_file = [](const QString& path, const QByteArray& bytes) {
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly | QIODevice::NewOnly) &&
+        file.write(bytes) == bytes.size() && file.flush();
+  };
+  auto stale_primary_document = QJsonObject{
+      {QStringLiteral("timelineId"), timeline_id},
+      {QStringLiteral("name"), QStringLiteral("Older canonical state")},
+      {QStringLiteral("version"), 8},
+      {QStringLiteral("sequenceFormat"),
+       expected_document.value(QStringLiteral("sequenceFormat"))},
+      {QStringLiteral("tracks"), QJsonArray{}},
+      {QStringLiteral("markers"), QJsonArray{}},
+  };
+  const auto stale_primary_bytes =
+      QJsonDocument(stale_primary_document).toJson(QJsonDocument::Compact);
+  auto stale_primary_stable = stale_primary_document;
+  stale_primary_stable.remove(QStringLiteral("updatedAt"));
+  if (canonical_documents_root.isEmpty() || !paths_are_unused() ||
+      hash_object(stale_primary_stable) == expected_hash ||
+      !write_new_file(canonical_path, stale_primary_bytes) ||
+      !write_new_file(primary_autosave, stale_primary_bytes) ||
+      !write_new_file(completed_temp, source_bytes)) {
+    return fail("exact recovery diagnostic could not stage stale primary and exact completed sibling files");
+  }
+  if (read_file(primary_autosave) != stale_primary_bytes ||
+      read_file(completed_temp) != source_bytes ||
+      read_file(input_info.canonicalFilePath()) != source_bytes) {
+    return fail("exact recovery diagnostic staging changed the primary, sibling, or source bytes");
+  }
+
+  TimelineDocumentController controller;
+  const auto requested_candidate =
+      QStringLiteral("autosave:%1:%2").arg(timeline_id, expected_hash);
+  QVariantMap resolved_metadata;
+  const auto resolved_document =
+      photo_editor::desktop::TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+          controller, requested_candidate, &resolved_metadata, nullptr);
+  const auto wrong_hash = expected_hash.left(1) == QStringLiteral("0")
+      ? QStringLiteral("1") + expected_hash.mid(1)
+      : QStringLiteral("0") + expected_hash.mid(1);
+  const auto wrong_hash_document =
+      photo_editor::desktop::TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+          controller, QStringLiteral("autosave:%1:%2").arg(timeline_id, wrong_hash),
+          nullptr, nullptr);
+  if (resolved_document != expected_document ||
+      resolved_metadata.value(QStringLiteral("sourcePath")).toString() != completed_temp ||
+      resolved_metadata.value(QStringLiteral("canonicalDocumentPath")).toString() != canonical_path ||
+      !wrong_hash_document.isEmpty()) {
+    return fail("exact recovery lookup should select only the complete sibling with the expected native hash");
+  }
+
+  const auto minimal_document = [&](const QString& id, const QString& name) {
+    return QJsonObject{
+        {QStringLiteral("timelineId"), id},
+        {QStringLiteral("name"), name},
+        {QStringLiteral("version"), 8},
+        {QStringLiteral("sequenceFormat"), QJsonObject{
+             {QStringLiteral("width"), 640},
+             {QStringLiteral("height"), 360},
+             {QStringLiteral("frameRate"), 30.0}}},
+        {QStringLiteral("tracks"), QJsonArray{}},
+        {QStringLiteral("markers"), QJsonArray{}},
+    };
+  };
+  const auto write_temp_candidate = [&](const QString& id, const QString& suffix,
+                                        const QByteArray& bytes) {
+    return write_new_file(
+        QDir(canonical_documents_root).filePath(
+            QStringLiteral("%1.json.autosave.%2").arg(id, suffix)),
+        bytes);
+  };
+  const auto read_exact_candidate = [&](const QString& id, const QString& hash) {
+    return photo_editor::desktop::TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+        controller, QStringLiteral("autosave:%1:%2").arg(id, hash), nullptr, nullptr);
+  };
+
+  const auto truncated_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto truncated_document = minimal_document(truncated_id, QStringLiteral("Truncated"));
+  auto truncated_stable = truncated_document;
+  truncated_stable.remove(QStringLiteral("updatedAt"));
+  const auto truncated_hash = hash_object(truncated_stable);
+  if (!write_temp_candidate(truncated_id, QStringLiteral("B2c3D4"),
+                            QByteArrayLiteral("{\"timelineId\":")) ||
+      !read_exact_candidate(truncated_id, truncated_hash).isEmpty()) {
+    return fail("a truncated completed sibling must be rejected before native recovery");
+  }
+
+  const auto wrong_uuid_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto embedded_wrong_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto wrong_uuid_document =
+      minimal_document(embedded_wrong_id, QStringLiteral("Wrong UUID"));
+  auto wrong_uuid_stable = wrong_uuid_document;
+  wrong_uuid_stable.remove(QStringLiteral("updatedAt"));
+  const auto wrong_uuid_hash = hash_object(wrong_uuid_stable);
+  if (!write_temp_candidate(
+          wrong_uuid_id, QStringLiteral("C3d4E5"),
+          QJsonDocument(wrong_uuid_document).toJson(QJsonDocument::Compact)) ||
+      !read_exact_candidate(wrong_uuid_id, wrong_uuid_hash).isEmpty()) {
+    return fail("a sibling whose document Timeline ID differs from its filename must be rejected");
+  }
+
+  const auto too_many_tracks_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  auto too_many_tracks_document =
+      minimal_document(too_many_tracks_id, QStringLiteral("Too many tracks"));
+  QJsonArray too_many_tracks;
+  for (int index = 0; index < 4097; ++index) {
+    too_many_tracks.push_back(QJsonObject{
+        {QStringLiteral("trackId"), QStringLiteral("video-%1").arg(index)},
+        {QStringLiteral("kind"), QStringLiteral("video")},
+        {QStringLiteral("clips"), QJsonArray{}},
+    });
+  }
+  too_many_tracks_document.insert(QStringLiteral("tracks"), too_many_tracks);
+  auto too_many_tracks_stable = too_many_tracks_document;
+  too_many_tracks_stable.remove(QStringLiteral("updatedAt"));
+  const auto too_many_tracks_hash = hash_object(too_many_tracks_stable);
+  if (!write_temp_candidate(
+          too_many_tracks_id, QStringLiteral("D4e5F6"),
+          QJsonDocument(too_many_tracks_document).toJson(QJsonDocument::Compact)) ||
+      !read_exact_candidate(too_many_tracks_id, too_many_tracks_hash).isEmpty()) {
+    return fail("a sibling exceeding the temporary-document track bound must be rejected");
+  }
+
+  const auto candidate_count_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto candidate_count_document =
+      minimal_document(candidate_count_id, QStringLiteral("Candidate count"));
+  auto candidate_count_stable = candidate_count_document;
+  candidate_count_stable.remove(QStringLiteral("updatedAt"));
+  const auto candidate_count_hash = hash_object(candidate_count_stable);
+  const auto candidate_count_bytes =
+      QJsonDocument(candidate_count_document).toJson(QJsonDocument::Compact);
+  auto candidate_count_written = true;
+  for (int index = 0; index < 9; ++index) {
+    const auto suffix = QStringLiteral("E%1").arg(index, 5, 10, QLatin1Char('0'));
+    candidate_count_written = candidate_count_written &&
+        write_temp_candidate(candidate_count_id, suffix, candidate_count_bytes);
+  }
+  if (!candidate_count_written ||
+      !read_exact_candidate(candidate_count_id, candidate_count_hash).isEmpty()) {
+    return fail("recovery lookup must fail closed when more than eight Qt-style sibling candidates exist");
+  }
+
+  const auto oversized_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto oversized_document = minimal_document(oversized_id, QStringLiteral("Oversized"));
+  auto oversized_stable = oversized_document;
+  oversized_stable.remove(QStringLiteral("updatedAt"));
+  const auto oversized_hash = hash_object(oversized_stable);
+  const auto oversized_path = QDir(canonical_documents_root).filePath(
+      QStringLiteral("%1.json.autosave.F6g7H8").arg(oversized_id));
+  QFile oversized_file(oversized_path);
+  if (!oversized_file.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+      !oversized_file.resize(kMaximumRecoveryFixtureBytes + 1)) {
+    return fail("oversized sibling fixture should create a bounded sparse file");
+  }
+  oversized_file.close();
+  if (!read_exact_candidate(oversized_id, oversized_hash).isEmpty()) {
+    return fail("a sibling exceeding the temporary-document byte bound must be rejected before parsing");
+  }
+
+  const auto symlink_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto symlink_document = minimal_document(symlink_id, QStringLiteral("Symlink"));
+  auto symlink_stable = symlink_document;
+  symlink_stable.remove(QStringLiteral("updatedAt"));
+  const auto symlink_hash = hash_object(symlink_stable);
+  const auto symlink_target = QDir(cache_dir).filePath(
+      QStringLiteral("%1.json").arg(symlink_id));
+  const auto symlink_candidate = QDir(canonical_documents_root).filePath(
+      QStringLiteral("%1.json.autosave.G7h8I9").arg(symlink_id));
+  if (!QDir().mkpath(cache_dir)) {
+    return fail("symlink recovery fixture requires an existing target directory outside native documents");
+  }
+  const auto canonical_cache_root = QFileInfo(cache_dir).canonicalFilePath();
+  const auto cache_relative_to_documents =
+      QDir(canonical_documents_root).relativeFilePath(canonical_cache_root);
+  const auto cache_is_outside_documents =
+      cache_relative_to_documents == QStringLiteral("..") ||
+      cache_relative_to_documents.startsWith(QStringLiteral("..") + QDir::separator());
+  if (canonical_cache_root.isEmpty() || !cache_is_outside_documents) {
+    return fail("symlink recovery fixture requires an existing target directory outside native documents");
+  }
+  const auto symlink_target_bytes =
+      QJsonDocument(symlink_document).toJson(QJsonDocument::Compact);
+  const auto symlink_target_written = write_new_file(symlink_target, symlink_target_bytes);
+  const auto symlink_link_created = symlink_target_written &&
+      QFile::link(symlink_target, symlink_candidate);
+  const QFileInfo symlink_candidate_info(symlink_candidate);
+  const auto symlink_resolved_document = symlink_link_created
+      ? read_exact_candidate(symlink_id, symlink_hash)
+      : QJsonObject{};
+  const auto symlink_target_unchanged = read_file(symlink_target) == symlink_target_bytes;
+  if (!symlink_target_written || !symlink_link_created ||
+      !symlink_candidate_info.isSymLink() || !symlink_resolved_document.isEmpty() ||
+      !symlink_target_unchanged) {
+    std::cerr << "autosave temp symlink diagnostics: targetWritten="
+              << symlink_target_written << " linkCreated=" << symlink_link_created
+              << " isSymlink=" << symlink_candidate_info.isSymLink()
+              << " resolverAccepted=" << !symlink_resolved_document.isEmpty()
+              << " targetUnchanged=" << symlink_target_unchanged
+              << " candidate=" << symlink_candidate.toStdString() << '\n';
+    return fail("a symlinked sibling candidate must be rejected without changing its target");
+  }
+
+  auto completion_count = 0;
+  auto completion_success = false;
+  QObject::connect(
+      &controller, &TimelineDocumentController::recoveryOpenCompleted,
+      &controller,
+      [&](const QString&, const bool succeeded) {
+        ++completion_count;
+        completion_success = succeeded;
+      });
+  const auto admitted = controller.openAutosaveRecoveryForAutomation(timeline_id, expected_hash);
+  QElapsedTimer timeout;
+  timeout.start();
+  constexpr qint64 kRecoveryTimeoutMsecs = 180000;
+  while (admitted && completion_count == 0 && timeout.elapsed() < kRecoveryTimeoutMsecs) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  const auto actual_document =
+      photo_editor::desktop::TimelineHistoryTestAccess::document(controller);
+  auto actual_stable_document = actual_document;
+  actual_stable_document.remove(QStringLiteral("updatedAt"));
+  const auto actual_hash = actual_document.isEmpty()
+      ? QString{}
+      : hash_object(actual_stable_document);
+  QStringList differences;
+  collect_json_differences(
+      expected_document, actual_document, QStringLiteral("$"), &differences);
+  std::cerr << "exact autosave recovery diagnostic: admitted=" << admitted
+            << " completion_count=" << completion_count
+            << " completion_success=" << completion_success
+            << " active=" << controller.hasActiveTimeline()
+            << " dirty=" << controller.dirty()
+            << " status=" << controller.status().toStdString()
+            << " elapsed_ms=" << timeout.elapsed()
+            << " expected_hash=" << expected_hash.toStdString()
+            << " actual_hash=" << actual_hash.toStdString()
+            << " input_bytes=" << source_bytes.size()
+            << " cache_dir=" << cache_dir.toStdString()
+            << " stale_primary_unchanged="
+            << (read_file(primary_autosave) == stale_primary_bytes)
+            << " completed_sibling_unchanged="
+            << (read_file(completed_temp) == source_bytes)
+            << " canonical_baseline_unchanged="
+            << (read_file(canonical_path) == stale_primary_bytes)
+            << " original_source_unchanged="
+            << (read_file(input_info.canonicalFilePath()) == source_bytes) << '\n';
+  for (const auto& difference : differences) {
+    std::cerr << "  " << difference.toStdString() << '\n';
+  }
+  if (!admitted || completion_count != 1 || !completion_success ||
+      actual_hash != expected_hash ||
+      read_file(primary_autosave) != stale_primary_bytes ||
+      read_file(completed_temp) != source_bytes ||
+      read_file(canonical_path) != stale_primary_bytes ||
+      read_file(input_info.canonicalFilePath()) != source_bytes) {
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}
+
+int run_journal_validation_cache_workflow(const QString& workspace_path) {
+  using photo_editor::desktop::TimelineHistoryTestAccess;
+  constexpr qint64 kMiB = 1024LL * 1024LL;
+  const auto maximum_cache_bytes =
+      TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+          .value(QStringLiteral("cacheLimitBytes")).toLongLong();
+  const auto expected_large_tail_cost =
+      TimelineHistoryTestAccess::timelineJournalCacheCostEstimate(
+          130205655, 130205655);
+  if (expected_large_tail_cost <= 0 || expected_large_tail_cost > maximum_cache_bytes) {
+    return fail("a 130 MiB logical tail must fit the bounded recovery cache budget");
+  }
+
+  const auto scan_path = QDir(workspace_path).filePath(QStringLiteral("single-flight.jsonl"));
+  QJsonObject large_document{
+      {QStringLiteral("timelineId"),
+       QUuid::createUuid().toString(QUuid::WithoutBraces)},
+      {QStringLiteral("name"), QStringLiteral("Concurrent recovery scan")},
+      {QStringLiteral("tracks"), QJsonArray{}},
+      {QStringLiteral("padding"), QString(12 * 1024 * 1024, QLatin1Char('x'))},
+  };
+  QJsonObject entry{
+      {QStringLiteral("schema"), QStringLiteral("timeline-edit-journal:v1")},
+      {QStringLiteral("entryId"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
+      {QStringLiteral("timelineId"), large_document.value(QStringLiteral("timelineId"))},
+      {QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+      {QStringLiteral("reason"), QStringLiteral("cache fixture")},
+      {QStringLiteral("sequenceName"), QStringLiteral("Concurrent recovery scan")},
+      {QStringLiteral("baseDocumentPath"), QDir(workspace_path).filePath(QStringLiteral("base.json"))},
+      {QStringLiteral("document"), large_document},
+      {QStringLiteral("documentHash"), hash_object(large_document)},
+      {QStringLiteral("previousEntryHash"), QString{}},
+  };
+  entry.insert(QStringLiteral("entryHash"), hash_object(entry));
+  const auto journal_bytes = QJsonDocument(entry).toJson(QJsonDocument::Compact) + '\n';
+  QFile scan_file(scan_path);
+  if (!scan_file.open(QIODevice::WriteOnly) ||
+      scan_file.write(journal_bytes) != journal_bytes.size() || !scan_file.flush()) {
+    return fail("journal cache fixture should write a valid large tail");
+  }
+  scan_file.close();
+
+  TimelineHistoryTestAccess::clearTimelineJournalCache();
+  QSemaphore ready;
+  QSemaphore start;
+  QVariantMap first_result;
+  QVariantMap second_result;
+  auto reader = [&ready, &start, &scan_path](QVariantMap* result) {
+    ready.release();
+    start.acquire();
+    *result = TimelineHistoryTestAccess::readTimelineJournal(scan_path);
+  };
+  auto first = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&reader, &first_result]() { reader(&first_result); });
+  auto second = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&reader, &second_result]() { reader(&second_result); });
+  if (!ready.tryAcquire(2, 5000)) {
+    start.release(2);
+    first.waitForFinished();
+    second.waitForFinished();
+    return fail("concurrent journal readers should start on separate storage workers");
+  }
+  start.release(2);
+  first.waitForFinished();
+  second.waitForFinished();
+  auto diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+  if (!first_result.value(QStringLiteral("stableSnapshot")).toBool() ||
+      !second_result.value(QStringLiteral("stableSnapshot")).toBool() ||
+      first_result.value(QStringLiteral("lastDocumentBytes")).toLongLong() < 12 * kMiB ||
+      diagnostics.value(QStringLiteral("fullChainScans")).toULongLong() != 1 ||
+      diagnostics.value(QStringLiteral("cacheCostBytes")).toLongLong() > maximum_cache_bytes) {
+    std::cerr << "journal cache concurrency diagnostic: scans="
+              << diagnostics.value(QStringLiteral("fullChainScans")).toULongLong()
+              << " coalesced=" << diagnostics.value(QStringLiteral("coalescedWaits")).toULongLong()
+              << " bytes=" << diagnostics.value(QStringLiteral("bytesScanned")).toLongLong()
+              << " cache_bytes=" << diagnostics.value(QStringLiteral("cacheCostBytes")).toLongLong()
+              << " max=" << maximum_cache_bytes << '\n';
+    return fail("concurrent readers should share one complete validation and retain one bounded logical tail");
+  }
+
+  const auto old_bytes = read_file(scan_path);
+  QSaveFile replacement(scan_path);
+  if (!replacement.open(QIODevice::WriteOnly) ||
+      replacement.write(old_bytes) != old_bytes.size() || !replacement.commit()) {
+    return fail("atomic journal replacement fixture should preserve exact bytes");
+  }
+  const auto replaced_result = TimelineHistoryTestAccess::readTimelineJournal(scan_path);
+  diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+  if (!replaced_result.value(QStringLiteral("stableSnapshot")).toBool() ||
+      replaced_result.value(QStringLiteral("damagedTail")).toBool() ||
+      diagnostics.value(QStringLiteral("fullChainScans")).toULongLong() != 2) {
+    return fail("an atomically replaced journal must be revalidated even when its bytes are identical");
+  }
+  auto same_size_changed_bytes = read_file(scan_path);
+  const auto padding_token = QByteArrayLiteral("\"padding\":\"");
+  const auto padding_index = same_size_changed_bytes.indexOf(padding_token);
+  if (padding_index < 0 || padding_index + padding_token.size() >= same_size_changed_bytes.size()) {
+    return fail("same-size journal mutation fixture should locate its payload byte");
+  }
+  const auto payload_byte_index = padding_index + padding_token.size();
+  QFile same_size_mutation(scan_path);
+  if (!same_size_mutation.open(QIODevice::ReadWrite) ||
+      !same_size_mutation.seek(payload_byte_index) ||
+      same_size_mutation.write("y", 1) != 1 || !same_size_mutation.flush()) {
+    return fail("same-size journal mutation fixture should replace one byte in place");
+  }
+  same_size_mutation.close();
+  const auto mutated_result = TimelineHistoryTestAccess::readTimelineJournal(scan_path);
+  diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+  if (!mutated_result.value(QStringLiteral("stableSnapshot")).toBool() ||
+      !mutated_result.value(QStringLiteral("damagedTail")).toBool() ||
+      diagnostics.value(QStringLiteral("fullChainScans")).toULongLong() != 3) {
+    return fail("same-size in-place journal changes must invalidate the fingerprint and fail full-chain validation");
+  }
+
+  TimelineDocumentController recovery_context;
+  const auto writer_timeline_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto writer_path = QDir(TimelineHistoryTestAccess::journalRoot(recovery_context))
+      .filePath(QStringLiteral("%1.jsonl").arg(writer_timeline_id));
+  if (!QDir().mkpath(QFileInfo(writer_path).absolutePath())) {
+    return fail("recovery discovery fixture should create the managed journal directory");
+  }
+  const auto make_checkpoint = [&writer_timeline_id, &workspace_path](const QString& name, const QString& marker) {
+    QJsonObject document{
+        {QStringLiteral("timelineId"), writer_timeline_id},
+        {QStringLiteral("name"), name},
+        {QStringLiteral("sequenceFrameRate"), 30.0},
+        {QStringLiteral("tracks"), QJsonArray{}},
+        {QStringLiteral("markers"), QJsonArray{QJsonObject{{QStringLiteral("label"), marker}}}},
+    };
+    return QJsonObject{
+        {QStringLiteral("schema"), QStringLiteral("timeline-edit-journal:v1")},
+        {QStringLiteral("entryId"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
+        {QStringLiteral("timelineId"), writer_timeline_id},
+        {QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {QStringLiteral("reason"), QStringLiteral("cache writer fixture")},
+        {QStringLiteral("sequenceName"), name},
+        {QStringLiteral("baseDocumentPath"), QDir(workspace_path).filePath(QStringLiteral("writer.json"))},
+        {QStringLiteral("document"), document},
+    };
+  };
+  if (!TimelineHistoryTestAccess::persistTimelineJournalEntry(
+          writer_path, make_checkpoint(QStringLiteral("Writer cache"), QStringLiteral("First")))) {
+    return fail("journal writer should create its first checkpoint");
+  }
+  TimelineHistoryTestAccess::clearTimelineJournalCache();
+  QSemaphore discovery_ready;
+  QSemaphore discovery_start;
+  QVariantList first_discovery;
+  QVariantList second_discovery;
+  auto discovery_reader = [&discovery_ready, &discovery_start](QVariantList* result) {
+    discovery_ready.release();
+    discovery_start.acquire();
+    *result = TimelineHistoryTestAccess::discoverTimelineRecoveries();
+  };
+  auto first_discovery_future = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&discovery_reader, &first_discovery]() { discovery_reader(&first_discovery); });
+  auto second_discovery_future = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&discovery_reader, &second_discovery]() { discovery_reader(&second_discovery); });
+  if (!discovery_ready.tryAcquire(2, 5000)) {
+    discovery_start.release(2);
+    first_discovery_future.waitForFinished();
+    second_discovery_future.waitForFinished();
+    return fail("recovery discovery workers should start together for the same journal");
+  }
+  discovery_start.release(2);
+  first_discovery_future.waitForFinished();
+  second_discovery_future.waitForFinished();
+  diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+  const auto has_recovery = [writer_timeline_id](const QVariantList& rows) {
+    return std::any_of(rows.cbegin(), rows.cend(), [writer_timeline_id](const QVariant& value) {
+      return value.toMap().value(QStringLiteral("timelineId")).toString() ==
+          writer_timeline_id;
+    });
+  };
+  if (!has_recovery(first_discovery) || !has_recovery(second_discovery) ||
+      diagnostics.value(QStringLiteral("fullChainScans")).toULongLong() != 1) {
+    std::cerr << "recovery-list shared-scan diagnostic: scans="
+              << diagnostics.value(QStringLiteral("fullChainScans")).toULongLong()
+              << " waits=" << diagnostics.value(QStringLiteral("coalescedWaits")).toULongLong()
+              << " first_rows=" << first_discovery.size()
+              << " second_rows=" << second_discovery.size() << '\n';
+    return fail("simultaneous recovery lists should share one validated chain snapshot");
+  }
+  const auto scans_before_append = diagnostics.value(QStringLiteral("fullChainScans")).toULongLong();
+  if (!TimelineHistoryTestAccess::persistTimelineJournalEntry(
+          writer_path, make_checkpoint(QStringLiteral("Writer cache"), QStringLiteral("Second")))) {
+    return fail("writer should append from the validated recovery-cache head");
+  }
+  const auto after_append = TimelineHistoryTestAccess::readTimelineJournal(writer_path);
+  diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+  if (after_append.value(QStringLiteral("validEntryCount")).toInt() != 2 ||
+      diagnostics.value(QStringLiteral("fullChainScans")).toULongLong() != scans_before_append ||
+      diagnostics.value(QStringLiteral("cacheHits")).toULongLong() < 1) {
+    return fail("the writer should reuse recovery validation and publish its new verified head without rescanning");
+  }
+
+  const auto damaged_original = read_file(writer_path);
+  QFile crash_tail(writer_path);
+  if (!crash_tail.open(QIODevice::WriteOnly | QIODevice::Append) ||
+      crash_tail.write("{partial crash tail") <= 0 || !crash_tail.flush()) {
+    return fail("cache writer fixture should append a simulated crash tail");
+  }
+  crash_tail.close();
+  const auto scans_before_repair =
+      TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+          .value(QStringLiteral("fullChainScans")).toULongLong();
+  if (!TimelineHistoryTestAccess::persistTimelineJournalEntry(
+          writer_path, make_checkpoint(QStringLiteral("Writer cache"), QStringLiteral("After recovery")))) {
+    return fail("writer should archive a damaged tail before starting a new verified chain");
+  }
+  const auto damaged_archives = QDir(QFileInfo(writer_path).absolutePath()).entryInfoList(
+      {QFileInfo(writer_path).fileName() + QStringLiteral(".damaged-*")}, QDir::Files);
+  if (damaged_archives.size() != 1 ||
+      read_file(damaged_archives.first().absoluteFilePath()) !=
+          damaged_original + QByteArrayLiteral("{partial crash tail")) {
+    return fail("the journal cache must preserve every byte of an archived damaged tail");
+  }
+  const auto repaired_chain = TimelineHistoryTestAccess::readTimelineJournal(writer_path);
+  diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+  if (!repaired_chain.value(QStringLiteral("stableSnapshot")).toBool() ||
+      repaired_chain.value(QStringLiteral("validEntryCount")).toInt() != 1 ||
+      diagnostics.value(QStringLiteral("fullChainScans")).toULongLong() != scans_before_repair + 1) {
+    return fail("new journal head should be validated after damaged-tail archival");
+  }
+
+  // An oversized legacy chain is preserved byte-for-byte while its new active
+  // head is atomically replaced. Previously surfaced recovery IDs still work.
+  const auto rollover_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto rollover_path = QDir(TimelineHistoryTestAccess::journalRoot(recovery_context))
+      .filePath(rollover_id + QStringLiteral(".jsonl"));
+  QFile rollover_file(rollover_path);
+  if (!rollover_file.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    return fail("rollover fixture should create an isolated legacy journal");
+  QString previous_rollover_hash;
+  QJsonObject previous_rollover_document;
+  for (int index = 0; index < 6; ++index) {
+    auto legacy = make_checkpoint(QStringLiteral("Legacy rollover"), QString::number(index));
+    auto document = legacy.value(QStringLiteral("document")).toObject();
+    document.insert(QStringLiteral("timelineId"), rollover_id);
+    document.insert(QStringLiteral("padding"), large_document.value(QStringLiteral("padding")));
+    legacy.insert(QStringLiteral("timelineId"), rollover_id);
+    legacy.insert(QStringLiteral("document"), document);
+    legacy.insert(QStringLiteral("documentHash"), hash_object(document));
+    legacy.insert(QStringLiteral("previousEntryHash"), previous_rollover_hash);
+    previous_rollover_hash = hash_object(legacy);
+    legacy.insert(QStringLiteral("entryHash"), previous_rollover_hash);
+    const auto payload = QJsonDocument(legacy).toJson(QJsonDocument::Compact) + '\n';
+    if (rollover_file.write(payload) != payload.size())
+      return fail("rollover fixture should write every legacy envelope");
+    previous_rollover_document = document;
+  }
+  rollover_file.close();
+  const auto preserved_rollover_bytes = read_file(rollover_path);
+  auto new_head = make_checkpoint(QStringLiteral("After rollover"), QStringLiteral("Current"));
+  auto new_document = new_head.value(QStringLiteral("document")).toObject();
+  new_document.insert(QStringLiteral("timelineId"), rollover_id);
+  new_head.insert(QStringLiteral("timelineId"), rollover_id);
+  new_head.insert(QStringLiteral("document"), new_document);
+  if (!TimelineHistoryTestAccess::persistTimelineJournalEntry(rollover_path, new_head))
+    return fail("a verified oversized journal should roll over to a fresh active head");
+  const auto sealed = QDir(QFileInfo(rollover_path).absolutePath()).entryInfoList(
+      {QFileInfo(rollover_path).fileName() + QStringLiteral(".sealed-*")}, QDir::Files);
+  const auto active_head = TimelineHistoryTestAccess::readTimelineJournal(rollover_path);
+  if (sealed.size() != 1 || read_file(sealed.first().absoluteFilePath()) != preserved_rollover_bytes ||
+      QFileInfo(rollover_path).size() >= 1024 * 1024 ||
+      active_head.value(QStringLiteral("validEntryCount")).toInt() != 1 ||
+      active_head.value(QStringLiteral("lastDocumentHash")).toString() != hash_object(new_document))
+    return fail("rollover must retain every old byte and a small independently verified current head");
+  QVariantMap sealed_metadata;
+  bool sealed_scan_started = false;
+  const auto reopened_sealed = TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+      recovery_context, QStringLiteral("journal:") + previous_rollover_hash,
+      &sealed_metadata, &sealed_scan_started);
+  if (reopened_sealed != previous_rollover_document || !sealed_scan_started ||
+      sealed_metadata.value(QStringLiteral("sourcePath")).toString() != sealed.first().absoluteFilePath())
+    return fail("sealing must preserve the exact previously surfaced recovery candidate identity");
+
+  // Exercise the real UI flush path while another thread owns a cold scan.
+  // The synchronous operation must return a pending receipt promptly; its
+  // latest snapshot then completes once the shared scan publishes its result.
+  TimelineDocumentController pending_checkpoint;
+  pending_checkpoint.createTimeline(QStringLiteral("Pending Checkpoint Retry"));
+  if (!TimelineHistoryTestAccess::flushEditJournal(pending_checkpoint)) {
+    return fail("pending checkpoint fixture should write its initial journal head");
+  }
+  const auto pending_path =
+      TimelineHistoryTestAccess::journalPath(pending_checkpoint);
+  TimelineHistoryTestAccess::clearTimelineJournalCache();
+  TimelineHistoryTestAccess::holdTimelineJournalValidation(pending_path);
+  QVariantMap gated_read;
+  auto gated_reader = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&pending_path, &gated_read]() {
+        gated_read = TimelineHistoryTestAccess::readTimelineJournal(pending_path);
+      });
+  QElapsedTimer gate_wait;
+  gate_wait.start();
+  while (gate_wait.elapsed() < 5000) {
+    diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+    if (diagnostics.value(QStringLiteral("validationTestGateWaiters")).toInt() > 0) break;
+    QThread::msleep(2);
+  }
+  if (diagnostics.value(QStringLiteral("validationTestGateWaiters")).toInt() <= 0) {
+    TimelineHistoryTestAccess::releaseTimelineJournalValidation(pending_path);
+    gated_reader.waitForFinished();
+    return fail("the controlled cold validation should reach its gate before the UI flush");
+  }
+
+  pending_checkpoint.addSequenceMarker(QStringLiteral("Latest retained checkpoint"));
+  auto ui_heartbeat = false;
+  QTimer::singleShot(0, &pending_checkpoint, [&ui_heartbeat]() {
+    ui_heartbeat = true;
+  });
+  QElapsedTimer synchronous_flush_time;
+  synchronous_flush_time.start();
+  const auto flush_succeeded =
+      TimelineHistoryTestAccess::flushEditJournal(pending_checkpoint);
+  const auto flush_elapsed_ms = synchronous_flush_time.elapsed();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (flush_succeeded || flush_elapsed_ms > 250 ||
+      !ui_heartbeat ||
+      !pending_checkpoint.status().contains(QStringLiteral("waiting for Timeline history validation"))) {
+    TimelineHistoryTestAccess::releaseTimelineJournalValidation(pending_path);
+    gated_reader.waitForFinished();
+    return fail("an explicit flush must return quickly as pending during another full-chain validation");
+  }
+
+  QElapsedTimer deferred_write_wait;
+  deferred_write_wait.start();
+  while (deferred_write_wait.elapsed() < 5000) {
+    diagnostics = TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+    if (diagnostics.value(QStringLiteral("validationDeferrals")).toULongLong() > 0) break;
+    QThread::msleep(2);
+  }
+  const auto deferred_once =
+      diagnostics.value(QStringLiteral("validationDeferrals")).toULongLong() == 1;
+  TimelineHistoryTestAccess::releaseTimelineJournalValidation(pending_path);
+  gated_reader.waitForFinished();
+  auto* pending_writer =
+      TimelineHistoryTestAccess::editJournalWatcher(pending_checkpoint);
+  QElapsedTimer completed_write_wait;
+  completed_write_wait.start();
+  while (pending_writer->isRunning() && completed_write_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  auto latest_document =
+      TimelineHistoryTestAccess::document(pending_checkpoint);
+  latest_document.remove(QStringLiteral("updatedAt"));
+  auto completed_journal =
+      TimelineHistoryTestAccess::readTimelineJournal(pending_path);
+  if (!deferred_once || !gated_read.value(QStringLiteral("stableSnapshot")).toBool() ||
+      pending_writer->isRunning() || !pending_writer->result() ||
+      pending_checkpoint.status().contains(
+          QStringLiteral("Recovery checkpoint failed")) ||
+      completed_journal.value(QStringLiteral("validEntryCount")).toInt() != 2 ||
+      completed_journal.value(QStringLiteral("lastDocumentHash")).toString() !=
+          hash_object(latest_document)) {
+    std::cerr << "pending checkpoint diagnostic: deferrals="
+              << diagnostics.value(QStringLiteral("validationDeferrals")).toULongLong()
+              << " scanStable="
+              << gated_read.value(QStringLiteral("stableSnapshot")).toBool()
+              << " writerRunning=" << pending_writer->isRunning()
+              << " writerSucceeded=" << (!pending_writer->isRunning() && pending_writer->result())
+              << " entries="
+              << completed_journal.value(QStringLiteral("validEntryCount")).toInt()
+              << " elapsedMs=" << completed_write_wait.elapsed() << '\n';
+    return fail("a deferred latest checkpoint should complete exactly once after shared validation");
+  }
+  const auto bytes_before_duplicate = read_file(pending_path);
+  if (!TimelineHistoryTestAccess::flushEditJournal(pending_checkpoint) ||
+      read_file(pending_path) != bytes_before_duplicate ||
+      TimelineHistoryTestAccess::readTimelineJournal(pending_path)
+              .value(QStringLiteral("validEntryCount")).toInt() != 2) {
+    return fail("retrying an identical durable checkpoint must not add a duplicate history entry");
+  }
+
+  const auto original_permissions = QFileInfo(writer_path).permissions();
+  if (!QFile::setPermissions(writer_path, QFileDevice::ReadOwner)) {
+    return fail("permission failure fixture should make the journal read-only");
+  }
+  TimelineHistoryTestAccess::clearTimelineJournalCache();
+  const auto readable_read_only =
+      TimelineHistoryTestAccess::readTimelineJournal(writer_path);
+  const auto denied_append = TimelineHistoryTestAccess::persistTimelineJournalEntry(
+      writer_path, make_checkpoint(QStringLiteral("Writer cache"),
+                                   QStringLiteral("Permission denied")));
+  QFile::setPermissions(writer_path, original_permissions);
+  const auto permissions_restored = QFileInfo(writer_path).permissions() == original_permissions;
+  if (!permissions_restored ||
+      !readable_read_only.value(QStringLiteral("stableSnapshot")).toBool() ||
+      readable_read_only.value(QStringLiteral("validationInProgress")).toBool() ||
+      denied_append) {
+    return fail("a genuine read-only journal append must remain a hard failure, not a deferred retry");
+  }
+  const auto permission_failure_recheck =
+      TimelineHistoryTestAccess::readTimelineJournal(writer_path);
+  if (!permission_failure_recheck.value(QStringLiteral("stableSnapshot")).toBool() ||
+      permission_failure_recheck.value(QStringLiteral("validEntryCount")).toInt() != 1) {
+    return fail("a denied append must preserve the existing journal history exactly");
+  }
+
+  // A cold validation must never occupy the autosave lane. Hold an older
+  // snapshot immediately before commit, let a second controller publish a
+  // newer snapshot to the same autosave path, then release the old writer.
+  // Its revision token must reject the stale atomic replace.
+  const auto stable_hash = [](QJsonObject document) {
+    document.remove(QStringLiteral("updatedAt"));
+    return hash_object(document);
+  };
+  TimelineDocumentController older_session;
+  older_session.createTimeline(QStringLiteral("Deferred autosave ordering"));
+  if (!older_session.saveTimeline())
+    return fail("autosave ordering fixture should create a saved canonical Timeline");
+  const auto shared_document_path = older_session.savedDocumentPath();
+  const auto shared_autosave_path = shared_document_path + QStringLiteral(".autosave");
+  const auto shared_journal_path = TimelineHistoryTestAccess::journalPath(older_session);
+  TimelineHistoryTestAccess::clearTimelineJournalCache();
+  TimelineHistoryTestAccess::holdTimelineJournalValidation(shared_journal_path);
+  JournalValidationGateRelease shared_journal_gate(shared_journal_path);
+  QVariantMap shared_scan_result;
+  auto shared_scan = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&shared_journal_path, &shared_scan_result]() {
+        shared_scan_result = TimelineHistoryTestAccess::readTimelineJournal(shared_journal_path);
+      });
+  if (TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+          .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+    // The storage task may not have run yet; wait through the cache condition
+    // rather than inspecting or polling the journal on the UI thread.
+    QElapsedTimer start_wait;
+    start_wait.start();
+    while (start_wait.elapsed() < 5000 &&
+           TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+                   .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+      QThread::msleep(2);
+    }
+  }
+  if (TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+          .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+    shared_journal_gate.release();
+    shared_scan.waitForFinished();
+    return fail("the shared autosave journal scan should reach its gate");
+  }
+  older_session.addSequenceMarker(QStringLiteral("older-session-snapshot"));
+  if (TimelineHistoryTestAccess::flushEditJournal(older_session)) {
+    shared_journal_gate.release();
+    shared_scan.waitForFinished();
+    return fail("an older journal checkpoint should remain pending while validation is gated");
+  }
+  auto older_document = TimelineHistoryTestAccess::document(older_session);
+  const auto older_hash = stable_hash(older_document);
+  TimelineHistoryTestAccess::holdAutosaveCommit(shared_autosave_path, older_hash);
+  AutosaveCommitGateRelease older_autosave_gate(shared_autosave_path, older_hash);
+  TimelineHistoryTestAccess::scheduleAutosave(older_session);
+  if (!TimelineHistoryTestAccess::waitAutosaveCommitGate(
+          shared_autosave_path, older_hash, 5000)) {
+    older_autosave_gate.release();
+    shared_journal_gate.release();
+    shared_scan.waitForFinished();
+    return fail("the older autosave should reach its held commit point independently of journal validation");
+  }
+
+  TimelineDocumentController newer_session;
+  if (!newer_session.loadTimeline(shared_document_path)) {
+    older_autosave_gate.release();
+    shared_journal_gate.release();
+    shared_scan.waitForFinished();
+    return fail("the newer autosave session should load the same canonical Timeline");
+  }
+  newer_session.addSequenceMarker(QStringLiteral("newer-session-snapshot"));
+  if (TimelineHistoryTestAccess::flushEditJournal(newer_session)) {
+    older_autosave_gate.release();
+    shared_journal_gate.release();
+    shared_scan.waitForFinished();
+    return fail("the newer journal checkpoint should remain pending behind the same validation");
+  }
+  const auto newest_document = TimelineHistoryTestAccess::document(newer_session);
+  const auto newest_hash = stable_hash(newest_document);
+  TimelineHistoryTestAccess::scheduleAutosave(newer_session);
+  auto* newer_autosave = TimelineHistoryTestAccess::autosaveWatcher(newer_session);
+  QElapsedTimer newest_autosave_wait;
+  newest_autosave_wait.start();
+  while (newer_autosave->isRunning() && newest_autosave_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  const auto read_autosave_hash = [&shared_autosave_path, &stable_hash]() {
+    const auto parsed = QJsonDocument::fromJson(read_file(shared_autosave_path));
+    return parsed.isObject() ? stable_hash(parsed.object()) : QString{};
+  };
+  if (newer_autosave->isRunning() || !newer_autosave->result() ||
+      read_autosave_hash() != newest_hash) {
+    older_autosave_gate.release();
+    shared_journal_gate.release();
+    shared_scan.waitForFinished();
+    std::cerr << "newest autosave diagnostic: running=" << newer_autosave->isRunning()
+              << " result=" << (!newer_autosave->isRunning() && newer_autosave->result())
+              << " expected=" << newest_hash.toStdString()
+              << " actual=" << read_autosave_hash().toStdString() << '\n';
+    return fail("the separate autosave lane should commit the newest document while the journal scan is held");
+  }
+
+  older_autosave_gate.release();
+  auto* older_autosave = TimelineHistoryTestAccess::autosaveWatcher(older_session);
+  QElapsedTimer older_autosave_wait;
+  older_autosave_wait.start();
+  while (older_autosave->isRunning() && older_autosave_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (older_autosave->isRunning() || older_autosave->result() ||
+      read_autosave_hash() != newest_hash) {
+    shared_journal_gate.release();
+    shared_scan.waitForFinished();
+    std::cerr << "stale autosave diagnostic: running=" << older_autosave->isRunning()
+              << " result=" << (!older_autosave->isRunning() && older_autosave->result())
+              << " expectedNewest=" << newest_hash.toStdString()
+              << " actual=" << read_autosave_hash().toStdString() << '\n';
+    return fail("an older captured autosave must be rejected after the newer session commits");
+  }
+
+  shared_journal_gate.release();
+  shared_scan.waitForFinished();
+  const auto wait_for_pending_journal = [](TimelineDocumentController& controller) {
+    auto* watcher = TimelineHistoryTestAccess::editJournalWatcher(controller);
+    QElapsedTimer timer;
+    timer.start();
+    while (watcher->isRunning() && timer.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      QThread::msleep(2);
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    return !watcher->isRunning() && watcher->future().isValid() && watcher->result();
+  };
+  const auto both_journals_settled = wait_for_pending_journal(older_session) &&
+      wait_for_pending_journal(newer_session);
+  const auto newest_journal = TimelineHistoryTestAccess::readTimelineJournal(shared_journal_path);
+  if (!both_journals_settled ||
+      newest_journal.value(QStringLiteral("lastDocumentHash")).toString() != newest_hash ||
+      newest_journal.value(QStringLiteral("validEntryCount")).toInt() != 3 ||
+      read_autosave_hash() != newest_hash) {
+    std::cerr << "deferred newest checkpoint diagnostic: settled=" << both_journals_settled
+              << " entries=" << newest_journal.value(QStringLiteral("validEntryCount")).toInt()
+              << " expected=" << newest_hash.toStdString()
+              << " journal=" << newest_journal.value(QStringLiteral("lastDocumentHash")).toString().toStdString()
+              << " autosave=" << read_autosave_hash().toStdString() << '\n';
+    return fail("deferred history continuations should preserve both snapshots and finish at the newest exact hash");
+  }
+
+  // A stale controller must not invalidate a newer session's autosave when it
+  // leaves their shared path. Both writers are held at commit so this exercises
+  // the owner/generation transition, not just which writer happens to run first.
+  QTemporaryDir path_switch_directory;
+  if (!path_switch_directory.isValid())
+    return fail("autosave path-switch fixture should create a private temporary directory");
+  TimelineDocumentController path_owner_a;
+  path_owner_a.createTimeline(QStringLiteral("Autosave owner A"));
+  if (!path_owner_a.saveTimeline())
+    return fail("autosave path-switch fixture should save owner A's shared document");
+  const auto path_switch_shared_document = path_owner_a.savedDocumentPath();
+  const auto path_switch_shared_autosave =
+      path_switch_shared_document + QStringLiteral(".autosave");
+  TimelineDocumentController path_switch_target;
+  path_switch_target.createTimeline(QStringLiteral("Autosave owner A destination"));
+  if (!path_switch_target.saveTimeline())
+    return fail("autosave path-switch fixture should save A's destination document");
+
+  if (path_owner_a.addSequenceMarker(QStringLiteral("A stale snapshot")).isEmpty())
+    return fail("autosave path-switch fixture should create A's captured edit");
+  auto path_a_snapshot = TimelineHistoryTestAccess::document(path_owner_a);
+  path_a_snapshot.remove(QStringLiteral("updatedAt"));
+  const auto path_a_hash = hash_object(path_a_snapshot);
+  TimelineHistoryTestAccess::holdAutosaveCommit(
+      path_switch_shared_autosave, path_a_hash);
+  AutosaveCommitGateRelease path_a_gate(path_switch_shared_autosave, path_a_hash);
+  TimelineHistoryTestAccess::scheduleAutosave(path_owner_a);
+  if (!TimelineHistoryTestAccess::waitAutosaveCommitGate(
+          path_switch_shared_autosave, path_a_hash, 5000)) {
+    path_a_gate.release();
+    return fail("A's old-path autosave should reach its held commit point");
+  }
+
+  TimelineDocumentController path_owner_b;
+  if (!path_owner_b.loadTimeline(path_switch_shared_document) ||
+      path_owner_b.addSequenceMarker(QStringLiteral("B latest snapshot")).isEmpty()) {
+    path_a_gate.release();
+    return fail("owner B should open and edit the shared Timeline path");
+  }
+  auto path_b_snapshot = TimelineHistoryTestAccess::document(path_owner_b);
+  path_b_snapshot.remove(QStringLiteral("updatedAt"));
+  const auto path_b_hash = hash_object(path_b_snapshot);
+  const auto path_b_generation_before_a_switch =
+      TimelineHistoryTestAccess::autosaveGenerationToken(path_owner_b);
+  TimelineHistoryTestAccess::holdAutosaveCommit(
+      path_switch_shared_autosave, path_b_hash);
+  AutosaveCommitGateRelease path_b_gate(path_switch_shared_autosave, path_b_hash);
+  TimelineHistoryTestAccess::scheduleAutosave(path_owner_b);
+  if (!TimelineHistoryTestAccess::waitAutosaveCommitGate(
+          path_switch_shared_autosave, path_b_hash, 5000)) {
+    path_a_gate.release();
+    path_b_gate.release();
+    return fail("B's latest shared-path autosave should reach its held commit point");
+  }
+
+  if (!path_owner_a.loadTimeline(path_switch_target.savedDocumentPath())) {
+    path_a_gate.release();
+    path_b_gate.release();
+    return fail("stale owner A should be able to switch to its separately saved Timeline");
+  }
+  if (TimelineHistoryTestAccess::autosaveGenerationToken(path_owner_b) !=
+      path_b_generation_before_a_switch) {
+    path_a_gate.release();
+    path_b_gate.release();
+    return fail("A switching paths must leave B's shared-path autosave generation unchanged");
+  }
+
+  path_a_gate.release();
+  auto* path_a_watcher = TimelineHistoryTestAccess::autosaveWatcher(path_owner_a);
+  QElapsedTimer path_a_wait;
+  path_a_wait.start();
+  while (path_a_watcher->isRunning() && path_a_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  path_b_gate.release();
+  auto* path_b_watcher = TimelineHistoryTestAccess::autosaveWatcher(path_owner_b);
+  QElapsedTimer path_b_wait;
+  path_b_wait.start();
+  while (path_b_watcher->isRunning() && path_b_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QThread::msleep(2);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  const auto path_switch_autosave_object =
+      QJsonDocument::fromJson(read_file(path_switch_shared_autosave)).object();
+  if (path_a_watcher->isRunning() || path_b_watcher->isRunning() ||
+      !path_b_watcher->result() ||
+      stable_hash(path_switch_autosave_object) != path_b_hash) {
+    std::cerr << "shared-path owner switch diagnostic: A_running="
+              << path_a_watcher->isRunning()
+              << " B_running=" << path_b_watcher->isRunning()
+              << " B_result=" << (!path_b_watcher->isRunning() && path_b_watcher->result())
+              << " expected_B=" << path_b_hash.toStdString()
+              << " actual=" << stable_hash(path_switch_autosave_object).toStdString()
+              << '\n';
+    return fail("A leaving the shared path must not invalidate B's queued newest autosave");
+  }
+
+  // Destruction while a scan is paused must not join the validation or its
+  // deferred journal request. The immutable request owns its values and may
+  // safely finish after the controller and its watchers are gone.
+  auto shutting_down = std::make_unique<TimelineDocumentController>();
+  shutting_down->createTimeline(QStringLiteral("Bounded shutdown with deferred history"));
+  if (!shutting_down->saveTimeline())
+    return fail("bounded-shutdown fixture should create a saved Timeline");
+  const auto shutdown_journal_path =
+      TimelineHistoryTestAccess::journalPath(*shutting_down);
+  const auto shutdown_autosave_path =
+      shutting_down->savedDocumentPath() + QStringLiteral(".autosave");
+  TimelineHistoryTestAccess::clearTimelineJournalCache();
+  TimelineHistoryTestAccess::holdTimelineJournalValidation(shutdown_journal_path);
+  JournalValidationGateRelease shutdown_journal_gate(shutdown_journal_path);
+  QVariantMap shutdown_scan_result;
+  auto shutdown_scan = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&shutdown_journal_path, &shutdown_scan_result]() {
+        shutdown_scan_result = TimelineHistoryTestAccess::readTimelineJournal(
+            shutdown_journal_path);
+      });
+  if (TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+          .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+    QElapsedTimer start_wait;
+    start_wait.start();
+    while (start_wait.elapsed() < 5000 &&
+           TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+                   .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+      QThread::msleep(2);
+    }
+  }
+  if (TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+          .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+    shutdown_journal_gate.release();
+    shutdown_scan.waitForFinished();
+    return fail("shutdown fixture validation should reach its controllable gate");
+  }
+  shutting_down->addSequenceMarker(QStringLiteral("latest-on-shutdown"));
+  const auto shutdown_document = TimelineHistoryTestAccess::document(*shutting_down);
+  const auto shutdown_hash = stable_hash(shutdown_document);
+  if (TimelineHistoryTestAccess::flushEditJournal(*shutting_down)) {
+    shutdown_journal_gate.release();
+    shutdown_scan.waitForFinished();
+    return fail("shutdown journal checkpoint should remain pending while the full scan is gated");
+  }
+  const auto pending_shutdown_future =
+      TimelineHistoryTestAccess::editJournalFuture(*shutting_down);
+  QElapsedTimer destructor_timer;
+  destructor_timer.start();
+  shutting_down.reset();
+  const auto destructor_elapsed_ms = destructor_timer.elapsed();
+  if (destructor_elapsed_ms > 1000) {
+    shutdown_journal_gate.release();
+    shutdown_scan.waitForFinished();
+    return fail("controller shutdown must return without joining a cold journal validation");
+  }
+  shutdown_journal_gate.release();
+  shutdown_scan.waitForFinished();
+  QElapsedTimer shutdown_checkpoint_wait;
+  shutdown_checkpoint_wait.start();
+  while (!pending_shutdown_future.isFinished() && shutdown_checkpoint_wait.elapsed() < 10000)
+    QThread::msleep(2);
+  QJsonObject shutdown_autosave_document;
+  QElapsedTimer final_autosave_wait;
+  final_autosave_wait.start();
+  while (final_autosave_wait.elapsed() < 10000) {
+    const auto parsed = QJsonDocument::fromJson(read_file(shutdown_autosave_path));
+    if (parsed.isObject() && stable_hash(parsed.object()) == shutdown_hash) {
+      shutdown_autosave_document = parsed.object();
+      break;
+    }
+    QThread::msleep(10);
+  }
+  const auto shutdown_journal =
+      TimelineHistoryTestAccess::readTimelineJournal(shutdown_journal_path);
+  if (!pending_shutdown_future.isFinished() || !pending_shutdown_future.result() ||
+      shutdown_autosave_document.isEmpty() ||
+      shutdown_journal.value(QStringLiteral("lastDocumentHash")).toString() != shutdown_hash) {
+    std::cerr << "bounded shutdown checkpoint diagnostic: destructorMs="
+              << destructor_elapsed_ms << " journalFinished=" << pending_shutdown_future.isFinished()
+              << " journalResult=" << (pending_shutdown_future.isFinished() && pending_shutdown_future.result())
+              << " autosaveHash=" << stable_hash(shutdown_autosave_document).toStdString()
+              << " expected=" << shutdown_hash.toStdString()
+              << " journalHash=" << shutdown_journal.value(QStringLiteral("lastDocumentHash")).toString().toStdString()
+              << '\n';
+    return fail("a deferred checkpoint and final autosave should settle safely after bounded controller shutdown");
+  }
+
+  // Mirror application shutdown while both a recovery scan and a retained
+  // checkpoint continuation are pending. Cancellation is neither a damaged
+  // tail nor a successful write, and it must preserve the original bytes.
+  TimelineDocumentController cancelling_controller;
+  cancelling_controller.createTimeline(QStringLiteral("Canceled history scan"));
+  if (!cancelling_controller.saveTimeline())
+    return fail("cancellation fixture should create a saved Timeline");
+  const auto cancellation_path =
+      TimelineHistoryTestAccess::journalPath(cancelling_controller);
+  const auto cancellation_bytes_before = read_file(cancellation_path);
+  TimelineHistoryTestAccess::clearTimelineJournalCache();
+  TimelineHistoryTestAccess::holdTimelineJournalValidation(cancellation_path);
+  JournalValidationGateRelease cancellation_gate(cancellation_path);
+  QVariantMap cancelled_read;
+  auto cancellation_scan = TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+      [&cancellation_path, &cancelled_read]() {
+        cancelled_read = TimelineHistoryTestAccess::readTimelineJournal(cancellation_path);
+      });
+  QElapsedTimer cancellation_gate_wait;
+  cancellation_gate_wait.start();
+  while (cancellation_gate_wait.elapsed() < 5000 &&
+         TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+                 .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+    QThread::msleep(2);
+  }
+  if (TimelineHistoryTestAccess::timelineJournalCacheDiagnostics()
+          .value(QStringLiteral("validationTestGateWaiters")).toInt() == 0) {
+    cancellation_gate.release();
+    cancellation_scan.waitForFinished();
+    return fail("shutdown cancellation fixture should start a bounded validation worker");
+  }
+  cancelling_controller.addSequenceMarker(QStringLiteral("must-not-claim-durable"));
+  if (TimelineHistoryTestAccess::flushEditJournal(cancelling_controller)) {
+    cancellation_gate.release();
+    cancellation_scan.waitForFinished();
+    return fail("shutdown-canceled checkpoint should remain pending while validation is gated");
+  }
+  const auto canceled_checkpoint =
+      TimelineHistoryTestAccess::editJournalFuture(cancelling_controller);
+  TimelineHistoryTestAccess::cancelTimelineStorage();
+  cancellation_gate.release();
+  cancellation_scan.waitForFinished();
+  QElapsedTimer canceled_writer_wait;
+  canceled_writer_wait.start();
+  while (!canceled_checkpoint.isFinished() && canceled_writer_wait.elapsed() < 5000)
+    QThread::msleep(2);
+  const auto cancellation_read_is_typed =
+      cancelled_read.value(QStringLiteral("cancelled")).toBool() &&
+      !cancelled_read.value(QStringLiteral("damagedTail")).toBool() &&
+      cancelled_read.value(QStringLiteral("readError")).toBool();
+  const auto cancellation_preserved_history =
+      read_file(cancellation_path) == cancellation_bytes_before;
+  if (!canceled_checkpoint.isFinished() || canceled_checkpoint.result() ||
+      !cancellation_read_is_typed || !cancellation_preserved_history) {
+    std::cerr << "shutdown cancellation diagnostic: writerFinished="
+              << canceled_checkpoint.isFinished()
+              << " writerResult=" << (canceled_checkpoint.isFinished() && canceled_checkpoint.result())
+              << " canceled=" << cancelled_read.value(QStringLiteral("cancelled")).toBool()
+              << " damagedTail=" << cancelled_read.value(QStringLiteral("damagedTail")).toBool()
+              << " unchangedBytes=" << cancellation_preserved_history << '\n';
+    return fail("shutdown cancellation must release deferred work as failure without altering history");
+  }
+
+  std::cout << "timeline journal cache proof: scans="
+            << diagnostics.value(QStringLiteral("fullChainScans")).toULongLong()
+            << " cache_hits=" << diagnostics.value(QStringLiteral("cacheHits")).toULongLong()
+            << " waits=" << diagnostics.value(QStringLiteral("coalescedWaits")).toULongLong()
+            << " retained_bytes=" << diagnostics.value(QStringLiteral("cacheCostBytes")).toLongLong()
+            << " large_tail_estimate=" << expected_large_tail_cost << '\n';
+  return EXIT_SUCCESS;
 }
 
 QJsonObject timeline_project_state(QJsonObject document) {
@@ -279,6 +1671,290 @@ bool write_autosave_snapshot(const QString& canonical_path, const QJsonObject& d
          file.setFileTime(
              QDateTime::currentDateTime().addSecs(2),
              QFileDevice::FileModificationTime);
+}
+
+bool write_waveform_source_fixture(const QString& path) {
+  constexpr quint32 kSampleRate = 8000;
+  constexpr quint16 kChannels = 1;
+  constexpr quint16 kBitsPerSample = 16;
+  constexpr quint32 kSampleCount = 800;
+  constexpr quint32 kBytesPerSample = kBitsPerSample / 8;
+  constexpr quint32 kDataBytes = kSampleCount * kBytesPerSample;
+
+  QFile file(path);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return false;
+  QDataStream stream(&file);
+  stream.setByteOrder(QDataStream::LittleEndian);
+  const auto header_ok =
+      stream.writeRawData("RIFF", 4) == 4 &&
+      (stream << static_cast<quint32>(36U + kDataBytes), stream.status() == QDataStream::Ok) &&
+      stream.writeRawData("WAVEfmt ", 8) == 8 &&
+      (stream << static_cast<quint32>(16U)
+              << static_cast<quint16>(1U)
+              << kChannels
+              << kSampleRate
+              << static_cast<quint32>(kSampleRate * kChannels * kBytesPerSample)
+              << static_cast<quint16>(kChannels * kBytesPerSample)
+              << kBitsPerSample,
+       stream.status() == QDataStream::Ok) &&
+      stream.writeRawData("data", 4) == 4 &&
+      (stream << kDataBytes, stream.status() == QDataStream::Ok);
+  const QByteArray samples(static_cast<qsizetype>(kDataBytes), '\0');
+  const auto samples_ok = header_ok &&
+      stream.writeRawData(samples.constData(), static_cast<int>(samples.size())) ==
+          static_cast<int>(samples.size()) &&
+      stream.status() == QDataStream::Ok;
+  file.close();
+  return samples_ok && QFileInfo(path).size() == static_cast<qint64>(44U + kDataBytes);
+}
+
+bool wait_for_recovery_open(TimelineDocumentController* controller, int timeout_ms);
+
+int run_warm_waveform_recovery_contract(const QString& workspace_path) {
+  const auto source_path = QDir(workspace_path).filePath(QStringLiteral("waveform-source.wav"));
+  if (!write_waveform_source_fixture(source_path)) {
+    return fail("warm waveform recovery should create a readable WAV source fixture");
+  }
+  const auto canonical_source_path = QFileInfo(source_path).canonicalFilePath();
+  const QFileInfo source_info(canonical_source_path);
+  const auto source_revision = QStringLiteral("%1:%2:%3")
+                                   .arg(source_info.absoluteFilePath())
+                                   .arg(source_info.size())
+                                   .arg(source_info.lastModified().toMSecsSinceEpoch());
+  const auto digest = QCryptographicHash::hash(
+                          QStringLiteral("timeline-waveform-v2:%1").arg(source_revision).toUtf8(),
+                          QCryptographicHash::Sha1)
+                          .toHex();
+  const auto waveform_directory = QDir(qEnvironmentVariable("PHOTO_EDITOR_CACHE_DIR"))
+                                      .filePath(QStringLiteral("timeline-waveforms"));
+  if (!QDir().mkpath(waveform_directory)) {
+    return fail("warm waveform recovery should create its isolated waveform cache folder");
+  }
+  const auto waveform_path = QDir(waveform_directory).filePath(
+      QStringLiteral("%1-standard.png").arg(QString::fromLatin1(digest)));
+  QImage waveform(96, 32, QImage::Format_ARGB32);
+  waveform.fill(qRgba(20, 30, 40, 255));
+  if (!waveform.save(waveform_path)) {
+    return fail("warm waveform recovery should write the cache entry before opening the project");
+  }
+  const auto expected_waveform_url = QUrl::fromLocalFile(waveform_path).toString();
+
+  TimelineDocumentController author;
+  author.createTimeline(QStringLiteral("Warm Waveform Recovery"));
+  photo_editor::desktop::TimelineHistoryTestAccess::setBackgroundWorkPausedForTest(
+      author, true);
+  author.addClipFromGallery(
+      QStringLiteral("audio:warm-waveform-recovery"), canonical_source_path,
+      QStringLiteral("Warm Waveform"), 0.1, QString{});
+  QString audio_clip_id;
+  for (const auto& track_value : author.sequenceTracks()) {
+    for (const auto& clip_value : track_value.toMap().value(QStringLiteral("clips")).toList()) {
+      const auto clip = clip_value.toMap();
+      if (clip.value(QStringLiteral("mediaType")).toString() == QStringLiteral("audio")) {
+        audio_clip_id = clip.value(QStringLiteral("clipId")).toString();
+        break;
+      }
+    }
+    if (!audio_clip_id.isEmpty()) break;
+  }
+  if (audio_clip_id.isEmpty() ||
+      !photo_editor::desktop::TimelineHistoryTestAccess::clearAudioPreviewSources(
+          author, audio_clip_id) ||
+      !author.saveTimeline()) {
+    return fail("warm waveform recovery should save an audio clip with empty preview-source fields");
+  }
+
+  const auto recovery_marker = author.addSequenceMarker(
+      QStringLiteral("Recovered waveform state"));
+  if (recovery_marker.isEmpty() ||
+      !photo_editor::desktop::TimelineHistoryTestAccess::clearAudioPreviewSources(
+          author, audio_clip_id)) {
+    return fail("warm waveform autosave should contain a real unsaved edit delta");
+  }
+
+  auto expected_document =
+      photo_editor::desktop::TimelineHistoryTestAccess::document(author);
+  auto stable_expected = expected_document;
+  stable_expected.remove(QStringLiteral("updatedAt"));
+  const auto expected_hash = hash_object(stable_expected);
+  if (expected_hash.size() != 64 ||
+      !write_autosave_snapshot(author.savedDocumentPath(), expected_document)) {
+    return fail("warm waveform recovery should write an exact autosave snapshot");
+  }
+
+  TimelineDocumentController recovered;
+  auto completion_count = 0;
+  auto completion_succeeded = false;
+  QObject::connect(
+      &recovered, &TimelineDocumentController::recoveryOpenCompleted,
+      &recovered, [&](const QString&, bool succeeded) {
+        ++completion_count;
+        completion_succeeded = succeeded;
+      });
+  const auto recovery_accepted = recovered.openAutosaveRecoveryForAutomation(
+      author.timelineAssetId().mid(QStringLiteral("timeline:").size()), expected_hash);
+  const auto recovery_settled = recovery_accepted && wait_for_recovery_open(&recovered, 10000);
+  const auto recovered_hash = recovered.deterministicDocumentHash();
+  if (!recovery_accepted || !recovery_settled || completion_count != 1 ||
+      !completion_succeeded || recovered_hash != expected_hash ||
+      recovered.sequenceMarkers().size() != 1) {
+    QStringList differences;
+    auto actual = photo_editor::desktop::TimelineHistoryTestAccess::document(recovered);
+    auto expected = expected_document;
+    actual.remove(QStringLiteral("updatedAt"));
+    expected.remove(QStringLiteral("updatedAt"));
+    collect_json_differences(expected, actual, QStringLiteral("$"), &differences);
+    std::cerr << "warm waveform recovery diagnostic: accepted=" << recovery_accepted
+              << " settled=" << recovery_settled
+              << " completions=" << completion_count
+              << " succeeded=" << completion_succeeded
+              << " expected_hash=" << expected_hash.toStdString()
+              << " actual_hash=" << recovered_hash.toStdString()
+              << " status=" << recovered.status().toStdString() << '\n';
+    for (const auto& difference : differences) {
+      std::cerr << "  " << difference.toStdString() << '\n';
+    }
+    return fail("warm waveform exact recovery should preserve the complete autosave hash");
+  }
+  QString preserved_poster;
+  QString preserved_waveform;
+  for (const auto& track_value : recovered.sequenceTracks()) {
+    for (const auto& clip_value : track_value.toMap().value(QStringLiteral("clips")).toList()) {
+      const auto clip = clip_value.toMap();
+      if (clip.value(QStringLiteral("clipId")).toString() != audio_clip_id) continue;
+      preserved_poster = clip.value(QStringLiteral("posterSource")).toString();
+      preserved_waveform = clip.value(QStringLiteral("waveformSource")).toString();
+    }
+  }
+  if (!preserved_poster.isEmpty() || !preserved_waveform.isEmpty()) {
+    return fail("warm waveform exact recovery must retain both saved empty source fields");
+  }
+
+  const auto task_preparation = recovered.acceptAgentTaskDocumentPreparationForAutomation();
+  const auto rollback_state = recovered.agentTaskDocumentState();
+  if (!task_preparation.value(QStringLiteral("ok")).toBool() || rollback_state.isEmpty()) {
+    return fail("warm waveform recovery should accept the exact Timeline task checkpoint before rollback testing");
+  }
+  const auto rollback_document_path = recovered.savedDocumentPath();
+  const auto rollback_autosave_path = rollback_document_path + QStringLiteral(".autosave");
+  const auto rollback_token_before_edit =
+      photo_editor::desktop::TimelineHistoryTestAccess::autosaveGenerationToken(recovered);
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::isDirty(recovered)) {
+    return fail("same-path rollback must exercise a document that is already dirty before its next edit");
+  }
+  if (recovered.addSequenceMarker(QStringLiteral("Temporary rollback edit")).isEmpty()) {
+    return fail("same-path rollback fixture should first make a real dirty edit");
+  }
+  const auto stale_snapshot =
+      photo_editor::desktop::TimelineHistoryTestAccess::document(recovered);
+  auto stale_snapshot_without_timestamp = stale_snapshot;
+  stale_snapshot_without_timestamp.remove(QStringLiteral("updatedAt"));
+  const auto stale_snapshot_hash = hash_object(stale_snapshot_without_timestamp);
+  if (photo_editor::desktop::TimelineHistoryTestAccess::autosaveGenerationToken(recovered) <=
+      rollback_token_before_edit) {
+    return fail("each edit must advance the autosave generation even when the Timeline was already dirty");
+  }
+  photo_editor::desktop::TimelineHistoryTestAccess::holdAutosaveCommit(
+      rollback_autosave_path, stale_snapshot_hash);
+  AutosaveCommitGateRelease rollback_autosave_gate(
+      rollback_autosave_path, stale_snapshot_hash);
+  photo_editor::desktop::TimelineHistoryTestAccess::scheduleAutosave(recovered);
+  if (!photo_editor::desktop::TimelineHistoryTestAccess::waitAutosaveCommitGate(
+          rollback_autosave_path, stale_snapshot_hash, 5000)) {
+    rollback_autosave_gate.release();
+    return fail("the pre-rollback autosave should reach its held commit point");
+  }
+  const auto rollback_session_before_replacement =
+      photo_editor::desktop::TimelineHistoryTestAccess::workingSessionGeneration(recovered);
+  const auto rollback_token_before_replacement =
+      photo_editor::desktop::TimelineHistoryTestAccess::autosaveGenerationToken(recovered);
+  if (!recovered.restoreAgentTaskDocument(rollback_state) ||
+      recovered.agentTaskDocumentState() != rollback_state ||
+      recovered.savedDocumentPath() != rollback_document_path ||
+      photo_editor::desktop::TimelineHistoryTestAccess::workingSessionGeneration(recovered) <=
+          rollback_session_before_replacement ||
+      photo_editor::desktop::TimelineHistoryTestAccess::autosaveGenerationToken(recovered) <=
+          rollback_token_before_replacement) {
+    rollback_autosave_gate.release();
+    return fail("task rollback should restore the exact checkpoint after task acceptance clears recovery mode");
+  }
+  rollback_autosave_gate.release();
+  auto* rollback_autosave_watcher =
+      photo_editor::desktop::TimelineHistoryTestAccess::autosaveWatcher(recovered);
+  QElapsedTimer rollback_autosave_wait;
+  rollback_autosave_wait.start();
+  auto rollback_autosave_settled = false;
+  while (rollback_autosave_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    if (!rollback_autosave_watcher->isRunning()) {
+      // A stale completion can queue the restored snapshot from its finished
+      // callback. Require a quiet event-loop turn so this check observes both.
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      if (!rollback_autosave_watcher->isRunning()) {
+        rollback_autosave_settled = true;
+        break;
+      }
+    }
+    QThread::msleep(2);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  const auto restored_autosave_object =
+      QJsonDocument::fromJson(read_file(rollback_autosave_path)).object();
+  auto restored_autosave_without_timestamp = restored_autosave_object;
+  restored_autosave_without_timestamp.remove(QStringLiteral("updatedAt"));
+  const auto expected_rollback_document =
+      QJsonDocument::fromJson(rollback_state).object();
+  if (!rollback_autosave_settled || rollback_autosave_watcher->isRunning() ||
+      hash_object(restored_autosave_without_timestamp) !=
+          hash_object(expected_rollback_document)) {
+    std::cerr << "same-path rollback autosave diagnostic: running="
+              << rollback_autosave_watcher->isRunning()
+              << " settled=" << rollback_autosave_settled
+              << " elapsed_ms=" << rollback_autosave_wait.elapsed()
+              << " staleHash=" << stale_snapshot_hash.toStdString()
+              << " expectedRestored=" << hash_object(expected_rollback_document).toStdString()
+              << " actual=" << hash_object(restored_autosave_without_timestamp).toStdString()
+              << '\n';
+    return fail("a queued autosave from before same-path rollback must not replace the restored checkpoint");
+  }
+  QString restored_poster;
+  QString restored_waveform;
+  for (const auto& track_value : recovered.sequenceTracks()) {
+    for (const auto& clip_value : track_value.toMap().value(QStringLiteral("clips")).toList()) {
+      const auto clip = clip_value.toMap();
+      if (clip.value(QStringLiteral("clipId")).toString() != audio_clip_id) continue;
+      restored_poster = clip.value(QStringLiteral("posterSource")).toString();
+      restored_waveform = clip.value(QStringLiteral("waveformSource")).toString();
+    }
+  }
+  if (!restored_poster.isEmpty() || !restored_waveform.isEmpty()) {
+    return fail("task rollback should preserve both exact empty waveform source fields");
+  }
+
+  TimelineDocumentController ordinary;
+  if (!ordinary.loadTimeline(author.savedDocumentPath())) {
+    return fail("ordinary loading should open the same saved warm-cache fixture");
+  }
+  QString ordinary_poster;
+  QString ordinary_waveform;
+  for (const auto& track_value : ordinary.sequenceTracks()) {
+    for (const auto& clip_value : track_value.toMap().value(QStringLiteral("clips")).toList()) {
+      const auto clip = clip_value.toMap();
+      if (clip.value(QStringLiteral("clipId")).toString() != audio_clip_id) continue;
+      ordinary_poster = clip.value(QStringLiteral("posterSource")).toString();
+      ordinary_waveform = clip.value(QStringLiteral("waveformSource")).toString();
+    }
+  }
+  if (ordinary_poster != expected_waveform_url ||
+      ordinary_waveform != expected_waveform_url) {
+    std::cerr << "warm waveform ordinary-load diagnostic: expected="
+              << expected_waveform_url.toStdString()
+              << " poster=" << ordinary_poster.toStdString()
+              << " waveform=" << ordinary_waveform.toStdString() << '\n';
+    return fail("ordinary loading should still hydrate both audio preview fields from a warm cache");
+  }
+  std::cout << "warm waveform recovery contract: exact empty fields preserved; ordinary load hydrated cache\n";
+  return EXIT_SUCCESS;
 }
 
 bool run_process(const QString& program, const QStringList& arguments) {
@@ -451,6 +2127,43 @@ double clip_start_by_asset_id(
 }  // namespace
 
 int main(int argc, char** argv) {
+  QString exact_recovery_input;
+  QString exact_recovery_cache_override;
+  auto exact_recovery_options_valid = true;
+  auto saw_exact_recovery_input = false;
+  auto saw_exact_recovery_cache_override = false;
+  for (auto index = 1; index < argc; ++index) {
+    const auto argument = QString::fromLocal8Bit(argv[index]);
+    if (argument == QStringLiteral("--exact-autosave-recovery-diagnostic")) {
+      if (index + 1 >= argc || saw_exact_recovery_input) {
+        exact_recovery_options_valid = false;
+        break;
+      }
+      exact_recovery_input = QString::fromLocal8Bit(argv[++index]);
+      saw_exact_recovery_input = !exact_recovery_input.isEmpty();
+      if (!saw_exact_recovery_input) exact_recovery_options_valid = false;
+    } else if (argument == QStringLiteral("--exact-autosave-cache-dir")) {
+      if (index + 1 >= argc || saw_exact_recovery_cache_override) {
+        exact_recovery_options_valid = false;
+        break;
+      }
+      exact_recovery_cache_override = QString::fromLocal8Bit(argv[++index]);
+      saw_exact_recovery_cache_override = !exact_recovery_cache_override.isEmpty();
+      if (!saw_exact_recovery_cache_override) exact_recovery_options_valid = false;
+    }
+  }
+  if (!exact_recovery_options_valid ||
+      (!exact_recovery_cache_override.isEmpty() && exact_recovery_input.isEmpty())) {
+    return fail("exact recovery diagnostic options require one input path and an optional existing cache directory");
+  }
+  if (!exact_recovery_cache_override.isEmpty()) {
+    const QFileInfo cache_info(exact_recovery_cache_override);
+    const auto canonical_cache_dir = cache_info.canonicalFilePath();
+    if (!cache_info.isDir() || canonical_cache_dir.isEmpty()) {
+      return fail("exact recovery diagnostic cache override must be an existing canonical directory");
+    }
+    exact_recovery_cache_override = canonical_cache_dir;
+  }
   qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
   QTemporaryDir workspace;
   if (!workspace.isValid()) {
@@ -458,7 +2171,10 @@ int main(int argc, char** argv) {
   }
   qputenv("XDG_DATA_HOME", workspace.filePath(QStringLiteral("data")).toUtf8());
   qputenv("XDG_CACHE_HOME", workspace.filePath(QStringLiteral("cache")).toUtf8());
-  qputenv("PHOTO_EDITOR_CACHE_DIR", workspace.filePath(QStringLiteral("cache")).toUtf8());
+  const auto effective_cache_dir = exact_recovery_cache_override.isEmpty()
+      ? workspace.filePath(QStringLiteral("cache"))
+      : exact_recovery_cache_override;
+  qputenv("PHOTO_EDITOR_CACHE_DIR", effective_cache_dir.toUtf8());
   qputenv(
       "PHOTO_EDITOR_APP_DATA_ROOT",
       workspace.filePath(QStringLiteral("app-data")).toUtf8());
@@ -480,6 +2196,14 @@ int main(int argc, char** argv) {
     return fail("recovery proof should create source media");
   }
   still_file.close();
+  if (!exact_recovery_input.isEmpty()) {
+    return run_exact_autosave_recovery_diagnostic(
+        exact_recovery_input, effective_cache_dir);
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--journal-validation-cache-only"))) {
+    return run_journal_validation_cache_workflow(workspace.path());
+  }
 
   // Save is independent of publishing; an active render consumes immutable
   // bytes while later saves replace only the editable canonical project.
@@ -702,7 +2426,33 @@ int main(int argc, char** argv) {
     pending.closeTimeline();
     if (!pending.hasActiveTimeline()) return fail("Close must preserve the document after a checkpoint failure");
     if (!QDir().rmdir(blocked_journal)) return fail("Checkpoint failure fixture should restore writable storage");
-    if (!pending.flushEditJournal()) return fail("A failed checkpoint must be retryable");
+    if (!pending.flushEditJournal()) {
+      auto* watcher = photo_editor::desktop::TimelineHistoryTestAccess::editJournalWatcher(pending);
+      QElapsedTimer validation_retry_wait;
+      validation_retry_wait.start();
+      while (watcher->isRunning() && validation_retry_wait.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(2);
+      }
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      const auto settled_future =
+          photo_editor::desktop::TimelineHistoryTestAccess::editJournalFuture(pending);
+      auto checkpoint_recovered = settled_future.isValid() &&
+          settled_future.isFinished() && settled_future.result();
+      if (!watcher->isRunning() && !checkpoint_recovered)
+        checkpoint_recovered = pending.flushEditJournal();
+      if (watcher->isRunning() || !checkpoint_recovered) {
+        const auto future = photo_editor::desktop::TimelineHistoryTestAccess::editJournalFuture(pending);
+        std::cerr << "checkpoint retry diagnostic: status=" << pending.status().toStdString()
+                  << " watcherRunning=" << watcher->isRunning()
+                  << " futureValid=" << future.isValid()
+                  << " futureFinished=" << future.isFinished()
+                  << " futureResult=" << (future.isFinished() && future.isValid() && future.result())
+                  << " journalPathExists=" << QFileInfo::exists(blocked_journal)
+                  << '\n';
+        return fail("A pending checkpoint should settle or succeed on a later explicit retry");
+      }
+    }
 
     QFile crash_tail(blocked_journal);
     if (!crash_tail.open(QIODevice::WriteOnly | QIODevice::Append) || crash_tail.write("{partial") <= 0)
@@ -710,7 +2460,29 @@ int main(int argc, char** argv) {
     crash_tail.close();
     const auto damaged_bytes = read_file(blocked_journal);
     pending.addSequenceMarker(QStringLiteral("After damaged tail"));
-    if (!pending.flushEditJournal()) return fail("A changed journal must revalidate and preserve the damaged bytes");
+    if (!pending.flushEditJournal()) {
+      auto* watcher = photo_editor::desktop::TimelineHistoryTestAccess::editJournalWatcher(pending);
+      QElapsedTimer damaged_tail_wait;
+      damaged_tail_wait.start();
+      while (watcher->isRunning() && damaged_tail_wait.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(2);
+      }
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      const auto future = photo_editor::desktop::TimelineHistoryTestAccess::editJournalFuture(pending);
+      auto damaged_tail_checkpointed = future.isValid() && future.isFinished() && future.result();
+      if (!watcher->isRunning() && !damaged_tail_checkpointed)
+        damaged_tail_checkpointed = pending.flushEditJournal();
+      if (watcher->isRunning() || !damaged_tail_checkpointed) {
+        std::cerr << "damaged-tail checkpoint diagnostic: status=" << pending.status().toStdString()
+                  << " watcherRunning=" << watcher->isRunning()
+                  << " futureValid=" << future.isValid()
+                  << " futureFinished=" << future.isFinished()
+                  << " futureResult=" << (future.isValid() && future.isFinished() && future.result())
+                  << '\n';
+        return fail("A changed journal must revalidate and preserve the damaged bytes");
+      }
+    }
     const auto archives = QDir(QFileInfo(blocked_journal).absolutePath()).entryInfoList(
         {QFileInfo(blocked_journal).fileName() + QStringLiteral(".damaged-*")}, QDir::Files);
     if (archives.size() != 1 || read_file(archives.first().absoluteFilePath()) != damaged_bytes)
@@ -788,6 +2560,464 @@ int main(int argc, char** argv) {
       return fail("same-ID and unrelated autosave recoveries should be discoverable");
     }
 
+    // Native task recovery must pin the exact autosave revision before
+    // loadDocumentObject() can schedule media hydration. The ordinary UI
+    // recovery route remains independently covered below.
+    // A video-shaped autosave with provisional dimensions exercises the exact
+    // fields that startup hydration used to replace after recovery.
+    TimelineDocumentController hydration_source;
+    hydration_source.createTimeline(QStringLiteral("Task Recovery Hydration Checkpoint"));
+    const auto hydration_media_path = QFileInfo(still_path).canonicalFilePath();
+    if (hydration_media_path.isEmpty()) {
+      return fail("task hydration fixture should use a canonical managed media path");
+    }
+    hydration_source.addClipFromGallery(
+        QStringLiteral("photo:task-recovery-hydration"), hydration_media_path,
+        QStringLiteral("Pending Video Metadata"), 4.0, {});
+    if (!hydration_source.saveTimeline()) {
+      return fail("task hydration fixture should establish a managed base document");
+    }
+    auto hydration_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(hydration_source);
+    auto hydration_tracks = hydration_document.value(QStringLiteral("tracks")).toArray();
+    auto hydration_clip_id = QString{};
+    const auto make_provisional_video = [hydration_media_path](QJsonObject clip) {
+      clip.insert(QStringLiteral("mediaType"), QStringLiteral("video"));
+      clip.insert(QStringLiteral("durationProvisional"), true);
+      clip.insert(QStringLiteral("audioPresenceProvisional"), true);
+      clip.insert(QStringLiteral("sourceWidth"), 640);
+      clip.insert(QStringLiteral("sourceHeight"), 360);
+      // This fixture models the real recovery snapshot shape: audio analysis
+      // is pending, but the source has no linked audio lane yet. Without the
+      // explicit -2 route, syncAudioTracks() correctly derives a silent audio
+      // companion and changes the document graph during load.
+      clip.insert(QStringLiteral("hasAudio"), false);
+      clip.insert(QStringLiteral("audioLaneIndex"), -2);
+      clip.insert(QStringLiteral("filePath"), hydration_media_path);
+      clip.insert(QStringLiteral("posterSource"), hydration_media_path);
+      return clip;
+    };
+    for (qsizetype track_index = 0; track_index < hydration_tracks.size(); ++track_index) {
+      auto track = hydration_tracks.at(track_index).toObject();
+      auto clips = track.value(QStringLiteral("clips")).toArray();
+      if (clips.isEmpty()) continue;
+      auto clip = clips.first().toObject();
+      hydration_clip_id = clip.value(QStringLiteral("clipId")).toString();
+      clip = make_provisional_video(std::move(clip));
+      clips[0] = clip;
+      track.insert(QStringLiteral("clips"), clips);
+      hydration_tracks[track_index] = track;
+      break;
+    }
+    if (hydration_clip_id.isEmpty()) {
+      return fail("task hydration fixture should contain one stable media clip");
+    }
+    hydration_document.insert(QStringLiteral("tracks"), hydration_tracks);
+    auto hydration_legacy_clips = hydration_document.value(QStringLiteral("clips")).toArray();
+    auto legacy_clip_updated = false;
+    for (qsizetype clip_index = 0; clip_index < hydration_legacy_clips.size(); ++clip_index) {
+      auto clip = hydration_legacy_clips.at(clip_index).toObject();
+      if (clip.value(QStringLiteral("clipId")).toString() != hydration_clip_id) continue;
+      hydration_legacy_clips[clip_index] = make_provisional_video(std::move(clip));
+      legacy_clip_updated = true;
+      break;
+    }
+    if (!legacy_clip_updated) {
+      return fail("task hydration fixture should mirror its stable media clip in the legacy array");
+    }
+    hydration_document.insert(QStringLiteral("clips"), hydration_legacy_clips);
+    hydration_document.remove(QStringLiteral("updatedAt"));
+    const auto autosave_document_hash = QString::fromLatin1(
+        QCryptographicHash::hash(
+            QJsonDocument(hydration_document).toJson(QJsonDocument::Compact),
+            QCryptographicHash::Sha256).toHex());
+    if (!write_autosave_snapshot(hydration_source.savedDocumentPath(), hydration_document)) {
+      return fail("task hydration fixture should write its exact provisional-metadata autosave");
+    }
+    const auto hydration_autosave_path =
+        hydration_source.savedDocumentPath() + QStringLiteral(".autosave");
+    const auto autosave_bytes_before_task_open = read_file(hydration_autosave_path);
+    const auto hydration_timeline_id = hydration_source.timelineAssetId().mid(
+        QStringLiteral("timeline:").size());
+    const auto hydration_candidate_id = QStringLiteral("autosave:%1:%2")
+        .arg(hydration_timeline_id, autosave_document_hash);
+    const auto raced_document_hash_before_task_guard = raced.deterministicDocumentHash();
+    if (raced.openAutosaveRecoveryForAutomation(
+            hydration_timeline_id,
+            autosave_document_hash) ||
+        raced.deterministicDocumentHash() != raced_document_hash_before_task_guard) {
+      return fail("task autosave recovery must reject replacement of an already active Timeline");
+    }
+    TimelineDocumentController task_checkpoint_reopen;
+    const auto malformed_hash_rejected =
+        !task_checkpoint_reopen.openAutosaveRecoveryForAutomation(
+            hydration_timeline_id,
+            QStringLiteral("not-a-sha256"));
+    if (!malformed_hash_rejected ||
+        photo_editor::desktop::TimelineHistoryTestAccess::backgroundWorkPaused(
+            task_checkpoint_reopen) || task_checkpoint_reopen.recoveryOpenInProgress()) {
+      return fail("malformed recovery identities must be rejected before pausing or starting recovery work");
+    }
+    auto stale_hash = autosave_document_hash;
+    stale_hash[stale_hash.size() - 1] =
+        stale_hash.endsWith(QLatin1Char('0')) ? QLatin1Char('1') : QLatin1Char('0');
+    auto stale_open_completed = false;
+    auto stale_open_succeeded = false;
+    QObject::connect(
+        &task_checkpoint_reopen,
+        &TimelineDocumentController::recoveryOpenCompleted,
+        &task_checkpoint_reopen,
+        [&](const QString&, bool succeeded) {
+          stale_open_completed = true;
+          stale_open_succeeded = succeeded;
+        });
+    if (!task_checkpoint_reopen.openAutosaveRecoveryForAutomation(
+            hydration_timeline_id, stale_hash) ||
+        !wait_for_recovery_open(&task_checkpoint_reopen) ||
+        !stale_open_completed || stale_open_succeeded ||
+        photo_editor::desktop::TimelineHistoryTestAccess::backgroundWorkPaused(
+            task_checkpoint_reopen) || task_checkpoint_reopen.hasActiveTimeline()) {
+      return fail("stale autosave hashes should fail asynchronously without retaining the preparation pause");
+    }
+    auto task_checkpoint_open_completed = false;
+    auto task_checkpoint_open_succeeded = false;
+    QObject::connect(
+        &task_checkpoint_reopen,
+        &TimelineDocumentController::recoveryOpenCompleted,
+        &task_checkpoint_reopen,
+        [&](const QString& candidate_id, bool succeeded) {
+          if (candidate_id != hydration_candidate_id) return;
+          task_checkpoint_open_completed = true;
+          task_checkpoint_open_succeeded = succeeded;
+        });
+    const auto task_checkpoint_open_accepted =
+        task_checkpoint_reopen.openAutosaveRecoveryForAutomation(
+            hydration_timeline_id, autosave_document_hash);
+    const auto task_checkpoint_open_settled = task_checkpoint_open_accepted &&
+        wait_for_recovery_open(&task_checkpoint_reopen);
+    const auto task_checkpoint_active = task_checkpoint_reopen.hasActiveTimeline();
+    const auto task_checkpoint_paused =
+        photo_editor::desktop::TimelineHistoryTestAccess::backgroundWorkPaused(
+            task_checkpoint_reopen);
+    const auto task_checkpoint_queues_empty =
+        photo_editor::desktop::TimelineHistoryTestAccess::hydrationQueueEmpty(
+            task_checkpoint_reopen);
+    const auto task_checkpoint_actual_hash =
+        task_checkpoint_reopen.deterministicDocumentHash();
+    if (!task_checkpoint_open_accepted || !task_checkpoint_open_settled ||
+        !task_checkpoint_open_completed || !task_checkpoint_open_succeeded ||
+        !task_checkpoint_active || !task_checkpoint_paused ||
+        !task_checkpoint_queues_empty ||
+        task_checkpoint_actual_hash != autosave_document_hash) {
+      std::cerr << "task recovery checkpoint diagnostic: accepted="
+                << task_checkpoint_open_accepted
+                << " settled=" << task_checkpoint_open_settled
+                << " completed=" << task_checkpoint_open_completed
+                << " succeeded=" << task_checkpoint_open_succeeded
+                << " active=" << task_checkpoint_active
+                << " paused=" << task_checkpoint_paused
+                << " queuesEmpty=" << task_checkpoint_queues_empty
+                << " candidate=" << hydration_candidate_id.toStdString()
+                << " actualCandidate=" << task_checkpoint_reopen.recoveryOpenCandidateId().toStdString()
+                << " status=" << task_checkpoint_reopen.status().toStdString()
+                << " expectedHash=" << autosave_document_hash.toStdString()
+                << " actualHash=" << task_checkpoint_actual_hash.toStdString() << '\n';
+      const auto expected_track_values = hydration_document.value(QStringLiteral("tracks")).toArray();
+      const auto actual_track_values =
+          photo_editor::desktop::TimelineHistoryTestAccess::document(task_checkpoint_reopen)
+              .value(QStringLiteral("tracks")).toArray();
+      const auto scalar = [](const QJsonValue& value) {
+        return QString::fromUtf8(QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact));
+      };
+      const auto actual_document =
+          photo_editor::desktop::TimelineHistoryTestAccess::document(task_checkpoint_reopen);
+      const auto json_debug_value = [](const QJsonValue& value) {
+        if (value.isUndefined()) return QStringLiteral("<missing>");
+        QJsonArray wrapper;
+        wrapper.push_back(value);
+        const auto encoded = QJsonDocument(wrapper).toJson(QJsonDocument::Compact);
+        return QString::fromUtf8(encoded.mid(1, encoded.size() - 2));
+      };
+      std::function<QString(const QJsonValue&, const QJsonValue&, const QString&)> first_json_diff =
+          [&](const QJsonValue& expected, const QJsonValue& actual, const QString& path) {
+        if (expected.type() != actual.type()) {
+          return QStringLiteral("%1 expected=%2 actual=%3")
+              .arg(path, json_debug_value(expected), json_debug_value(actual));
+        }
+        if (expected.isObject()) {
+          const auto expected_object = expected.toObject();
+          const auto actual_object = actual.toObject();
+          auto keys = expected_object.keys();
+          for (const auto& key : actual_object.keys()) {
+            if (!keys.contains(key)) keys.push_back(key);
+          }
+          std::sort(keys.begin(), keys.end());
+          for (const auto& key : keys) {
+            const auto diff = first_json_diff(
+                expected_object.value(key), actual_object.value(key),
+                path + QLatin1Char('.') + key);
+            if (!diff.isEmpty()) return diff;
+          }
+          return QString{};
+        }
+        if (expected.isArray()) {
+          const auto expected_array = expected.toArray();
+          const auto actual_array = actual.toArray();
+          if (expected_array.size() != actual_array.size()) {
+            return QStringLiteral("%1.length expected=%2 actual=%3")
+                .arg(path)
+                .arg(expected_array.size())
+                .arg(actual_array.size());
+          }
+          for (qsizetype index = 0; index < expected_array.size(); ++index) {
+            const auto diff = first_json_diff(
+                expected_array.at(index), actual_array.at(index),
+                path + QLatin1Char('[') + QString::number(index) + QLatin1Char(']'));
+            if (!diff.isEmpty()) return diff;
+          }
+          return QString{};
+        }
+        return expected == actual
+                   ? QString{}
+                   : QStringLiteral("%1 expected=%2 actual=%3")
+                         .arg(path, json_debug_value(expected), json_debug_value(actual));
+      };
+      auto hash_comparison_document = actual_document;
+      hash_comparison_document.remove(QStringLiteral("updatedAt"));
+      const auto first_diff = first_json_diff(
+          QJsonValue(hydration_document),
+          QJsonValue(hash_comparison_document),
+          QStringLiteral("$"));
+      if (!first_diff.isEmpty()) {
+        std::cerr << "task recovery first full-document diff: "
+                  << first_diff.toStdString() << '\n';
+      }
+      for (const auto& key : hydration_document.keys()) {
+        if (key != QStringLiteral("tracks") && key != QStringLiteral("clips") &&
+            hydration_document.value(key) != actual_document.value(key)) {
+          std::cerr << "task recovery first document diff: " << key.toStdString()
+                    << " expected=" << scalar(hydration_document.value(key)).toStdString()
+                    << " actual=" << scalar(actual_document.value(key)).toStdString() << '\n';
+          break;
+        }
+      }
+      for (qsizetype track_index = 0;
+           track_index < qMin(expected_track_values.size(), actual_track_values.size());
+           ++track_index) {
+        const auto expected_track = expected_track_values.at(track_index).toObject();
+        const auto actual_track = actual_track_values.at(track_index).toObject();
+        for (const auto& key : expected_track.keys()) {
+          if (key != QStringLiteral("clips") &&
+              expected_track.value(key) != actual_track.value(key)) {
+            std::cerr << "task recovery first track diff: tracks[" << track_index
+                      << "]." << key.toStdString()
+                      << " expected=" << scalar(expected_track.value(key)).toStdString()
+                      << " actual=" << scalar(actual_track.value(key)).toStdString() << '\n';
+            track_index = expected_track_values.size();
+            break;
+          }
+        }
+        if (track_index >= expected_track_values.size()) break;
+        const auto expected_clips = expected_track
+            .value(QStringLiteral("clips")).toArray();
+        const auto actual_clips = actual_track
+            .value(QStringLiteral("clips")).toArray();
+        for (qsizetype clip_index = 0;
+             clip_index < qMin(expected_clips.size(), actual_clips.size());
+             ++clip_index) {
+          const auto expected_clip = expected_clips.at(clip_index).toObject();
+          const auto actual_clip = actual_clips.at(clip_index).toObject();
+          for (const auto& key : expected_clip.keys()) {
+            if (expected_clip.value(key) != actual_clip.value(key)) {
+              std::cerr << "task recovery first clip diff: tracks[" << track_index
+                        << "].clips[" << clip_index << "]." << key.toStdString()
+                        << " expected=" << scalar(expected_clip.value(key)).toStdString()
+                        << " actual=" << scalar(actual_clip.value(key)).toStdString() << '\n';
+              track_index = expected_track_values.size();
+              break;
+            }
+          }
+          if (track_index >= expected_track_values.size()) break;
+        }
+      }
+      return fail("task recovery should pause derived work before loading and preserve the exact autosave hash");
+    }
+    const auto loaded_hydration_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(task_checkpoint_reopen);
+    auto loaded_hydration_clip = QJsonObject{};
+    for (const auto& track_value : loaded_hydration_document.value(QStringLiteral("tracks")).toArray()) {
+      for (const auto& clip_value : track_value.toObject().value(QStringLiteral("clips")).toArray()) {
+        if (clip_value.toObject().value(QStringLiteral("clipId")).toString() == hydration_clip_id) {
+          loaded_hydration_clip = clip_value.toObject();
+        }
+      }
+    }
+    if (loaded_hydration_clip.value(QStringLiteral("mediaType")).toString() != QStringLiteral("video") ||
+        !loaded_hydration_clip.value(QStringLiteral("durationProvisional")).toBool() ||
+        !loaded_hydration_clip.value(QStringLiteral("audioPresenceProvisional")).toBool() ||
+        loaded_hydration_clip.value(QStringLiteral("hasAudio")).toBool() ||
+        loaded_hydration_clip.value(QStringLiteral("audioLaneIndex")).toInt() != -2 ||
+        loaded_hydration_clip.value(QStringLiteral("sourceWidth")).toInt() != 640 ||
+        loaded_hydration_clip.value(QStringLiteral("sourceHeight")).toInt() != 360 ||
+        loaded_hydration_clip.value(QStringLiteral("posterSource")).toString() != hydration_media_path) {
+      return fail("the recovered checkpoint should retain provisional dimensions, audio state, and poster reference exactly");
+    }
+    photo_editor::desktop::TimelineHistoryTestAccess::stopEditJournalTimer(
+        task_checkpoint_reopen);
+    QElapsedTimer task_checkpoint_stability_window;
+    task_checkpoint_stability_window.start();
+    while (task_checkpoint_stability_window.elapsed() < 250) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      QThread::msleep(2);
+    }
+    if (task_checkpoint_reopen.deterministicDocumentHash() != autosave_document_hash ||
+        read_file(hydration_autosave_path) != autosave_bytes_before_task_open) {
+      return fail("derived media work must not drift the exact checkpoint during native task recovery");
+    }
+
+    // An explicit autosave ID must resolve its one canonical file without
+    // enumerating the much larger edit-journal set. Keep malformed identities
+    // on the same bounded path, and reject paths whose content identity or
+    // filesystem object does not match the app-managed name.
+    bool fastpath_scanned_journals = true;
+    QVariantMap fastpath_metadata;
+    const auto fastpath_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+            raced, recovery_candidate_id, &fastpath_metadata,
+            &fastpath_scanned_journals);
+    const auto expected_fastpath_source_path = QFileInfo(
+        raced.savedDocumentPath() + QStringLiteral(".autosave")).canonicalFilePath();
+    const auto fastpath_document_matches = fastpath_document == recovered_document;
+    if (fastpath_scanned_journals || fastpath_document != recovered_document ||
+        expected_fastpath_source_path.isEmpty() ||
+        fastpath_metadata.value(QStringLiteral("sourcePath")).toString() !=
+            expected_fastpath_source_path) {
+      std::cerr << "autosave fast-path diagnostics: scannedJournals="
+                << fastpath_scanned_journals
+                << " documentMatches=" << fastpath_document_matches
+                << " expectedCanonicalSourcePath="
+                << expected_fastpath_source_path.toStdString()
+                << " actualSourcePath="
+                << fastpath_metadata.value(QStringLiteral("sourcePath")).toString().toStdString()
+                << " candidateId=" << recovery_candidate_id.toStdString() << '\n';
+      return fail("exact autosave recovery lookup should bypass journal enumeration and return its verified document");
+    }
+    auto wrong_hash_candidate = recovery_candidate_id;
+    wrong_hash_candidate[wrong_hash_candidate.size() - 1] =
+        wrong_hash_candidate.endsWith(QLatin1Char('0')) ? QLatin1Char('1') : QLatin1Char('0');
+    fastpath_scanned_journals = true;
+    fastpath_metadata.clear();
+    if (!photo_editor::desktop::TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+             raced, wrong_hash_candidate, &fastpath_metadata,
+             &fastpath_scanned_journals).isEmpty() ||
+        !fastpath_metadata.isEmpty() || fastpath_scanned_journals) {
+      return fail("autosave lookup should reject a stale content hash without scanning journals");
+    }
+
+    const auto document_root = QFileInfo(raced.savedDocumentPath()).absolutePath();
+    const auto mismatched_path_id = QStringLiteral("00000000-0000-4000-8000-000000000001");
+    auto mismatched_identity_document = recovered_document;
+    mismatched_identity_document.insert(QStringLiteral("timelineId"),
+                                        QStringLiteral("00000000-0000-4000-8000-000000000002"));
+    const auto document_hash = [](QJsonObject source) {
+      source.remove(QStringLiteral("updatedAt"));
+      return QString::fromLatin1(QCryptographicHash::hash(
+          QJsonDocument(source).toJson(QJsonDocument::Compact),
+          QCryptographicHash::Sha256).toHex());
+    };
+    const auto mismatched_path = QDir(document_root).filePath(
+        mismatched_path_id + QStringLiteral(".json.autosave"));
+    QFile mismatched_file(mismatched_path);
+    if (!mismatched_file.open(QIODevice::WriteOnly) ||
+        mismatched_file.write(QJsonDocument(mismatched_identity_document)
+                                  .toJson(QJsonDocument::Compact)) <= 0) {
+      return fail("autosave identity fixture should write its mismatched document");
+    }
+    mismatched_file.close();
+    fastpath_scanned_journals = true;
+    if (!photo_editor::desktop::TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+             raced, QStringLiteral("autosave:%1:%2").arg(
+                 mismatched_path_id, document_hash(mismatched_identity_document)),
+             nullptr, &fastpath_scanned_journals).isEmpty() ||
+        fastpath_scanned_journals) {
+      QFile::remove(mismatched_path);
+      return fail("autosave lookup should reject embedded timeline IDs that differ from the managed filename");
+    }
+    QFile::remove(mismatched_path);
+
+    const auto symlink_path_id = QStringLiteral("00000000-0000-4000-8000-000000000003");
+    auto symlink_document = recovered_document;
+    symlink_document.insert(QStringLiteral("timelineId"), symlink_path_id);
+    const auto symlink_target = workspace.filePath(QStringLiteral("outside-autosave.json"));
+    QFile symlink_target_file(symlink_target);
+    if (!symlink_target_file.open(QIODevice::WriteOnly) ||
+        symlink_target_file.write(QJsonDocument(symlink_document)
+                                      .toJson(QJsonDocument::Compact)) <= 0) {
+      return fail("autosave symlink fixture should write its outside target");
+    }
+    symlink_target_file.close();
+    const auto symlink_path = QDir(document_root).filePath(
+        symlink_path_id + QStringLiteral(".json.autosave"));
+    if (!QFile::link(symlink_target, symlink_path) || !QFileInfo(symlink_path).isSymLink()) {
+      QFile::remove(symlink_path);
+      return fail("autosave symlink fixture should create a link at the managed-looking path");
+    }
+    fastpath_scanned_journals = true;
+    const auto symlink_candidate = QStringLiteral("autosave:%1:%2")
+        .arg(symlink_path_id, document_hash(symlink_document));
+    const auto symlink_document_result =
+        photo_editor::desktop::TimelineHistoryTestAccess::recoveryDocumentForCandidate(
+            raced, symlink_candidate, nullptr, &fastpath_scanned_journals);
+    QFile::remove(symlink_path);
+    if (!symlink_document_result.isEmpty() || fastpath_scanned_journals) {
+      return fail("autosave lookup should reject symlinked recovery files without scanning journals");
+    }
+
+    QSemaphore storage_blockers_started;
+    QSemaphore release_storage_blockers;
+    QVector<QFuture<void>> storage_blockers;
+    for (int index = 0; index < 2; ++index) {
+      storage_blockers.push_back(
+          photo_editor::desktop::TimelineHistoryTestAccess::scheduleRecoveryStorageTask(
+              [&storage_blockers_started, &release_storage_blockers]() {
+                storage_blockers_started.release();
+                release_storage_blockers.acquire();
+              }));
+    }
+    const auto storage_pool_was_full = storage_blockers_started.tryAcquire(2, 5000);
+    if (!storage_pool_was_full) {
+      release_storage_blockers.release(2);
+      for (auto& future : storage_blockers) future.waitForFinished();
+      return fail("the recovery-list storage pool should expose both occupied worker slots to the fixture");
+    }
+    TimelineDocumentController storage_isolated_open;
+    auto storage_isolated_completed = false;
+    auto storage_isolated_success = false;
+    QObject::connect(
+        &storage_isolated_open,
+        &TimelineDocumentController::recoveryOpenCompleted,
+        &storage_isolated_open,
+        [&](const QString&, bool succeeded) {
+          storage_isolated_completed = true;
+          storage_isolated_success = succeeded;
+        });
+    const auto storage_isolated_admitted =
+        storage_isolated_open.openRecoveryCandidate(recovery_candidate_id);
+    QElapsedTimer storage_isolated_timeout;
+    storage_isolated_timeout.start();
+    while (!storage_isolated_completed && storage_isolated_timeout.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      QThread::msleep(2);
+    }
+    const auto storage_isolated_succeeded = storage_isolated_admitted &&
+        storage_isolated_completed && storage_isolated_success &&
+        storage_isolated_open.hasActiveTimeline();
+    release_storage_blockers.release(2);
+    for (auto& future : storage_blockers) future.waitForFinished();
+    if (!storage_isolated_succeeded) {
+      return fail("an exact autosave recovery open should complete while both recovery-list storage workers are occupied");
+    }
+
     // Explicit candidate opens are keyed by durable candidate identity and do
     // not depend on which single recovery row Recents currently surfaces.
     const auto canonical_before_explicit_reopen = read_file(raced.savedDocumentPath());
@@ -858,6 +3088,11 @@ int main(int argc, char** argv) {
       }
       return fail("directly opening the explicit autosave candidate should restore its exact one-marker document without changing saved bytes");
     }
+    // Give the recovered snapshot a second durable identity before reopening
+    // its autosave identity. Candidate-list deduplication must not make an
+    // explicit selection disappear when a checkpoint contains the same state.
+    if (!explicit_candidate_reopen.flushEditJournal())
+      return fail("the explicitly recovered state must checkpoint before the duplicate-identity regression");
 
     raced.refreshRecentTimelines();
     QElapsedTimer recent_rows_timeout;
@@ -973,6 +3208,20 @@ int main(int argc, char** argv) {
         !raced.dirty() || raced.sequenceMarkers().size() != 1 ||
         timeline_project_state(photo_editor::desktop::TimelineHistoryTestAccess::document(raced)) !=
             timeline_project_state(recovered_document)) {
+      const auto actual_state = timeline_project_state(
+          photo_editor::desktop::TimelineHistoryTestAccess::document(raced));
+      const auto expected_state = timeline_project_state(recovered_document);
+      std::cerr << "same-ID recovery diagnostic: saving=" << raced.timelineSaveInProgress()
+                << " opening=" << raced.recoveryOpenInProgress()
+                << " dirty=" << raced.dirty()
+                << " markers=" << raced.sequenceMarkers().size()
+                << " status=" << raced.status().toStdString() << '\n';
+      for (const auto& key : expected_state.keys()) {
+        if (actual_state.value(key) != expected_state.value(key))
+          std::cerr << "recovery state differs at " << key.toStdString()
+                    << ": actual=" << QJsonDocument(QJsonArray{actual_state.value(key)}).toJson(QJsonDocument::Compact).toStdString()
+                    << " expected=" << QJsonDocument(QJsonArray{expected_state.value(key)}).toJson(QJsonDocument::Compact).toStdString() << '\n';
+      }
       return fail("the verified same-ID recovery should open as dirty work after Save completes");
     }
     recent_refresh_timeout.restart();
@@ -1282,11 +3531,22 @@ int main(int argc, char** argv) {
         surfaced_candidate_metadata.value(QStringLiteral("kind")).toString();
     const auto surfaced_candidate_path =
         surfaced_candidate_metadata.value(QStringLiteral("sourcePath")).toString();
+    const auto same_existing_canonical_file = [](const QString& left, const QString& right) {
+      const QFileInfo left_info(left);
+      const QFileInfo right_info(right);
+      const auto left_canonical = left_info.canonicalFilePath();
+      const auto right_canonical = right_info.canonicalFilePath();
+      return left_info.isFile() && right_info.isFile() &&
+          !left_canonical.isEmpty() && left_canonical == right_canonical;
+    };
     const auto surfaced_candidate_source_is_supported =
         (surfaced_candidate_kind == QStringLiteral("autosave") &&
-         surfaced_candidate_path == raced.savedDocumentPath() + QStringLiteral(".autosave")) ||
+         same_existing_canonical_file(
+             surfaced_candidate_path,
+             raced.savedDocumentPath() + QStringLiteral(".autosave"))) ||
         (surfaced_candidate_kind == QStringLiteral("journal") &&
-         surfaced_candidate_path == journal_path_after_recovery);
+         same_existing_canonical_file(
+             surfaced_candidate_path, journal_path_after_recovery));
     const auto surfaced_candidate_matches_expected =
         !surfaced_candidate_state.isEmpty() &&
         surfaced_candidate_state == expected_recovered_state;
@@ -1295,6 +3555,21 @@ int main(int argc, char** argv) {
     const auto reopen_admission_ms = exact_reopen_timer.nsecsElapsed() / 1000000.0;
     const auto reopen_settled = reopen_admitted && wait_for_recovery_open(&reopened_recovery);
     const auto reopen_elapsed_ms = exact_reopen_timer.nsecsElapsed() / 1000000.0;
+    auto* reopened_journal_watcher =
+        photo_editor::desktop::TimelineHistoryTestAccess::editJournalWatcher(reopened_recovery);
+    auto reopened_snapshot_durable = false;
+    QElapsedTimer reopened_journal_wait;
+    reopened_journal_wait.start();
+    while (reopen_settled && !reopened_snapshot_durable &&
+           reopened_journal_wait.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      const auto future = reopened_journal_watcher->future();
+      if (future.isValid() && future.isFinished() && !future.isCanceled() && future.result()) {
+        reopened_snapshot_durable = timeline_journal_contains_snapshot(
+            journal_path_after_recovery, surfaced_candidate_document);
+      }
+      if (!reopened_snapshot_durable) QThread::msleep(2);
+    }
     const auto reopened_markers = reopened_recovery.sequenceMarkers();
     QSet<QString> reopened_marker_labels;
     for (const auto& marker : reopened_markers)
@@ -1313,8 +3588,16 @@ int main(int argc, char** argv) {
             dirty_checkpoint_document,
             recovered_document) &&
         !raw_journal_documents.isEmpty();
-    const auto reopened_recovery_state = timeline_project_state(
+    auto reopened_recovery_state = timeline_project_state(
         photo_editor::desktop::TimelineHistoryTestAccess::document(reopened_recovery));
+    QElapsedTimer reopened_snapshot_wait;
+    reopened_snapshot_wait.start();
+    while (reopen_settled && reopened_recovery_state != surfaced_candidate_state &&
+           reopened_snapshot_wait.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      reopened_recovery_state = timeline_project_state(
+          photo_editor::desktop::TimelineHistoryTestAccess::document(reopened_recovery));
+    }
     const auto surfaced_recent_snapshot_exact =
         surfaced_candidate_source_is_supported && surfaced_candidate_matches_expected &&
         surfaced_candidate_metadata.value(QStringLiteral("markerCount")).toInt() ==
@@ -1326,6 +3609,7 @@ int main(int argc, char** argv) {
             recent_candidate_id &&
         surfaced_recent_snapshot_exact &&
         reopen_settled && reopen_completion_count == 1 &&
+        reopened_snapshot_durable &&
         reopen_completed_successfully &&
         reopen_completed_candidate_id == recent_candidate_id &&
         reopened_recovery.dirty() && reopened_markers.size() == 1 &&
@@ -1346,6 +3630,17 @@ int main(int argc, char** argv) {
           read_file(raced.savedDocumentPath()), QCryptographicHash::Sha256).toHex();
       const auto expected_canonical_hash = QCryptographicHash::hash(
           canonical_bytes_after_save, QCryptographicHash::Sha256).toHex();
+      QStringList reopened_candidate_differences;
+      collect_json_differences(
+          surfaced_candidate_state, reopened_recovery_state,
+          QStringLiteral("$"), &reopened_candidate_differences);
+      QStringList latest_journal_differences;
+      if (!raw_journal_documents.isEmpty()) {
+        collect_json_differences(
+            expected_recovered_state,
+            timeline_project_state(raw_journal_documents.last()),
+            QStringLiteral("$"), &latest_journal_differences);
+      }
       std::cerr << "recovery reopen diagnostic: surfaced_candidate="
                 << recent_candidate_id.toStdString()
                 << " recovery_kind="
@@ -1370,6 +3665,20 @@ int main(int argc, char** argv) {
                        journal_path_after_recovery, dirty_checkpoint_document)
                 << " ordered_checkpoint_history=" << journal_history_preserved
                 << " expected_recent_snapshot_exact=" << surfaced_candidate_matches_expected
+                << " source_supported=" << surfaced_candidate_source_is_supported
+                << " reopened_state_sha256=" << hash_object(reopened_recovery_state).toStdString()
+                << " reopened_candidate_diff="
+                << reopened_candidate_differences.join(QLatin1Char(';')).toStdString()
+                << " journal_latest_diff="
+                << latest_journal_differences.join(QLatin1Char(';')).toStdString()
+                << " reopened_snapshot_durable=" << reopened_snapshot_durable
+                << " journal_future_valid=" << reopened_journal_watcher->future().isValid()
+                << " journal_future_finished=" << reopened_journal_watcher->isFinished()
+                << " journal_future_result="
+                << (reopened_journal_watcher->isFinished() &&
+                            !reopened_journal_watcher->isCanceled()
+                        ? reopened_journal_watcher->result()
+                        : false)
                 << " admitted=" << reopen_admitted
                 << " settled=" << reopen_settled
                 << " completion_count=" << reopen_completion_count
@@ -1393,13 +3702,41 @@ int main(int argc, char** argv) {
         QStringLiteral("Still"), 4.0, {});
     checkpoint_failure.addSequenceMarker(QStringLiteral("Keep this dirty work open"));
     const auto checkpoint_failure_timeline_id = checkpoint_failure.timelineAssetId();
-    if (!QDir().mkpath(checkpoint_failure.editJournalPath()) ||
-        !checkpoint_failure.openRecoveryCandidate(unrelated_candidate_id) ||
-        !wait_for_recovery_open(&checkpoint_failure) ||
-        !checkpoint_failure.hasActiveTimeline() || !checkpoint_failure.dirty() ||
-        checkpoint_failure.timelineAssetId() != checkpoint_failure_timeline_id ||
-        checkpoint_failure.sequenceMarkers().size() != 1 ||
-        !checkpoint_failure.status().contains(QStringLiteral("Your edits remain open"))) {
+    const auto blocked_journal_created = QDir().mkpath(checkpoint_failure.editJournalPath());
+    const auto checkpoint_recovery_accepted = blocked_journal_created &&
+        checkpoint_failure.openRecoveryCandidate(unrelated_candidate_id);
+    const auto checkpoint_recovery_settled = checkpoint_recovery_accepted &&
+        wait_for_recovery_open(&checkpoint_failure, 5000);
+    const auto checkpoint_future =
+        photo_editor::desktop::TimelineHistoryTestAccess::editJournalFuture(checkpoint_failure);
+    const auto invalid_destination_failed_terminally = checkpoint_future.isValid() &&
+        checkpoint_future.isFinished() && !checkpoint_future.result();
+    const auto checkpoint_recovery_kept_document =
+        checkpoint_failure.hasActiveTimeline() && checkpoint_failure.dirty() &&
+        checkpoint_failure.timelineAssetId() == checkpoint_failure_timeline_id &&
+        checkpoint_failure.sequenceMarkers().size() == 1 &&
+        checkpoint_failure.status().contains(QStringLiteral("Your edits remain open"));
+    if (!blocked_journal_created || !checkpoint_recovery_accepted ||
+        !checkpoint_recovery_settled || !invalid_destination_failed_terminally ||
+        !checkpoint_recovery_kept_document) {
+      std::cerr << "pre-replacement checkpoint diagnostic: created=" << blocked_journal_created
+                << " accepted=" << checkpoint_recovery_accepted
+                << " settled=" << checkpoint_recovery_settled
+                << " active=" << checkpoint_failure.hasActiveTimeline()
+                << " dirty=" << checkpoint_failure.dirty()
+                << " idMatches=" << (checkpoint_failure.timelineAssetId() == checkpoint_failure_timeline_id)
+                << " markers=" << checkpoint_failure.sequenceMarkers().size()
+                << " status=" << checkpoint_failure.status().toStdString();
+      const auto validation_diagnostics =
+          photo_editor::desktop::TimelineHistoryTestAccess::timelineJournalCacheDiagnostics();
+      std::cerr << " futureValid=" << checkpoint_future.isValid()
+                << " futureFinished=" << checkpoint_future.isFinished()
+                << " scans=" << validation_diagnostics.value(QStringLiteral("fullChainScans")).toULongLong()
+                << " deferrals=" << validation_diagnostics.value(QStringLiteral("validationDeferrals")).toULongLong()
+                << " pendingWrites=" << validation_diagnostics.value(QStringLiteral("pendingDeferredWrites")).toInt()
+                << " pendingBytes=" << validation_diagnostics.value(QStringLiteral("pendingDeferredBytes")).toLongLong()
+                << " validationWaiters=" << validation_diagnostics.value(QStringLiteral("validationTestGateWaiters")).toInt()
+                << '\n';
       return fail("a failed async pre-replacement checkpoint must keep the current dirty timeline intact");
     }
   }
@@ -1692,6 +4029,8 @@ int main(int argc, char** argv) {
   // delivery coverage. This mode ends after the complete Save/recovery,
   // append-only checkpoint, Recent reopen, Restore Copy, and Discard contract.
   if (recovery_lifecycle_only) {
+    const auto waveform_contract = run_warm_waveform_recovery_contract(workspace.path());
+    if (waveform_contract != EXIT_SUCCESS) return waveform_contract;
     std::cout << "timeline recovery lifecycle segment: passed\n";
     return EXIT_SUCCESS;
   }
@@ -3542,6 +5881,8 @@ int main(int argc, char** argv) {
   auto projected_clip_count = 0;
   auto projected_effect_count = 0;
   auto projected_offline_count = 0;
+  auto missing_tracking_readiness_fields = 0;
+  auto unexpectedly_ready_tracking_clips = 0;
   for (const auto& track_value : stress_track_model) {
     const auto track = track_value.toMap();
     if (track.value(QStringLiteral("trackKind")).toString() != QStringLiteral("video")) {
@@ -3557,6 +5898,16 @@ int main(int argc, char** argv) {
       if (!clip.value(QStringLiteral("mediaOnline")).toBool()) {
         ++projected_offline_count;
       }
+      if (!clip.contains(QStringLiteral("surfaceTrackReady")) ||
+          !clip.contains(QStringLiteral("surfaceTrackRepairable")) ||
+          !clip.contains(QStringLiteral("sceneTrackReady"))) {
+        ++missing_tracking_readiness_fields;
+      }
+      if (clip.value(QStringLiteral("surfaceTrackReady")).toBool() ||
+          clip.value(QStringLiteral("surfaceTrackRepairable")).toBool() ||
+          clip.value(QStringLiteral("sceneTrackReady")).toBool()) {
+        ++unexpectedly_ready_tracking_clips;
+      }
     }
   }
   const auto rss_with_full_projection = current_resident_bytes();
@@ -3566,6 +5917,8 @@ int main(int argc, char** argv) {
       stress_marker_model.size() != kStressMarkerCount ||
       stress_transcript_model.size() != kStressCaptionCount ||
       projected_effect_count < 2000 || projected_offline_count < 9000 ||
+      missing_tracking_readiness_fields != 0 ||
+      unexpectedly_ready_tracking_clips != 0 ||
       (rss_before_stress_load >= 0 && rss_with_full_projection >= 0 &&
        rss_with_full_projection - rss_before_stress_load > 512LL * kMebibyte)) {
     std::cerr << "stress projection diagnostics: projection_ms=" << projection_ms
@@ -3575,6 +5928,8 @@ int main(int argc, char** argv) {
               << " transcripts=" << stress_transcript_model.size()
               << " effected=" << projected_effect_count
               << " offline=" << projected_offline_count
+              << " missing_tracking_fields=" << missing_tracking_readiness_fields
+              << " unexpectedly_ready_tracking=" << unexpectedly_ready_tracking_clips
               << " rss_growth_mib="
               << (rss_before_stress_load >= 0 && rss_with_full_projection >= 0
                       ? (rss_with_full_projection - rss_before_stress_load) / kMebibyte
@@ -3593,6 +5948,7 @@ int main(int argc, char** argv) {
       return fail("large-project projection warmup should remain complete");
   }
   const auto rss_after_warm_projection = current_resident_bytes();
+  const auto allocator_after_warm_projection = current_allocator_memory();
   for (auto repeat = 0; repeat < 4; ++repeat) {
     const auto repeated_model = incremental.sequenceTracks();
     if (repeated_model.size() != kStressRuntimeTrackCount) {
@@ -3600,6 +5956,42 @@ int main(int argc, char** argv) {
     }
   }
   const auto rss_after_repeated_projection = current_resident_bytes();
+  const auto allocator_after_repeated_projection = current_allocator_memory();
+  const auto memory_mib = [](qint64 bytes) {
+    return bytes >= 0
+        ? static_cast<double>(bytes) / (1024.0 * 1024.0)
+        : -1.0;
+  };
+  std::cout << "timeline projection retention: warm_rss_mib="
+            << memory_mib(rss_after_warm_projection)
+            << " repeated_rss_mib=" << memory_mib(rss_after_repeated_projection)
+            << " rss_delta_mib="
+            << memory_mib(rss_after_repeated_projection >= 0 &&
+                                  rss_after_warm_projection >= 0
+                              ? rss_after_repeated_projection -
+                                    rss_after_warm_projection
+                              : -1)
+            << " warm_default_malloc_in_use_mib="
+            << memory_mib(allocator_after_warm_projection.bytes_in_use)
+            << " repeated_default_malloc_in_use_mib="
+            << memory_mib(allocator_after_repeated_projection.bytes_in_use)
+            << " default_malloc_in_use_delta_mib="
+            << memory_mib(allocator_after_repeated_projection.bytes_in_use >= 0 &&
+                                  allocator_after_warm_projection.bytes_in_use >= 0
+                              ? allocator_after_repeated_projection.bytes_in_use -
+                                    allocator_after_warm_projection.bytes_in_use
+                              : -1)
+            << " warm_default_malloc_allocated_mib="
+            << memory_mib(allocator_after_warm_projection.bytes_allocated)
+            << " repeated_default_malloc_allocated_mib="
+            << memory_mib(allocator_after_repeated_projection.bytes_allocated)
+            << " default_malloc_allocated_delta_mib="
+            << memory_mib(allocator_after_repeated_projection.bytes_allocated >= 0 &&
+                                  allocator_after_warm_projection.bytes_allocated >= 0
+                              ? allocator_after_repeated_projection.bytes_allocated -
+                                    allocator_after_warm_projection.bytes_allocated
+                              : -1)
+            << '\n';
   if (rss_after_warm_projection >= 0 && rss_after_repeated_projection >= 0 &&
       rss_after_repeated_projection - rss_after_warm_projection > 128LL * kMebibyte) {
     return fail("repeated 10,000-clip model projection should not retain more than 128 MiB after warmup");

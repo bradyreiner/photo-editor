@@ -46,7 +46,9 @@ std::size_t key_bytes(std::span<const LocalMaskSet> prefix) {
           source.name.size() + source.kind.size() + source.operation.size() + source.blend_mode.size() +
           source.retouch_mode.size() + source.inpaint_model_name.size() + source.segmentation_mask.size() +
           source.depth_map.size() + source.brush_points.size() * sizeof(BrushPoint) +
-          source.polygon_points.size() * sizeof(CurvePoint) + source.inpaint_patch_pixels.size() * sizeof(ColorPixel);
+          source.polygon_points.size() * sizeof(CurvePoint) +
+          source.color_range_sample_hues.size() * sizeof(double) +
+          source.inpaint_patch_pixels.size() * sizeof(ColorPixel);
       if (bytes > kMaximumKeyBytes) return bytes;
     }
     if (bytes > kMaximumKeyBytes) return bytes;

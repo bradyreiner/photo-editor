@@ -6,6 +6,7 @@ TextArea {
 
     property color accent: theme.accentWarm400
     property string accessibleLabel: ""
+    property bool inlineField: false
     readonly property string resolvedAccessibleName: {
         const explicitName = String(root.accessibleLabel || "").trim()
         if (explicitName.length > 0)
@@ -49,20 +50,10 @@ TextArea {
     Accessible.description: root.placeholderText
     Accessible.role: root.readOnly ? Accessible.StaticText : Accessible.EditableText
 
-    background: Rectangle {
-        radius: theme.radiusControl
-        color: root.enabled ? theme.fieldFill : theme.alpha(theme.fieldFill, 0.45)
-        border.width: root.activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
-        border.color: root.activeFocus ? theme.focusRing
-                      : root.hovered ? theme.alpha(theme.controlEdge, 0.82)
-                      : theme.alpha(theme.controlEdge, 0.52)
-
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: theme.hairlineWidth
-            radius: Math.max(1, parent.radius - theme.hairlineWidth)
-            visible: root.activeFocus
-            color: theme.alpha(theme.focusFill, 0.2)
-        }
+    background: InputFieldSurface {
+        inlineField: root.inlineField
+        focused: root.activeFocus
+        hovered: root.hovered
+        interactiveEnabled: root.enabled
     }
 }

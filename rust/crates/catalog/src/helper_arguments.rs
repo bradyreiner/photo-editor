@@ -130,6 +130,39 @@ mod tests {
     }
 
     #[test]
+    fn large_painted_canvas_upsert_roundtrips_without_argv_limits() {
+        use crate::PersistedCarouselDocument;
+
+        let expected = PersistedCarouselDocument {
+            document_id: "painted-canvas".into(),
+            name: "After the Rain — painted canvas".into(),
+            document_format: "custom".into(),
+            slide_count: 1,
+            document_json: serde_json::json!({
+                "slides": [{"primary": {"adjustmentPatch": {
+                    "paintPayload": "brush-α-\"-\\-\n".repeat(200_000)
+                }}}]
+            }),
+            created_at: "2026-11-02T00:00:00Z".into(),
+            updated_at: "2026-11-02T00:00:01Z".into(),
+        };
+        let payload = serde_json::to_string(&expected).unwrap();
+        assert!(payload.len() > 1024 * 1024);
+        let envelope = serde_json::to_vec(&serde_json::json!({
+            "schema": SCHEMA, "arguments": ["upsert", &payload]
+        }))
+        .unwrap();
+        let arguments = decode_helper_arguments(
+            vec!["catalog_carousel_documents".into(), "--stdin-json-v1".into()],
+            envelope.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(arguments, vec!["catalog_carousel_documents", "upsert", &payload]);
+        let restored: PersistedCarouselDocument = serde_json::from_str(&arguments[2]).unwrap();
+        assert_eq!(restored, expected);
+    }
+
+    #[test]
     fn malformed_or_wrong_version_payloads_fail_closed() {
         let too_many = serde_json::to_vec(&serde_json::json!({
             "schema": SCHEMA, "arguments": vec!["argument"; 33]

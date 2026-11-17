@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
   if (!manifest.open(QIODevice::ReadOnly)) return 1;
   const auto families = QJsonDocument::fromJson(manifest.readAll())
       .object().value(QStringLiteral("families")).toArray();
-  if (families.size() != 8 ||
+  if (families.size() != 10 ||
       !photo_editor::desktop::register_creative_fonts().isEmpty()) return 1;
   for (const auto& entry : families) {
     const auto family = entry.toObject();
@@ -42,6 +42,6 @@ int main(int argc, char** argv) {
     }
     if (!licensed) return 1;
   }
-  std::cout << "Eight bundled families load with verified bytes and licenses\n";
+  std::cout << "Ten bundled families load with verified bytes and licenses\n";
   return 0;
 }

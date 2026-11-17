@@ -3,6 +3,9 @@ import QtQuick
 
 Item {
     id: statusStack
+    // The viewport's pan/zoom and painting surfaces accept pointer presses.
+    // Status actions must be above them while empty status space stays inert.
+    z: 100
 
     required property string viewportObjectName
     required property bool pixelInspectionRequested
@@ -16,6 +19,12 @@ Item {
     required property real maskActivityProgressValue
     required property bool maskActivityChipVisible
     required property string maskActivityChipText
+    property bool savePending: false
+    property string saveError: ""
+    property int saveRecoveryCount: 0
+    property string saveRecoveryDetail: ""
+    property var saveRecoveryEntries: []
+    property var archiveRecoveryHandler: null
     property bool previewUpdateDelayElapsed: false
 
     signal retryRequested()
@@ -44,61 +53,39 @@ Item {
 
     Theme { id: theme }
 
-    Column {
-        objectName: statusStack.viewportObjectName + "LeftStatusStack"
-        anchors.left: parent.left
+    OpticalActivityIndicator {
+        objectName: statusStack.viewportObjectName + "LoadingSpinner"
+        anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.leftMargin: 14
-        anchors.bottomMargin: 14
+        anchors.margins: 14
+        width: theme.scaled(18)
+        height: width
+        visible: !statusStack.previewRenderFailed && statusStack.saveError.length === 0 &&
+                 ((statusStack.previewContentVisible &&
+                   (statusStack.maskActivityChipVisible ||
+                    (statusStack.previewProcessing && statusStack.previewUpdateDelayElapsed))) ||
+                  (statusStack.pixelInspectionRequested && !statusStack.pixelGridFullResolutionBacked) ||
+                  (statusStack.editedPreviewSurface && statusStack.savePending))
+        active: visible
+        Accessible.name: statusStack.maskActivityChipVisible ? statusStack.maskActivityChipText
+                         : statusStack.pixelInspectionRequested && !statusStack.pixelGridFullResolutionBacked
+                           ? "Loading full-resolution pixels"
+                           : statusStack.previewProcessing ? statusStack.previewUpdateBadgeText : "Saving edits"
+    }
+
+    RecipeSaveStatusChip {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 14
+        anchors.bottomMargin: statusStack.saveError.length === 0 && statusStack.saveRecoveryCount > 0 ? 48 : 14
         width: implicitWidth
         height: implicitHeight
-        spacing: theme.space12
-
-        StatusChip {
-            id: maskActivityStatusChip
-            objectName: statusStack.viewportObjectName.length > 0
-                        ? statusStack.viewportObjectName + "MaskActivityStatusChip"
-                        : "maskActivityStatusChip"
-            readonly property string activityAnimationContract: "nonblocking|persistent|animated-dot:v2|progress-strip:true|smart:indeterminate|retouch:determinate"
-            width: implicitWidth
-            height: implicitHeight
-            visible: statusStack.previewContentVisible && statusStack.maskActivityChipVisible
-            text: statusStack.maskActivityChipText
-            tone: "warning"
-            busy: true
-            tooltipText: text
-            z: 1.45
-
-            ProgressStrip {
-                objectName: statusStack.viewportObjectName.length > 0
-                            ? statusStack.viewportObjectName + "MaskActivityProgressStrip"
-                            : "maskActivityProgressStrip"
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                height: 3
-                progress: statusStack.maskActivityProgressValue
-                accent: theme.primaryAccent
-                trackColor: "transparent"
-                visible: maskActivityStatusChip.visible
-            }
-        }
-
-        StatusChip {
-            id: previewUpdateBadge
-            objectName: statusStack.viewportObjectName.length > 0
-                        ? statusStack.viewportObjectName + "PreviewUpdateBadge"
-                        : "previewUpdateBadge"
-            width: implicitWidth
-            height: implicitHeight
-            visible: statusStack.pixelInspectionRequested && !statusStack.pixelGridFullResolutionBacked
-            text: "Loading full-resolution pixels"
-            tone: "accent"
-            busy: true
-            actionText: ""
-            tooltipText: text
-            z: 1.4
-        }
+        savePending: false
+        saveError: statusStack.editedPreviewSurface ? statusStack.saveError : ""
+        recoveryCount: statusStack.editedPreviewSurface ? statusStack.saveRecoveryCount : 0
+        recoveryDetail: statusStack.saveRecoveryDetail
+        recoveryEntries: statusStack.saveRecoveryEntries
+        archiveRecoveryHandler: statusStack.archiveRecoveryHandler
     }
 
     StatusChip {
@@ -111,12 +98,10 @@ Item {
         anchors.rightMargin: 14
         anchors.bottomMargin: 14
         width: implicitWidth
-        visible: statusStack.previewContentVisible &&
-                 (statusStack.previewRenderFailed ||
-                  (statusStack.previewProcessing && statusStack.previewUpdateDelayElapsed))
+        visible: statusStack.previewContentVisible && statusStack.previewRenderFailed && statusStack.saveError.length === 0
         text: statusStack.previewUpdateBadgeText
         tone: statusStack.previewRenderFailed ? "error" : "info"
-        busy: statusStack.previewProcessing && !statusStack.previewRenderFailed
+        busy: false
         actionText: statusStack.previewRenderFailed ? "Retry" : ""
         detailText: statusStack.previewFailureDetail
         tooltipText: statusStack.previewFailureDetail.length > 0

@@ -97,6 +97,9 @@ Rectangle {
 
     CanvasCoordinateMapper {
         id: maskCoordinateMapper
+        geometryMapper: editorPreview
+        inputCoordinateSpace: "source"
+        coordinateSpace: "active"
         contentX: 0
         contentY: 0
         contentWidth: previewItem.width
@@ -137,7 +140,8 @@ Rectangle {
                       editorPreview.alphaMaskImportPreview.height + "  " +
                       editorPreview.alphaMaskImportPreview.selectedPixelCount + " px"
                 color: theme.textStrong
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 font.letterSpacing: 0
                 fontSizeMode: Text.HorizontalFit
@@ -1374,9 +1378,9 @@ Rectangle {
                                             root.tabletBrushStrokeActive = false
                                             return
                                         }
-                                        editorPreview.beginActiveBrushStroke()
+                                        editorPreview.beginActiveBrushSourceStroke()
                                         root.tabletBrushStrokeActive = true
-                                        editorPreview.addBrushPointWithTabletEraser(
+                                        editorPreview.addBrushSourcePointWithTabletEraser(
                                                     point.x,
                                                     point.y,
                                                     pressure,
@@ -1396,7 +1400,7 @@ Rectangle {
                                         const point = root.imagePointFromItem(brushOverlay, x, y)
                                         if (!point.valid)
                                             return
-                                        editorPreview.addBrushPointWithTabletEraser(
+                                        editorPreview.addBrushSourcePointWithTabletEraser(
                                                     point.x,
                                                     point.y,
                                                     pressure,
@@ -1438,7 +1442,7 @@ Rectangle {
                                             root.cloneSourcePickArmed = false
                                             return
                                         }
-                                        editorPreview.addBrushPointWithTablet(point.x, point.y, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
+                                        editorPreview.addBrushSourcePointWithTablet(point.x, point.y, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                                     }
                                     onPositionChanged: function(mouse) {
                                         root.brushHoverX = mouse.x
@@ -1450,17 +1454,15 @@ Rectangle {
                                             return
                                         const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)
                                         if (point.valid)
-                                            editorPreview.addBrushPointWithTablet(point.x, point.y, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
+                                            editorPreview.addBrushSourcePointWithTablet(point.x, point.y, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                                     }
                                 }
 
                                 Item {
                                     id: maskViewBrushCursor
                                     objectName: "maskViewBrushCursor"
-                                    readonly property real brushDiameter: Math.max(
-                                        8,
-                                        Math.min(previewItem.width, previewItem.height) *
-                                            editorPreview.activeMaskBrushSize * 2)
+                                    readonly property real brushDiameter:
+                                        Math.min(previewItem.width, previewItem.height) * editorPreview.activeMaskBrushSize * 2
                                     readonly property real hardnessDiameter: Math.max(
                                         2,
                                         brushDiameter * root.clamp(editorPreview.activeMaskBrushHardness, 0.0, 1.0))
@@ -1474,8 +1476,24 @@ Rectangle {
                                     height: brushDiameter
                                     z: 8
 
+                                    ProjectedBrushCursor {
+                                        id: projectedMaskViewBrushCursor
+                                        objectName: "maskViewBrushCursorProjectedFootprint"
+                                        x: -maskViewBrushCursor.x; y: -maskViewBrushCursor.y
+                                        width: previewItem.width; height: previewItem.height
+                                        visible: active
+                                        controller: editorPreview
+                                        pointerX: root.brushHoverX; pointerY: root.brushHoverY
+                                        imageX: 0; imageY: 0
+                                        imageWidth: previewItem.width; imageHeight: previewItem.height
+                                        brushSize: editorPreview.activeMaskBrushSize
+                                        hardness: editorPreview.activeMaskBrushHardness * (1 - editorPreview.activeMaskFeather)
+                                        accent: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
+                                    }
+
                                     Rectangle {
                                         objectName: "maskViewBrushCursorOuterHaloRing"
+                                        visible: !projectedMaskViewBrushCursor.available
                                         anchors.fill: parent
                                         radius: width / 2
                                         color: "transparent"
@@ -1485,6 +1503,7 @@ Rectangle {
 
                                     Rectangle {
                                         objectName: "maskViewBrushCursorFeatherRing"
+                                        visible: !projectedMaskViewBrushCursor.available
                                         anchors.fill: parent
                                         anchors.margins: 1
                                         radius: width / 2
@@ -1495,6 +1514,7 @@ Rectangle {
 
                                     Rectangle {
                                         objectName: "maskViewBrushCursorHardnessRing"
+                                        visible: !projectedMaskViewBrushCursor.available
                                         anchors.centerIn: parent
                                         width: maskViewBrushCursor.hardnessDiameter
                                         height: width
@@ -1511,7 +1531,8 @@ Rectangle {
                                         anchors.topMargin: 5
                                         text: root.brushCursorReadout()
                                         color: theme.textStrong
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 10
                                         font.letterSpacing: 0
                                         padding: 4
@@ -1956,12 +1977,7 @@ Rectangle {
                             color: "#f2f4f6"
                             placeholderTextColor: "#6f7882"
                             onTextChanged: root.maskSearchQuery = text
-                            background: Rectangle {
-                                radius: 8
-                                color: "#11161a"
-                                border.width: 1
-                                border.color: maskSearchModel.searchText().length > 0 ? Qt.alpha("#8ab8d8", 0.52) : "#2a3138"
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                         }
 
                         Rectangle {
@@ -2188,7 +2204,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "SELECT"
                             color: "#6b7580"
-                            font.family: "Menlo"
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 8
                             font.weight: Font.DemiBold
                             font.letterSpacing: 0.8
@@ -2706,6 +2723,7 @@ Rectangle {
 
                                                 AppMenu {
                                                     id: maskSourceContextMenu
+                                                    transientMenu: true
                                                     objectName: "maskSourceContextMenu"
                                                     accent: root.maskAccent(modelData)
 
@@ -2961,6 +2979,7 @@ Rectangle {
 
                                     AppMenu {
                                         id: retouchRowContextMenu
+                                        transientMenu: true
                                         objectName: "retouchRowContextMenu"
                                         accent: root.maskAccent(modelData)
 
@@ -3170,7 +3189,8 @@ Rectangle {
                                         objectName: "activeMaskHeaderOpacityLabel"
                                         text: "Opacity " + root.percentText(editorPreview.activeMaskOpacity)
                                         color: "#aeb7c1"
-                                        font.family: "Menlo"
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 10
                                         font.letterSpacing: 0
                                     }
@@ -4538,6 +4558,8 @@ Rectangle {
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Hue Center"
+                            visible: editorPreview.activeMaskColorSamples.length === 0 ||
+                                String((editorPreview.maskStack[editorPreview.activeMaskIndex] || ({})).colorSampleMode || "") !== "union"
                             valueText: Math.round(editorPreview.activeMaskHueCenter * 360).toString() + "°"
                             from: 0
                             to: 1

@@ -20,7 +20,7 @@ Button {
 
     Theme { id: theme }
 
-    readonly property bool clippedShape: root.shape === "clipped"
+    readonly property bool clippedShape: false
     readonly property color iconOnlyFill: root.down
                                             ? theme.ink750
                                           : root.highlighted
@@ -32,15 +32,16 @@ Button {
                                                ? "transparent"
                                                : "transparent"
 
-    implicitHeight: iconOnly ? theme.railButtonSize : (compact ? theme.sidebarRowHeightCompact : theme.sidebarRowHeight)
-    implicitWidth: iconOnly ? theme.railButtonSize : Math.max(implicitBackgroundWidth, titleLabel.implicitWidth + (root.badgeText.length > 0 ? badgeLabel.implicitWidth + 54 : 46))
+    implicitHeight: iconOnly ? theme.railButtonSize : Math.max(compact ? theme.sidebarRowHeightCompact : theme.sidebarRowHeight, titleLabel.implicitHeight + theme.space12)
+    implicitWidth: iconOnly ? theme.railButtonSize : Math.max(implicitBackgroundWidth, titleLabel.implicitWidth + (root.badgeText.length > 0 ? badgeLabel.implicitWidth + theme.scaled(54) : theme.scaled(46)))
     font.family: theme.fontUi
     font.pixelSize: compact ? theme.typeLabel : theme.typeControl
-    font.weight: root.highlighted ? theme.weightSection : theme.weightControl
+    font.weight: theme.weightControl
     hoverEnabled: true
     activeFocusOnTab: true
     Accessible.name: root.tooltipText.length > 0 ? root.tooltipText : (root.title.length > 0 ? root.title : root.kind)
     Accessible.description: root.subtitle
+    Accessible.checked: root.highlighted
 
     AppToolTip {
         id: sharedTooltip1
@@ -50,51 +51,20 @@ Button {
         timeout: 3000
         text: root.tooltipText.length > 0 ? root.tooltipText : root.title
     }
-    background: Item {
-        Rectangle {
-            anchors.fill: parent
-            visible: !root.clippedShape
-            radius: theme.radiusControl
-            color: root.down
-                   ? theme.ink750
-                   : root.highlighted
-                     ? theme.editorSelectionFill
-                     : (root.hovered ? theme.editorControlHover : "transparent")
-            border.width: root.visualFocus ? theme.focusBorderWidth : 0
-            border.color: root.visualFocus
-                          ? theme.focusRing
-                          : "transparent"
-        }
-
-        CutCornerSurface {
-            anchors.fill: parent
-            visible: root.clippedShape
-            cut: root.iconOnly ? 8 : theme.cutCorner
-            cutTopLeft: false
-            cutTopRight: false
-            cutBottomRight: true
-            cutBottomLeft: false
-            fillColor: root.iconOnly
-                       ? root.iconOnlyFill
-                       : root.down
-                         ? theme.ink750
-                         : root.highlighted
-                           ? theme.editorSelectionFill
-                           : (root.hovered ? theme.editorControlHover : "transparent")
-            borderWidth: root.visualFocus ? theme.focusBorderWidth : 0
-            borderColor: root.iconOnly
-                         ? root.iconOnlyBorder
-                         : root.visualFocus
-                           ? theme.focusRing
-                           : "transparent"
-        }
-
+    background: CommandButtonSurface {
+        hovered: root.hovered
+        pressed: root.down
+        selected: root.highlighted
+        focused: root.visualFocus
+        interactiveEnabled: root.enabled
+        fillColor: theme.commandFill("secondary", root.highlighted, root.hovered, root.down, root.enabled, true)
     }
 
     contentItem: Item {
         anchors.fill: parent
 
         AppIcon {
+                objectName: "sharedCommandIcon"
             visible: root.iconOnly
             anchors.centerIn: parent
             name: root.iconName
@@ -109,9 +79,9 @@ Button {
             anchors.right: parent.right
             anchors.topMargin: 4
             anchors.rightMargin: 4
-            implicitWidth: 8
-            implicitHeight: 8
-            radius: 4
+            implicitWidth: theme.scaled(8)
+            implicitHeight: theme.scaled(8)
+            radius: theme.scaled(4)
             color: root.badgeEmphasis ? theme.alpha(root.accent, 0.9) : theme.alpha(theme.textMuted, 0.85)
         }
 
@@ -128,6 +98,7 @@ Button {
                 Layout.alignment: Qt.AlignVCenter
 
                 AppIcon {
+                objectName: "sharedCommandIcon"
                     anchors.centerIn: parent
                     name: root.iconName
                     color: root.highlighted ? theme.interaction300 : (root.hovered ? theme.textMain : theme.textMuted)
@@ -138,18 +109,18 @@ Button {
 
             Text {
                 id: titleLabel
+                objectName: "sharedCommandLabel"
                 Layout.fillWidth: true
                 text: root.title
                 color: root.highlighted ? theme.interaction300 : (root.hovered ? theme.textMain : theme.textMuted)
                 font.family: root.font.family
                 font.pixelSize: root.font.pixelSize
-                font.weight: root.highlighted ? theme.weightSection : theme.weightControl
+                font.weight: theme.weightControl
                 Layout.alignment: Qt.AlignVCenter
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideNone
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 9
-                maximumLineCount: 1
+                fontSizeMode: Text.FixedSize
+                wrapMode: Text.Wrap
             }
 
             Rectangle {
@@ -157,17 +128,18 @@ Button {
                 Layout.alignment: Qt.AlignVCenter
                 radius: 1
                 color: root.badgeEmphasis ? theme.alpha(root.accent, 0.18) : theme.alpha(theme.ink700, 0.5)
-                border.width: 1
+                border.width: theme.highContrast ? theme.hairlineWidth : 0
                 border.color: root.badgeEmphasis ? theme.alpha(root.accent, 0.34) : theme.alpha(theme.lineSoft, 0.4)
-                implicitWidth: badgeLabel.implicitWidth + 8
-                implicitHeight: 16
+                implicitWidth: badgeLabel.implicitWidth + theme.space8
+                implicitHeight: theme.scaled(16)
 
                 Label {
                     id: badgeLabel
                     anchors.centerIn: parent
                     text: root.badgeText
                     color: root.badgeEmphasis ? root.accent : theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                 }
             }

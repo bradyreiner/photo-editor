@@ -1,0 +1,1676 @@
+{
+  "schema": "looksy.native-authoring-command-plan/v1",
+  "executionState": "planning-only-unbound",
+  "resourceId": "UNBOUND",
+  "taskId": "UNBOUND",
+  "title": "NEPAL. In three forms.",
+  "authoringOrigin": "Execute typed commands inside Looksy; this JSON is not an imported project.",
+  "sequence": {
+    "width": 1080,
+    "height": 1920,
+    "frameRate": 30,
+    "audioSampleRate": 48000
+  },
+  "colorSpace": "Rec.709",
+  "dataLevels": "Legal",
+  "durationSeconds": 42,
+  "nativeProjectSchemaVersionObserved": 8,
+  "nativeCreation": {
+    "tool": "timeline.create_draft",
+    "arguments": {
+      "settings": {
+        "timelineName": "LOOKSi C02 — NEPAL. In three forms.",
+        "width": 1080,
+        "height": 1920,
+        "frameRate": 30,
+        "audioSampleRate": 48000,
+        "colorSpace": "Rec.709",
+        "dataLevels": "Legal",
+        "trackLayout": "creator_social"
+      }
+    }
+  },
+  "bindingRequired": [
+    "Fresh native resourceId",
+    "Current admitted taskId",
+    "Current startingDocumentHash",
+    "Canonical existing outputDirectory admitted to task",
+    "Live available command schemas"
+  ],
+  "admissionActions": [
+    {
+      "kind": "text",
+      "summary": "Create editable campaign titles and native graphic shapes."
+    },
+    {
+      "kind": "layers",
+      "summary": "Create and arrange native Timeline tracks and clips."
+    },
+    {
+      "kind": "media",
+      "summary": "Import only the listed raw/native source assets as individual clips."
+    },
+    {
+      "kind": "framing",
+      "summary": "Frame sources and animate native position, scale and opacity."
+    },
+    {
+      "kind": "audio",
+      "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+    },
+    {
+      "kind": "delivery",
+      "summary": "Save readback-verified native project and prepare native H.264 export."
+    }
+  ],
+  "sourceAssets": [
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+      "bytes": 4608729,
+      "sha256": "ed9c980585ae74e18ab2f9dbd383e988f5b79c7329da69b9878ccc9099054830"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/archive/native-timeline-review-2026-11-02.mp4",
+      "bytes": 18511550,
+      "sha256": "6cedcbd366c42d2d4b116557016bf2fbd0905f48d5fc1e8d6f92f7ed9f3bb596"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-01.png",
+      "bytes": 11817245,
+      "sha256": "138173ad1357ea060f9cf0d179869477d4b5ee8efb38e02340fcbc11cbfbd91a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-02.png",
+      "bytes": 11817245,
+      "sha256": "f9f79d4d6aec047d8e886991c41cf1b63cca049300c1c9c0daf7256e899405da"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-03.png",
+      "bytes": 11817245,
+      "sha256": "762c860533aad32c59ebc197fdbfda054f24edeb9d809a32125c55273d3396d9"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-04.png",
+      "bytes": 11817245,
+      "sha256": "1ef8d652a910a8a86ec2effe7c466bdd3e409c1d601069fde6ad2a9a6ed5138c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-05.png",
+      "bytes": 11817245,
+      "sha256": "8c8f5684e8d013bc47dbc83659ac5fc042e82c52d47bed965286dffc79d87151"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-06.png",
+      "bytes": 11817245,
+      "sha256": "f3c2178abc5c96021d8a4768151a66bc6ed55bb38a7335008c16397d8977ebca"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign02/audio/original-score.wav",
+      "bytes": 8064044,
+      "sha256": "8d15445cca2d823b5835b081bbe28e37a0f9da5c039b5601ac3630a06f343aa2"
+    }
+  ],
+  "scenePlan": [
+    {
+      "startSeconds": 0,
+      "endSeconds": 11,
+      "purpose": "Open the native-output casebook, then show the real photo treatment.",
+      "nativeObjects": [
+        "titles",
+        "native photo source clip"
+      ],
+      "acceptance": "This is a mixed-session casebook, not a new continuous live walkthrough."
+    },
+    {
+      "startSeconds": 11,
+      "endSeconds": 23,
+      "purpose": "Play the actual historical native motion study as one source insert.",
+      "nativeObjects": [
+        "12-second archival output clip",
+        "date title"
+      ],
+      "acceptance": "Keep source visible in a frame; do not represent this insert as the whole new authored film."
+    },
+    {
+      "startSeconds": 23,
+      "endSeconds": 35,
+      "purpose": "Turn through six actual native board output inserts.",
+      "nativeObjects": [
+        "six individually timed board PNG clips",
+        "editable labels"
+      ],
+      "acceptance": "Film inserts do not establish that a new storyboard/carousel native document is authored."
+    },
+    {
+      "startSeconds": 35,
+      "endSeconds": 42,
+      "purpose": "Close the casebook with an invitation.",
+      "nativeObjects": [
+        "editable title clips"
+      ],
+      "acceptance": "Native output proof scope and historical dates stay legible."
+    }
+  ],
+  "steps": [
+    {
+      "id": "c02-track-ink",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "ink",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-ink",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c02-track-ink",
+          "field": "trackId"
+        },
+        "shapeType": "rectangle",
+        "startSeconds": 0,
+        "durationSeconds": 42,
+        "values": {
+          "positionX": 0.5,
+          "positionY": 0.5,
+          "shapeWidth": 1,
+          "shapeHeight": 1,
+          "backgroundColor": "#08090B",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c02-track-hook",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "hook",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-hook",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-hook",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 0,
+        "durationSeconds": 4,
+        "values": {
+          "text": "NEPAL.\nIn three forms.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 104,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.29,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-hook-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-hook",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 3.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.315,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.29,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-photo-treatment",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "photo-treatment",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-photo-treatment",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-photo-treatment",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:photo-treatment",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+        "displayLabel": "photo-treatment",
+        "durationSeconds": 7,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 7,
+        "startSeconds": 4,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-photo-treatment-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-photo-treatment",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.45,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-photo-label",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "photo-label",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-photo-label",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-photo-label",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 4,
+        "durationSeconds": 7,
+        "values": {
+          "text": "01 / A photo treatment",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 58,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.18,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-photo-label-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-photo-label",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.205,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.18,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-photo-date",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "photo-date",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-photo-date",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-photo-date",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 4,
+        "durationSeconds": 7,
+        "values": {
+          "text": "Native photo output · 16 Nov 2026",
+          "fontFamily": "Space Mono",
+          "fontSize": 33,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.82,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-photo-date-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-photo-date",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.845,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.82,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-native-archival-study",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "native-archival-study",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-native-archival-study",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-native-archival-study",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:native-archival-study",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/archive/native-timeline-review-2026-11-02.mp4",
+        "displayLabel": "native-archival-study",
+        "durationSeconds": 12,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 12,
+        "startSeconds": 11,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-native-archival-study-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-native-archival-study",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.34,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-study-label",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "study-label",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-study-label",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-study-label",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 11,
+        "durationSeconds": 12,
+        "values": {
+          "text": "02 / A 12-second\nmotion study",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 64,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.18,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-study-label-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-study-label",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 11.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 12.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.205,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.18,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-study-date",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "study-date",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-study-date",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-study-date",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 11,
+        "durationSeconds": 12,
+        "values": {
+          "text": "Native Timeline export · 2 Nov 2026",
+          "fontFamily": "Space Mono",
+          "fontSize": 33,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.82,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-study-date-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-study-date",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 11.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 12.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.845,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.82,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-board-1",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "board-1",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-1",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-1",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:board-1",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-01.png",
+        "displayLabel": "board-1",
+        "durationSeconds": 2,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 2,
+        "startSeconds": 23,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-board-1-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-board-1",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.43,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-board-2",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "board-2",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-2",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-2",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:board-2",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-02.png",
+        "displayLabel": "board-2",
+        "durationSeconds": 2,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 2,
+        "startSeconds": 25,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-board-2-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-board-2",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.43,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-board-3",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "board-3",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-3",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-3",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:board-3",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-03.png",
+        "displayLabel": "board-3",
+        "durationSeconds": 2,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 2,
+        "startSeconds": 27,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-board-3-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-board-3",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.43,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-board-4",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "board-4",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-4",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-4",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:board-4",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-04.png",
+        "displayLabel": "board-4",
+        "durationSeconds": 2,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 2,
+        "startSeconds": 29,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-board-4-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-board-4",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.43,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-board-5",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "board-5",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-5",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-5",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:board-5",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-05.png",
+        "displayLabel": "board-5",
+        "durationSeconds": 2,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 2,
+        "startSeconds": 31,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-board-5-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-board-5",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.43,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-board-6",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "board-6",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-6",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-6",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:board-6",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-06.png",
+        "displayLabel": "board-6",
+        "durationSeconds": 2,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 2,
+        "startSeconds": 33,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-board-6-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c02-board-6",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.43,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c02-track-board-label",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "board-label",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-label",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-label",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 23,
+        "durationSeconds": 12,
+        "values": {
+          "text": "03 / A story\nin six boards",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 67,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.17,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-board-label-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-board-label",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 11.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 12.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.195,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.17,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-board-date",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "board-date",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-board-date",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-board-date",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 23,
+        "durationSeconds": 12,
+        "values": {
+          "text": "Native board exports · 16 Nov 2026",
+          "fontFamily": "Space Mono",
+          "fontSize": 33,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.83,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-board-date-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-board-date",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 11.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 12.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.855,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.83,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-builder-disclosure",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "builder-disclosure",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-builder-disclosure",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-builder-disclosure",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 35,
+        "durationSeconds": 7,
+        "values": {
+          "text": "I’m building LOOKSi.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 80,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.29,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-builder-disclosure-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-builder-disclosure",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.315,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.29,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-product-category",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "product-category",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-product-category",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-product-category",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 35.3,
+        "durationSeconds": 6.7,
+        "values": {
+          "text": "Photo + video.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 82,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.42,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-product-category-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-product-category",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.466666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.7,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.445,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.42,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-maker-line",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "maker-line",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-maker-line",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-maker-line",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 35.6,
+        "durationSeconds": 6.4,
+        "values": {
+          "text": "For people who care\nhow it looks.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 64,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.56,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-maker-line-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-maker-line",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.133333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.4,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.5850000000000001,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.56,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-cta",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "cta",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c02-cta",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c02-track-cta",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 35.9,
+        "durationSeconds": 6.1,
+        "values": {
+          "text": "Which form would you try?",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 65,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#00FF96",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.76,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c02-cta-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-cta",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.866666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.1,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.785,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.76,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-track-source-score",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "audio",
+        "name": "source-score",
+        "audioRole": "music"
+      }
+    },
+    {
+      "id": "c02-source-score",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c02-track-source-score",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c02:source-score",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign02/audio/original-score.wav",
+        "displayLabel": "source-score",
+        "durationSeconds": 42,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 42,
+        "startSeconds": 0,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c02-source-score-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c02-source-score",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "audioGainDb",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": -60,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.266666667,
+                "value": -8,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 41.333333333,
+                "value": -8,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 42.0,
+                "value": -60,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c02-save-native-project-copy",
+      "commandId": "timeline.action.saveTimeline",
+      "values": {
+        "outputPath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign02/projects/campaign02-native-v1.json"
+      }
+    }
+  ],
+  "completionStatus": "Not authored in Looksy; no native deliverable or export exists from this plan.",
+  "reviewRequirements": [
+    "Inspect native title/shape text and source identities",
+    "Verify track compositing order in native preview",
+    "Native preview and visible proof at every cut",
+    "Readback-verified project save",
+    "Native delivery preflight",
+    "Native export receipt reaches completed with output integrity",
+    "Full decode/phone-size/audio review",
+    "Human creative approval pending"
+  ]
+}

@@ -1,0 +1,756 @@
+{
+  "schema_version": 1,
+  "common": {
+    "brand_display": "LOOKSi",
+    "brand_status": "Campaign spelling follows current user request; application identifiers and existing Looksy assets are unchanged.",
+    "positioning": "A photo and video editor I am building to give professionals and hobbyists more room to make work their way.",
+    "publication_status": "Review creative. No posts have been published. Product demonstration footage and founder performances remain production tasks.",
+    "voice_rules": [
+      "Use I in founder posts; invite a specific useful reply.",
+      "Frame better as the maker’s aim; show a specific workflow rather than claiming universal superiority.",
+      "Keep hobbyists welcome without reducing professional work to a quick trick.",
+      "Show a revision or human choice; polished output alone does not prove product behavior."
+    ],
+    "cta_policy": "Use discussion CTAs now. Add an access/purchase/download CTA only after its destination and release readiness are verified.",
+    "evidence_as_of": "2026-11-16",
+    "evidence": [
+      {
+        "path": "apps/desktop/qml/components/Theme.qml",
+        "finding": "Current identity states graphite, cool white and additive RGB; brandRed #FF3B30, brandGreen #30D158, brandBlue #3282FF."
+      },
+      {
+        "path": "apps/desktop/qml/workspaces/StudioWorkspace.qml",
+        "finding": "Photo adjustment, sync-selected-photos, and export-format surfaces exist in current source. Source presence is not current marketing demonstration proof."
+      },
+      {
+        "path": "apps/desktop/qml/workspaces/TimelineView.qml",
+        "finding": "Current source includes source/program monitors, trim/split, shared color tooling, and export configuration. No new end-to-end run was recorded by this copy task."
+      },
+      {
+        "path": "docs/professional-expansion-program.md",
+        "finding": "Documents scoped multi-format image export and reference matching; broader professional qualification and multiple advanced capabilities remain open."
+      },
+      {
+        "path": "marketing/evidence/current-menu-boards-edit.md",
+        "finding": "Historical receipt for manually authored and exported three-board menu document; does not prove local-agent autonomy or current release qualification."
+      },
+      {
+        "path": "marketing/evidence/current-magazine-edit.md",
+        "finding": "Historical native manual composition/export receipt using an externally generated source; not RAW/log/offline/AI-agent proof."
+      },
+      {
+        "path": "marketing/media/captures/provenance.json",
+        "finding": "Existing UI captures are historical fixtures marked internal review and proof pending. Do not present as a fresh real workflow."
+      },
+      {
+        "path": "release/product.json",
+        "finding": "Target platform mac-arm; commercialTermsApproved=false; price and checkout URLs blank. Do not advertise price, public availability, subscription-free terms, Intel, Windows or mobile support."
+      }
+    ],
+    "global_claim_caveats": [
+      "No fastest, industry-leading, professional-grade accuracy, all-cameras, all-codecs or replacement-for-everything assertion.",
+      "No synthetic or stock image is described as an image generated or edited in Looksi without the matching product execution.",
+      "No offline, privacy, local-agent or zero-cloud claim is made without complete recorded proof for that run.",
+      "Use the words development preview when showing historical or non-shipping interface captures.",
+      "Time compression, dramatization and externally generated source art are identified wherever used."
+    ],
+    "version_policy": "Primary image and direction-board words match build_creative.py. The 18-second video_script is the rendered typography version; production_master_script is a separate 24-second richer capture script, not the rendered film. board_panels are optional social carousel copy."
+  },
+  "campaigns": [
+    {
+      "id": "01",
+      "title": "A note from the builder",
+      "tone": "Candid / human / curious",
+      "audience": "Photographers, video makers and curious software builders",
+      "hook": "I built this. I’d love your honest take.",
+      "caption_instagram": "I built this. I’d love your honest take.\n\nI’m building LOOKSi, a photo and video editor. The aim is useful control for professional projects, with room to explore when you make things for yourself.\n\nI’ll be sharing real edits, the choices behind them, and what I’m still improving. What would make editing better for you?",
+      "reddit_title": "I’m building a photo and video editor. What should I put to the test?",
+      "reddit_body": "I’m the person building LOOKSi, a photo and video editor. I’m trying to make something that gives working creatives useful control and gives hobbyists a place to grow.\n\nFor this first look I want to show one real edit, including a change of mind and the exported result. I’ll describe what is working in that build and where it still needs work.\n\nIf you edit photos, video, or both: what single workflow would you want me to demonstrate next? Tell me the kind of project and the awkward step, and I can make the next demo specific.",
+      "cta": "What would make it better for you?",
+      "founder_requirements": [
+        "Required for full founder version: one seated A-roll take, 30–45 seconds; three opening takes.",
+        "Record quiet room sound and clean voice. Capture a 5-second listening/looking-at-screen cutaway.",
+        "No founder capture required for the text-led motion concept; do not use a synthetic founder likeness or voice."
+      ],
+      "demo_requirements": [
+        "Own photo plus 2–3 own video clips; one current-build session showing actual edits and exports.",
+        "Keep uncut capture, build identity, source files and final outputs.",
+        "Do not reuse historical fixture screenshots as if the demo happened now."
+      ],
+      "alt_text": "A note from the builder: I built this. I’d love your honest take. An editor I’m building for people who care about photos and video. LOOKSi signature and additive RGB accents in an original typographic campaign design.",
+      "image_headline": "I built this.\nI’d love your\nhonest take.",
+      "image_subhead": "An editor I’m building for people\nwho care about photos and video.",
+      "board_panels": [
+        {
+          "label": "01 / THE REASON",
+          "headline": "I wanted a better way to make my work.",
+          "body": "So I started building a photo and video editor."
+        },
+        {
+          "label": "02 / THE AIM",
+          "headline": "Control for working creatives. Room to grow for everyone.",
+          "body": "Professional projects and personal experiments both deserve care."
+        },
+        {
+          "label": "03 / THE PROCESS",
+          "headline": "I’ll show the decisions.",
+          "body": "Real edits, honest revisions, and the parts still being improved."
+        },
+        {
+          "label": "04 / YOUR TURN",
+          "headline": "What should I put to the test?",
+          "body": "Tell me your medium, your project, and the step that gets in the way."
+        }
+      ],
+      "art_direction": "An editorial builder’s notebook. Graphite and warm white, left-aligned type, small RGB registration marks. For final capture use an actual founder desk and candid eye contact; no staged stock founder.",
+      "hypothesis": "A specific invitation from the builder will generate useful workflow requests.",
+      "primary_kpi": "Qualified workflow-request comments per 1,000 reached accounts",
+      "claim_caveats": [
+        "The founder’s motivation is proposed messaging for review, not a historical quote.",
+        "Use present progressive building; do not imply an available commercial release."
+      ],
+      "alternate_hook": "I built the editor I wanted to use.",
+      "production_master_duration_seconds": 24,
+      "production_master_script": [
+        {
+          "start": 0,
+          "end": 5,
+          "on_screen": "I built the editor\nI wanted to use.",
+          "voiceover": "I’m building a photo and video editor called Looksi.",
+          "visual": "Founder, eye level, natural room light; immediate cut to own finished project."
+        },
+        {
+          "start": 5,
+          "end": 11,
+          "on_screen": "Photos. Video.\nYour decisions.",
+          "voiceover": "I want it to serve the people doing this for work, and the people doing it because they love it.",
+          "visual": "Real photo adjustment and real timeline edit from the same documented session."
+        },
+        {
+          "start": 11,
+          "end": 18,
+          "on_screen": "Here’s what I’m\nworking on.",
+          "voiceover": "I’ll show the decisions, the results, and the parts I’m still improving.",
+          "visual": "One honest reversal: try an edit, undo it, choose a different treatment. Capture current build."
+        },
+        {
+          "start": 18,
+          "end": 24,
+          "on_screen": "What should I\nput to the test?",
+          "voiceover": "What would you want to see it handle?",
+          "visual": "Founder returns; hold question, RGB wordmark accent."
+        }
+      ],
+      "video_duration_seconds": 18,
+      "video_script": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "on_screen": "I built this.",
+          "production_label": "FOUNDER SHOT TO FILM",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "on_screen": "For the way\nI want to edit.",
+          "production_label": "FOUNDER / DEMO TO FILM",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "on_screen": "Photo. Video.\nRoom for your ideas.",
+          "production_label": "PRODUCT RECORDING TO ADD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "on_screen": "I’m building LOOKSi.\nWhat would you change?",
+          "production_label": "GRAPHIC END CARD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        }
+      ],
+      "rendered_video_status": "Rendered motion review draft; founder/demo placeholders remain",
+      "rendered_direction_board": {
+        "format": "1920x1080 editable creative direction board, not an exported Instagram carousel",
+        "story_beats": [
+          {
+            "time": "00–04",
+            "title": "The person",
+            "detail": "Founder to camera. Eye level, natural light."
+          },
+          {
+            "time": "04–12",
+            "title": "The reason",
+            "detail": "One friction you know. One real app action."
+          },
+          {
+            "time": "12–18",
+            "title": "The invitation",
+            "detail": "Ask one useful question. Hold for a reply."
+          }
+        ],
+        "production_needs": "Founder filming + one current app recording"
+      },
+      "board_panels_status": "Additional four-panel social-carousel copy; direction-board rendering is separate."
+    },
+    {
+      "id": "02",
+      "title": "Show the work",
+      "tone": "Precise / considered / professional",
+      "audience": "Independent photographers, editors and hybrid photo/video makers",
+      "hook": "One source. Show every step.",
+      "caption_instagram": "One source. Show every step.\n\nThat’s the standard I want to bring to LOOKSi demos: the actual source, a deliberate edit, a real timeline action, and the opened export.\n\nI’m building a photo and video editor for people who care about the work. Which step should I demonstrate next?",
+      "reddit_title": "What would make a photo/video editor worth testing in your workflow?",
+      "reddit_body": "I’m building LOOKSi, and I’d like to put a concrete workflow in front of people who edit regularly.\n\nMy planned demonstration is one small project: a photo treatment, a short video cut, one deliberate revision, and the actual exports. I’ll retain the uncut session and list the build and source formats so the claims stay specific.\n\nWhat would you inspect first to decide whether it is worth a longer test? I’m especially interested in concrete failure cases you have encountered, rather than a broad feature wish list.",
+      "cta": "Which step should I demonstrate next?",
+      "founder_requirements": [
+        "Optional: record clean voiceover, 45–60 words. Founder face is unnecessary.",
+        "Record alternative opening: “Here’s the file. Now let me show you how I got there.” after real output exists."
+      ],
+      "demo_requirements": [
+        "Required for full demo: source photo and video footage from one owned project; current-build photo edit, timeline trim, one revision and exports.",
+        "Inspect outputs independently and retain metadata. Compare like-for-like framing, color profile and display conditions.",
+        "If timing is accelerated, label time compressed; never use an animation as performance proof."
+      ],
+      "alt_text": "Show the work: One source. Show every step. A photo + video editor in development. The work should speak for itself. LOOKSi signature and additive RGB accents in an original typographic campaign design.",
+      "image_headline": "One source.\nShow every\nstep.",
+      "image_subhead": "A photo + video editor in development.\nThe work should speak for itself.",
+      "board_panels": [
+        {
+          "label": "01 / THE STANDARD",
+          "headline": "An editor earns attention with the work.",
+          "body": "Start with a specific project and a specific result."
+        },
+        {
+          "label": "02 / THE DEMO",
+          "headline": "A photo. A short cut. A deliberate revision.",
+          "body": "Use the actual controls and retain the complete session."
+        },
+        {
+          "label": "03 / THE FINISH",
+          "headline": "Open the exported files.",
+          "body": "Judge the output alongside the decisions that made it."
+        },
+        {
+          "label": "04 / YOUR STANDARD",
+          "headline": "What would you inspect first?",
+          "body": "The photo, the cut, or the delivery?"
+        }
+      ],
+      "art_direction": "Quiet technical editorial design. Equal margins, restrained typography, hairline dividers. RGB appears only as a fine index system. No fake scopes or invented app chrome.",
+      "hypothesis": "Working creatives will respond to a specific proof standard and a visible delivered result.",
+      "primary_kpi": "Qualified professional-workflow comments or demo requests per 1,000 reached accounts",
+      "claim_caveats": [
+        "The exported demo is a production dependency, not an assertion that this task recorded it.",
+        "Professional describes audience and intent, not complete professional qualification.",
+        "One source means source consistency within the demonstrated edit; it does not claim a still image becomes video or all media share one source format."
+      ],
+      "alternate_hook": "Show the decisions. Show the export.",
+      "production_master_duration_seconds": 24,
+      "production_master_script": [
+        {
+          "start": 0,
+          "end": 5,
+          "on_screen": "Show the decisions.\nShow the export.",
+          "voiceover": "An editor should earn your attention with the work.",
+          "visual": "Full screen finished photo and a still from the actual exported short sequence; label each."
+        },
+        {
+          "start": 5,
+          "end": 11,
+          "on_screen": "One photo.\nOne short sequence.",
+          "voiceover": "I’m building Looksi for photo and video editing.",
+          "visual": "Legible close crop of real photo adjustment, then trim gesture; maintain cursor/action continuity."
+        },
+        {
+          "start": 11,
+          "end": 18,
+          "on_screen": "Make a choice.\nRevise it.",
+          "voiceover": "Here is the change I made, and the one I decided to undo.",
+          "visual": "Real revision and undo with matched before/after on one source; do not stage a nonfunctional control."
+        },
+        {
+          "start": 18,
+          "end": 24,
+          "on_screen": "Inspect the result.",
+          "voiceover": "What would you inspect first: the photo, the cut, or the delivery?",
+          "visual": "Open actual exported files; show format/dimensions only if verified. End card question."
+        }
+      ],
+      "video_duration_seconds": 18,
+      "video_script": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "on_screen": "One source.",
+          "production_label": "DEMO RECORDING TO ADD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "on_screen": "A deliberate edit.",
+          "production_label": "DEMO RECORDING TO ADD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "on_screen": "Then the\nexported result.",
+          "production_label": "EXPORT RECORDING TO ADD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "on_screen": "I’m building LOOKSi.\nTell me your workflow.",
+          "production_label": "GRAPHIC END CARD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        }
+      ],
+      "rendered_video_status": "Rendered motion review draft; founder/demo placeholders remain",
+      "rendered_direction_board": {
+        "format": "1920x1080 editable creative direction board, not an exported Instagram carousel",
+        "story_beats": [
+          {
+            "time": "00–04",
+            "title": "Show the source",
+            "detail": "Original frame. Same source across the demo."
+          },
+          {
+            "time": "04–12",
+            "title": "Show the decision",
+            "detail": "One adjustment, then one real timeline action."
+          },
+          {
+            "time": "12–18",
+            "title": "Show the file",
+            "detail": "Export, open the result, invite a closer look."
+          }
+        ],
+        "production_needs": "Current continuous app capture + opened export"
+      },
+      "board_panels_status": "Additional four-panel social-carousel copy; direction-board rendering is separate."
+    },
+    {
+      "id": "03",
+      "title": "Start with your eye",
+      "tone": "Welcoming / useful / encouraging",
+      "audience": "Hobby photographers, occasional video makers and people learning to edit",
+      "hook": "Your eye. Your first edit.",
+      "caption_instagram": "Your eye. Your first edit.\n\nPick a photo you like. Ask what you want someone to notice. Try one change, then compare.\n\nThat’s where I want the first LOOKSi walkthrough to begin. I’m building a photo and video editor for professional work and personal discovery. What part of editing feels confusing?",
+      "reddit_title": "What should a first photo-editing walkthrough explain?",
+      "reddit_body": "I’m building LOOKSi, a photo and video editor, and I want the first walkthrough to be useful to people who do not edit every day.\n\nMy proposed starting point is one photo: choose what you want the viewer to notice, make one tonal change, compare it with the original, and export a version you like. Then we can build toward a short video edit.\n\nIf you are learning, what step needs the clearest explanation? If you teach editing, what do beginners usually get left to figure out alone?",
+      "cta": "What part of editing feels confusing?",
+      "founder_requirements": [
+        "Optional: calm voiceover recorded in short sentences; a face-to-camera greeting can be added.",
+        "Use plain-language narration; name a control only after saying what visual choice it helps make."
+      ],
+      "demo_requirements": [
+        "One owned everyday photograph with a clearly chosen subject; record original and actual adjusted output.",
+        "Capture one real control change, matched comparison, export, and independent open of the output.",
+        "The tutorial is photo-first. Mention video as the product scope without implying the photo walkthrough teaches video."
+      ],
+      "alt_text": "Start with your eye: Your eye. Your first edit. A little curiosity goes a long way. Let’s make something you like. LOOKSi signature and additive RGB accents in an original typographic campaign design.",
+      "image_headline": "Your eye.\nYour first\nedit.",
+      "image_subhead": "A little curiosity goes a long way.\nLet’s make something you like.",
+      "board_panels": [
+        {
+          "label": "01 / START SMALL",
+          "headline": "Choose one photo you care about.",
+          "body": "A small project is enough to start learning."
+        },
+        {
+          "label": "02 / NOTICE",
+          "headline": "What should someone look at first?",
+          "body": "Let that answer guide one deliberate change."
+        },
+        {
+          "label": "03 / COMPARE",
+          "headline": "Look at where you started.",
+          "body": "Keep the version that feels right to you."
+        },
+        {
+          "label": "04 / ASK",
+          "headline": "What would you like to learn next?",
+          "body": "I’m building LOOKSi for professional work and personal discovery."
+        }
+      ],
+      "art_direction": "Cool-white paper, graphite type, one blue/red/green optical detail. Soft pacing and strong reading hierarchy. Avoid showing synthetic photographic examples as actual app results.",
+      "hypothesis": "A small understandable first task will earn saves and learning questions from hobbyists.",
+      "primary_kpi": "Saves per 1,000 reached accounts; learning-question comments as supporting evidence",
+      "claim_caveats": [
+        "No easy-for-everyone or mastery-in-seconds promise.",
+        "If the image comes from generation, label it as source art; a recorded edit is still required for demonstration."
+      ],
+      "alternate_hook": "Start with one photo.",
+      "production_master_duration_seconds": 24,
+      "production_master_script": [
+        {
+          "start": 0,
+          "end": 5,
+          "on_screen": "Start with\none photo.",
+          "voiceover": "Start with one photo. What do you want someone to notice?",
+          "visual": "Use one owned source. Quiet full-frame view; no fake before/after."
+        },
+        {
+          "start": 5,
+          "end": 11,
+          "on_screen": "Make one\ndeliberate change.",
+          "voiceover": "Make one deliberate change to help it stand out.",
+          "visual": "Current build: one clear exposure or contrast adjustment; explain the choice in plain language."
+        },
+        {
+          "start": 11,
+          "end": 18,
+          "on_screen": "Compare.\nChoose.",
+          "voiceover": "Compare it with where you started. Keep the version that feels right to you.",
+          "visual": "Same-source before/after, one pause long enough to inspect both versions."
+        },
+        {
+          "start": 18,
+          "end": 24,
+          "on_screen": "What would you\nlike to learn?",
+          "voiceover": "I’m building Looksi for the work you do, and the work you want to learn. What should I explain first?",
+          "visual": "Verified exported image, then a welcoming question. Use voiceover or text-led motion."
+        }
+      ],
+      "video_duration_seconds": 18,
+      "video_script": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "on_screen": "Like the photo.\nWonder about the edit?",
+          "production_label": "GRAPHIC OPENING",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "on_screen": "Start with\none choice.",
+          "production_label": "TUTORIAL CAPTURE TO ADD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "on_screen": "Then see\nwhat changes.",
+          "production_label": "TUTORIAL CAPTURE TO ADD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "on_screen": "I’m building LOOKSi.\nCome learn with me.",
+          "production_label": "GRAPHIC END CARD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        }
+      ],
+      "rendered_video_status": "Rendered motion review draft; founder/demo placeholders remain",
+      "rendered_direction_board": {
+        "format": "1920x1080 editable creative direction board, not an exported Instagram carousel",
+        "story_beats": [
+          {
+            "time": "00–04",
+            "title": "Start small",
+            "detail": "Pick one photo. Name one thing you want to try."
+          },
+          {
+            "time": "04–12",
+            "title": "Make one choice",
+            "detail": "Show a crop and a light adjustment slowly."
+          },
+          {
+            "time": "12–18",
+            "title": "Keep exploring",
+            "detail": "Show the result. Invite a beginner question."
+          }
+        ],
+        "production_needs": "Beginner-paced app capture; voice optional"
+      },
+      "board_panels_status": "Additional four-panel social-carousel copy; direction-board rendering is separate."
+    },
+    {
+      "id": "04",
+      "title": "The final final club",
+      "tone": "Playful / knowing / lightly irreverent",
+      "audience": "People who edit for work or fun and recognize creative indecision",
+      "hook": "final_final_ actuallyfinal.",
+      "caption_instagram": "final_final_actuallyfinal.\n\nIf you know, you know.\n\nI’m building LOOKSi, a photo and video editor, and I know the feeling of an edit growing another ‘final’ version. This is a joke about the process we all recognize.\n\nTell me your most chaotic file name.",
+      "reddit_title": "What is your most chaotic final-final file name?",
+      "reddit_body": "I’m building a photo and video editor called LOOKSi, and the editing habit behind this little campaign idea felt familiar: final, final_final, final_final_actuallyfinal.\n\nThe graphic is a joke about our process, not a demonstration of automatic version management or a claim that the tool fixes it.\n\nWhat is your most chaotic file name, and what were you still changing? I’m the builder and would like to understand the actual revision decisions behind the joke.",
+      "cta": "Tell me your most chaotic file name.",
+      "founder_requirements": [
+        "Optional 10-minute skit: satisfied glance, doubtful glance, return to screen; three 3-second shots.",
+        "Deliver lines dry, with a short pause before the second thought.",
+        "Text-only animation is a complete alternative; no founder likeness is required."
+      ],
+      "demo_requirements": [
+        "Text-only skit needs no UI footage and makes no feature demonstration claim.",
+        "If product footage is inserted: record an actual warming/cooling adjustment and undo on the same owned source; retain the session.",
+        "Frame behavior as a dramatized editing habit, not as a testimonial from an actual customer."
+      ],
+      "alt_text": "The final final club: final_final_ actuallyfinal. If you know, you know. I’m building toward a better editing day. LOOKSi signature and additive RGB accents in an original typographic campaign design.",
+      "image_headline": "final_final_\nactuallyfinal.",
+      "image_subhead": "If you know, you know.\nI’m building toward a better editing day.",
+      "board_panels": [
+        {
+          "label": "01 / CONFIDENCE",
+          "headline": "This version is done.",
+          "body": "A short story about editing."
+        },
+        {
+          "label": "02 / THE THOUGHT",
+          "headline": "What if it was slightly warmer?",
+          "body": "A familiar creative detour."
+        },
+        {
+          "label": "03 / THE NEXT THOUGHT",
+          "headline": "Actually, slightly cooler.",
+          "body": "Changing your mind is part of making things."
+        },
+        {
+          "label": "04 / CONFESS",
+          "headline": "What’s your one more tweak?",
+          "body": "I’m building LOOKSi for people who care about the details."
+        }
+      ],
+      "art_direction": "Large conversational typography with intentional deadpan pauses. RGB marks move as second thoughts. Keep humor about the maker’s habits; no competitor attack, fake error dialog or unverified file-management claim.",
+      "hypothesis": "A recognizable creative habit will invite shares and specific replies from photo and video editors.",
+      "primary_kpi": "Shares per 1,000 reached accounts; specific adjustment replies as supporting evidence",
+      "claim_caveats": [
+        "Scripted voice is a proposed persona performance, not a real customer quote.",
+        "Do not claim a feature solves indecision, eliminates revisions, or reduces measured time.",
+        "File names are fictional joke props. No version-management, file-recovery or project-organization capability is asserted."
+      ],
+      "alternate_hook": "Just one more tweak. Famous last words.",
+      "production_master_duration_seconds": 24,
+      "production_master_script": [
+        {
+          "start": 0,
+          "end": 5,
+          "on_screen": "“This version\nis done.”",
+          "voiceover": "This version is done.",
+          "visual": "Typographic setup, dry pause. Optional founder looking pleased."
+        },
+        {
+          "start": 5,
+          "end": 11,
+          "on_screen": "“What if it was\nslightly warmer?”",
+          "voiceover": "What if it was slightly warmer?",
+          "visual": "Second thought arrives in RGB red. Clearly a creative dramatization, not a benchmark."
+        },
+        {
+          "start": 11,
+          "end": 18,
+          "on_screen": "And then…\nslightly cooler.",
+          "voiceover": "And then, slightly cooler.",
+          "visual": "Typography reverses. Optional real same-source adjustment and undo, with actual capture."
+        },
+        {
+          "start": 18,
+          "end": 24,
+          "on_screen": "What’s your\none more tweak?",
+          "voiceover": "I’m building Looksi for people who care about the details. What is your one more tweak?",
+          "visual": "LOOKSi signature and question; founder reaction optional."
+        }
+      ],
+      "video_duration_seconds": 18,
+      "video_script": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "on_screen": "final_final.",
+          "production_label": "TYPE ANIMATION",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "on_screen": "final_final_v7.",
+          "production_label": "TYPE ANIMATION",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "on_screen": "I know the feeling.\nSo I’m building.",
+          "production_label": "TYPE ANIMATION",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "on_screen": "LOOKSi. Photo + video.\nTell me your file-name lore.",
+          "production_label": "GRAPHIC END CARD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        }
+      ],
+      "rendered_video_status": "Rendered original motion execution; creative review remains",
+      "rendered_direction_board": {
+        "format": "1920x1080 editable creative direction board, not an exported Instagram carousel",
+        "story_beats": [
+          {
+            "time": "00–04",
+            "title": "The recognition",
+            "detail": "Three revision names pile up. No app claims."
+          },
+          {
+            "time": "04–12",
+            "title": "The confession",
+            "detail": "“I know this feeling. So I’m building.”"
+          },
+          {
+            "time": "12–18",
+            "title": "The conversation",
+            "detail": "LOOKSi. Photo + video. Ask for file-name lore."
+          }
+        ],
+        "production_needs": "Graphic animation only; no founder filming"
+      },
+      "board_panels_status": "Additional four-panel social-carousel copy; direction-board rendering is separate."
+    },
+    {
+      "id": "05",
+      "title": "A point of view",
+      "tone": "Cinematic / editorial / personal",
+      "audience": "Design-conscious photographers, filmmakers and personal creative makers",
+      "hook": "It starts with how you see.",
+      "caption_instagram": "It starts with how you see.\n\nA frame. A feeling. A point of view.\n\nI’m building LOOKSi, a photo and video editor, around the choices that make the work yours. For professional projects and for the things you make because you want to.\n\nFollow the build.",
+      "reddit_title": "What makes an editing tool feel like it belongs in your creative process?",
+      "reddit_body": "I’m building LOOKSi, a photo and video editor. The question behind it is personal: can the tool give deliberate choices room, from a photograph to a cut?\n\nThe visual direction for this introduction uses light, rhythm and restrained typography. The product demonstrations will show real source-to-export decisions separately so the mood film does not stand in for proof.\n\nWhat makes a tool feel like it belongs in your creative process: the way it lets you explore, the way it lets you finish, or something else?",
+      "cta": "Follow the build.",
+      "founder_requirements": [
+        "Optional clean voiceover with space between sentences; no face-to-camera requirement.",
+        "A founder voice can anchor the I’m building line. Do not synthesize the founder’s voice."
+      ],
+      "demo_requirements": [
+        "No app footage is required for the abstract brand-film version; label it as brand motion in production records.",
+        "If a finished photo/video is added, identify its source and authorship accurately.",
+        "The film does not substantiate product usability, processing quality, performance or release readiness."
+      ],
+      "alt_text": "A point of view: It starts with how you see. Photo. Video. Your point of view. An editor I’m building around the work. LOOKSi signature and additive RGB accents in an original typographic campaign design.",
+      "image_headline": "It starts\nwith how\nyou see.",
+      "image_subhead": "Photo. Video. Your point of view.\nAn editor I’m building around the work.",
+      "board_panels": [
+        {
+          "label": "01 / ATTENTION",
+          "headline": "A photograph can hold your attention.",
+          "body": "Start with the feeling you want to keep."
+        },
+        {
+          "label": "02 / RHYTHM",
+          "headline": "A cut can change the feeling.",
+          "body": "A different frame. A different moment."
+        },
+        {
+          "label": "03 / AUTHORSHIP",
+          "headline": "Your decisions make it yours.",
+          "body": "I’m building a photo and video editor to give them room."
+        },
+        {
+          "label": "04 / POSSIBILITY",
+          "headline": "What are you making next?",
+          "body": "Professional projects. Personal experiments. LOOKSi."
+        }
+      ],
+      "art_direction": "Cinematic optical light and editorial typography. Graphite, cool white and additive red/green/blue. Long holds, subtle grain and deliberate cuts. Avoid neon-tech clichés, lens logos and invented product imagery.",
+      "hypothesis": "A restrained visual statement will earn attention from creators who care about taste and authorship.",
+      "primary_kpi": "Profile visits per 1,000 reached accounts; substantive project-intent replies as supporting evidence",
+      "claim_caveats": [
+        "Aspirational brand promise; no claim that a tool uniquely creates originality.",
+        "Generated optical/source artwork is campaign art, not a product editing result.",
+        "Follow the build refers to the founder account posting the work; it does not imply a download or access destination."
+      ],
+      "alternate_hook": "For the work only you would make.",
+      "production_master_duration_seconds": 24,
+      "production_master_script": [
+        {
+          "start": 0,
+          "end": 5,
+          "on_screen": "For the work\nonly you would make.",
+          "voiceover": "A photograph can hold your attention.",
+          "visual": "Optical RGB light crosses graphite. Use original campaign motion or own footage; no fabricated app UI."
+        },
+        {
+          "start": 5,
+          "end": 11,
+          "on_screen": "A frame.\nA feeling.",
+          "voiceover": "A cut can change the feeling.",
+          "visual": "One slow compositional shift followed by a deliberate cut; authored campaign motion."
+        },
+        {
+          "start": 11,
+          "end": 18,
+          "on_screen": "Your decisions\nmake it yours.",
+          "voiceover": "I’m building a photo and video editor that gives those decisions room.",
+          "visual": "RGB beams overlap into cool white. The visual expresses the brand; it is not product behavior."
+        },
+        {
+          "start": 18,
+          "end": 24,
+          "on_screen": "What are you\nmaking next?",
+          "voiceover": "For professional projects. For the things you make because you want to. Looksi.",
+          "visual": "Wordmark, photo + video editor line, invitation. Let final frame breathe."
+        }
+      ],
+      "video_duration_seconds": 18,
+      "video_script": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "on_screen": "It starts\nwith how you see.",
+          "production_label": "OPTICAL ARTWORK",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "on_screen": "A frame.\nA feeling.",
+          "production_label": "OPTICAL ARTWORK",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "on_screen": "Photo. Video.\nYour point of view.",
+          "production_label": "TYPE / LIGHT",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "on_screen": "LOOKSi.\nFollow the build.",
+          "production_label": "GRAPHIC END CARD",
+          "audio": "Original motion sound bed; no spoken founder performance."
+        }
+      ],
+      "rendered_video_status": "Rendered original motion execution; creative review remains",
+      "rendered_direction_board": {
+        "format": "1920x1080 editable creative direction board, not an exported Instagram carousel",
+        "story_beats": [
+          {
+            "time": "00–04",
+            "title": "Light becomes form",
+            "detail": "Original optical artwork. Quiet, slow reveal."
+          },
+          {
+            "time": "04–12",
+            "title": "A point of view",
+            "detail": "Type and RGB light. A personal creative premise."
+          },
+          {
+            "time": "12–18",
+            "title": "The signature",
+            "detail": "LOOKSi. Photo + video. Follow the build."
+          }
+        ],
+        "production_needs": "Original artwork + motion graphics; no filming"
+      },
+      "board_panels_status": "Additional four-panel social-carousel copy; direction-board rendering is separate."
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 #include "agent_runtime_paths.h"
 #include "agent_model_artifact.h"
 #include "agent_workmanship.h"
+#include "agent_decision_shadow.h"
 
 #include <QBuffer>
 #include <QColor>
@@ -6573,7 +6574,8 @@ AgentLocalModelPlanResult plan_ollama_recipe_patch(
       current_assessment_revision_instruction(request);
   const auto system_prompt =
       QStringLiteral("Return one compact JSON object matching the supplied schema. ") +
-      agent_workmanship_guidance() + approved_scope_instruction + typography_discovery_instruction +
+      (request.allow_tool_call_plan ? agent_workmanship_guidance() : agent_photo_workmanship_guidance()) +
+      approved_scope_instruction + typography_discovery_instruction +
       revision_baseline_instruction +
       (request.allow_tool_call_plan
            ? QStringLiteral("When a supplied photo composition tool matches an explicit text, typography, paint, mask, selection, cutout, layer-order, or Photo Fragment request, return decision=tool_call_plan and invoke that tool; do not substitute edit_intent or photo-tone changes. Read composition state with photo.inspect_composition arguments {assetId}; do not pass operation or empty values. Never use photo.edit_composition with operation inspect. Inspect first if a required existing layer or mask id is unknown. Serialize photo.edit_composition arguments in the supplied schema order: assetId, layerId when required, operation, values. Keep each values object in the supplied property order and use the exact requested operation. If the request gives exact active asset and mask or layer ids, use them directly and include dependent edits in order in the same tool-call plan. After successful tool results, continue necessary tool rounds until requested editing work is complete; never repeat a successful operation. Discover missing native design controls with app.list_commands, read app.command_schema and invoke only available controls with app.invoke_command and stable layer IDs. A successful result with alreadySatisfied=true and changed=false confirms the requested state already exists; continue without retrying it to force a mutation. ")
@@ -6657,6 +6659,8 @@ AgentLocalModelPlanResult plan_ollama_recipe_patch(
   const QVariantMap prompt_component_audit{
       {QStringLiteral("contract"), QStringLiteral("ollama-planning-prompt-components-v1")},
       {QStringLiteral("systemPromptUtf8Bytes"), system_prompt_utf8_bytes},
+      {QStringLiteral("workmanshipGuidanceMode"), request.allow_tool_call_plan
+           ? QStringLiteral("construction") : QStringLiteral("photo_intent")},
       {QStringLiteral("userPromptUtf8Bytes"), user_prompt_utf8_bytes},
       {QStringLiteral("aggregateTextUtf8Bytes"), aggregate_text_utf8_bytes},
       {QStringLiteral("userGuidanceMode"), scoped_text_composition_prompt
@@ -9082,6 +9086,13 @@ AgentLocalModelPlanResult plan_agent_recipe_patch(
         }
       }
       auto ollama_result = plan_ollama_recipe_patch(request, model);
+      const auto shadow_directory = qEnvironmentVariable("PHOTO_EDITOR_AGENT_DECISION_SHADOW_DIR");
+      if (!shadow_directory.isEmpty()) {
+        const auto history = QJsonDocument::fromJson(
+            prior_tool_results_prompt_json(request.prior_tool_results).toUtf8());
+        const auto observations = history.isArray() ? history.array() : QJsonArray{history.object()};
+        record_agent_decision_shadow(request, &ollama_result, observations, shadow_directory);
+      }
       if (ollama_result.ok) {
         return ollama_result;
       }

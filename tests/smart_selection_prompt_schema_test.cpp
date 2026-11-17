@@ -109,6 +109,27 @@ int main() {
     return fail("canonical prompts must preserve sampled brush, negative, and box semantics");
   }
 
+  const auto clicks = smart_select_prompts_for_path(
+      {point(0.1, 0.5), point(0.9, 0.5), point(0.5, 0.5, QStringLiteral("negative"))});
+  if (clicks.size() != 3 || clicks[0].x != 0.1 || clicks[1].x != 0.9 || !clicks[2].negative) {
+    return fail("separate foreground clicks must not select the background between them");
+  }
+  const auto brush = smart_select_prompts_for_path(
+      {point(0.1, 0.5, QStringLiteral("brush")), point(0.9, 0.5, QStringLiteral("brush"))});
+  if (brush.size() <= 2 || brush.first().x != 0.1 || std::abs(brush.last().x - 0.9) > 1e-12) {
+    return fail("explicit brush paths still sample the complete stroke");
+  }
+  QVariantList long_stroke{box};
+  for (int i = 0; i < 12; ++i)
+    long_stroke.append(point((i % 2) == 0 ? 0.1 : 0.9, 0.1 + i * 0.06, QStringLiteral("brush")));
+  long_stroke.append(point(0.95, 0.95, QStringLiteral("negative")));
+  const auto bounded_stroke = smart_select_prompts_for_path(long_stroke);
+  if (bounded_stroke.size() != 64 || !bounded_stroke.first().box.isValid() ||
+      !bounded_stroke.last().negative || bounded_stroke[1].x != 0.1 ||
+      std::abs(bounded_stroke[62].x - 0.9) > 1e-12) {
+    return fail("long strokes fit the model budget while preserving box, endpoints, and negative constraints");
+  }
+
   const auto metadata = smart_select_prompt_metadata_for_path(source_prompts);
   if (metadata.value(QStringLiteral("positivePromptCount")).toInt() != 0 ||
       metadata.value(QStringLiteral("negativePromptCount")).toInt() != 1 ||

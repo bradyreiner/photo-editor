@@ -1,0 +1,80 @@
+{
+    "automaticCommitAllowed": false,
+    "cloudUsed": false,
+    "contract": "agent-live-local-runtime-smoke-v1",
+    "fixtureKind": "source-image-override",
+    "localOnly": true,
+    "modelFamily": "qwen3_5",
+    "modelId": "ollama-qwen35-9b",
+    "ollamaModel": "qwen3.5:9b",
+    "parameterSize": "9.7B",
+    "photographerApprovalRequired": true,
+    "planning": {
+        "decision": "recipe_patch",
+        "elapsedMs": 9652,
+        "fallbackUsed": false,
+        "generationSchemaByteCount": 1597,
+        "generationSchemaContract": "agent-operation-discriminated-generation-v2",
+        "globalChangePolicy": "allow",
+        "globalChangePolicyCorrection": {
+            "contract": "agent-explicit-scope-authority-v1",
+            "currentRequestAuthoritative": true,
+            "enforcedValue": "allow",
+            "modelValue": "preserve"
+        },
+        "imageIncluded": true,
+        "ok": true,
+        "ollamaServer": {
+            "evalCount": 517,
+            "evalDurationMs": 9579,
+            "loadDurationMs": 2,
+            "promptEvalCount": 3305,
+            "promptEvalDurationMs": 43,
+            "totalDurationMs": 9648
+        },
+        "responseCharCount": 1458,
+        "summary": "The image shows a mountain landscape at dusk with a soft pink and purple sky. The mountains are rocky and jagged with some snow patches visible. The lighting is dim but the details of the rocks are still visible. The overall tone is cool with a slight warm cast from the sunset.",
+        "transport": {
+            "durationMs": 9648,
+            "endpoint": "http://127.0.0.1:11434",
+            "ok": true,
+            "path": "/api/chat",
+            "responseBytes": 2496,
+            "retryable": false,
+            "statusCode": 200,
+            "timeoutMs": -1
+        }
+    },
+    "probeAvailable": true,
+    "proofCritique": {
+        "elapsedMs": 3420,
+        "imageIncluded": true,
+        "needsUserReview": false,
+        "ok": true,
+        "ollamaServer": {
+            "available": true,
+            "evalCount": 125,
+            "evalDurationMs": 3356,
+            "loadDurationMs": 14,
+            "promptEvalCachedCount": 1871,
+            "promptEvalCount": 1876,
+            "promptEvalDurationMs": 30,
+            "totalDurationMs": 3416
+        },
+        "pass": true,
+        "summary": "The image displays a mountain landscape at dusk with a soft, warm gradient in the sky and detailed rock textures. The lighting is consistent with an evening setting, featuring gentle contrast and natural colors without clipped highlights or crushed blacks. No graphic text layers were requested or present; therefore, no text validation is required. The composition preserves the subject's integrity and framing as intended.",
+        "tasteConfidence": "high",
+        "transport": {
+            "durationMs": 3416,
+            "endpoint": "http://127.0.0.1:11434",
+            "ok": true,
+            "path": "/api/chat",
+            "responseBytes": 1111,
+            "retryable": false,
+            "statusCode": 200,
+            "timeoutMs": -1
+        }
+    },
+    "quantizationLevel": "nvfp4",
+    "sourceSha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56"
+}

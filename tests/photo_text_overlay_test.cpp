@@ -7,6 +7,8 @@
 #include <QInputMethodEvent>
 #include <QMouseEvent>
 #include <QJSValue>
+#include <QEventLoop>
+#include <QTimer>
 #include <iostream>
 #include "photo_text_document_style.h"
 #include "photo_text_layout.h"
@@ -39,6 +41,22 @@ Item {
     property int styleCalls: 0
     property int coalescedBegins: 0
     property int coalescedEnds: 0
+    property int coalescedCancels: 0
+    property bool transformActive: false
+    property real transformX: 100
+    property real transformY: 120
+    property real transformWidth: 200
+    property real transformHeight: 100
+    property string transformLayerId: "text-a"
+    property int gestureBegins: 0
+    property int gestureEnds: 0
+    property int gestureMoveCalls: 0
+    property int gestureBoxCalls: 0
+    property int gestureFinalMoves: 0
+    property int gestureFinalBoxes: 0
+    property var gestureMoveDeltas: []
+    property var gestureBoxValues: []
+    property var gestureCommitTargets: []
     property string createdText: ""
     property var createdStyle: ({})
     function addParagraphTextLayer(text, x, y, width, height, canvasWidth, canvasHeight) {
@@ -58,6 +76,7 @@ Item {
     }
     function beginCoalescedEdit() { coalescedBegins++ }
     function endCoalescedEdit() { coalescedEnds++ }
+    function cancelCoalescedEdit() { coalescedCancels++ }
     Shortcut { sequence: "F"; onActivated: harness.toolShortcuts++ }
     property string saved: ""
     function setPhotoLayerText(index, value) { if (rejectEdits) return false; commits++; saved = value; return true }
@@ -71,8 +90,22 @@ Item {
         onPointRequested: function(x, y) { harness.createdPoint = [x, y] }
         onTextRequested: function(request) { harness.createdRequest = request }
     }
+    PhotoTextCreateOverlay {
+        objectName: "legibilityCreator"
+        imageWidth: 80; imageHeight: 40
+        canvasWidth: 800; canvasHeight: 400
+    }
     Item { id: controlsHost; x: 620; y: 0; width: 180; height: 400 }
+    PhotoTextContentEditor {
+        objectName: "sessionInspector"
+        x: 620; y: 120; width: 160; height: 80
+        controller: harness
+        session: textSession
+        layerIndex: textSession.layerIndex
+        layerData: textSession.layerData
+    }
     PhotoTextOverlay {
+        id: textSession
         objectName: "overlay"
         documentId: "document-1"
         anchors.fill: parent
@@ -81,6 +114,43 @@ Item {
         layerIndex: 0
         layerData: ({id: "text-1", kind: "text", text: "Original", pixelWidth: 300, pixelHeight: 100})
         transformFrame: ({frameX: 20, frameY: 30, frameWidth: 300, frameHeight: 100, layerRotation: 0})
+    }
+    LayerTransformOverlay {
+        id: textTransform
+        objectName: "textTransform"
+        anchors.fill: parent
+        active: harness.transformActive
+        layerId: harness.transformLayerId
+        imageWidth: 800; imageHeight: 600
+        canvasWidth: 800; canvasHeight: 600
+        layerX: harness.transformX
+        layerY: harness.transformY
+        layerWidth: harness.transformWidth
+        layerHeight: harness.transformHeight
+        textBoxResize: true
+        moveSelection: true
+        onInteractionStarted: harness.gestureBegins++
+        onInteractionFinished: harness.gestureEnds++
+        onTextGestureMoveEdited: function(deltaX, deltaY, finalCommit) {
+            harness.gestureMoveCalls++
+            harness.gestureMoveDeltas = harness.gestureMoveDeltas.concat([[deltaX, deltaY]])
+            harness.gestureCommitTargets = harness.gestureCommitTargets.concat([textTransform.gestureLayerId])
+            if (finalCommit) harness.gestureFinalMoves++
+            harness.transformX += deltaX
+            harness.transformY += deltaY
+            textTransform.acknowledgeTextGestureCommit(true, finalCommit)
+        }
+        onTextGestureBoxEdited: function(x, y, width, height, finalCommit) {
+            harness.gestureBoxCalls++
+            harness.gestureBoxValues = harness.gestureBoxValues.concat([[x, y, width, height]])
+            harness.gestureCommitTargets = harness.gestureCommitTargets.concat([textTransform.gestureLayerId])
+            if (finalCommit) harness.gestureFinalBoxes++
+            harness.transformX = x
+            harness.transformY = y
+            harness.transformWidth = width
+            harness.transformHeight = height
+            textTransform.acknowledgeTextGestureCommit(true, finalCommit)
+        }
     }
 }
 )QML", QUrl::fromLocalFile(QStringLiteral(PHOTO_TEXT_TEST_ROOT "/tests/overlay-harness.qml")));
@@ -92,6 +162,21 @@ Item {
   window.show();
   window.requestActivate();
   QCoreApplication::processEvents();
+  auto* legibility = root->findChild<QObject*>("legibilityCreator");
+  if (!legibility || legibility->property("creationFontSize").toDouble() * 0.1 < 22.0) {
+    std::cerr << "First-use text at Fit must default to readable display-pixel type\n";
+    return 1;
+  }
+  // C++ QObject property writes retain QML bindings. Exercise the production
+  // SpinBox acceptance signal, whose JS assignment records an explicit choice.
+  auto* size_control = legibility->findChild<QObject*>("photoTextCreationSize");
+  if (!size_control || !size_control->setProperty("value", 72) ||
+      !QMetaObject::invokeMethod(size_control, "valueModified")) return 1;
+  legibility->setProperty("imageWidth", 40.0);
+  if (legibility->property("creationFontSize").toDouble() != 72.0) {
+    std::cerr << "Zoom changes must preserve an explicit source-pixel font size\n";
+    return 1;
+  }
   auto* overlay = root->findChild<QObject*>("overlay");
   auto* input = root->findChild<QObject*>("photoCanvasTextInput");
   if (!overlay || !input) return 1;
@@ -106,7 +191,16 @@ Item {
   QMetaObject::invokeMethod(overlay, "beginEditing");
   input->setProperty("text", "Wrong target");
   overlay->setProperty("layerIndex", 1);
-  if (overlay->property("editing").toBool() || root->property("commits").toInt() != 1) return 1;
+  if (!overlay->property("editing").toBool() || input->property("text").toString() != "Wrong target" ||
+      root->property("commits").toInt() != 1) {
+    std::cerr << "Reordering the same text layer must keep its draft attached to that layer ID\n";
+    return 1;
+  }
+  QMetaObject::invokeMethod(overlay, "finish", Q_ARG(QVariant, false));
+  if (overlay->property("editing").toBool() || root->property("commits").toInt() != 1) {
+    std::cerr << "Canceling a reordered text draft must not commit it\n";
+    return 1;
+  }
   const auto key = [&](int code, Qt::KeyboardModifiers modifiers, const QString& text = {}) {
     QKeyEvent press(QEvent::KeyPress, code, modifiers, text);
     QCoreApplication::sendEvent(&window, &press);
@@ -177,6 +271,27 @@ Item {
     std::cerr << "Clicking outside the canvas text box must commit once\n";
     return 1;
   }
+  auto* inspector = qobject_cast<QQuickItem*>(root->findChild<QObject*>("sessionInspector"));
+  QMetaObject::invokeMethod(overlay, "beginEditing");
+  input->setProperty("text", "Shared draft");
+  if (!inspector || inspector->property("text").toString() != "Shared draft") return 1;
+  inspector->forceActiveFocus();
+  inspector->setProperty("text", "Inspector draft");
+  if (input->property("text").toString() != "Inspector draft" ||
+      !overlay->property("editing").toBool()) return 1;
+  key(Qt::Key_Z, Qt::ControlModifier);
+  if (input->property("text").toString() != "Shared draft") return 1;
+  key(Qt::Key_Z, Qt::ControlModifier);
+  key(Qt::Key_Z, Qt::ControlModifier);
+  if (input->property("text").toString() != "Original" ||
+      root->property("commits").toInt() != 3) {
+    std::cerr << "Shared local Undo must stop at the session baseline\n";
+    return 1;
+  }
+  key(Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+  if (input->property("text").toString() != "Shared draft") return 1;
+  key(Qt::Key_Escape, Qt::NoModifier);
+  if (overlay->property("editing").toBool() || root->property("commits").toInt() != 3) return 1;
   auto* creator = root->findChild<QObject*>("creator");
   creator->setProperty("active", true);
   const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button, Qt::MouseButtons buttons) {
@@ -194,7 +309,7 @@ Item {
   const auto paragraph_request = root->property("createdRequest").value<QJSValue>().toVariant().toMap();
   if (paragraph_request.value("x").toInt() != 200 || paragraph_request.value("y").toInt() != 100 ||
       paragraph_request.value("width").toInt() != 400 || paragraph_request.value("height").toInt() != 200 ||
-      paragraph_request.value("pointText").toBool() || paragraph_request.value("text").toString() != "Text") {
+      paragraph_request.value("pointText").toBool() || !paragraph_request.value("text").toString().isEmpty()) {
     std::cerr << "Paragraph creation must carry its geometry and initial typography draft\n";
     return 1;
   }
@@ -290,7 +405,8 @@ Item {
       root->property("styleCalls").toInt() != 1 || root->property("createdText").toString() != "Styled point" ||
       created_style.value("index").toInt() != 0 || created_style.value("family").toString() != "Lyskamm" ||
       created_style.value("size").toDouble() != 52 || created_style.value("color").toString() != "#80445566" ||
-      root->property("coalescedBegins").toInt() != root->property("coalescedEnds").toInt()) {
+      root->property("coalescedBegins").toInt() != root->property("coalescedEnds").toInt() +
+          root->property("coalescedCancels").toInt()) {
     std::cerr << "Point text creation must commit its initial typography in one coalesced edit\n";
     return 1;
   }
@@ -469,5 +585,116 @@ Item {
     std::cerr << "Version-8 point text must measure valid draft bounds with its saved base font\n";
     return 1;
   }
+  QMetaObject::invokeMethod(overlay, "finish", Q_ARG(QVariant, false));
+
+  auto* text_transform = qobject_cast<QQuickItem*>(root->findChild<QObject*>("textTransform"));
+  if (!text_transform) return 1;
+  const auto wait_for_gesture_timer = [](int milliseconds) {
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
+    QCoreApplication::processEvents();
+  };
+  root->setProperty("transformActive", true);
+  QCoreApplication::processEvents();
+  auto gesture_center = QPointF(text_transform->property("centerX").toDouble(),
+                                text_transform->property("centerY").toDouble());
+  mouse(QEvent::MouseButtonPress, gesture_center, Qt::LeftButton, Qt::LeftButton);
+  mouse(QEvent::MouseMove, gesture_center + QPointF(6, 3), Qt::NoButton, Qt::LeftButton);
+  mouse(QEvent::MouseMove, gesture_center + QPointF(12, 6), Qt::NoButton, Qt::LeftButton);
+  if (root->property("gestureMoveCalls").toInt() != 0 ||
+      std::abs(text_transform->property("frameX").toDouble() - 112.0) > 0.1 ||
+      std::abs(text_transform->property("frameY").toDouble() - 126.0) > 0.1) {
+    std::cerr << "Text move must update its local frame immediately and coalesce controller commits\n";
+    return 1;
+  }
+  wait_for_gesture_timer(24);
+  const auto move_deltas = [&] {
+    return root->property("gestureMoveDeltas").value<QJSValue>().toVariant().toList();
+  };
+  if (root->property("gestureMoveCalls").toInt() != 1 || move_deltas().size() != 1 ||
+      move_deltas().front().toList() != QVariantList{12, 6}) {
+    std::cerr << "A burst of text pointer events must produce one latest-value commit\n";
+    return 1;
+  }
+  mouse(QEvent::MouseMove, gesture_center + QPointF(23, 12), Qt::NoButton, Qt::LeftButton);
+  mouse(QEvent::MouseButtonRelease, gesture_center + QPointF(32, 22), Qt::LeftButton, Qt::NoButton);
+  if (root->property("gestureMoveCalls").toInt() != 2 ||
+      root->property("gestureFinalMoves").toInt() != 1 || move_deltas().size() != 2 ||
+      move_deltas().at(1).toList() != QVariantList{20, 16} ||
+      std::abs(text_transform->property("frameX").toDouble() - 132.0) > 0.1 ||
+      std::abs(text_transform->property("frameY").toDouble() - 142.0) > 0.1) {
+    std::cerr << "Release must flush the exact final text move before ending its transaction\n";
+    return 1;
+  }
+
+  auto* resize_handle = find_named_item(find_named_item, text_transform,
+      QStringLiteral("photoLayerTransformBottomRightHandle"));
+  if (!resize_handle) {
+    std::cerr << "Text transform must expose its resize delegate to the gesture fixture\n";
+    return 1;
+  }
+  const auto resize_start = resize_handle->mapToItem(window.contentItem(),
+      resize_handle->width() / 2.0, resize_handle->height() / 2.0);
+  mouse(QEvent::MouseButtonPress, resize_start, Qt::LeftButton, Qt::LeftButton);
+  mouse(QEvent::MouseMove, resize_start + QPointF(16, 10), Qt::NoButton, Qt::LeftButton);
+  if (root->property("gestureBoxCalls").toInt() != 0 ||
+      std::abs(text_transform->property("displayLayerWidth").toDouble() - 216.0) > 0.1 ||
+      std::abs(text_transform->property("displayLayerHeight").toDouble() - 110.0) > 0.1) {
+    std::cerr << "Text resize must update its local bounds before the paced renderer commit\n";
+    return 1;
+  }
+  wait_for_gesture_timer(24);
+  if (root->property("gestureBoxCalls").toInt() != 1) {
+    std::cerr << "Repeated resize pointer events must be rate limited\n";
+    return 1;
+  }
+  mouse(QEvent::MouseButtonRelease, resize_start + QPointF(28, 18), Qt::LeftButton, Qt::NoButton);
+  const auto box_values = root->property("gestureBoxValues").value<QJSValue>().toVariant().toList();
+  if (root->property("gestureBoxCalls").toInt() != 2 ||
+      root->property("gestureFinalBoxes").toInt() != 1 || box_values.size() != 2 ||
+      box_values.at(1).toList() != QVariantList{132, 142, 228, 118} ||
+      std::abs(text_transform->property("frameX").toDouble() - 132.0) > 0.1 ||
+      std::abs(text_transform->property("displayLayerWidth").toDouble() - 228.0) > 0.1) {
+    std::cerr << "Text resize release must commit exact document geometry and preserve anchor alignment\n";
+    return 1;
+  }
+  if (root->property("gestureBegins").toInt() != 2 || root->property("gestureEnds").toInt() != 2) {
+    std::cerr << "Move and resize must each remain a single coalesced edit transaction\n";
+    return 1;
+  }
+
+  root->setProperty("transformActive", false);
+  QCoreApplication::processEvents();
+  root->setProperty("transformActive", true);
+  QCoreApplication::processEvents();
+  gesture_center = QPointF(text_transform->property("centerX").toDouble(),
+                           text_transform->property("centerY").toDouble());
+  mouse(QEvent::MouseButtonPress, gesture_center, Qt::LeftButton, Qt::LeftButton);
+  mouse(QEvent::MouseMove, gesture_center + QPointF(10, 5), Qt::NoButton, Qt::LeftButton);
+  root->setProperty("transformActive", false);
+  QCoreApplication::processEvents();
+  if (text_transform->property("interactionActive").toBool() ||
+      text_transform->property("textGestureCommitPending").toBool() ||
+      root->property("gestureBegins").toInt() != root->property("gestureEnds").toInt()) {
+    std::cerr << "Hiding the transform overlay must close and drain its active gesture\n";
+    return 1;
+  }
+
+  root->setProperty("transformActive", true);
+  QCoreApplication::processEvents();
+  gesture_center = QPointF(text_transform->property("centerX").toDouble(),
+                           text_transform->property("centerY").toDouble());
+  mouse(QEvent::MouseButtonPress, gesture_center, Qt::LeftButton, Qt::LeftButton);
+  mouse(QEvent::MouseMove, gesture_center + QPointF(9, 4), Qt::NoButton, Qt::LeftButton);
+  root->setProperty("transformLayerId", "text-b");
+  QCoreApplication::processEvents();
+  const auto commit_targets = root->property("gestureCommitTargets").value<QJSValue>().toVariant().toList();
+  if (text_transform->property("interactionActive").toBool() || commit_targets.isEmpty() ||
+      commit_targets.last().toString() != "text-a") {
+    std::cerr << "A layer selection change must flush to the gesture's original layer ID\n";
+    return 1;
+  }
+  mouse(QEvent::MouseButtonRelease, gesture_center + QPointF(9, 4), Qt::LeftButton, Qt::NoButton);
   return 0;
 }

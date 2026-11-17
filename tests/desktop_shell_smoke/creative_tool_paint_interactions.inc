@@ -59,6 +59,12 @@
       const QStringList material_keys{QStringLiteral("solid"), QStringLiteral("dry_ink"),
                                       QStringLiteral("graphite"), QStringLiteral("light_paint")};
       for (int material_index = 0; material_index < material_keys.size(); ++material_index) {
+        if (material_index == 0 &&
+            (!click_studio_item(material_chooser) ||
+             !wait_for_condition([&] { return material_popup->property("opened").toBool(); }, 3000) ||
+             !click_studio_item(material_chooser) ||
+             !wait_for_condition([&] { return !material_popup->property("visible").toBool(); }, 3000)))
+          return fail("Clicking the brush material chooser again should close its menu");
         if (!click_studio_item(material_chooser) ||
             !wait_for_condition([&] { return material_popup->property("opened").toBool(); }, 3000))
           return fail("The visible brush chooser should open from a native pointer click");

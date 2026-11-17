@@ -1,0 +1,55 @@
+{
+  "scope": "Current source inspection only; live runtime may be an older build. No mutation was executed.",
+  "sources": [
+    {
+      "path": "apps/desktop/qml/Main.qml",
+      "sha256": "5d6f0cdffafc400e012fdc5e594a730f80cc8b679301891a571034b3f38a6ca0"
+    },
+    {
+      "path": "apps/desktop/src/photo_layer_clipboard.h",
+      "sha256": "5da4653dabda7a6ef099806963bb69581984fc188b0cb1ab72864f979b991bf1"
+    },
+    {
+      "path": "apps/desktop/src/editor_preview_controller.cpp",
+      "sha256": "d7536bb7516d1f867aacb81f92889684d65cfb47805bd68d18d7b7fa2e5bc627"
+    },
+    {
+      "path": "apps/desktop/src/edit_recipe_validation.cpp",
+      "sha256": "a54d9638a7ad1918249c07f5716c9f851231ac8d49e0d9c9497d2c03880fe119"
+    },
+    {
+      "path": "apps/desktop/src/edit_recipe_document_codec.cpp",
+      "sha256": "1621016eeef8de71cc45cf3013a4dc8331d195ce514ec67efccebe304ee3eade"
+    },
+    {
+      "path": "apps/desktop/src/agent_photo_commands.h",
+      "sha256": "2a08bb568c2a116202d9a0b76627a2380d95a57d933055fcfa6a2ac6c9ee47e5"
+    },
+    {
+      "path": "apps/desktop/src/main.cpp",
+      "sha256": "daac0ee5878e4fa1a4847d87338723bb121b287e2d141426f4409190b4d6992b"
+    },
+    {
+      "path": "apps/desktop/src/carousel_document_controller.cpp",
+      "sha256": "d8db1a8fa76c0ddd1b495e15365b3a2d7d163ff09be80b4060879f49ba9e9cf9"
+    },
+    {
+      "path": "apps/desktop/qml/workspaces/StudioWorkspace.qml",
+      "sha256": "06de002697bb26025bac2c231f717ef04fcc7ac0bcc1c54a5568a50677310e63"
+    },
+    {
+      "path": "docs/looksy-agent-interface.md",
+      "sha256": "269de9a8c581b75448bc259e661cba4b0039d42c252693435659484a22a58245"
+    }
+  ],
+  "key_lines": {
+    "new_canvas_ui": "Main.qml2715\u20132730,2800\u20132835",
+    "legacy_view_unreachable": "Main.qml1277\u20131279,4301\u20134305",
+    "native_save_action": "Main.qml2982\u20132995",
+    "photo_clipboard": "photo_layer_clipboard.h91\u2013139;editor_preview_controller.cpp21657\u201321720",
+    "preset_import": "StudioWorkspace.qml3613\u20133618,26358\u201326375;editor_preview_controller.cpp31916\u201331970",
+    "ownership": "main.cpp2044\u20132052;agent_photo_commands.h149\u2013155",
+    "native_shape_format": "editor_preview_controller.cpp32276\u201332312",
+    "native_recipe_required_fields": "edit_recipe_validation.cpp164\u2013201"
+  }
+}

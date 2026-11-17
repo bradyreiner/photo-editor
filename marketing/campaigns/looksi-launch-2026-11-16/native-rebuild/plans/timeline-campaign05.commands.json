@@ -1,0 +1,1461 @@
+{
+  "schema": "looksy.native-authoring-command-plan/v1",
+  "executionState": "planning-only-unbound",
+  "resourceId": "UNBOUND",
+  "taskId": "UNBOUND",
+  "title": "Make room for your eye.",
+  "authoringOrigin": "Execute typed commands inside Looksy; this JSON is not an imported project.",
+  "sequence": {
+    "width": 1080,
+    "height": 1920,
+    "frameRate": 30,
+    "audioSampleRate": 48000
+  },
+  "colorSpace": "Rec.709",
+  "dataLevels": "Legal",
+  "durationSeconds": 36,
+  "nativeProjectSchemaVersionObserved": 8,
+  "nativeCreation": {
+    "tool": "timeline.create_draft",
+    "arguments": {
+      "settings": {
+        "timelineName": "LOOKSi C05 — Make room for your eye.",
+        "width": 1080,
+        "height": 1920,
+        "frameRate": 30,
+        "audioSampleRate": 48000,
+        "colorSpace": "Rec.709",
+        "dataLevels": "Legal",
+        "trackLayout": "creator_social"
+      }
+    }
+  },
+  "bindingRequired": [
+    "Fresh native resourceId",
+    "Current admitted taskId",
+    "Current startingDocumentHash",
+    "Canonical existing outputDirectory admitted to task",
+    "Live available command schemas"
+  ],
+  "admissionActions": [
+    {
+      "kind": "text",
+      "summary": "Create editable campaign titles and native graphic shapes."
+    },
+    {
+      "kind": "layers",
+      "summary": "Create and arrange native Timeline tracks and clips."
+    },
+    {
+      "kind": "media",
+      "summary": "Import only the listed raw/native source assets as individual clips."
+    },
+    {
+      "kind": "framing",
+      "summary": "Frame sources and animate native position, scale and opacity."
+    },
+    {
+      "kind": "audio",
+      "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+    },
+    {
+      "kind": "delivery",
+      "summary": "Save readback-verified native project and prepare native H.264 export."
+    }
+  ],
+  "sourceAssets": [
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_4870.jpg",
+      "bytes": 322695,
+      "sha256": "7663700d19882d407aebf12ac86765942c106d3a8600b3dd56b7fe449525eca4"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_4969.jpg",
+      "bytes": 485098,
+      "sha256": "73f1dfaf468aa80e27a70b5e1616233032ab338c0b36408ecc05aedeac230271"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_5077.jpg",
+      "bytes": 190369,
+      "sha256": "52a29d8d0bdc748f71b5e25bea35c59794db67dbf118b9b69ac5128ec5045c3b"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+      "bytes": 4608729,
+      "sha256": "ed9c980585ae74e18ab2f9dbd383e988f5b79c7329da69b9878ccc9099054830"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign05/audio/original-score.wav",
+      "bytes": 6912044,
+      "sha256": "d636ed71f640033cb9f458d2c939deaf7c5ac95581cf0bd6b984841c2b04ab1f"
+    }
+  ],
+  "scenePlan": [
+    {
+      "startSeconds": 0,
+      "endSeconds": 4,
+      "purpose": "An unhurried typographic opening.",
+      "nativeObjects": [
+        "editable native title"
+      ],
+      "acceptance": "Hold an invitation rather than making a product-performance claim."
+    },
+    {
+      "startSeconds": 4,
+      "endSeconds": 10,
+      "purpose": "For the color you noticed.",
+      "nativeObjects": [
+        "source photograph clip",
+        "slow native scale keys",
+        "editable type"
+      ],
+      "acceptance": "Keep subject and horizon clear; no synthesized photographic detail or fake app output."
+    },
+    {
+      "startSeconds": 10,
+      "endSeconds": 16,
+      "purpose": "For the quieter frame.",
+      "nativeObjects": [
+        "source photograph clip",
+        "slow native scale keys",
+        "editable type"
+      ],
+      "acceptance": "Keep subject and horizon clear; no synthesized photographic detail or fake app output."
+    },
+    {
+      "startSeconds": 16,
+      "endSeconds": 22,
+      "purpose": "For the light you stayed for.",
+      "nativeObjects": [
+        "source photograph clip",
+        "slow native scale keys",
+        "editable type"
+      ],
+      "acceptance": "Keep subject and horizon clear; no synthesized photographic detail or fake app output."
+    },
+    {
+      "startSeconds": 22,
+      "endSeconds": 29,
+      "purpose": "A real dated native product output anchors the manifesto.",
+      "nativeObjects": [
+        "verified native photo source",
+        "editable date title"
+      ],
+      "acceptance": "Output proof does not imply current-session recording or broader workflow qualification."
+    },
+    {
+      "startSeconds": 29,
+      "endSeconds": 36,
+      "purpose": "Simple maker disclosure and open invitation.",
+      "nativeObjects": [
+        "editable type"
+      ],
+      "acceptance": "No feature, speed, price, release or availability promise."
+    }
+  ],
+  "steps": [
+    {
+      "id": "c05-track-ink",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "ink",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-ink",
+      "commandId": "timeline.action.createTimelineGraphic",
+      "values": {
+        "trackId": {
+          "result": "c05-track-ink",
+          "field": "trackId"
+        },
+        "shapeType": "rectangle",
+        "startSeconds": 0,
+        "durationSeconds": 36,
+        "values": {
+          "positionX": 0.5,
+          "positionY": 0.5,
+          "shapeWidth": 1,
+          "shapeHeight": 1,
+          "backgroundColor": "#08090B",
+          "shapeCornerRadius": 0,
+          "shapeStrokeColor": "#00000000",
+          "shapeStrokeWidth": 0
+        }
+      }
+    },
+    {
+      "id": "c05-track-hook",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "hook",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-hook",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-hook",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 0,
+        "durationSeconds": 4,
+        "values": {
+          "text": "Make room\nfor your eye.",
+          "fontFamily": "Instrument Serif",
+          "fontSize": 106,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.29,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-hook-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-hook",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 3.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 4.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.315,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.29,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-flowers",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "flowers",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-flowers",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c05-track-flowers",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c05:flowers",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_4870.jpg",
+        "displayLabel": "flowers",
+        "durationSeconds": 6,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 6,
+        "startSeconds": 4,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c05-flowers-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c05-flowers",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.16000000000000014,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.51,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c05-flowers-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-flowers",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameScale",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 1.045,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-flowers-line",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "flowers-line",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-flowers-line",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-flowers-line",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 4,
+        "durationSeconds": 6,
+        "values": {
+          "text": "For the color you noticed.",
+          "fontFamily": "Instrument Serif",
+          "fontSize": 62,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.17,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-flowers-line-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-flowers-line",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.195,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.17,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-boats",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "boats",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-boats",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c05-track-boats",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c05:boats",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_4969.jpg",
+        "displayLabel": "boats",
+        "durationSeconds": 6,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 6,
+        "startSeconds": 10,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c05-boats-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c05-boats",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.16000000000000014,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.51,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c05-boats-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-boats",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameScale",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 1.045,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-boats-line",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "boats-line",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-boats-line",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-boats-line",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 10,
+        "durationSeconds": 6,
+        "values": {
+          "text": "For the quieter frame.",
+          "fontFamily": "Instrument Serif",
+          "fontSize": 62,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.17,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-boats-line-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-boats-line",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.195,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.17,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-dawn",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "dawn",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-dawn",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c05-track-dawn",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c05:dawn",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_5077.jpg",
+        "displayLabel": "dawn",
+        "durationSeconds": 6,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 6,
+        "startSeconds": 16,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c05-dawn-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c05-dawn",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.16000000000000014,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.51,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c05-dawn-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-dawn",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "frameScale",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 1.045,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-dawn-line",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "dawn-line",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-dawn-line",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-dawn-line",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 16,
+        "durationSeconds": 6,
+        "values": {
+          "text": "For the light you stayed for.",
+          "fontFamily": "Instrument Serif",
+          "fontSize": 62,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.17,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-dawn-line-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-dawn-line",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.195,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.17,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-native-product-moment",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "video",
+        "name": "native-product-moment",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-native-product-moment",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c05-track-native-product-moment",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c05:native-product-moment",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+        "displayLabel": "native-product-moment",
+        "durationSeconds": 7,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 7,
+        "startSeconds": 22,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c05-native-product-moment-frame",
+      "commandId": "timeline.action.setTimelineClipFrame",
+      "values": {
+        "clipId": {
+          "result": "c05-native-product-moment",
+          "field": "createdClipId"
+        },
+        "offsetX": 0.0,
+        "offsetY": 0.1200000000000001,
+        "scale": 1,
+        "rotationDegrees": 0,
+        "perspectiveX": 0,
+        "perspectiveY": 0,
+        "opacity": 1,
+        "objectFit": "fit",
+        "width": 0.84,
+        "height": 0.45,
+        "cornerRadius": 0,
+        "cropLeft": 0,
+        "cropTop": 0,
+        "cropRight": 1,
+        "cropBottom": 1
+      }
+    },
+    {
+      "id": "c05-track-native-line",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "native-line",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-native-line",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-native-line",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 22,
+        "durationSeconds": 7,
+        "values": {
+          "text": "Still looking.\nStill making.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 77,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.18,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-native-line-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-native-line",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.205,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.18,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-native-date",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "native-date",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-native-date",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-native-date",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 22,
+        "durationSeconds": 7,
+        "values": {
+          "text": "Native photo output · 16 Nov 2026",
+          "fontFamily": "Space Mono",
+          "fontSize": 34,
+          "fontWeight": 400,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.82,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-native-date-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-native-date",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.845,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.82,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-builder-disclosure",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "builder-disclosure",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-builder-disclosure",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-builder-disclosure",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 29,
+        "durationSeconds": 7,
+        "values": {
+          "text": "I’m building LOOKSi.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 80,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.29,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-builder-disclosure-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-builder-disclosure",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.733333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 7.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.315,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.29,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-product-category",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "product-category",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-product-category",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-product-category",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 29.3,
+        "durationSeconds": 6.7,
+        "values": {
+          "text": "Photo + video.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 82,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.42,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-product-category-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-product-category",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.466666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.7,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.445,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.42,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-maker-line",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "maker-line",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-maker-line",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-maker-line",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 29.6,
+        "durationSeconds": 6.4,
+        "values": {
+          "text": "For people who care\nhow it looks.",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 64,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#F4F3EC",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.56,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-maker-line-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-maker-line",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.133333333,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.4,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.5850000000000001,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.56,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-cta",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "graphics",
+        "name": "cta",
+        "audioRole": ""
+      }
+    },
+    {
+      "id": "c05-cta",
+      "commandId": "timeline.action.createTimelineTitle",
+      "values": {
+        "trackId": {
+          "result": "c05-track-cta",
+          "field": "trackId"
+        },
+        "templateKey": "headline",
+        "startSeconds": 29.9,
+        "durationSeconds": 6.1,
+        "values": {
+          "text": "What catches your eye?",
+          "fontFamily": "Space Grotesk",
+          "fontSize": 65,
+          "fontWeight": 600,
+          "italic": false,
+          "letterSpacing": -1,
+          "lineHeight": 1.04,
+          "color": "#00FF96",
+          "backgroundColor": "#00000000",
+          "alignment": "left",
+          "positionX": 0.08,
+          "positionY": 0.76,
+          "safeMarginX": 0.065,
+          "safeMarginY": 0.07
+        }
+      }
+    },
+    {
+      "id": "c05-cta-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-cta",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "opacity",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.3,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 5.866666667,
+                "value": 1,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 6.1,
+                "value": 0,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          },
+          {
+            "parameter": "titlePositionY",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": 0.785,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.4,
+                "value": 0.76,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-track-source-score",
+      "commandId": "timeline.action.createTimelineTrack",
+      "values": {
+        "kind": "audio",
+        "name": "source-score",
+        "audioRole": "music"
+      }
+    },
+    {
+      "id": "c05-source-score",
+      "commandId": "timeline.action.createTimelineClip",
+      "values": {
+        "trackId": {
+          "result": "c05-track-source-score",
+          "field": "trackId"
+        },
+        "assetId": "native-rebuild:c05:source-score",
+        "filePath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign05/audio/original-score.wav",
+        "displayLabel": "source-score",
+        "durationSeconds": 36,
+        "trimStartSeconds": 0,
+        "trimEndSeconds": 36,
+        "startSeconds": 0,
+        "posterSource": ""
+      }
+    },
+    {
+      "id": "c05-source-score-animation",
+      "commandId": "timeline.action.setTimelineClipAnimation",
+      "values": {
+        "clipId": {
+          "result": "c05-source-score",
+          "field": "createdClipId"
+        },
+        "channels": [
+          {
+            "parameter": "audioGainDb",
+            "keyframes": [
+              {
+                "localSeconds": 0.0,
+                "value": -60,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 0.266666667,
+                "value": -8,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 35.333333333,
+                "value": -8,
+                "interpolation": "ease-in-out"
+              },
+              {
+                "localSeconds": 36.0,
+                "value": -60,
+                "interpolation": "ease-in-out"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "c05-save-native-project-copy",
+      "commandId": "timeline.action.saveTimeline",
+      "values": {
+        "outputPath": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign05/projects/campaign05-native-v1.json"
+      }
+    }
+  ],
+  "completionStatus": "Not authored in Looksy; no native deliverable or export exists from this plan.",
+  "reviewRequirements": [
+    "Inspect native title/shape text and source identities",
+    "Verify track compositing order in native preview",
+    "Native preview and visible proof at every cut",
+    "Readback-verified project save",
+    "Native delivery preflight",
+    "Native export receipt reaches completed with output integrity",
+    "Full decode/phone-size/audio review",
+    "Human creative approval pending"
+  ]
+}

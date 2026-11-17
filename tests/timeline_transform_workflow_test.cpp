@@ -78,23 +78,40 @@ import QtQuick
 import QtQuick.Window
 import "../apps/desktop/qml/components" as Components
 Window {
-    width: 800; height: 520; visible: true; color: "#202328"
+    id: testWindow
+    width: 1000; height: 700; visible: true; color: "#202328"
+    property bool outsideViewportClickReceived: false
     Components.Theme { id: theme }
-    Components.TimelineTransformOverlay {
-        id: overlay
-        objectName: "transformOverlay"
-        anchors.fill: parent
-        theme: theme
-        active: true
-        sourceAspect: 16 / 9
-        frameScale: document.currentClip.frameScale
-        frameRotation: document.currentClip.frameRotationDegrees
-        offsetX: document.currentClip.frameOffsetX
-        offsetY: document.currentClip.frameOffsetY
-        onInteractionStarted: document.beginContinuousEdit()
-        onTransformEdited: (x, y, scale, rotation) => document.setSelectedClipTransform(x, y, scale, rotation)
-        onInteractionFinished: document.endContinuousEdit()
-        onInteractionCancelled: { document.endContinuousEdit(); document.undo() }
+    Rectangle {
+        objectName: "outsideTransformViewportClickTarget"
+        x: 920; y: 590; width: 60; height: 40
+        z: 0
+        color: "#8fb7db"
+        MouseArea {
+            anchors.fill: parent
+            onClicked: testWindow.outsideViewportClickReceived = true
+        }
+    }
+    Item {
+        id: viewport
+        x: 100; y: 100; width: 800; height: 520
+        z: 1
+        Components.TimelineTransformOverlay {
+            id: overlay
+            objectName: "transformOverlay"
+            anchors.fill: parent
+            theme: theme
+            active: true
+            sourceAspect: 16 / 9
+            frameScale: document.currentClip.frameScale
+            frameRotation: document.currentClip.frameRotationDegrees
+            offsetX: document.currentClip.frameOffsetX
+            offsetY: document.currentClip.frameOffsetY
+            onInteractionStarted: document.beginContinuousEdit()
+            onTransformEdited: (x, y, scale, rotation) => document.setSelectedClipTransform(x, y, scale, rotation)
+            onInteractionFinished: document.endContinuousEdit()
+            onInteractionCancelled: { document.endContinuousEdit(); document.undo() }
+        }
     }
 }
 )QML");
@@ -130,6 +147,11 @@ Window {
               << " x=" << document.currentClip().value("frameOffsetX").toDouble() << '\n';
     return fail("Corner resizing must preserve aspect and move the center around the opposite anchor");
   }
+  auto* resizeHandle = find_item(window->contentItem(), "timelineProgramResizeHandle0");
+  auto* resizePointer = find_item(window->contentItem(), "timelineProgramResizeHandlePointer0");
+  if (!resizeHandle || !resizePointer || resizePointer->width() < resizeHandle->width() + 14 ||
+      resizePointer->height() < resizeHandle->height() + 14)
+    return fail("Resize handles must keep a scale-aware hit target larger than their visible grip");
   document.undo();
   if (!drag("timelineProgramRotationHandle", {70, 20}) ||
       std::abs(document.currentClip().value("frameRotationDegrees").toDouble()) < 5)
@@ -139,6 +161,36 @@ Window {
   if (!drag("timelineProgramTransformMoveArea", {60, 25}, true) ||
       document.deterministicDocumentHash() != before_cancel)
     return fail("Escape must restore the exact authored transform");
+
+  const auto before_deactivate = document.deterministicDocumentHash();
+  auto* moveArea = find_item(window->contentItem(), "timelineProgramTransformMoveArea");
+  auto* overlay = find_item(window->contentItem(), "transformOverlay");
+  if (!moveArea || !overlay) return fail("The transform cancellation fixture must expose its real overlay");
+  const auto movePoint = moveArea->mapToScene(QPointF(moveArea->width() / 2, moveArea->height() / 2)).toPoint();
+  QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, movePoint);
+  QTest::mouseMove(window, movePoint + QPoint(60, 25), 20);
+  QTest::qWait(30);
+  overlay->setProperty("active", false);
+  QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, movePoint + QPoint(60, 25));
+  const auto after_deactivate = document.deterministicDocumentHash();
+  if (after_deactivate == before_deactivate)
+    return fail("Disabling the transform tool must flush the in-progress transform edit");
+  document.undo();
+  if (document.deterministicDocumentHash() != before_deactivate)
+    return fail("One Undo must restore a transform committed by switching tools");
+  overlay->setProperty("active", true);
+
+  const auto before_viewport_hit = document.deterministicDocumentHash();
+  if (!document.setSelectedClipTransform(0.1, -0.1, 1.6, 20))
+    return fail("The viewport hit test needs a transformed frame that extends beyond its monitor bounds");
+  QTest::qWait(40);
+  const auto outside_target = QPoint(950, 610);
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, outside_target);
+  if (!window->property("outsideViewportClickReceived").toBool())
+    return fail("A transformed frame must not swallow clicks outside the transform viewport");
+  document.undo();
+  if (document.deterministicDocumentHash() != before_viewport_hit)
+    return fail("The viewport hit test must not change the authored transform");
 
   int publications = 0;
   QObject::connect(&document, &TimelineDocumentController::selectedClipStateChanged,
@@ -177,6 +229,11 @@ Window {
   reopened.selectClip(0);
   if (reopened.currentClip().value("keyframes").toList() != keys)
     return fail("Transform keys and tangents must survive save/reopen");
+
+  if (app.arguments().contains(QStringLiteral("--interaction-only"))) {
+    std::cout << "Transform pointer routing, gestures, cancellation, animation and persistence passed\n";
+    return 0;
+  }
 
   if (QStandardPaths::findExecutable("ffmpeg").isEmpty()) return fail("FFmpeg is required for fade verification");
   TimelineDocumentController fades;

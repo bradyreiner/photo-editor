@@ -136,6 +136,57 @@ InspectorSlider {
   if (item->property("starts") != item->property("finishes")) return fail("Exposure transactions are unbalanced");
   const auto capture = qEnvironmentVariable("PHOTO_EDITOR_EXPOSURE_CAPTURE_PATH");
   if (!capture.isEmpty() && !window.grabWindow().save(capture)) return fail("Exposure capture failed");
+  item->setVisible(false);
+  QQmlComponent scene_component(&engine);
+  scene_component.setData(R"qml(
+import QtQuick
+import "file:)qml" PHOTO_EDITOR_SOURCE_DIR R"qml(/apps/desktop/qml/components"
+CompactSceneSlider {
+    objectName: "sceneSlider"; width: 500
+    label: "Depth"; from: 0; to: 2; stepSize: 0.01; value: 0.65; defaultValue: 0.65
+    suffix: "×"; decimals: 2
+    property int edits: 0
+    property int starts: 0
+    property int finishes: 0
+    onInteractionStarted: starts++
+    onInteractionFinished: finishes++
+    onValueEdited: function(next) { value = next; edits++ }
+}
+)qml", QUrl());
+  std::unique_ptr<QObject> scene_object(scene_component.create());
+  auto* scene_item = qobject_cast<QQuickItem*>(scene_object.get());
+  if (!scene_item) { std::cerr << scene_component.errorString().toStdString(); return fail("Shared Scene slider did not load"); }
+  scene_item->setParentItem(window.contentItem());
+  window.resize(500, 90);
+  const auto commit_scene = [&](const QString& text) {
+    QVariant result;
+    QMetaObject::invokeMethod(scene_item, "testCommitInputText", Q_RETURN_ARG(QVariant, result), Q_ARG(QVariant, text));
+    return result.toDouble();
+  };
+  if (std::abs(commit_scene(QString()) - 0.65) > 1e-8 ||
+      std::abs(commit_scene(QStringLiteral("0.1.2")) - 0.65) > 1e-8 ||
+      scene_item->property("edits").toInt() != 0)
+    return fail("Scene numeric fields must reject blank and malformed input without modifying the value");
+  if (std::abs(commit_scene(QStringLiteral("1e-1×")) - 0.1) > 1e-8)
+    return fail("Scene numeric fields must preserve scientific notation and displayed units");
+  auto* scene_field = scene_item->findChild<QQuickItem*>(QStringLiteral("sceneSliderValueField"));
+  auto* scene_control = scene_item->findChild<QQuickItem*>(QStringLiteral("sceneSliderControl"));
+  if (!scene_field || !scene_control) return fail("Scene must share the inspector numeric and track controls");
+  scene_field->forceActiveFocus();
+  scene_field->setProperty("text", QStringLiteral("1.8"));
+  scene_item->setProperty("valueInputDirty", true);
+  QTest::keyClick(&window, Qt::Key_Escape);
+  if (std::abs(scene_item->property("value").toDouble() - 0.1) > 1e-8 ||
+      scene_item->property("valueInputDirty").toBool())
+    return fail("Escape must discard an uncommitted Scene numeric edit");
+  scene_control->forceActiveFocus();
+  QTest::keyClick(&window, Qt::Key_Right);
+  if (std::abs(scene_item->property("value").toDouble() - 0.11) > 1e-8)
+    return fail("Scene keyboard increments must use the parameter's actual step");
+  QMetaObject::invokeMethod(scene_item, "requestReset");
+  if (std::abs(scene_item->property("value").toDouble() - 0.65) > 1e-8 ||
+      scene_item->property("starts") != scene_item->property("finishes"))
+    return fail("Scene typing, keyboard editing and reset must form balanced edit transactions");
   std::cout << "Exposure numeric range, mapping, central precision, fine drag, endpoints and cancel passed\n";
   return EXIT_SUCCESS;
 }

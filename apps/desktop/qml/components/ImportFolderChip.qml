@@ -14,44 +14,53 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitWidth: Math.min(220, Math.max(108, folderLabel.implicitWidth + theme.space20))
+    implicitWidth: Math.min(theme.scaled(252), Math.max(theme.scaled(108), folderLabel.implicitWidth + theme.space20))
     implicitHeight: 34
     width: implicitWidth
     height: implicitHeight
-    radius: theme.radius8
-    color: chipHover.hovered || activeFocus
-           ? theme.alpha(theme.accentCool400, 0.14)
-           : theme.alpha(theme.ink900, 0.92)
-    border.width: activeFocus ? 2 : 0
+    radius: theme.radiusControl
+    color: !enabled
+           ? theme.alpha(theme.ink850, 0.42)
+           : chipHover.hovered
+             ? theme.editorControlHover
+             : theme.alpha(theme.editorControlIdle, 0.74)
+    border.width: activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
     border.color: activeFocus
-                  ? theme.alpha(theme.focusRing, 0.88)
-                  : "transparent"
+                  ? theme.focusRing
+                  : theme.alpha(theme.lineSoft, 0.46)
     clip: true
     activeFocusOnTab: true
     Accessible.name: fileName
+    Accessible.description: "Open folder " + fileUrl
     Accessible.role: Accessible.Button
-    Keys.onReturnPressed: root.activated(root.fileUrl)
-    Keys.onEnterPressed: root.activated(root.fileUrl)
-    Keys.onSpacePressed: root.activated(root.fileUrl)
+    Keys.onReturnPressed: if (root.enabled) root.activated(root.fileUrl)
+    Keys.onEnterPressed: if (root.enabled) root.activated(root.fileUrl)
+    Keys.onSpacePressed: if (root.enabled) root.activated(root.fileUrl)
+    opacity: enabled ? 1.0 : 0.62
+
+    Behavior on color {
+        ColorAnimation { duration: theme.durationFast }
+    }
 
     HoverHandler {
         id: chipHover
-        cursorShape: Qt.PointingHandCursor
+        enabled: root.enabled
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
     Label {
         id: folderLabel
         anchors.fill: parent
-        anchors.leftMargin: theme.space10
-        anchors.rightMargin: theme.space10
+        anchors.leftMargin: theme.space8
+        anchors.rightMargin: theme.space8
         text: root.fileName
-        color: theme.textMain
+        color: root.enabled ? theme.textMain : theme.textFaint
         font.family: theme.fontUi
-        font.pixelSize: 10
-        font.weight: Font.Medium
+        font.pixelSize: theme.typeMicro
+        font.weight: theme.weightControl
         fontSizeMode: Text.HorizontalFit
-        minimumPixelSize: 8
-        horizontalAlignment: Text.AlignHCenter
+        minimumPixelSize: theme.scaled(10)
+        horizontalAlignment: Text.AlignLeft
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideNone
         AppToolTip {
@@ -65,6 +74,10 @@ Rectangle {
     }
 
     TapHandler {
-        onTapped: root.activated(root.fileUrl)
+        enabled: root.enabled
+        onTapped: {
+            root.forceActiveFocus()
+            root.activated(root.fileUrl)
+        }
     }
 }

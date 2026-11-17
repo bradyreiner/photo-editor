@@ -2,7 +2,9 @@
 #include "color_adjustment_kernel_runtime.h"
 #include "color_layer_composite.h"
 #include "color_layer_sampling.h"
+#include "color_local_layer_runtime.h"
 #include "photo_editor/pipeline/photo_effects.h"
+#include "photo_editor/pipeline/layer_styles.h"
 
 #include "color_adjustment_scheduler.h"
 #include "color_blur_runtime.h"
@@ -20,6 +22,7 @@
 #include <iterator>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <string_view>
@@ -55,6 +58,46 @@ void composite_rows(int count, int row_width, Work&& work) {
   } else {
     parallel_for(count, std::forward<Work>(work));
   }
+}
+
+enum class PhotoLayerBlendOperation {
+  Normal,
+  Multiply,
+  Screen,
+  Overlay,
+  SoftLight,
+  HardLight,
+  Difference,
+  Lighten,
+  Darken,
+  LinearLight,
+  Hue,
+  Saturation,
+  Color,
+  Luminosity,
+  Other,
+};
+
+[[nodiscard]] PhotoLayerBlendOperation resolve_photo_layer_blend_operation(
+    std::string_view mode) {
+  if (mode.empty() || mode == "normal") return PhotoLayerBlendOperation::Normal;
+  if (mode == "multiply") return PhotoLayerBlendOperation::Multiply;
+  if (mode == "screen") return PhotoLayerBlendOperation::Screen;
+  if (mode == "overlay") return PhotoLayerBlendOperation::Overlay;
+  if (mode == "soft light" || mode == "soft-light")
+    return PhotoLayerBlendOperation::SoftLight;
+  if (mode == "hard light" || mode == "hard-light")
+    return PhotoLayerBlendOperation::HardLight;
+  if (mode == "difference") return PhotoLayerBlendOperation::Difference;
+  if (mode == "lighten") return PhotoLayerBlendOperation::Lighten;
+  if (mode == "darken") return PhotoLayerBlendOperation::Darken;
+  if (mode == "linear light" || mode == "linear-light")
+    return PhotoLayerBlendOperation::LinearLight;
+  if (mode == "hue") return PhotoLayerBlendOperation::Hue;
+  if (mode == "saturation") return PhotoLayerBlendOperation::Saturation;
+  if (mode == "color") return PhotoLayerBlendOperation::Color;
+  if (mode == "luminosity") return PhotoLayerBlendOperation::Luminosity;
+  return PhotoLayerBlendOperation::Other;
 }
 
 }  // namespace
@@ -137,8 +180,12 @@ void composite_rows(int count, int row_width, Work&& work) {
 [[nodiscard]] ColorPixel blend_layer_color(
     const ColorPixel& base,
     const ColorPixel& source,
-    const std::string& mode,
+    PhotoLayerBlendOperation operation,
     const PipelineColorContext& context) {
+  // Normal blending consumes the source colors as-is. Keep that common path
+  // ahead of the channel conversions needed only by non-normal blend modes.
+  if (operation == PhotoLayerBlendOperation::Normal) return source;
+
   // Blend equations use the declared creative/output reference range. The
   // much wider scene working headroom is a storage contract, not the neutral
   // for Screen, Overlay, Soft Light, or Linear Light.
@@ -151,70 +198,73 @@ void composite_rows(int count, int row_width, Work&& work) {
   const auto source_green = std::max(0.0, static_cast<double>(source.green));
   const auto source_blue = std::max(0.0, static_cast<double>(source.blue));
 
-  if (mode == "multiply") {
+  if (operation == PhotoLayerBlendOperation::Multiply) {
     return ColorPixel{
         static_cast<float>(base_red * source_red),
         static_cast<float>(base_green * source_green),
         static_cast<float>(base_blue * source_blue),
         source.alpha};
   }
-  if (mode == "screen") {
+  if (operation == PhotoLayerBlendOperation::Screen) {
     return ColorPixel{
         static_cast<float>(headroom - ((headroom - base_red) * (headroom - source_red) / headroom)),
         static_cast<float>(headroom - ((headroom - base_green) * (headroom - source_green) / headroom)),
         static_cast<float>(headroom - ((headroom - base_blue) * (headroom - source_blue) / headroom)),
         source.alpha};
   }
-  if (mode == "overlay") {
+  if (operation == PhotoLayerBlendOperation::Overlay) {
     return ColorPixel{
         static_cast<float>(overlay_channel(base_red, source_red, headroom)),
         static_cast<float>(overlay_channel(base_green, source_green, headroom)),
         static_cast<float>(overlay_channel(base_blue, source_blue, headroom)),
         source.alpha};
   }
-  if (mode == "soft light" || mode == "soft-light") {
+  if (operation == PhotoLayerBlendOperation::SoftLight) {
     return ColorPixel{
         static_cast<float>(soft_light_channel(base_red, source_red, headroom)),
         static_cast<float>(soft_light_channel(base_green, source_green, headroom)),
         static_cast<float>(soft_light_channel(base_blue, source_blue, headroom)),
         source.alpha};
   }
-  if (mode == "hard light" || mode == "hard-light") {
+  if (operation == PhotoLayerBlendOperation::HardLight) {
     return ColorPixel{
         static_cast<float>(overlay_channel(source_red, base_red, headroom)),
         static_cast<float>(overlay_channel(source_green, base_green, headroom)),
         static_cast<float>(overlay_channel(source_blue, base_blue, headroom)),
         source.alpha};
   }
-  if (mode == "difference") {
+  if (operation == PhotoLayerBlendOperation::Difference) {
     return ColorPixel{
         static_cast<float>(std::abs(base_red - source_red)),
         static_cast<float>(std::abs(base_green - source_green)),
         static_cast<float>(std::abs(base_blue - source_blue)),
         source.alpha};
   }
-  if (mode == "lighten") {
+  if (operation == PhotoLayerBlendOperation::Lighten) {
     return ColorPixel{
         static_cast<float>(std::max(base_red, source_red)),
         static_cast<float>(std::max(base_green, source_green)),
         static_cast<float>(std::max(base_blue, source_blue)),
         source.alpha};
   }
-  if (mode == "darken") {
+  if (operation == PhotoLayerBlendOperation::Darken) {
     return ColorPixel{
         static_cast<float>(std::min(base_red, source_red)),
         static_cast<float>(std::min(base_green, source_green)),
         static_cast<float>(std::min(base_blue, source_blue)),
         source.alpha};
   }
-  if (mode == "linear light" || mode == "linear-light") {
+  if (operation == PhotoLayerBlendOperation::LinearLight) {
     return ColorPixel{
         static_cast<float>(std::clamp(base_red + 2.0 * source_red - headroom, 0.0, headroom)),
         static_cast<float>(std::clamp(base_green + 2.0 * source_green - headroom, 0.0, headroom)),
         static_cast<float>(std::clamp(base_blue + 2.0 * source_blue - headroom, 0.0, headroom)),
         source.alpha};
   }
-  if (mode == "hue" || mode == "saturation" || mode == "color" || mode == "luminosity") {
+  if (operation == PhotoLayerBlendOperation::Hue ||
+      operation == PhotoLayerBlendOperation::Saturation ||
+      operation == PhotoLayerBlendOperation::Color ||
+      operation == PhotoLayerBlendOperation::Luminosity) {
     auto blend_context = context;
     blend_context.output_headroom = headroom;
     const auto base_oklab = linear_rgb_to_oklab(base, context);
@@ -229,11 +279,11 @@ void composite_rows(int count, int row_width, Work&& work) {
     const auto source_hue = source_chroma > 1.0e-6
                                 ? wrap_radians(std::atan2(source_oklab.b, source_oklab.a))
                                 : hue;
-    if (mode == "hue") {
+    if (operation == PhotoLayerBlendOperation::Hue) {
       hue = source_hue;
-    } else if (mode == "saturation") {
+    } else if (operation == PhotoLayerBlendOperation::Saturation) {
       chroma = source_chroma;
-    } else if (mode == "color") {
+    } else if (operation == PhotoLayerBlendOperation::Color) {
       hue = source_hue;
       chroma = source_chroma;
     } else {
@@ -255,22 +305,123 @@ void composite_rows(int count, int row_width, Work&& work) {
   return source;
 }
 
-void composite_layer_pixel(
+[[nodiscard]] double layer_blend_if_gate(
+    const LayerBlendIf& blend_if,
+    const ColorPixel& source,
+    const ColorPixel& underlying,
+    const PipelineColorContext& context);
+
+[[nodiscard]] double composite_layer_pixel(
     ColorPixel* target,
     const ColorPixel& source,
     double alpha,
-    const std::string& mode,
-    const PipelineColorContext& context, bool erase_base_image = false) {
-  if (target == nullptr || alpha <= 1e-6) {
-    return;
+    PhotoLayerBlendOperation operation,
+    const PipelineColorContext& context, bool erase_base_image = false,
+    const LayerBlendIf* blend_if = nullptr) {
+  if (target == nullptr) return 0.0;
+  if (blend_if != nullptr && blend_if->enabled) {
+    alpha *= layer_blend_if_gate(*blend_if, source, *target, context);
   }
+  if (alpha <= 1e-6) return alpha;
   if (erase_base_image) {
     target->alpha = static_cast<float>(static_cast<double>(target->alpha) * (1.0 - clamp_unit(alpha)));
     if (target->alpha <= 1e-6F) *target = ColorPixel{0.0F, 0.0F, 0.0F, 0.0F};
-    return;
+    return alpha;
   }
-  const auto blended = blend_layer_color(*target, source, mode, context);
+  const auto blended = blend_layer_color(*target, source, operation, context);
   *target = composite_layer_source_over(*target, source, blended, alpha);
+  return alpha;
+}
+
+[[nodiscard]] double blend_if_split_gate(
+    double sample,
+    double black_low,
+    double black_high,
+    double white_low,
+    double white_high) {
+  const auto safe_threshold = [](double value, double fallback) {
+    return std::isfinite(value) ? std::clamp(value, 0.0, 1.0) : fallback;
+  };
+  black_low = safe_threshold(black_low, 0.0);
+  black_high = safe_threshold(black_high, 0.0);
+  white_low = safe_threshold(white_low, 1.0);
+  white_high = safe_threshold(white_high, 1.0);
+  if (black_low > black_high) std::swap(black_low, black_high);
+  if (white_low > white_high) std::swap(white_low, white_high);
+
+  const auto black_gate = black_low == black_high
+      ? (sample >= black_high ? 1.0 : 0.0)
+      : (sample <= black_low ? 0.0
+          : sample >= black_high ? 1.0
+          : (sample - black_low) / (black_high - black_low));
+  const auto white_gate = white_low == white_high
+      ? (sample <= white_low ? 1.0 : 0.0)
+      : (sample <= white_low ? 1.0
+          : sample >= white_high ? 0.0
+          : (white_high - sample) / (white_high - white_low));
+  return std::clamp(black_gate * white_gate, 0.0, 1.0);
+}
+
+[[nodiscard]] std::optional<double> blend_if_sample(
+    const ColorPixel& pixel,
+    BlendIfChannel channel,
+    const PipelineColorContext& context) {
+  const auto red = static_cast<double>(pixel.red);
+  const auto green = static_cast<double>(pixel.green);
+  const auto blue = static_cast<double>(pixel.blue);
+  if (!std::isfinite(red) || !std::isfinite(green) || !std::isfinite(blue)) {
+    return std::nullopt;
+  }
+
+  double value = 0.0;
+  switch (channel) {
+    case BlendIfChannel::Red:
+      value = red;
+      break;
+    case BlendIfChannel::Green:
+      value = green;
+      break;
+    case BlendIfChannel::Blue:
+      value = blue;
+      break;
+    case BlendIfChannel::Gray:
+    default: {
+      const auto& matrix = context.rgb_to_xyz_native.values;
+      const auto red_weight = matrix[3];
+      const auto green_weight = matrix[4];
+      const auto blue_weight = matrix[5];
+      if (!std::isfinite(red_weight) || !std::isfinite(green_weight) ||
+          !std::isfinite(blue_weight)) {
+        return std::nullopt;
+      }
+      value = red_weight * red + green_weight * green + blue_weight * blue;
+      break;
+    }
+  }
+  if (!std::isfinite(value)) return std::nullopt;
+  const auto headroom = std::isfinite(context.layer_blend_headroom)
+      ? sanitized_scene_working_headroom(context.layer_blend_headroom) : 1.0;
+  return std::clamp(value / headroom, 0.0, 1.0);
+}
+
+[[nodiscard]] double layer_blend_if_gate(
+    const LayerBlendIf& blend_if,
+    const ColorPixel& source,
+    const ColorPixel& underlying,
+    const PipelineColorContext& context) {
+  if (!blend_if.enabled) return 1.0;
+  const auto source_sample = blend_if_sample(source, blend_if.channel, context);
+  const auto underlying_sample = blend_if_sample(underlying, blend_if.channel, context);
+  // Unknown/nonfinite color cannot be classified safely. Keep the gate neutral
+  // so malformed range/color data never turns into a black or transparent rim.
+  if (!source_sample.has_value() || !underlying_sample.has_value()) return 1.0;
+  const auto source_gate = blend_if_split_gate(*source_sample,
+      blend_if.source_black_low, blend_if.source_black_high,
+      blend_if.source_white_low, blend_if.source_white_high);
+  const auto underlying_gate = blend_if_split_gate(*underlying_sample,
+      blend_if.underlying_black_low, blend_if.underlying_black_high,
+      blend_if.underlying_white_low, blend_if.underlying_white_high);
+  return source_gate * underlying_gate;
 }
 
 struct TextMaterialBackdrop final {
@@ -676,10 +827,6 @@ struct MetalTextProfile final {
   glyph.green = reflected_working.green;
   glyph.blue = reflected_working.blue;
   return glyph;
-}
-
-[[nodiscard]] bool photo_layer_uses_normal_blend(const PhotoLayer& layer) {
-  return layer.blend_mode.empty() || layer.blend_mode == "normal";
 }
 
 [[nodiscard]] bool has_photo_layer_transform(const PhotoLayer& layer) {
@@ -1278,6 +1425,81 @@ bool prepare_effect_content(PhotoLayer* layer, int width, int height,
   layer->effects = std::move(effects);
   return true;
 }
+
+bool prepare_layer_styles(PhotoLayer* layer, int width, int height,
+    CancellationToken cancellation, std::string* error) {
+  if (layer == nullptr) return false;
+  if (!layer->style_error.empty()) {
+    if (error != nullptr) *error = "Layer '" + layer->name + "': " + layer->style_error;
+    return false;
+  }
+  const auto active_styles = layer->style_stack.enabled && std::any_of(
+      layer->style_stack.operations.begin(), layer->style_stack.operations.end(),
+      [](const auto& operation) { return operation.enabled && operation.opacity > 0.0; });
+  if (!active_styles) return true;
+  if (layer->kind == "fill") {
+    layer->kind = "pixel";
+    layer->pixel_width = width;
+    layer->pixel_height = height;
+    layer->x = 0;
+    layer->y = 0;
+    layer->transform_scale = 1.0;
+    layer->transform_rotation = 0.0;
+    layer->pixels.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height),
+        layer->fill_color);
+  }
+  if ((layer->kind != "pixel" && layer->kind != "source" && layer->kind != "text" &&
+          layer->kind != "group") ||
+      layer->pixel_width <= 0 || layer->pixel_height <= 0 ||
+      layer->pixels.size() != static_cast<std::size_t>(layer->pixel_width) *
+          static_cast<std::size_t>(layer->pixel_height)) {
+    if (error != nullptr)
+      *error = "Layer '" + layer->name + "': layer styles require raster, text, fill or group content.";
+    return false;
+  }
+
+  std::vector<LayerStyleMaskBinding> masks;
+  masks.reserve(layer->effect_masks.size());
+  for (const auto& mask : layer->effect_masks) masks.push_back({mask.id, mask.coverage});
+  const LayerStyleRenderOptions options{
+      .document_scale_x = layer->style_scale_x,
+      .document_scale_y = layer->style_scale_y,
+      .global_light_angle_degrees = layer->style_global_light_angle,
+      .cancellation = cancellation};
+  auto rendered = render_layer_styles(layer->pixels, layer->pixel_width, layer->pixel_height,
+      layer->style_stack, options, masks);
+  if (!rendered.ok()) {
+    if (error != nullptr) *error = "Layer '" + layer->name + "': " + rendered.error;
+    return false;
+  }
+  if (rendered.status == LayerStyleRenderStatus::Identity) return true;
+
+  const int padding_left = -rendered.canvas_offset_x;
+  const int padding_top = -rendered.canvas_offset_y;
+  const int padding_right = rendered.width - layer->pixel_width - padding_left;
+  const int padding_bottom = rendered.height - layer->pixel_height - padding_top;
+  if (padding_left < 0 || padding_top < 0 || padding_right < 0 || padding_bottom < 0) {
+    if (error != nullptr) *error = "Layer '" + layer->name + "': layer-style renderer returned invalid bounds.";
+    return false;
+  }
+  const auto padded_x = static_cast<std::int64_t>(layer->effect_padding_x) + padding_left;
+  const auto padded_y = static_cast<std::int64_t>(layer->effect_padding_y) + padding_top;
+  if (layer->effect_padding_x < 0 || layer->effect_padding_y < 0 ||
+      padded_x > std::numeric_limits<int>::max() || padded_y > std::numeric_limits<int>::max()) {
+    if (error != nullptr) *error = "Layer '" + layer->name + "': layer-style padding overflows its content bounds.";
+    return false;
+  }
+
+  layer->pixel_width = rendered.width;
+  layer->pixel_height = rendered.height;
+  layer->effect_padding_x = static_cast<int>(padded_x);
+  layer->effect_padding_y = static_cast<int>(padded_y);
+  layer->pixels = std::move(rendered.pixels);
+  // All filter and style masks have been consumed. Leaving unpadded local
+  // masks beside the expanded raster would be an invalid future input contract.
+  layer->effect_masks.clear();
+  return true;
+}
 }  // namespace
 
 static bool apply_photo_layers_impl(
@@ -1345,6 +1567,7 @@ static bool apply_photo_layers_impl(
         content_recipe.copy_base_image = false;
         content_recipe.opacity = 1.0;
         content_recipe.blend_mode = "normal";
+        content_recipe.blend_if = LayerBlendIf{};
         content_recipe.clipping_mask = false;
         content_recipe.mask_data.clear();
         content_recipe.mask_width = 0;
@@ -1353,6 +1576,8 @@ static bool apply_photo_layers_impl(
         content_recipe.mask_opacity = 1.0;
         content_recipe.mask_density = 1.0;
         content_recipe.effects.clear();
+        content_recipe.style_stack = LayerStyleStack{};
+        content_recipe.style_error.clear();
         const std::vector<PhotoLayer> content_stack{std::move(content_recipe)};
         if (!apply_photo_layers_impl(&content_pixels, original_layer.pixel_width,
                 original_layer.pixel_height, context, content_stack,
@@ -1368,8 +1593,13 @@ static bool apply_photo_layers_impl(
       if (!prepared_layer) prepared_layer = original_layer;
       prepared_layer->effect_luminance_weights = effect_luminance_weights_for_context(context);
       if (!prepare_effect_content(&*prepared_layer, width, height, cancellation, error)) return false;
+      if (!prepare_layer_styles(&*prepared_layer, width, height, cancellation, error)) return false;
     }
     const auto& layer = prepared_layer ? *prepared_layer : original_layer;
+    const auto blend_operation =
+        resolve_photo_layer_blend_operation(layer.blend_mode);
+    const auto normal_blend =
+        blend_operation == PhotoLayerBlendOperation::Normal;
     const auto material_tint_linear_srgb = layer.kind == "text"
         ? apply_rgb_matrix(layer.text_material_tint, context.rgb_to_linear_srgb)
         : ColorPixel{};
@@ -1387,10 +1617,21 @@ static bool apply_photo_layers_impl(
               common_adjustment_thread_safe, cancellation, error, standard_rendering_model, layer.id)) {
         return false;
       }
+      if (!layer.component_retouch_masks.empty() &&
+          !apply_component_retouch_operations(
+              &group_pixels, width, height, context,
+              layer.component_retouch_masks,
+              layer.component_retouch_final_quality
+                  ? RemovalQuality::Final
+                  : RemovalQuality::Interactive,
+              cancellation)) {
+        return false;
+      }
       auto group_adjustment = layer;
       group_adjustment.kind = "adjustment";
       group_adjustment.parent_id.clear();
       group_adjustment.opacity = 1.0;
+      group_adjustment.blend_if = LayerBlendIf{};
       group_adjustment.clipping_mask = false;
       group_adjustment.mask_data.clear();
       group_adjustment.mask_width = 0;
@@ -1399,6 +1640,9 @@ static bool apply_photo_layers_impl(
       group_adjustment.mask_opacity = 1.0;
       group_adjustment.mask_density = 1.0;
       group_adjustment.effects.clear();
+      group_adjustment.style_stack = LayerStyleStack{};
+      group_adjustment.style_error.clear();
+      group_adjustment.component_retouch_masks.clear();
       group_adjustment.copy_base_image = false;
       const std::vector<PhotoLayer> group_adjustment_stack{group_adjustment};
       const auto apply_group_adjustment = [&](ColorPixel* pixel, const PhotoLayer&) {
@@ -1417,6 +1661,7 @@ static bool apply_photo_layers_impl(
       group_layer.effect_luminance_weights = effect_luminance_weights_for_context(context);
       if (photo_layer_has_active_effects(layer)) {
         if (!prepare_effect_content(&group_layer, width, height, cancellation, error)) return false;
+        if (!prepare_layer_styles(&group_layer, width, height, cancellation, error)) return false;
       }
       if (!has_photo_layer_transform(group_layer) && group_layer.x == 0 &&
           group_layer.y == 0) {
@@ -1435,13 +1680,12 @@ static bool apply_photo_layers_impl(
             const auto alpha = clamp_unit(
                 static_cast<double>(source.alpha) * opacity * clip_weight *
                 photo_layer_mask_weight(layer, target_x, target_y, width, height));
+            const auto composited_alpha = composite_layer_pixel(
+                &(*pixels)[target_index], source, alpha, blend_operation, context,
+                false, &layer.blend_if);
             if (retain_alpha) {
-              current_layer_alpha[target_index] =
-                  std::max(current_layer_alpha[target_index], alpha);
-            }
-            if (alpha > 1e-6) {
-              composite_layer_pixel(
-                  &(*pixels)[target_index], source, alpha, layer.blend_mode, context);
+              current_layer_alpha[target_index] = std::max(
+                  current_layer_alpha[target_index], composited_alpha);
             }
           }
         }
@@ -1475,13 +1719,12 @@ static bool apply_photo_layers_impl(
             const auto alpha = clamp_unit(
                 static_cast<double>(source.alpha) * opacity * clip_weight *
                 photo_layer_mask_weight(layer, target_x, target_y, width, height));
+            const auto composited_alpha = composite_layer_pixel(
+                &(*pixels)[target_index], source, alpha, blend_operation, context,
+                false, &layer.blend_if);
             if (retain_alpha) {
-              current_layer_alpha[target_index] =
-                  std::max(current_layer_alpha[target_index], alpha);
-            }
-            if (alpha > 1e-6) {
-              composite_layer_pixel(
-                  &(*pixels)[target_index], source, alpha, layer.blend_mode, context);
+              current_layer_alpha[target_index] = std::max(
+                  current_layer_alpha[target_index], composited_alpha);
             }
           }
         }
@@ -1531,7 +1774,8 @@ static bool apply_photo_layers_impl(
           has_optical_adjustments || has_effect_detail_adjustments || has_creative_effects;
       const auto neutral_normal_layer = !has_common_adjustments &&
           !has_advanced_tone_adjustments && !has_curve_adjustments && !has_color_adjustments &&
-          !precompute_adjusted_layer && photo_layer_uses_normal_blend(layer) &&
+          !precompute_adjusted_layer && !layer.blend_if.enabled &&
+          normal_blend &&
           !layer.clipping_mask && std::isfinite(layer.opacity) &&
           std::isfinite(layer.mask_opacity) && std::isfinite(layer.mask_density) &&
           std::all_of(pixels->begin(), pixels->end(), [](const ColorPixel& pixel) {
@@ -1690,10 +1934,14 @@ static bool apply_photo_layers_impl(
                   const auto before_layer = pixel;
                   const auto adjusted = tile.pixels[static_cast<std::size_t>(row) *
                       static_cast<std::size_t>(tile.stride) + static_cast<std::size_t>(column)];
-                  auto blended = photo_layer_uses_normal_blend(layer) ? adjusted :
-                      blend_layer_color(before_layer, adjusted, layer.blend_mode, context);
+                  const auto effective_weight = layer_weight * layer_blend_if_gate(
+                      layer.blend_if, adjusted, before_layer, context);
+                  if (retain_alpha) current_layer_alpha[index] = effective_weight;
+                  if (effective_weight <= 1e-6) continue;
+                  auto blended = normal_blend ? adjusted :
+                      blend_layer_color(before_layer, adjusted, blend_operation, context);
                   blended.alpha = adjusted.alpha;
-                  pixel = interpolate_effect_pixel(before_layer, blended, layer_weight);
+                  pixel = interpolate_effect_pixel(before_layer, blended, effective_weight);
                 }
               });
               return !cancellation.cancelled();
@@ -1724,16 +1972,20 @@ static bool apply_photo_layers_impl(
           auto adjusted = precompute_adjusted_layer
                               ? effect_detail_input_pixels[index]
                               : apply_layer_recipe_without_effect_detail(before_layer);
+          const auto effective_weight = layer_weight * layer_blend_if_gate(
+              layer.blend_if, adjusted, before_layer, context);
+          if (retain_alpha) current_layer_alpha[index] = effective_weight;
+          if (effective_weight <= 1e-6) continue;
           if (has_creative_effects) {
-            auto blended = photo_layer_uses_normal_blend(layer) ? adjusted :
-                blend_layer_color(before_layer, adjusted, layer.blend_mode, context);
+            auto blended = normal_blend ? adjusted :
+                blend_layer_color(before_layer, adjusted, blend_operation, context);
             blended.alpha = adjusted.alpha;
-            pixel = interpolate_effect_pixel(before_layer, blended, layer_weight);
-          } else if (photo_layer_uses_normal_blend(layer)) {
-            pixel = interpolate_adjustment_pixel(before_layer, adjusted, layer_weight);
+            pixel = interpolate_effect_pixel(before_layer, blended, effective_weight);
+          } else if (normal_blend) {
+            pixel = interpolate_adjustment_pixel(before_layer, adjusted, effective_weight);
           } else {
             pixel = interpolate_adjustment_pixel(before_layer,
-                blend_layer_color(before_layer, adjusted, layer.blend_mode, context), layer_weight);
+                blend_layer_color(before_layer, adjusted, blend_operation, context), effective_weight);
           }
         }
       };
@@ -1756,12 +2008,11 @@ static bool apply_photo_layers_impl(
           const auto alpha = clamp_unit(
               static_cast<double>(layer.fill_color.alpha) * opacity * clip_weight *
               photo_layer_mask_weight(layer, x, y, width, height));
-          if (retain_alpha) current_layer_alpha[index] = alpha;
-          if (alpha <= 1e-6) {
-            continue;
-          }
           auto& target = (*pixels)[index];
-          composite_layer_pixel(&target, layer.fill_color, alpha, layer.blend_mode, context);
+          const auto composited_alpha = composite_layer_pixel(
+              &target, layer.fill_color, alpha, blend_operation, context,
+              false, &layer.blend_if);
+          if (retain_alpha) current_layer_alpha[index] = composited_alpha;
         }
       }
       previous_layer_alpha = std::move(current_layer_alpha);
@@ -1822,12 +2073,13 @@ static bool apply_photo_layers_impl(
           const auto alpha = clamp_unit(
               static_cast<double>(source.alpha) * opacity * clip_weight *
               photo_layer_mask_weight(layer, target_x, target_y, width, height));
-          if (retain_alpha) current_layer_alpha[target_index] = layer.erase_base_image ? target.alpha : std::max(current_layer_alpha[target_index], alpha);
-          if (alpha <= 1e-6) {
-            continue;
+          const auto composited_alpha = composite_layer_pixel(
+              &target, source, alpha, blend_operation, context,
+              layer.erase_base_image, &layer.blend_if);
+          if (retain_alpha) {
+            current_layer_alpha[target_index] = layer.erase_base_image
+                ? target.alpha : std::max(current_layer_alpha[target_index], composited_alpha);
           }
-          composite_layer_pixel(&target, source, alpha, layer.blend_mode, context, layer.erase_base_image);
-          if (retain_alpha && layer.erase_base_image) current_layer_alpha[target_index] = target.alpha;
         }
       });
       if (cancellation.cancelled()) return false;
@@ -1880,12 +2132,13 @@ static bool apply_photo_layers_impl(
         const auto alpha = clamp_unit(
             static_cast<double>(source.alpha) * opacity * clip_weight *
             photo_layer_mask_weight(layer, target_x, target_y, width, height));
-        if (retain_alpha) current_layer_alpha[target_index] = layer.erase_base_image ? target.alpha : std::max(current_layer_alpha[target_index], alpha);
-        if (alpha <= 1e-6) {
-          continue;
+        const auto composited_alpha = composite_layer_pixel(
+            &target, source, alpha, blend_operation, context,
+            layer.erase_base_image, &layer.blend_if);
+        if (retain_alpha) {
+          current_layer_alpha[target_index] = layer.erase_base_image
+              ? target.alpha : std::max(current_layer_alpha[target_index], composited_alpha);
         }
-        composite_layer_pixel(&target, source, alpha, layer.blend_mode, context, layer.erase_base_image);
-        if (retain_alpha && layer.erase_base_image) current_layer_alpha[target_index] = target.alpha;
       }
     });
     if (cancellation.cancelled()) return false;
@@ -1906,6 +2159,27 @@ static bool apply_photo_layers_prepared(std::vector<ColorPixel>* pixels, int wid
     if (!layer.enabled || layer.opacity <= 1e-6) continue;
     effects_active = effects_active || photo_layer_has_active_effects(layer);
     if (!layer.effect_error.empty()) { if (error) *error = layer.effect_error; return false; }
+    std::string style_validation_error;
+    try {
+      if (!validate_layer_style_stack(layer.style_stack, &style_validation_error)) {
+        if (error) *error = "Layer '" + layer.name + "': " + style_validation_error;
+        return false;
+      }
+    } catch (const std::bad_alloc&) {
+      if (error) *error = "Layer '" + layer.name + "': could not validate layer styles.";
+      return false;
+    }
+    if (!layer.style_error.empty()) {
+      if (error) *error = "Layer '" + layer.name + "': " + layer.style_error;
+      return false;
+    }
+    const auto has_active_styles = layer.style_stack.enabled && std::any_of(
+        layer.style_stack.operations.begin(), layer.style_stack.operations.end(),
+        [](const auto& operation) { return operation.enabled && operation.opacity > 0.0; });
+    if (has_active_styles && layer.kind == "adjustment") {
+      if (error) *error = "Layer styles require content-bearing layers.";
+      return false;
+    }
     for (const auto& effect : layer.effects) {
       if (!effect.enabled || effect.amount == 0) continue;
       const auto expected = layer.kind == "adjustment" ? PhotoEffectInputScope::CompositeBelow : PhotoEffectInputScope::LayerContent;
@@ -1917,6 +2191,89 @@ static bool apply_photo_layers_prepared(std::vector<ColorPixel>* pixels, int wid
   }
   if (pixels == nullptr || cancellation.cancelled()) return false;
   try {
+    const auto resolve_copied_base_images = [&](
+        const std::vector<ColorPixel>& developed_base,
+        std::vector<PhotoLayer>* resolved) {
+      if (resolved == nullptr) return false;
+      for (std::size_t layer_index = 0; layer_index < resolved->size(); ++layer_index) {
+        auto& layer = resolved->at(layer_index);
+        if (!layer.copy_base_image) continue;
+        const auto copy_through_adjustments = layer.copy_base_image_through_adjustments;
+        layer.copy_base_image = false;
+        layer.copy_base_image_through_adjustments = false;
+        layer.pixels = developed_base;
+        if (copy_through_adjustments) {
+          std::vector<PhotoLayer> underlying_adjustments;
+          // The desktop compiler supplies bottom-first order. Only top-level
+          // adjustments below the copy source develop the Base Image; group
+          // children stay isolated, and the copy layer itself is never fed
+          // back into its own source.
+          for (std::size_t lower_index = 0; lower_index < layer_index; ++lower_index) {
+            const auto& lower_layer = resolved->at(lower_index);
+            if (lower_layer.kind == "adjustment" && lower_layer.parent_id.empty())
+              underlying_adjustments.push_back(lower_layer);
+          }
+          if (!underlying_adjustments.empty() &&
+              !apply_photo_layers_impl(&layer.pixels, width, height, context,
+                  underlying_adjustments, apply_common_adjustment,
+                  common_adjustment_uses_layer_fields, common_adjustment_thread_safe,
+                  cancellation, error, standard_rendering_model)) {
+            return false;
+          }
+        }
+        layer.pixel_width = width;
+        layer.pixel_height = height;
+      }
+      return true;
+    };
+    // An unlocked Base Image row is a source layer in the stack. Keep the
+    // developed source separate from the destination so the source is drawn
+    // once, at that row's actual order, instead of remaining as an implicit
+    // opaque underlay beneath the moved layer. Its sparse eraser raster still
+    // edits the developed source before the source layer is composited.
+    const auto has_movable_base_source = std::any_of(layers.begin(), layers.end(),
+        [](const auto& layer) { return layer.copy_base_image && layer.erase_base_image; });
+    if (has_movable_base_source) {
+      auto resolved = layers;
+      auto developed_base = *pixels;
+      std::vector<PhotoLayer> base_edits;
+      for (const auto& layer : resolved) {
+        if (!layer.erase_base_image) continue;
+        auto base_edit = layer;
+        if (base_edit.copy_base_image) {
+          base_edit.opacity = 1.0;
+          // The Base Image's mask controls its final visibility. Its sparse
+          // eraser coverage has already been clipped at authoring time.
+          base_edit.mask_data.clear();
+          base_edit.mask_width = 0;
+          base_edit.mask_height = 0;
+          base_edit.mask_inverted = false;
+        }
+        base_edits.push_back(std::move(base_edit));
+      }
+      if (!base_edits.empty() && !apply_photo_layers_impl(&developed_base, width, height, context,
+              base_edits, apply_common_adjustment, common_adjustment_uses_layer_fields,
+              common_adjustment_thread_safe, cancellation, error, standard_rendering_model)) {
+        return false;
+      }
+      std::erase_if(resolved, [](const auto& layer) {
+        return layer.erase_base_image && !layer.copy_base_image;
+      });
+      for (auto& layer : resolved) {
+        if (layer.erase_base_image && layer.copy_base_image) {
+          layer.erase_base_image = false;
+        }
+      }
+      if (!resolve_copied_base_images(developed_base, &resolved)) return false;
+      auto output = std::vector<ColorPixel>(pixels->size(), ColorPixel{0.0F, 0.0F, 0.0F, 0.0F});
+      if (!apply_photo_layers_prepared(&output, width, height, context, resolved,
+              apply_common_adjustment, common_adjustment_uses_layer_fields,
+              common_adjustment_thread_safe, cancellation, error, standard_rendering_model)) {
+        return false;
+      }
+      pixels->swap(output);
+      return true;
+    }
     if (std::any_of(layers.begin(), layers.end(), [](const auto& layer) {
           return layer.enabled && layer.copy_base_image;
         })) {
@@ -1928,13 +2285,7 @@ static bool apply_photo_layers_prepared(std::vector<ColorPixel>* pixels, int wid
             apply_common_adjustment, common_adjustment_uses_layer_fields, common_adjustment_thread_safe,
             cancellation, error, standard_rendering_model)) return false;
       std::erase_if(resolved, [](const auto& layer) { return layer.erase_base_image; });
-      for (auto& layer : resolved) {
-        if (!layer.copy_base_image) continue;
-        layer.copy_base_image = false;
-        layer.pixels = developed_base;
-        layer.pixel_width = width;
-        layer.pixel_height = height;
-      }
+      if (!resolve_copied_base_images(developed_base, &resolved)) return false;
       if (!apply_photo_layers_prepared(&developed_base, width, height, context, resolved,
           apply_common_adjustment, common_adjustment_uses_layer_fields,
           common_adjustment_thread_safe, cancellation, error, standard_rendering_model)) return false;

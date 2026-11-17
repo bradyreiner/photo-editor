@@ -78,6 +78,7 @@ struct EditorPreviewControllerTestAccess {
       };
       if (!settle()) { std::cerr << "multistroke checkpoint 3 failed\n"; return false; }
       strokes.addMask(QStringLiteral("radial"));
+      static_cast<void>(strokes.ensureActiveSelectionAdjustmentLayer());
       const auto original_masks = strokes.maskStack();
       const auto original_history = strokes.editHistoryEntries();
       strokes.beginCoalescedEdit();
@@ -104,6 +105,7 @@ struct EditorPreviewControllerTestAccess {
       EditorPreviewController rollback;
       rollback.asset_id_ = QStringLiteral("rollback-fixture");
       rollback.addMask(QStringLiteral("radial"));
+      static_cast<void>(rollback.ensureActiveSelectionAdjustmentLayer());
       if (!rollback.hasActiveMask() || rollback.maskStack().size() != 1) return false;
       const auto original = rollback.currentState();
       const auto history = rollback.editHistoryEntries();
@@ -836,7 +838,7 @@ bool has_thumbnail_invalidation_fields(
          value.value(QStringLiteral("thumbnailInvalidationVisible")).toBool() ==
              expected_visible &&
          value.value(QStringLiteral("thumbnailInvalidationColorPipelineVersion")).toString() ==
-             QStringLiteral("thumbnail-color-pipeline-v9") &&
+             QLatin1String(photo_editor::desktop::kThumbnailColorPipelineVersion) &&
          key.startsWith(QStringLiteral("sha1:")) &&
          value.value(QStringLiteral("thumbnailInvalidationComparator")).toString() ==
              QStringLiteral("thumbnailInvalidationKey") &&
@@ -852,7 +854,7 @@ bool has_thumbnail_invalidation_fields(
          signature.contains(QStringLiteral("visible:%1")
                                 .arg(expected_visible ? QStringLiteral("true")
                                                       : QStringLiteral("false"))) &&
-         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v9")) &&
+         signature.contains(QStringLiteral("color:%1").arg(QLatin1String(photo_editor::desktop::kThumbnailColorPipelineVersion))) &&
          signature.contains(QStringLiteral("key:%1").arg(key)) &&
          value.value(QStringLiteral("thumbnailSignature")).toString().contains(key);
 }
@@ -872,9 +874,18 @@ bool has_thumbnail_entry_cache_fields(
                          .arg(expected_backing_width)
                          .arg(expected_backing_height);
   const auto signature = value.value(QStringLiteral("thumbnailCacheSignature")).toString();
+  const photo_editor::desktop::EditRecipeState default_document;
+  const auto expected_color_version = photo_editor::desktop::photo_layer_thumbnail_output_version(value,
+      photo_editor::desktop::thumbnail_content_output_policy_identity(
+          default_document.working_color_profile, default_document.photographic_rendering_model));
+  const auto expected_key = photo_editor::desktop::thumbnail_entry_cache_key(expected_asset_id,
+      recipe_hash, expected_layer_id, expected_mask_id, expected_backing_width, expected_backing_height,
+      value.value(QStringLiteral("thumbnailCacheDevicePixelRatio")).toDouble(), expected_color_version,
+      value.value(QStringLiteral("thumbnailCacheMaskRevision")).toInt());
   return value.value(QStringLiteral("thumbnailCacheContract")).toString() ==
              QStringLiteral("thumbnail-entry-cache-v1") &&
          key.startsWith(QStringLiteral("sha1:")) &&
+         key == expected_key &&
          value.value(QStringLiteral("thumbnailCacheAssetId")).toString() ==
              expected_asset_id &&
          value.value(QStringLiteral("thumbnailCacheRecipeHash")).toString().startsWith(
@@ -889,14 +900,14 @@ bool has_thumbnail_entry_cache_fields(
              expected_backing_height &&
          value.value(QStringLiteral("thumbnailCacheOutputScale")).toString().startsWith(scale) &&
          value.value(QStringLiteral("thumbnailCacheColorPipelineVersion")).toString() ==
-             QStringLiteral("thumbnail-color-pipeline-v9") &&
+             expected_color_version &&
          value.value(QStringLiteral("thumbnailCacheHit")).toBool() == expected_hit &&
          value.value(QStringLiteral("thumbnailCacheSource")).toString() == expected_source &&
          signature.contains(QStringLiteral("asset:%1").arg(expected_asset_id)) &&
          signature.contains(QStringLiteral("recipe:%1").arg(recipe_hash)) &&
          signature.contains(QStringLiteral("layer:%1").arg(expected_layer_id)) &&
          signature.contains(QStringLiteral("mask:%1").arg(expected_mask_id)) &&
-         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v9")) &&
+         signature.contains(QStringLiteral("color:%1").arg(expected_color_version)) &&
          signature.contains(QStringLiteral("hit:%1").arg(expected_hit ? QStringLiteral("true")
                                                                        : QStringLiteral("false"))) &&
          signature.contains(QStringLiteral("source:%1").arg(expected_source)) &&
@@ -1064,8 +1075,9 @@ int main(int argc, char** argv) {
   }
 
   controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(controller.ensureActiveSelectionAdjustmentLayer());
   if (controller.photoLayerCount() != 1) {
-    return fail("creating a mask should create one adjustment layer");
+    return fail("explicit mask-owner fixture should have one adjustment layer");
   }
   auto thumbnail_mask_sets = controller.maskSets();
   QElapsedTimer initial_mask_thumbnail_timer;
@@ -1318,7 +1330,9 @@ int main(int argc, char** argv) {
         QString(),
         QString());
     thumbnail_combine_controller.addMask(QStringLiteral("linear"));
+    static_cast<void>(thumbnail_combine_controller.ensureActiveSelectionAdjustmentLayer());
     thumbnail_combine_controller.addMask(QStringLiteral("radial"));
+    static_cast<void>(thumbnail_combine_controller.ensureActiveSelectionAdjustmentLayer());
     thumbnail_combine_controller.setActiveMaskOperation(thumbnail_combine_case.operation);
     if (thumbnail_combine_case.invert_second_source) {
       thumbnail_combine_controller.setActiveMaskSelectionInverted(true);
@@ -1363,15 +1377,18 @@ int main(int argc, char** argv) {
               .toStdString()
               .c_str());
     }
-    // Combine at the photo-aspect evaluation size, then resize the finished
-    // matte. Combining already-resized source thumbnails is not equivalent for
-    // subtract/intersect/exclude, and used to conceal coordinate mismatches.
+    // Settled selection-layer composites now evaluate native source pixels,
+    // then resize the finished matte. Combining already-resized source
+    // thumbnails (or regenerating masks at the backing size) is not equivalent
+    // for subtract/intersect/exclude.
     QImage mask_input;
     if (!photo_editor::desktop::decode_source_image(
             thumbnail_fixture_path, &mask_input,
-            photo_editor::desktop::kMaskThumbnailBackingEdge)) {
-      return fail("mask combine reference should decode the thumbnail-size source");
+            0)) {
+      return fail("mask combine reference should decode the native source");
     }
+    if (mask_input.size() != photo_editor::desktop::source_image_size(thumbnail_fixture_path))
+      return fail("mask combine reference must retain the complete source pixel grid");
     const auto native_source_alpha = [&mask_input](QVariantMap source) {
       source.insert(QStringLiteral("operation"), QStringLiteral("add"));
       return photo_editor::desktop::grayscale_mask_alpha_image(
@@ -1805,6 +1822,7 @@ int main(int argc, char** argv) {
     return fail("adjustment thumbnail queue proof should start from an idle preview controller");
   }
   adjustment_queue_controller.startSelectionBrush(false);
+  static_cast<void>(adjustment_queue_controller.ensureActiveSelectionAdjustmentLayer());
   const auto adjustment_queue_initial_dispatch =
       photo_editor::desktop::EditorPreviewControllerTestAccess::
           thumbnail_refresh_queue_dispatched_count(adjustment_queue_controller);
@@ -1973,6 +1991,7 @@ int main(int argc, char** argv) {
     return fail("thumbnail preview parity proof should publish an initial edited preview");
   }
   thumbnail_parity_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(thumbnail_parity_controller.ensureActiveSelectionAdjustmentLayer());
   if (!thumbnail_parity_controller.setPhotoLayerAdjustmentValue(
           0,
           QStringLiteral("exposure"),
@@ -2020,6 +2039,7 @@ int main(int argc, char** argv) {
     return fail("curve thumbnail parity proof should publish an initial edited preview");
   }
   curve_thumbnail_parity_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(curve_thumbnail_parity_controller.ensureActiveSelectionAdjustmentLayer());
   const auto initial_curve_parity_layer =
       wait_for_fresh_photo_layer_thumbnail(curve_thumbnail_parity_controller);
   const auto initial_curve_parity_thumbnail_source =
@@ -2190,6 +2210,7 @@ int main(int argc, char** argv) {
       QString(),
       QString());
   thumbnail_failure_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(thumbnail_failure_controller.ensureActiveSelectionAdjustmentLayer());
   const auto failure_initial_mask_set =
       wait_for_fresh_mask_thumbnails(thumbnail_failure_controller).constFirst().toMap();
   const auto failure_initial_mask_thumbnail =
@@ -2331,13 +2352,16 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController copied_mask_set_controller;
   copied_mask_set_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(copied_mask_set_controller.ensureActiveSelectionAdjustmentLayer());
   copied_mask_set_controller.addMask(QStringLiteral("radial"));
+  static_cast<void>(copied_mask_set_controller.ensureActiveSelectionAdjustmentLayer());
   if (copied_mask_set_controller.maskCount() != 2 ||
       copied_mask_set_controller.photoLayerCount() != 1 ||
       !copied_mask_set_controller.duplicateActiveMaskSet() ||
+      copied_mask_set_controller.ensureActiveSelectionAdjustmentLayer() < 0 ||
       copied_mask_set_controller.maskCount() != 4 ||
       copied_mask_set_controller.photoLayerCount() != 2) {
-    return fail("duplicating a selection mask set should create one linked adjustment layer for the copied set");
+    return fail("explicitly attach a duplicated selection to its own adjustment layer");
   }
   const auto copied_mask_set_id =
       copied_mask_set_controller.maskStack()
@@ -2892,6 +2916,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController parametric_curve_edge_controller;
   parametric_curve_edge_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(parametric_curve_edge_controller.ensureActiveSelectionAdjustmentLayer());
   if (parametric_curve_edge_controller.photoLayerCount() != 1 ||
       !parametric_curve_edge_controller.setPhotoLayerAdjustmentValue(
           0, QStringLiteral("curveShadows"), 140.0) ||
@@ -2926,6 +2951,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController point_curve_controller;
   point_curve_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(point_curve_controller.ensureActiveSelectionAdjustmentLayer());
   const auto master_points = curve_points({{1.0, 0.96}, {0.70, 0.82}, {0.30, 0.25}, {0.0, 0.05}});
   const auto luma_points = curve_points({{0.0, 0.0}, {0.50, 0.44}, {1.0, 1.0}});
   const auto red_points = curve_points({{0.0, 0.0}, {0.40, 0.58}, {1.0, 1.0}});
@@ -2986,6 +3012,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController hsl_mixer_controller;
   hsl_mixer_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(hsl_mixer_controller.ensureActiveSelectionAdjustmentLayer());
   const QStringList mixer_channels = {
       QStringLiteral("Reds"),
       QStringLiteral("Oranges"),
@@ -3068,6 +3095,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController rgb_mixer_controller;
   rgb_mixer_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(rgb_mixer_controller.ensureActiveSelectionAdjustmentLayer());
   if (rgb_mixer_controller.photoLayerCount() != 1 ||
       !rgb_mixer_controller.setPhotoLayerAdjustmentValue(
           0, QStringLiteral("channelMixerRedFromRed"), 260.0) ||
@@ -3128,6 +3156,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController black_and_white_controller;
   black_and_white_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(black_and_white_controller.ensureActiveSelectionAdjustmentLayer());
   const QStringList black_and_white_channel_names = mixer_channels;
   if (black_and_white_controller.photoLayerCount() != 1 ||
       !black_and_white_controller.setPhotoLayerAdjustmentBool(
@@ -3197,6 +3226,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController color_grading_controller;
   color_grading_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(color_grading_controller.ensureActiveSelectionAdjustmentLayer());
   if (color_grading_controller.photoLayerCount() != 1 ||
       !color_grading_controller.setPhotoLayerAdjustmentValue(
           0, QStringLiteral("gradingShadowsHue"), -0.20) ||
@@ -3264,6 +3294,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController replacement_skin_harmony_controller;
   replacement_skin_harmony_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(replacement_skin_harmony_controller.ensureActiveSelectionAdjustmentLayer());
   if (replacement_skin_harmony_controller.photoLayerCount() != 1 ||
       !replacement_skin_harmony_controller.setPhotoLayerAdjustmentBool(
           0, QStringLiteral("colorReplacementEnabled"), true) ||
@@ -3371,6 +3402,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController lut_stack_controller;
   lut_stack_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(lut_stack_controller.ensureActiveSelectionAdjustmentLayer());
   QVariantList lut_stack_table;
   for (int sample_index = 0; sample_index < 8; ++sample_index) {
     lut_stack_table.append(QVariant(QVariantList{1.25, -0.25, 0.50, 1.25}));
@@ -3502,6 +3534,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController advanced_tone_edge_controller;
   advanced_tone_edge_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(advanced_tone_edge_controller.ensureActiveSelectionAdjustmentLayer());
   if (advanced_tone_edge_controller.photoLayerCount() != 1 ||
       !advanced_tone_edge_controller.setPhotoLayerAdjustmentValue(
           0, QStringLiteral("brightness"), 140.0) ||
@@ -3764,6 +3797,7 @@ int main(int argc, char** argv) {
   paste_global_controller.setHslChannel(QStringLiteral("Blues"));
   paste_global_controller.setHueAdjustment(41.0);
   paste_global_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(paste_global_controller.ensureActiveSelectionAdjustmentLayer());
   if (paste_global_controller.photoLayerCount() != 1 ||
       paste_global_controller.maskSets().size() != 1 ||
       !paste_global_controller.setPhotoLayerOpacity(0, 0.46) ||
@@ -3838,6 +3872,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController module_reset_controller;
   module_reset_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(module_reset_controller.ensureActiveSelectionAdjustmentLayer());
   if (module_reset_controller.photoLayerCount() != 1 ||
       !module_reset_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("texture"), 30.0) ||
       !module_reset_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("sharpening"), 40.0) ||
@@ -3865,6 +3900,7 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::EditorPreviewController full_layer_reset_controller;
   full_layer_reset_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(full_layer_reset_controller.ensureActiveSelectionAdjustmentLayer());
   QVariantList reset_lut_table;
   for (int i = 0; i < 8; ++i) {
     reset_lut_table.append(QVariant(QVariantList{1.0, 0.0, 0.0, 1.0}));
@@ -4059,6 +4095,7 @@ int main(int argc, char** argv) {
   layer_preset_controller.setTexture(44.0);
   layer_preset_controller.setVibrance(66.0);
   layer_preset_controller.addMask(QStringLiteral("linear"));
+  static_cast<void>(layer_preset_controller.ensureActiveSelectionAdjustmentLayer());
   if (layer_preset_controller.photoLayerCount() != 1) {
     return fail("test should prepare one linked adjustment layer for layer preset routing");
   }

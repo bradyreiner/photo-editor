@@ -11,6 +11,18 @@
 
 namespace photo_editor::desktop {
 
+inline void inherit_retained_geometry_source_area(
+    const WorkingImage& working,
+    photo_editor::pipeline::RenderExecutionRequest* request) {
+  if (request == nullptr) return;
+  if (const auto descriptor = working.retainedDescriptor()) {
+    request->source_area_x = descriptor->source_area_x;
+    request->source_area_y = descriptor->source_area_y;
+    request->source_area_width = descriptor->source_area_width;
+    request->source_area_height = descriptor->source_area_height;
+  }
+}
+
 [[nodiscard]] inline bool canonical_working_surface_request_is_eligible(
     const RenderRequest& request) {
   // CPU-only consumers still use the existing materialization route. Scopes can

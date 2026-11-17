@@ -1,5 +1,3 @@
-use std::env;
-
 use photo_catalog::{
     run_catalog_helper, AppRuntimePaths, CatalogRepository, CatalogRuntime,
     PersistedCarouselDocument,
@@ -10,15 +8,15 @@ pub(crate) fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let arguments: Vec<String> = env::args().collect();
+    let arguments = photo_catalog::helper_arguments::read_helper_arguments()?;
     let command = arguments.get(1).map(String::as_str).unwrap_or("list");
 
     let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
 
     match command {
-        "list" => {
-            let documents = catalog.list_carousel_documents().await?;
-            println!("{}", serde_json::to_string_pretty(&documents)?);
+        "list" | "list-summaries" => {
+            let documents = catalog.list_carousel_document_summaries().await?;
+            println!("{}", serde_json::to_string(&documents)?);
         }
         "get" => {
             let document_id = arguments.get(2).ok_or("missing document_id argument")?;
@@ -34,7 +32,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             eprintln!(
-                "Usage: {} <list|get|upsert> ...",
+                "Usage: {} <list|list-summaries|get|upsert> ...",
                 arguments
                     .first()
                     .map(String::as_str)

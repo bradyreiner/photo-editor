@@ -31,6 +31,11 @@ on:
         required: true
         type: boolean
         default: false
+      native_proof_run_id:
+        description: "Successful Native editor qualification run for this exact commit"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   quality-gate:
@@ -88,8 +93,49 @@ jobs:
             third-party-inventory.json
           if-no-files-found: error
 
-  package:
+  editor-regression-proof:
     needs: quality-gate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Identify exact-commit native qualification
+        id: proof
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROOF_RUN_ID: ${{ inputs.native_proof_run_id || vars.LOOKSY_NATIVE_PROOF_RUN_ID }}
+        run: |
+          if ! [[ "$PROOF_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "Release blocked: provide the successful exact-commit Native editor qualification run ID." >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PROOF_RUN_ID" > "$RUNNER_TEMP/native-run.json"
+          python3 -B scripts/perf/check-editor-proof-run.py \
+            --metadata "$RUNNER_TEMP/native-run.json" --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" --run-id "$PROOF_RUN_ID"
+          echo "run_id=$PROOF_RUN_ID" >> "$GITHUB_OUTPUT"
+      - name: Download qualified native proof
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        uses: actions/download-artifact@v4
+        with:
+          name: looksy-editor-native-qualified
+          run-id: ${{ steps.proof.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/editor-native-proof
+      - name: Reject stale, skipped, weakened, or incomplete proof
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --validate "$RUNNER_TEMP/editor-native-proof" --commit "$GITHUB_SHA"
+      - name: Mark candidate builds as unqualified
+        if: "!startsWith(github.ref, 'refs/tags/') && !inputs.publish"
+        run: echo "Candidate only. Native release qualification has not been granted." >> "$GITHUB_STEP_SUMMARY"
+
+  package:
+    needs: [quality-gate, editor-regression-proof]
     env:
       FRAMEHOUSE_WEBSITE_URL: ${{ vars.LOOKSY_WEBSITE_URL || vars.FRAMEHOUSE_WEBSITE_URL || vars.VIREL_WEBSITE_URL }}
       FRAMEHOUSE_LEGAL_PUBLISHER: ${{ vars.LOOKSY_LEGAL_PUBLISHER || vars.FRAMEHOUSE_LEGAL_PUBLISHER }}
@@ -131,7 +177,7 @@ jobs:
 
       - name: Install macOS native dependencies
         if: runner.os == 'macOS'
-        run: brew install cmake ninja openexr libheif libraw openssl@3 postgresql@16
+        run: brew install cmake ninja opencolorio openexr libheif libraw openssl@3 postgresql@16
 
       - name: Prepare relocatable macOS PostgreSQL runtime
         if: runner.os == 'macOS'
@@ -244,6 +290,32 @@ jobs:
       - name: Run native release test suite
         shell: bash
         run: ctest --test-dir "build/${{ matrix.configure_preset }}" --output-on-failure --timeout 420 -LE monolithic -j 4
+
+      - name: Require desktop to PostgreSQL recipe compatibility
+        if: runner.os == 'macOS'
+        shell: bash
+        run: >-
+          python3 scripts/test-recipe-catalog-contract.py
+          --desktop-test "build/${{ matrix.configure_preset }}/tests/edit_recipe_v13_persistence_test"
+          --catalog-bin-dir rust/target/release
+          --postgres-bin "${{ steps.postgres-runtime-macos.outputs.runtime_dir }}/bin"
+          --require-postgres
+
+      - name: Enforce editor regression inventory
+        shell: bash
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --build-dir "build/${{ matrix.configure_preset }}"
+          --tier portable --output "$RUNNER_TEMP/editor-regression-portable"
+      - name: Upload editor regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-regression-${{ matrix.artifact_suffix }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/editor-regression-portable
+            !${{ runner.temp }}/editor-regression-portable/**/runtime/**
+          if-no-files-found: error
 
       - name: Capture rendering migration proof
         shell: bash

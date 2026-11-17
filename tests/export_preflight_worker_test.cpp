@@ -89,6 +89,36 @@ int main(int argc, char** argv) {
   const auto batch_reference = controller.batchExportPreflight({asset}, "Web Proof", destination);
   if (!reference.value("ok").toBool() || reference.value("estimatedPixelWidth").toInt() != 120 ||
       reference.value("warningCount").toInt() < 4) return fail("Baseline fixture invariants failed");
+  // Old preview recipes may predate the final-required flag. Both asynchronous
+  // batch admission and direct queue calls must refuse those pixels as final.
+  auto draft_state = state;
+  QVariantMap draft{{"id", "repair-source"}, {"repairId", "repair-cable"},
+      {"kind", "brush"}, {"toolRole", "retouch"}, {"retouchMode", "remove"},
+      {"committed", true}, {"inpaintPatchData", QByteArray(16, '\x7f')},
+      {"inpaintPatchWidth", 2}, {"inpaintPatchHeight", 2},
+      {"inpaintModelName", "fixture"}, {"inpaintQualityMode", "preview"}};
+  draft_state.mask_stack = {draft};
+  const auto draft_recipe = serialize_edit_recipe_json(draft_state);
+  const auto draft_report = controller.exportPreflight("photo", source, {}, draft_recipe,
+      "Web Proof", destination, 0, 0, 0, 0, 0, 0);
+  bool blocked_repair = false;
+  for (const auto& value : draft_report.value("issues").toList()) {
+    const auto issue = value.toMap();
+    if (issue.value("code") == "final-inpaint-required")
+      blocked_repair = issue.value("severity") == "error" &&
+          issue.value("message").toString().contains("repair-cable");
+  }
+  if (draft_report.value("ok").toBool() || !blocked_repair ||
+      controller.queueExport("fixture", "photo", "photo", source, {}, draft_recipe, "Web Proof", destination) ||
+      controller.jobCount() != 0)
+    return fail("Legacy preview repair bypassed final-quality export admission");
+  auto draft_asset = asset;
+  draft_asset["adjustmentPatchJson"] = draft_recipe;
+  if (controller.batchExportPreflight({draft_asset}, "Web Proof", destination).value("readyCount").toInt() != 0)
+    return fail("Batch preflight admitted an unfinished repair");
+  if (!controller.exportPreflight("photo", source, {}, draft_recipe, "Original Copy",
+          destination, 0, 0, 0, 0, 0, 0).value("ok").toBool())
+    return fail("Source-byte copy was incorrectly blocked by a nonrendered repair");
   int ticks = 0;
   QTimer heartbeat;
   heartbeat.setInterval(1);

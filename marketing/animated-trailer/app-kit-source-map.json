@@ -1,0 +1,78 @@
+{
+  "kind": "App-source-derived Remotion adapters; not Qt runtime captures",
+  "generated_on": "2026-10-23",
+  "sources": [
+    {
+      "source": "apps/desktop/qml/components/Theme.qml",
+      "sha256": "d58ebab93e546c994389c27096a77ccb769db5760c1cf1e443685171705c5249"
+    },
+    {
+      "source": "apps/desktop/qml/workspaces/StudioWorkspace.qml",
+      "sha256": "b1889fff1ec5b7641f975b378a3826b80ddc0a89a702f7585823f3840c65e4f4"
+    },
+    {
+      "source": "apps/desktop/qml/components/InspectorSlider.qml",
+      "sha256": "032aa24ffc790f86c06ca1c9e9de8860a07de8bf13e7f105d9dd33d4a3a159a7"
+    },
+    {
+      "source": "apps/desktop/qml/components/StudioAdjustmentSlider.qml",
+      "sha256": "2cf3abc95ad7f74fd38aa8e12ac1b88a182c1e0b261a7d033ba5c74a359fcab7"
+    },
+    {
+      "source": "apps/desktop/qml/components/AppIcon.qml",
+      "sha256": "07655a65aab0a3940de356a7363f10f43e1a172150c799f6d4db7a484bf11919"
+    },
+    {
+      "source": "apps/desktop/qml/components/OpticalLightField.qml",
+      "sha256": "85a0aa210cb2c65db7c52f00c4913d97ee79bab51a829e9d9f6a55ee892d7d36"
+    },
+    {
+      "source": "apps/desktop/qml/components/OpticalActivityIndicator.qml",
+      "sha256": "2b478004a010f92b5143ef559dd3e50ed39cc82727893c3266285a7f08db5c13"
+    },
+    {
+      "source": "apps/desktop/qml/components/LooksyLoadingScene.qml",
+      "sha256": "809f8893c0461ef8934da457f71774a99b24a7e9a068c12a89fdd938efeb1b0c"
+    },
+    {
+      "source": "apps/desktop/qml/components/ProgressStrip.qml",
+      "sha256": "edbc8e3b0ef2e5cf3f85ab4d76e6fb40e312e40caac2c106e524903592b6804b"
+    },
+    {
+      "source": "apps/desktop/qml/components/CompletionCaustic.qml",
+      "sha256": "bd8d3a1fd63d9215e8db1bd53118d98ede954c5e3fefea9289602eb0bfeccf59"
+    },
+    {
+      "source": "apps/desktop/qml/components/BrandWordmark.qml",
+      "sha256": "e23fe8dfe70e46d50409fe7f2cc814395b82b0136acf25d4e588806595cfa97a"
+    },
+    {
+      "source": "apps/desktop/qml/components/LooksyMark.qml",
+      "sha256": "ccb4a3cb255ff420fb17a87436866346461e6d3e1979fde281be3a8d98da9661"
+    },
+    {
+      "source": "apps/desktop/shaders/optical_light.frag",
+      "sha256": "e74938071255678e4c65938aa695da83d69231c6998b39f831e79d39b7e5038e"
+    },
+    {
+      "source": "apps/desktop/assets/brand/looksy-logo-dark.png",
+      "sha256": "17199f363f1168d68bd9ac1f1c9a7a8d3401ab04982175021be3c8dedda811b9"
+    },
+    {
+      "source": "apps/desktop/assets/looksy-rgb-orb.png",
+      "sha256": "7edf41cf7253590e2765c1ce6dd3a118d6695ca5c64b9fd03fa228f714b8d062"
+    },
+    {
+      "source": "apps/desktop/qml/components/ToneCurveEditor.qml",
+      "sha256": "a21226ffbb2a6c3a261894bb7353f75e35a568a536643ef2b558f668e6222013"
+    }
+  ],
+  "adaptations": [
+    "Qt 440 shader interface to WebGL2 uniforms; optical equations retained",
+    "AppIcon canvas paths copied with typed browser helpers",
+    "InspectorSlider geometry/state port; film values and cursor are authored",
+    "Current app palette and original logo/orb assets",
+    "Browser system font substituted for Qt platform UI font",
+    "Native ToneCurveEditor monotone Hermite sampling and tangent limits ported in curve-sampling.ts"
+  ]
+}

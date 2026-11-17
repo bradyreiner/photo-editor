@@ -1,5 +1,7 @@
 # Professional editing tools: current audit and upgrade plan
 
+2026-10-29 approved expansion: [Professional content tools roadmap](photoshop-professional-tools-roadmap.md) defines the new Photoshop foundations, cross-media extensions and completion criteria. Current program status lives in the [capability acceptance owner](capability-verification-plan.md#professional-content-tools-2026-10-29). Preserve the historical baseline below.
+
 Date: 2026-09-19. Scope: photo-workspace masking, selections, brushes, erasers, retouch/inpainting, text, filters and blurs.
 
 Creative direction update (2026-09-24): [the creative tools plan and completion metrics](creative-tools-plan.md) defines nine proposed filter, typography, and brush families focused on analog print, experimental photography, and sculptural lettering. It includes current foundation evidence, delivery order, visual review, native reliability, performance, and UI/agent parity gates. These are planned additions, not completed capabilities.

@@ -1,0 +1,49 @@
+{
+  "checks": [
+    {
+      "label": "project count",
+      "actual": 15
+    },
+    {
+      "label": "review alone cannot schedule",
+      "actual": "Production open"
+    },
+    {
+      "label": "common tasks alone cannot schedule founder campaign",
+      "actual": "Production open"
+    },
+    {
+      "label": "all founder prerequisites complete",
+      "actual": "Ready to schedule"
+    },
+    {
+      "label": "missing export cannot schedule",
+      "actual": "Render pending"
+    },
+    {
+      "label": "blank metrics remain blank",
+      "actual": ""
+    },
+    {
+      "label": "3s view rate responds",
+      "actual": 0.5
+    },
+    {
+      "label": "completion rate responds",
+      "actual": 0.5
+    },
+    {
+      "label": "measured zero denominator unavailable",
+      "actual": "n.a."
+    }
+  ],
+  "finalCounts": {
+    "deliverables": 15,
+    "draftsDelivered": 15,
+    "approved": 0,
+    "readyToSchedule": 0,
+    "openProductionTasks": 24
+  },
+  "summary": "{\"kind\":\"notice\",\"message\":\"No records matched the requested kinds.\"}",
+  "errors": "{\"kind\":\"notice\",\"message\":\"Cell search matched 0 entries.\"}"
+}

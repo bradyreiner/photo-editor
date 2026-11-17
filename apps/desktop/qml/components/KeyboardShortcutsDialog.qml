@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Dialogs as NativeDialogs
 
 AppDialog {
     id: root
@@ -16,23 +17,11 @@ AppDialog {
 
     readonly property bool macStyle: Qt.platform.os === "osx"
     readonly property string primaryLabel: macStyle ? "Cmd" : "Ctrl"
-    readonly property string redoLabel: macStyle ? "Cmd+Shift+Z" : "Ctrl+Y"
+    readonly property string redoLabel: macStyle ? "Cmd+Shift+Z" : "Ctrl+Shift+Z"
     property string shortcutEditorStatus: ""
     property string activeShortcutPreset: "app-native"
     property string shortcutSearchText: ""
-    property var editableShortcuts: [
-        { "id": "command-palette", "label": "Command Palette", "sequence": primarySequence("K"), "defaultSequence": primarySequence("K") },
-        { "id": "workspace-library", "label": "Go To Library", "sequence": primarySequence("1"), "defaultSequence": primarySequence("1") },
-        { "id": "workspace-edit", "label": "Go To Edit", "sequence": primarySequence("2"), "defaultSequence": primarySequence("2") },
-        { "id": "tool-adjust", "label": "Adjust Tool", "sequence": primarySequenceAlt("A"), "defaultSequence": primarySequenceAlt("A") },
-        { "id": "tool-crop", "label": "Crop Tool", "sequence": primarySequenceAlt("C"), "defaultSequence": primarySequenceAlt("C") },
-        { "id": "tool-masks", "label": "Masks Tool", "sequence": primarySequenceAlt("M"), "defaultSequence": primarySequenceAlt("M") },
-        { "id": "tool-brush", "label": "Brush Tool", "sequence": primarySequenceAlt("B"), "defaultSequence": primarySequenceAlt("B") },
-        { "id": "tool-compare", "label": "Compare Tool", "sequence": primarySequenceAlt("P"), "defaultSequence": primarySequenceAlt("P") },
-        { "id": "tool-export", "label": "Export Tool", "sequence": primarySequenceAlt("E"), "defaultSequence": primarySequenceAlt("E") },
-        { "id": "queue-export", "label": "Start Export", "sequence": primarySequence("Shift+E"), "defaultSequence": primarySequence("Shift+E") },
-        { "id": "toggle-full-edit", "label": "Full-Screen Edit", "sequence": "F", "defaultSequence": "F" }
-    ]
+    property var editableShortcuts: []
     readonly property int editableShortcutCount: editableShortcuts.length
     readonly property string dialogVisibilityContract: "dialog-visibility:v2|keyboard-shortcuts|always:title-search-close|contextual:matching-editable-shortcuts-matching-reference-sections-presets-without-query-status-conflicts-empty-search-platform-modifier|one-expansion:preset-apply-editable-sequence-reset|hover-focus:preset-buttons-edit-fields-reset-controls|diagnostic:conflict-count-search-results|preserve:functionality"
     readonly property string dialogSurfaceContract: "dialog-surface:v2|keyboard-shortcuts|search:header|editable:matching|sections:scrollable-matching|keys:scaled-wrapped|descriptions:wrap|presets:wrapping-buttons|empty:explicit|no-elide:true|no-overlap:true"
@@ -95,14 +84,14 @@ AppDialog {
             "sequences": {
                 "command-palette": primarySequence("K"),
                 "workspace-library": primarySequence("B"),
-                "workspace-edit": primarySequence("E"),
+                "workspace-edit": "D",
                 "tool-adjust": primarySequenceAlt("A"),
                 "tool-crop": primarySequenceAlt("C"),
                 "tool-masks": primarySequenceAlt("M"),
                 "tool-brush": primarySequenceAlt("B"),
                 "tool-compare": primarySequenceAlt("P"),
                 "tool-export": primarySequenceAlt("E"),
-                "queue-export": primarySequence("D"),
+                "queue-export": primarySequence("Shift+E"),
                 "toggle-full-edit": "F11"
             }
         }
@@ -123,6 +112,8 @@ AppDialog {
                 { "keys": primary("E"), "description": "Open the selected photo in Edit. Unavailable when a video or timeline is selected." },
                 { "keys": primary("A"), "description": "Select all visible items in Library, Import, or Timeline." },
                 { "keys": primary("Shift+A"), "description": "Clear the active library, import, or timeline selection." },
+                { "keys": primary("Shift+R"), "description": "Show or hide rulers in Edit and Timeline Program. Drag from a rail to create guides; click the ruler corner for units." },
+                { "keys": primary(";"), "description": "Show or hide canvas guides. Hold Shift while dragging a guide to snap to multiples of 5 in the current unit." },
                 { "keys": primary("Shift+E"), "description": "Queue the current selection for export." },
                 { "keys": primaryAlt("E"), "description": "Open the export workflow." },
                 { "keys": primary(","), "description": "Open preferences." }
@@ -147,7 +138,7 @@ AppDialog {
             title: "Masks",
             accent: theme.accentWarm300,
             items: [
-                { "keys": "Ctrl+Shift+M", "description": "Create a new selection and linked layer." },
+                { "keys": "Ctrl+Shift+M", "description": "Create or extend a brush selection." },
                 { "keys": "Ctrl+Shift+A / S / I", "description": "Set the next selection operation to Add, Subtract, or Intersect." },
                 { "keys": "Ctrl+Shift+V", "description": "Invert the active mask." },
                 { "keys": "Ctrl+Shift+O", "description": "Show or hide the active mask color overlay." },
@@ -188,7 +179,12 @@ AppDialog {
                 { "keys": "Shift+I / Shift+O", "description": "Go to the Source In / Out point." },
                 { "keys": "F", "description": "Match the Program frame into the Source monitor." },
                 { "keys": "V", "description": "Select tool." },
+                { "keys": "A", "description": "Track Select tool; choose forward or backward in the Timeline palette." },
                 { "keys": "C", "description": "Razor tool." },
+                { "keys": "R", "description": "Rate Stretch tool." },
+                { "keys": "P", "description": "Pen tool for clip and track envelopes." },
+                { "keys": "H", "description": "Hand tool for timeline panning." },
+                { "keys": "Z", "description": "Zoom tool for the timeline." },
                 { "keys": "B", "description": "Split the selected clip at the playhead." },
                 { "keys": "Y", "description": "Slip tool." },
                 { "keys": "N", "description": "Roll tool." },
@@ -313,19 +309,49 @@ AppDialog {
         return ""
     }
 
-    function shortcutConflictIds(sequence, excludingShortcutId) {
-        const cleanSequence = normalizeShortcutSequence(sequence).toLowerCase()
-        const cleanExcludedId = String(excludingShortcutId || "")
-        let conflicts = []
-        if (cleanSequence.length === 0)
-            return conflicts
+    function shortcutContextsOverlap(leftId, rightId) {
+        let left = "global"
+        let right = "global"
         for (let i = 0; i < editableShortcuts.length; ++i) {
-            const shortcut = editableShortcuts[i]
-            if (shortcut.id !== cleanExcludedId
-                    && String(shortcut.sequence || "").trim().toLowerCase() === cleanSequence)
-                conflicts.push(shortcut.id)
+            const item = editableShortcuts[i]
+            if (item.id === leftId) left = item.context || "global"
+            if (item.id === rightId) right = item.context || "global"
         }
-        return conflicts
+        return left === right || left === "global" || right === "global"
+    }
+
+    function shortcutConflictIds(sequence, excludingShortcutId) {
+        return appShell.shortcutConflicts(String(excludingShortcutId || ""),
+                                          normalizeShortcutSequence(sequence),
+                                          shortcutOverrideDraft())
+    }
+
+    function shortcutOverrideDraft() {
+        let overrides = Object.assign({}, appShell.shortcutBindings)
+        for (let i = 0; i < editableShortcuts.length; ++i)
+            overrides[editableShortcuts[i].id] = editableShortcuts[i].sequence
+        return overrides
+    }
+
+    function updateActiveShortcutPreset() {
+        activeShortcutPreset = ""
+        for (let presetIndex = 0; presetIndex < shortcutPresetMappings.length; ++presetIndex) {
+            const preset = shortcutPresetMappings[presetIndex]
+            let matches = true
+            for (let index = 0; index < editableShortcuts.length; ++index) {
+                const shortcut = editableShortcuts[index]
+                const expected = preset.sequences[shortcut.id] || shortcut.defaultSequence
+                if (appShell.canonicalShortcutSequence(normalizeShortcutSequence(expected))
+                        !== appShell.canonicalShortcutSequence(shortcut.sequence)) {
+                    matches = false
+                    break
+                }
+            }
+            if (matches) {
+                activeShortcutPreset = preset.id
+                return
+            }
+        }
     }
 
     function shortcutWouldConflict(shortcutId, sequence) {
@@ -401,17 +427,12 @@ AppDialog {
         const preset = presetForId(String(presetId || ""))
         if (preset === null)
             return false
-        let usedSequences = {}
+        let overrides = shortcutOverrideDraft()
         for (let i = 0; i < editableShortcuts.length; ++i) {
             const shortcut = editableShortcuts[i]
-            const sequence = normalizeShortcutSequence(preset.sequences[shortcut.id] || shortcut.sequence || "").toLowerCase()
-            if (sequence.length === 0)
-                continue
-            if (usedSequences[sequence])
-                return true
-            usedSequences[sequence] = true
+            overrides[shortcut.id] = normalizeShortcutSequence(preset.sequences[shortcut.id] || shortcut.sequence)
         }
-        return false
+        return !appShell.shortcutKeymapValid(overrides)
     }
 
     function applyShortcutPreset(presetId) {
@@ -433,10 +454,11 @@ AppDialog {
                 "id": shortcut.id,
                 "label": shortcut.label,
                 "sequence": normalizeShortcutSequence(preset.sequences[shortcut.id] || shortcut.sequence || ""),
+                "context": shortcut.context,
                 "defaultSequence": shortcut.defaultSequence
             }
         }
-        let overrides = {}
+        let overrides = Object.assign({}, appShell.shortcutBindings)
         for (let index = 0; index < shortcuts.length; ++index)
             overrides[shortcuts[index].id] = shortcuts[index].sequence
         if (!appShell.setShortcutOverrides(overrides)) {
@@ -444,16 +466,16 @@ AppDialog {
             return false
         }
         editableShortcuts = shortcuts
-        activeShortcutPreset = cleanPresetId
+        updateActiveShortcutPreset()
         shortcutEditorStatus = "Applied " + preset.label + " shortcuts."
         return true
     }
 
     function setShortcutSequence(shortcutId, sequence) {
         const cleanId = String(shortcutId || "")
-        const cleanSequence = normalizeShortcutSequence(sequence)
+        const cleanSequence = appShell.canonicalShortcutSequence(normalizeShortcutSequence(sequence))
         if (cleanId.length === 0 || cleanSequence.length === 0) {
-            shortcutEditorStatus = "Shortcut cannot be empty."
+            shortcutEditorStatus = "Enter a valid shortcut key or key sequence."
             return false
         }
         const conflicts = shortcutConflictIds(cleanSequence, cleanId)
@@ -474,9 +496,11 @@ AppDialog {
                     "id": shortcuts[i].id,
                     "label": shortcuts[i].label,
                     "sequence": cleanSequence,
+                    "context": shortcuts[i].context,
                     "defaultSequence": shortcuts[i].defaultSequence
                 }
                 editableShortcuts = shortcuts
+                updateActiveShortcutPreset()
                 shortcutEditorStatus = "Shortcut updated."
                 return true
             }
@@ -488,15 +512,20 @@ AppDialog {
     function resetShortcutSequence(shortcutId) {
         for (let i = 0; i < editableShortcuts.length; ++i) {
             if (editableShortcuts[i].id === shortcutId) {
-                appShell.resetShortcutOverride(shortcutId)
+                if (!appShell.resetShortcutOverride(shortcutId)) {
+                    shortcutEditorStatus = "The default shortcut conflicts with another mapping. Change that mapping first."
+                    return false
+                }
                 const shortcuts = editableShortcuts.slice(0)
                 shortcuts[i] = {
                     "id": shortcuts[i].id,
                     "label": shortcuts[i].label,
                     "sequence": shortcuts[i].defaultSequence,
+                    "context": shortcuts[i].context,
                     "defaultSequence": shortcuts[i].defaultSequence
                 }
                 editableShortcuts = shortcuts
+                updateActiveShortcutPreset()
                 shortcutEditorStatus = "Shortcut reset."
                 return true
             }
@@ -506,22 +535,50 @@ AppDialog {
     }
 
     function loadPersistedShortcuts() {
-        const shortcuts = editableShortcuts.slice(0)
+        const shortcuts = appShell.shortcutDefinitions()
         for (let index = 0; index < shortcuts.length; ++index) {
             shortcuts[index] = {
                 "id": shortcuts[index].id,
                 "label": shortcuts[index].label,
                 "sequence": normalizeShortcutSequence(appShell.shortcutSequence(shortcuts[index].id, shortcuts[index].defaultSequence)),
+                "context": shortcuts[index].context,
                 "defaultSequence": shortcuts[index].defaultSequence
             }
         }
         editableShortcuts = shortcuts
+        updateActiveShortcutPreset()
     }
 
     Component.onCompleted: loadPersistedShortcuts()
     onOpened: {
+        loadPersistedShortcuts()
         shortcutSearchText = ""
         shortcutSearchField.forceActiveFocus(Qt.PopupFocusReason)
+    }
+
+    NativeDialogs.FileDialog {
+        id: exportKeymapDialog
+        title: "Export Keyboard Shortcuts"
+        fileMode: NativeDialogs.FileDialog.SaveFile
+        nameFilters: ["Looksy keymap (*.json)"]
+        defaultSuffix: "json"
+        onAccepted: root.shortcutEditorStatus = appShell.exportShortcutKeymap(selectedFile.toString())
+                    ? "Keyboard shortcuts exported." : "The keymap could not be written."
+    }
+
+    NativeDialogs.FileDialog {
+        id: importKeymapDialog
+        title: "Import Keyboard Shortcuts"
+        fileMode: NativeDialogs.FileDialog.OpenFile
+        nameFilters: ["Looksy keymap (*.json)"]
+        onAccepted: {
+            if (appShell.importShortcutKeymap(selectedFile.toString())) {
+                root.loadPersistedShortcuts()
+                root.shortcutEditorStatus = "Keyboard shortcuts imported."
+            } else {
+                root.shortcutEditorStatus = "Invalid or conflicting keymap. Your shortcuts were preserved."
+            }
+        }
     }
 
     parent: Overlay.overlay
@@ -586,6 +643,18 @@ AppDialog {
             }
         }
 
+        Label {
+            objectName: "keyboardShortcutStatus"
+            Layout.fillWidth: true
+            visible: root.shortcutEditorStatus.length > 0
+            text: root.shortcutEditorStatus
+            textFormat: Text.PlainText
+            color: root.shortcutEditorStatus.indexOf("conflict") >= 0 ? theme.warning : theme.textMuted
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeBody
+            wrapMode: Text.WordWrap
+        }
+
         ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -640,10 +709,26 @@ AppDialog {
 
                             Label {
                                 Layout.fillWidth: true
-                                text: "Preset mappings"
+                                text: "Preset mappings" + (root.activeShortcutPreset.length === 0 ? " · Custom" : "")
                                 color: theme.textMuted
                                 font.family: theme.fontUi
                                 font.pixelSize: theme.typeCaption
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                ActionButton {
+                                    objectName: "importShortcutKeymapButton"
+                                    text: "Import Keymap"
+                                    compact: true
+                                    onClicked: importKeymapDialog.open()
+                                }
+                                ActionButton {
+                                    objectName: "exportShortcutKeymapButton"
+                                    text: "Export Keymap"
+                                    compact: true
+                                    onClicked: exportKeymapDialog.open()
+                                }
                             }
 
                             Flow {
@@ -690,7 +775,8 @@ AppDialog {
                                     text: root.displayShortcutSequence(modelData.sequence)
                                     selectByMouse: true
                                     color: theme.textStrong
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: theme.typeControl
                                     onEditingFinished: root.setShortcutSequence(modelData.id, text)
                                 }
@@ -704,14 +790,6 @@ AppDialog {
                             }
                         }
 
-                        Label {
-                            Layout.fillWidth: true
-                            visible: root.shortcutEditorStatus.length > 0
-                            text: root.shortcutEditorStatus
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeCaption
-                        }
                     }
                 }
 
@@ -780,7 +858,8 @@ AppDialog {
                                                 anchors.margins: theme.space8
                                                 text: modelData.keys
                                                 color: theme.textStrong
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: theme.typeControl
                                                 font.weight: Font.DemiBold
                                                 horizontalAlignment: Text.AlignHCenter

@@ -1,10 +1,13 @@
 import QtQuick
+import QtQuick.Effects
 
 Item {
     id: root
 
     property Item sourceItem: null
     property var effects: []
+    property real blurAmount: 0
+    property var blurMask: ({})
     property string frameMode: "fit"
     property real sourceAspectRatio: 16 / 9
     readonly property real itemAspectRatio: width / Math.max(1, height)
@@ -25,6 +28,17 @@ Item {
     readonly property vector4d contentRect: Qt.vector4d(
         contentLeft / Math.max(1, width), contentTop / Math.max(1, height),
         contentWidth / Math.max(1, width), contentHeight / Math.max(1, height))
+    readonly property bool maskedBlurEnabled: blurAmount > 0.0001 && blurMask.enabled === true
+    readonly property vector4d blurGeometry: Qt.vector4d(
+        Number(blurMask.centerX !== undefined ? blurMask.centerX : 0.5),
+        Number(blurMask.centerY !== undefined ? blurMask.centerY : 0.5),
+        Number(blurMask.width !== undefined ? blurMask.width : 0.65),
+        Number(blurMask.height !== undefined ? blurMask.height : 0.65))
+    readonly property vector4d blurMaskShape: Qt.vector4d(
+        Number(blurMask.feather || 0),
+        String(blurMask.shape || "ellipse") === "rectangle" ? 1 : 0,
+        blurMask.inverted === true ? 1 : 0,
+        maskedBlurEnabled ? 1 : 0)
 
     function effectCode(name) {
         switch (String(name || "")) {
@@ -94,12 +108,37 @@ Item {
         visible: root.visible
     }
 
+    MultiEffect {
+        id: maskedBlurStage
+        anchors.fill: parent
+        source: effectTexture
+        visible: root.visible
+        autoPaddingEnabled: false
+        blurEnabled: root.maskedBlurEnabled
+        blur: Math.max(0, Math.min(1, root.blurAmount))
+        blurMax: 32
+    }
+
+    ShaderEffectSource {
+        id: blurredTexture
+        anchors.fill: parent
+        sourceItem: maskedBlurStage
+        live: true
+        recursive: true
+        hideSource: true
+        visible: false
+    }
+
     ShaderEffect {
         anchors.fill: parent
         visible: root.visible
         property var source: effectTexture
+        property var blurredSource: blurredTexture
         property vector4d pixelSize: root.pixelSize
         property vector4d contentRect: root.contentRect
+        property vector4d blurGeometry: root.blurGeometry
+        property vector4d blurMaskShape: root.blurMaskShape
+        property vector4d blurSettings: Qt.vector4d(root.blurAmount, root.maskedBlurEnabled ? 1 : 0, 0, 0)
         vertexShader: "qrc:/photo-editor/shaders/timeline_effect_mask.vert.qsb"
         fragmentShader: "qrc:/photo-editor/shaders/timeline_effect_mask.frag.qsb"
         property vector4d effect0: root.effect0

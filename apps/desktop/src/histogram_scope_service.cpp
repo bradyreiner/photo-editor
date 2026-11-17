@@ -7,6 +7,8 @@
 #include <utility>
 
 #include <QRgb>
+#include <qrgbafloat.h>
+#include <vector>
 #include <QVariantMap>
 
 namespace photo_editor::desktop {
@@ -16,14 +18,44 @@ QString histogram_scope_service_contract() {
 }
 
 HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
+  return compute_histogram_scope_data_with_options(image, {});
+}
+
+HistogramComputationResult compute_histogram_scope_data_with_options(
+    const QImage& source, const HistogramScopeOptions& options) {
+  const auto image = options.max_edge > 0 &&
+      std::max(source.width(), source.height()) > options.max_edge
+      ? source.scaled(options.max_edge, options.max_edge, Qt::KeepAspectRatio, Qt::FastTransformation)
+      : source;
   constexpr int kDisplayBins = 256;
   constexpr int kInternalBins = 4096;
   static_assert(kInternalBins % kDisplayBins == 0);
-  constexpr int kScopeColumns = 128;
-  constexpr int kScopeLevels = 64;
-  constexpr int kVectorscopeSampleTarget = 1800;
+  const int kScopeColumns = std::clamp(options.columns, 16, 512);
+  const int kScopeLevels = std::clamp(options.levels, 16, 256);
+  const int kVectorscopeSampleTarget = std::clamp(options.vector_samples, 64, 16384);
   HistogramComputationResult result;
+  result.columns = kScopeColumns;
+  result.levels = kScopeLevels;
+  result.minimum = std::isfinite(options.minimum) ? options.minimum : 0.0;
+  result.maximum = std::isfinite(options.maximum) && options.maximum > result.minimum
+      ? options.maximum : result.minimum + 1.0;
+  const auto range = result.maximum - result.minimum;
+  const auto inverse_range = 1.0 / range;
+  const auto normalize = [&](double value) {
+    return std::clamp((value - result.minimum) * inverse_range, 0.0, 1.0);
+  };
   struct HistogramScratch final {
+    HistogramScratch(int columns, int levels)
+        : red_scope_density(static_cast<std::size_t>(columns * levels)),
+          green_scope_density(red_scope_density.size()), blue_scope_density(red_scope_density.size()),
+          luma_scope_density(red_scope_density.size()),
+          red_scope_sum(static_cast<std::size_t>(columns)), green_scope_sum(red_scope_sum.size()),
+          blue_scope_sum(red_scope_sum.size()), luma_scope_sum(red_scope_sum.size()),
+          red_scope_min(red_scope_sum.size(), 1.0), green_scope_min(red_scope_min),
+          blue_scope_min(red_scope_min), luma_scope_min(red_scope_min),
+          red_scope_max(red_scope_sum.size()), green_scope_max(red_scope_sum.size()),
+          blue_scope_max(red_scope_sum.size()), luma_scope_max(red_scope_sum.size()),
+          scope_counts(red_scope_sum.size()) {}
     std::array<int, kInternalBins> red_bins{};
     std::array<int, kInternalBins> green_bins{};
     std::array<int, kInternalBins> blue_bins{};
@@ -32,25 +64,25 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
     std::array<int, kDisplayBins> green_display_counts{};
     std::array<int, kDisplayBins> blue_display_counts{};
     std::array<int, kDisplayBins> luma_display_counts{};
-    std::array<int, kScopeColumns * kScopeLevels> red_scope_density{};
-    std::array<int, kScopeColumns * kScopeLevels> green_scope_density{};
-    std::array<int, kScopeColumns * kScopeLevels> blue_scope_density{};
-    std::array<int, kScopeColumns * kScopeLevels> luma_scope_density{};
-    std::array<double, kScopeColumns> red_scope_sum{};
-    std::array<double, kScopeColumns> green_scope_sum{};
-    std::array<double, kScopeColumns> blue_scope_sum{};
-    std::array<double, kScopeColumns> luma_scope_sum{};
-    std::array<double, kScopeColumns> red_scope_min{};
-    std::array<double, kScopeColumns> green_scope_min{};
-    std::array<double, kScopeColumns> blue_scope_min{};
-    std::array<double, kScopeColumns> luma_scope_min{};
-    std::array<double, kScopeColumns> red_scope_max{};
-    std::array<double, kScopeColumns> green_scope_max{};
-    std::array<double, kScopeColumns> blue_scope_max{};
-    std::array<double, kScopeColumns> luma_scope_max{};
-    std::array<int, kScopeColumns> scope_counts{};
+    std::vector<int> red_scope_density;
+    std::vector<int> green_scope_density;
+    std::vector<int> blue_scope_density;
+    std::vector<int> luma_scope_density;
+    std::vector<double> red_scope_sum;
+    std::vector<double> green_scope_sum;
+    std::vector<double> blue_scope_sum;
+    std::vector<double> luma_scope_sum;
+    std::vector<double> red_scope_min;
+    std::vector<double> green_scope_min;
+    std::vector<double> blue_scope_min;
+    std::vector<double> luma_scope_min;
+    std::vector<double> red_scope_max;
+    std::vector<double> green_scope_max;
+    std::vector<double> blue_scope_max;
+    std::vector<double> luma_scope_max;
+    std::vector<int> scope_counts;
   };
-  const auto scratch = std::make_unique<HistogramScratch>();
+  const auto scratch = std::make_unique<HistogramScratch>(kScopeColumns, kScopeLevels);
   auto& red_bins = scratch->red_bins;
   auto& green_bins = scratch->green_bins;
   auto& blue_bins = scratch->blue_bins;
@@ -78,20 +110,17 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
   auto& scope_counts = scratch->scope_counts;
   QVariantList vectorscope_points;
 
-  red_scope_min.fill(1.0);
-  green_scope_min.fill(1.0);
-  blue_scope_min.fill(1.0);
-  luma_scope_min.fill(1.0);
 
   const auto width = image.width();
   const auto height = image.height();
-  result.sample_count = std::max(0, width * height);
-  const auto sample_stride = std::max(
-      1,
-      static_cast<int>(std::sqrt(
-          static_cast<double>(std::max(1, width * height)) /
-          static_cast<double>(kVectorscopeSampleTarget))));
-  const auto density_slot = [](int column, double value) {
+  const auto region = options.region.normalized().intersected(QRectF(0, 0, 1, 1));
+  const auto left = std::clamp(static_cast<int>(std::floor(region.left() * width)), 0, width);
+  const auto top = std::clamp(static_cast<int>(std::floor(region.top() * height)), 0, height);
+  const auto right = std::clamp(static_cast<int>(std::ceil(region.right() * width)), left, width);
+  const auto bottom = std::clamp(static_cast<int>(std::ceil(region.bottom() * height)), top, height);
+  const auto vector_stride = std::max(1, ((right-left)*(bottom-top)) / kVectorscopeSampleTarget);
+  int next_vector_sample = 0;
+  const auto density_slot = [kScopeLevels](int column, double value) {
     const auto level = std::clamp(
         static_cast<int>(value * static_cast<double>(kScopeLevels - 1) + 0.5),
         0,
@@ -118,10 +147,11 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
       image.format() == QImage::Format_RGB32;
   const auto premultiplied_argb = image.format() == QImage::Format_ARGB32_Premultiplied;
   const auto record_sample = [&](int x, int y, double red, double green, double blue, double luma) {
-    red = std::clamp(red, 0.0, 1.0);
-    green = std::clamp(green, 0.0, 1.0);
-    blue = std::clamp(blue, 0.0, 1.0);
-    luma = std::clamp(luma, 0.0, 1.0);
+    if (!std::isfinite(red) || !std::isfinite(green) || !std::isfinite(blue) || !std::isfinite(luma)) {
+      ++result.rejected_sample_count;
+      return;
+    }
+    ++result.sample_count;
     if (red <= 0.0 || green <= 0.0 || blue <= 0.0) {
       ++result.shadow_clip_count;
     }
@@ -129,6 +159,11 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
       ++result.highlight_clip_count;
     }
 
+    // Clipping counts retain the 0/1 reference even when plotting an HDR range.
+    red = normalize(red);
+    green = normalize(green);
+    blue = normalize(blue);
+    luma = normalize(luma);
     ++red_bins[static_cast<std::size_t>(internal_bin_for_value(red))];
     ++green_bins[static_cast<std::size_t>(internal_bin_for_value(green))];
     ++blue_bins[static_cast<std::size_t>(internal_bin_for_value(blue))];
@@ -136,7 +171,7 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
 
     const auto scope_index = std::clamp(
         static_cast<int>(
-            (static_cast<double>(x) / static_cast<double>(std::max(1, width))) *
+            (static_cast<double>(x - left) / static_cast<double>(std::max(1, right - left))) *
             static_cast<double>(kScopeColumns)),
         0,
         kScopeColumns - 1);
@@ -159,8 +194,9 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
     luma_scope_max[scope_slot] = std::max(luma_scope_max[scope_slot], luma);
     ++scope_counts[scope_slot];
 
-    if ((x % sample_stride) == 0 && (y % sample_stride) == 0 &&
-        vectorscope_points.size() < kVectorscopeSampleTarget) {
+    const auto pixel_index = (y-top)*(right-left) + (x-left);
+    if (pixel_index >= next_vector_sample && vectorscope_points.size() < kVectorscopeSampleTarget) {
+      next_vector_sample = pixel_index + vector_stride;
       const auto y_value = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
       const auto cb = (blue - y_value) * 0.565;
       const auto cr = (red - y_value) * 0.713;
@@ -174,10 +210,10 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
       vectorscope_points.append(point);
     }
   };
-  for (int y = 0; y < height; ++y) {
+  for (int y = top; y < bottom; ++y) {
     if (direct_argb) {
       const auto* scanline = reinterpret_cast<const QRgb*>(image.constScanLine(y));
-      for (int x = 0; x < width; ++x) {
+      for (int x = left; x < right; ++x) {
         // Scopes measure straight color, just like pixelColor() in the
         // high-precision path. Alpha encoding must not darken the samples.
         const auto pixel = premultiplied_argb ? qUnpremultiply(scanline[x]) : scanline[x];
@@ -194,8 +230,28 @@ HistogramComputationResult compute_histogram_scope_data(const QImage& image) {
             blue / 255.0,
             std::clamp(luma, 0, 255) / 255.0);
       }
+    } else if (image.format() == QImage::Format_RGBA16FPx4 ||
+               image.format() == QImage::Format_RGBA16FPx4_Premultiplied ||
+               image.format() == QImage::Format_RGBA32FPx4 ||
+               image.format() == QImage::Format_RGBA32FPx4_Premultiplied) {
+      const bool half = image.format() == QImage::Format_RGBA16FPx4 ||
+                        image.format() == QImage::Format_RGBA16FPx4_Premultiplied;
+      const bool premultiplied = image.format() == QImage::Format_RGBA16FPx4_Premultiplied ||
+                                image.format() == QImage::Format_RGBA32FPx4_Premultiplied;
+      const auto sample_row = [&](const auto* row) {
+        for (int x = left; x < right; ++x) {
+          // Match Qt's float unpremultiplication before promoting to double.
+          const auto pixel = premultiplied ? row[x].unpremultiplied() : row[x];
+          const auto red = static_cast<double>(pixel.red());
+          const auto green = static_cast<double>(pixel.green());
+          const auto blue = static_cast<double>(pixel.blue());
+          record_sample(x, y, red, green, blue, 0.2126 * red + 0.7152 * green + 0.0722 * blue);
+        }
+      };
+      if (half) sample_row(reinterpret_cast<const QRgbaFloat16*>(image.constScanLine(y)));
+      else sample_row(reinterpret_cast<const QRgbaFloat32*>(image.constScanLine(y)));
     } else {
-      for (int x = 0; x < width; ++x) {
+      for (int x = left; x < right; ++x) {
         const auto color = image.pixelColor(x, y);
         const auto red = static_cast<double>(color.redF());
         const auto green = static_cast<double>(color.greenF());

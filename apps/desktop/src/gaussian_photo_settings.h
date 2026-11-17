@@ -1,6 +1,8 @@
 #pragma once
 #include "gaussian_lens_settings.h"
 #include "gaussian_film_settings.h"
+#include "gaussian_post_settings.h"
+#include "gaussian_tone_settings.h"
 #include <QJsonObject>
 #include <QVariantMap>
 #include <cmath>
@@ -15,10 +17,12 @@ struct GaussianPhotoSettings {
   int look = 0;  // Neutral, soft highlights, monochrome.
   GaussianLensSettings lens{};
   GaussianFilmSettings film{};
+  GaussianPostSettings post{};
+  GaussianToneSettings tone{};
   bool operator==(const GaussianPhotoSettings&) const = default;
   bool valid() const {
     return std::isfinite(focal_scale) && focal_scale >= 0.25F && focal_scale <= 4 &&
-        std::isfinite(exposure_ev) && exposure_ev >= -6 && exposure_ev <= 6 && look >= 0 && look <= 2 && lens.valid() && film.valid();
+        std::isfinite(exposure_ev) && exposure_ev >= -6 && exposure_ev <= 6 && look >= 0 && look <= 2 && lens.valid() && film.valid() && post.valid() && tone.valid();
   }
   QVariantMap description() const {
     QVariantMap result{{"schema", "framehouse-gaussian-photo-settings-v1"}, {"focalScale", focal_scale},
@@ -32,15 +36,30 @@ struct GaussianPhotoSettings {
       result.insert("lens", lens.description());
       result.insert("film", film.description());
     }
+    if (post != GaussianPostSettings{}) {
+      result.insert("schema", "framehouse-gaussian-photo-settings-v4");
+      result.insert("lens", lens.description());
+      result.insert("film", film.description());
+      result.insert("post", post.description());
+    }
+    if (tone != GaussianToneSettings{}) {
+      result.insert("schema", "framehouse-gaussian-photo-settings-v5");
+      result.insert("lens", lens.description());
+      result.insert("film", film.description());
+      result.insert("post", post.description());
+      result.insert("tone", tone.description());
+    }
     return result;
   }
 };
 inline std::optional<GaussianPhotoSettings> gaussian_photo_settings(const QVariantMap& value) {
   const auto json = QJsonObject::fromVariantMap(value);
-  const bool film = json.value("schema") == "framehouse-gaussian-photo-settings-v3";
+  const bool tone = json.value("schema") == "framehouse-gaussian-photo-settings-v5";
+  const bool post = tone || json.value("schema") == "framehouse-gaussian-photo-settings-v4";
+  const bool film = post || json.value("schema") == "framehouse-gaussian-photo-settings-v3";
   const bool optical = film || json.value("schema") == "framehouse-gaussian-photo-settings-v2";
   if ((!optical && json.value("schema") != "framehouse-gaussian-photo-settings-v1") ||
-      json.size() != (film ? 6 : optical ? 5 : 4) ||
+      json.size() != (tone ? 8 : post ? 7 : film ? 6 : optical ? 5 : 4) ||
       !json.value("focalScale").isDouble() || !json.value("exposureEv").isDouble()) return {};
   const auto focal = json.value("focalScale").toDouble();
   const auto exposure = json.value("exposureEv").toDouble();
@@ -61,6 +80,18 @@ inline std::optional<GaussianPhotoSettings> gaussian_photo_settings(const QVaria
     const auto parsed = gaussian_film_settings(json.value("film").toObject().toVariantMap());
     if (!parsed) return {};
     result.film = *parsed;
+  }
+  if (post) {
+    if (!json.value("post").isObject()) return {};
+    const auto parsed = gaussian_post_settings(json.value("post").toObject().toVariantMap());
+    if (!parsed) return {};
+    result.post = *parsed;
+  }
+  if (tone) {
+    if (!json.value("tone").isObject()) return {};
+    const auto parsed = gaussian_tone_settings(json.value("tone").toObject().toVariantMap());
+    if (!parsed) return {};
+    result.tone = *parsed;
   }
   return result;
 }

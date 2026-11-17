@@ -12,13 +12,15 @@ inline Vector vector(QVector3D value) { return {value.x(), value.y(), value.z()}
 struct Projected {
   double x, y, a, b, c, alpha, depth;
   Vector color;
+  std::array<int,4> tiles{};
 };
 
 // Scalar double-precision oracle, independent of Metal's triangle interpolation
 // and framebuffer fetch. World-space projection derivatives avoid the GPU's
 // intermediate camera covariance matrix. This is a test, never a preview path.
 inline QVariantMap audit(const photo_editor::desktop::GaussianSceneData& scene,
-    const photo_editor::desktop::GaussianCamera& camera, const QImage& native, const QImage& trainer) {
+    const photo_editor::desktop::GaussianCamera& camera, const QImage& native, const QImage& trainer,
+    bool original_raster = false) {
   std::vector<Projected> points;
   points.reserve(scene.points.size());
   const auto right = vector(camera.right), down = vector(camera.down), forward = vector(camera.forward);
@@ -26,12 +28,12 @@ inline QVariantMap audit(const photo_editor::desktop::GaussianSceneData& scene,
   for (const auto& p : scene.points) {
     Vector displacement{p.center_opacity[0] - eye[0], p.center_opacity[1] - eye[1], p.center_opacity[2] - eye[2]};
     const double z = dot(forward, displacement);
-    if (z < 0.01 || z > 1e10 || p.center_opacity[3] < 1.0 / 255.0) continue;
+    if ((original_raster ? z <= 0.2 : z < 0.01) || z > 1e10 || p.center_opacity[3] < 1.0 / 255.0) continue;
     const double x = dot(right, displacement) / z, y = dot(down, displacement) / z;
-    const double u = std::clamp(x, (-0.15 * camera.image_size.width() - camera.cx) / camera.fx,
-        (1.15 * camera.image_size.width() - camera.cx) / camera.fx);
-    const double v = std::clamp(y, (-0.15 * camera.image_size.height() - camera.cy) / camera.fy,
-        (1.15 * camera.image_size.height() - camera.cy) / camera.fy);
+    const double u = original_raster ? std::clamp(x,-0.65*camera.image_size.width()/camera.fx,0.65*camera.image_size.width()/camera.fx) :
+        std::clamp(x, (-0.15 * camera.image_size.width() - camera.cx) / camera.fx, (1.15 * camera.image_size.width() - camera.cx) / camera.fx);
+    const double v = original_raster ? std::clamp(y,-0.65*camera.image_size.height()/camera.fy,0.65*camera.image_size.height()/camera.fy) :
+        std::clamp(y, (-0.15 * camera.image_size.height() - camera.cy) / camera.fy, (1.15 * camera.image_size.height() - camera.cy) / camera.fy);
     Vector dx{}, dy{};
     for (size_t i = 0; i < 3; ++i) {
       dx[i] = camera.fx / z * (right[i] - u * forward[i]);
@@ -61,7 +63,18 @@ inline QVariantMap audit(const photo_editor::desktop::GaussianSceneData& scene,
     for (int i = 0; i < (scene.sh_degree+1)*(scene.sh_degree+1); ++i)
       for (size_t channel = 0; channel < 3; ++channel) color[channel] += basis[i] * p.sh[static_cast<size_t>(i)*3+channel];
     for (auto& channel : color) channel = std::max(0.0, channel);
-    points.push_back({camera.fx*x + camera.cx, camera.fy*y + camera.cy, c/det, -b/det, a/det, p.center_opacity[3], z, color});
+    // Test-only interpretation of the published original raster convention.
+    // Work in pixel-center coordinates, independent of Metal triangle bounds.
+    const double denominator = original_raster ? z+1e-7 : z;
+    const double px = camera.fx*dot(right,displacement)/denominator+camera.cx;
+    const double py = camera.fy*dot(down,displacement)/denominator+camera.cy;
+    const double mid = (a+c)*0.5;
+    const double radius = std::ceil(3*std::sqrt(mid+std::sqrt(std::max(0.1,mid*mid-det))));
+    const auto tile = [](double value,int limit) { return std::clamp(static_cast<int>(value/16),0,limit); };
+    const int columns = (camera.image_size.width()+15)/16, rows = (camera.image_size.height()+15)/16;
+    const std::array<int,4> tiles{tile(px-0.5-radius,columns),tile(py-0.5-radius,rows),
+        tile(px-0.5+radius+15,columns),tile(py-0.5+radius+15,rows)};
+    points.push_back({px,py,c/det,-b/det,a/det,p.center_opacity[3],z,color,tiles});
   }
   std::stable_sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return a.depth < b.depth; });
   QVariantList samples;
@@ -73,10 +86,11 @@ inline QVariantMap audit(const photo_editor::desktop::GaussianSceneData& scene,
     Vector rgb{};
     double transmittance = 1;
     for (const auto& point : points) {
+      if (original_raster && (px/16 < point.tiles[0] || py/16 < point.tiles[1] || px/16 >= point.tiles[2] || py/16 >= point.tiles[3])) continue;
       const double dx = px + 0.5 - point.x, dy = py + 0.5 - point.y;
       const double power = 0.5 * (point.a*dx*dx + 2*point.b*dx*dy + point.c*dy*dy);
       if (power < 0 || power > std::log(255*point.alpha)) continue;
-      const double alpha = std::min(0.999, point.alpha * std::exp(-power));
+      const double alpha = std::min(original_raster ? 0.99 : static_cast<double>(photo_editor::desktop::gaussian_alpha_limit(photo_editor::desktop::gaussian_alpha_model(camera))), point.alpha * std::exp(-power));
       if (alpha < 1.0 / 255.0) continue;
       const double next = transmittance * (1-alpha);
       if (next <= 1e-4) break;
@@ -100,6 +114,7 @@ inline QVariantMap audit(const photo_editor::desktop::GaussianSceneData& scene,
       samples.append(QVariantMap{{"x", px}, {"y", py}, {"scalarRgb", expected}, {"nativeRgb", actual}, {"trainerRgb", reference}});
   }
   return {{"sampleCount", 192}, {"nativeMaxChannelDifference", maximum_native}, {"trainerMaxChannelDifference", maximum_trainer},
+      {"scope",original_raster ? "Independent double-precision interpretation of published original raster equations at sampled pixels; not a CUDA execution or complete same-weight parity proof" : "Independent double-precision Brush projection/compositing samples"},
       {"nativePsnr", 10*std::log10(255.0*255.0/(std::max(native_squared, 1e-12)/576))},
       {"trainerPsnr", 10*std::log10(255.0*255.0/(std::max(trainer_squared, 1e-12)/576))}, {"differingSamples", samples}};
 }

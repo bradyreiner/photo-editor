@@ -1,0 +1,32 @@
+{
+  "retrieved": "2026-10-27",
+  "usage_guidance": {
+    "urls": [
+      "https://oceanservice.noaa.gov/about/faq.html",
+      "https://oceanexplorer.noaa.gov/about/media-kit/"
+    ],
+    "summary": "NOAA says its images are generally public domain unless otherwise noted and requests NOAA credit. NOAA Ocean Exploration requests the image-caption credit; captions marked copyright require additional permission. Neither fixture caption includes a copyright notice."
+  },
+  "files": [
+    {
+      "path": "noaa-sun-peeks-clouds.jpg",
+      "source_page": "https://oceanexplorer.noaa.gov/multimedia/sun-peeks-through-the-clouds/",
+      "download": "https://oceanexplorer.noaa.gov/wp-content/uploads/2024/07/okeanos-sun-clouds-hires.jpg",
+      "caption": "The sun peeks through the clouds over the Pacific Ocean during the Beyond the Blue: Hawai‘i Mapping expedition on NOAA Ship Okeanos Explorer. Image courtesy of NOAA Ocean Exploration, 2024 Beyond the Blue.",
+      "credit": "NOAA Ocean Exploration, 2024 Beyond the Blue",
+      "width": 3000,
+      "height": 1688,
+      "sha256": "474f00b634c523271013b3eb5227affe5e71afc138d235a3ee30e6ec83eea6b"
+    },
+    {
+      "path": "noaa-open-ocean.jpg",
+      "source_page": "https://olympiccoast.noaa.gov/science/habitat/open-ocean.html",
+      "download": "https://olympiccoast.noaa.gov/media/img/20220412-open-ocean-2-1000.jpg",
+      "caption": "The calm blue waters of the open ocean blend into the horizon and the clear blue skies above.",
+      "credit": "NOAA",
+      "width": 1000,
+      "height": 563,
+      "sha256": "9ce4abd54bdefa067e340f9b04db2ee0a8594bd913a61645c58f077f56668cf2"
+    }
+  ]
+}

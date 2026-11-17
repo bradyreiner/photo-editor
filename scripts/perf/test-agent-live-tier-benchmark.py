@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -131,10 +132,30 @@ def test_guardrail_failure_is_rejected() -> None:
             raise AssertionError("fallback receipt should fail closed")
 
 
+def test_mixed_source_or_model_receipts_are_rejected() -> None:
+    module = load_module()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        paths = [Path(temp_dir) / name for name in ("first.json", "second.json")]
+        for field, first, second in (("sourceSha256", "a" * 64, "b" * 64),
+                                     ("modelId", "first", "second"),
+                                     ("ollamaModel", "first:9b", "second:35b")):
+            for path, value in zip(paths, (first, second)):
+                receipt = sample_receipt(1000, 1000)
+                receipt[field] = value
+                path.write_text(json.dumps(receipt))
+            try:
+                module.build_aggregate(SimpleNamespace(), [], paths)
+            except SystemExit as error:
+                assert "different models or source images" in str(error)
+            else:
+                raise AssertionError("mixed input/model receipts should not produce an aggregate")
+
+
 def main() -> int:
     test_nearest_rank_and_summary()
     test_aggregate_only_contract()
     test_guardrail_failure_is_rejected()
+    test_mixed_source_or_model_receipts_are_rejected()
     print("agent_live_tier_benchmark_tests=passed")
     return 0
 

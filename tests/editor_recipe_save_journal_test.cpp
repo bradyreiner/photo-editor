@@ -1,5 +1,7 @@
 #include "editor_recipe_save_journal.h"
+#include "editor_recipe_journal_delta.h"
 #include "edit_recipe_mask_schema.h"
+#include "photo_editor/pipeline/layer_styles.h"
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QCryptographicHash>
@@ -25,16 +27,37 @@ QByteArray read(const QString& path) {
   if (!input.open(QIODevice::ReadOnly)) return {};
   return input.readAll();
 }
+QByteArray materialized(const QByteArray& bytes) {
+  if (QJsonDocument::fromJson(bytes).isObject()) return bytes;
+  const auto lines = bytes.split('\n');
+  auto envelope = QJsonDocument::fromJson(lines.first()).object();
+  QJsonValue payload = envelope.value("payload");
+  auto digest = envelope.value("sha256").toString();
+  for (qsizetype i = 1; i + 1 < lines.size() - 1; i += 2) {
+    const auto record = QJsonDocument::fromJson(lines.at(i)).object();
+    const auto body = record.value("record").toObject();
+    const auto computed = QString::fromLatin1(QCryptographicHash::hash(
+        QJsonDocument(body).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+    if (lines.at(i + 1) != QByteArray("commit:") + computed.toLatin1() ||
+        body.value("previous") != digest || record.value("sha256") != computed ||
+        !recipe_journal_delta::apply(&payload, body.value("edit").toObject())) return {};
+    digest = computed;
+  }
+  const auto hash = QString::fromLatin1(QCryptographicHash::hash(
+      QJsonDocument(payload.toObject()).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+  return QJsonDocument(QJsonObject{{"payload", payload}, {"sha256", hash}}).toJson(QJsonDocument::Compact);
+}
 bool independent_envelope_match(const QByteArray& bytes) {
-  const auto document = QJsonDocument::fromJson(bytes);
+  const auto normalized = materialized(bytes);
+  const auto document = QJsonDocument::fromJson(normalized);
   const auto envelope = document.object();
   const auto payload = QJsonDocument(envelope.value("payload").toObject()).toJson(QJsonDocument::Compact);
-  return document.isObject() && document.toJson(QJsonDocument::Compact) == bytes &&
+  return document.isObject() && document.toJson(QJsonDocument::Compact) == normalized &&
       envelope.value("sha256").toString().toLatin1() ==
           QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex();
 }
 bool legacy_checkpoint_roundtrip(const QByteArray& current_bytes, bool string_recipes) {
-  const auto original = QJsonDocument::fromJson(current_bytes).object().value("payload").toObject();
+  const auto original = QJsonDocument::fromJson(materialized(current_bytes)).object().value("payload").toObject();
   auto legacy = original;
   // v1/v2 predate rejected records. Construct an actual old-format payload,
   // rather than changing only the schema label on a six-field v3 payload.
@@ -122,7 +145,7 @@ bool large_string_checkpoint_contracts() {
          QString::fromUtf8("\"\\\nλ-雪") + QChar(0), QString(1, QChar(0x100))}) {
       checkpoint.pending[0].migration_evidence["longText"] = encoded + suffix;
       if (!journal.write(checkpoint, &error) ||
-          read(path) != reference_checkpoint_bytes(checkpoint, "large-string-catalog")) return false;
+          materialized(read(path)) != reference_checkpoint_bytes(checkpoint, "large-string-catalog")) return false;
     }
     auto layer = checkpoint.pending[0].state.layers[0].toMap();
     auto paint = layer.value("paintTiles").toMap();
@@ -131,7 +154,7 @@ bool large_string_checkpoint_contracts() {
     tiles["0,0"] = changed; paint["tiles"] = tiles; layer["paintTiles"] = paint;
     checkpoint.pending[0].state.layers[0] = layer;
     if (!journal.write(checkpoint, &error) ||
-        read(path) != reference_checkpoint_bytes(checkpoint, "large-string-catalog")) return false;
+        materialized(read(path)) != reference_checkpoint_bytes(checkpoint, "large-string-catalog")) return false;
   }
   EditorRecipeSaveJournal reopened;
   EditorRecipeSaveCheckpoint recovered;
@@ -176,7 +199,7 @@ bool cached_records_roundtrip() {
     path = journal.path();
     const auto write_exact = [&]() {
       return journal.write(checkpoint, &error) &&
-          read(path) == reference_checkpoint_bytes(checkpoint, authority) &&
+          materialized(read(path)) == reference_checkpoint_bytes(checkpoint, authority) &&
           independent_envelope_match(read(path));
     };
     for (int i = 0; i < 4; ++i) {
@@ -240,7 +263,7 @@ bool cached_records_roundtrip() {
     EditorRecipeSaveCheckpoint recovered;
     if (!reopened.open(root.path(), authority, &recovered, &error) ||
         reference_checkpoint_bytes(recovered, authority) != reference_checkpoint_bytes(checkpoint, authority) ||
-        !reopened.write({}, &error) || read(path) != reference_checkpoint_bytes({}, authority)) return false;
+        !reopened.write({}, &error) || materialized(read(path)) != reference_checkpoint_bytes({}, authority)) return false;
   }
   EditorRecipeSaveJournal empty;
   EditorRecipeSaveCheckpoint recovered;
@@ -250,21 +273,32 @@ bool cached_records_roundtrip() {
 
 bool supported_recipe_versions_roundtrip() {
   for (const auto& key : {QString{}, QStringLiteral("effectStack"),
-                         QStringLiteral("textTypography"), QStringLiteral("paintTiles")}) {
+                         QStringLiteral("textTypography"), QStringLiteral("paintTiles"),
+                         QStringLiteral("smartObjectDocument"), QStringLiteral("layerStyleStack")}) {
     QTemporaryDir root;
     EditorRecipeSaveSnapshot snapshot{.asset_id = "versioned-photo", .file_path = "/photo.dng"};
     if (!key.isEmpty()) {
       // Layer payloads are opaque to the journal; exercise each writer-selected
       // envelope, including content nested inside a group.
-      const QVariantMap child{{"id", "child"}, {"kind", "pixel"},
-          {key, QVariantMap{{"version", 1}, {"items", QVariantList{}}}}};
+      QVariant payload = QVariantMap{{"version", 1}, {"items", QVariantList{}}};
+      if (key == "smartObjectDocument")
+        payload = QVariantMap{{"schema", "looksy.smart-object.document"}, {"version", 1},
+            {"contentId", "00000000-0000-4000-8000-000000000017"}, {"revision", 1},
+            {"canvasWidth", 8}, {"canvasHeight", 6}, {"layers", QVariantList{}}, {"maskStack", QVariantList{}}};
+      if (key == "layerStyleStack") {
+        const auto stack = photo_editor::pipeline::serialize_layer_style_stack({});
+        if (!stack) return false;
+        payload = QString::fromStdString(*stack);
+      }
+      const QVariantMap child{{"id", "child"}, {"kind", "pixel"}, {key, payload}};
       snapshot.state.layers = {QVariantMap{{"id", "group"}, {"kind", "group"},
           {"children", QVariantList{child}}}};
     }
     const auto expected = build_edit_recipe_object(snapshot.state);
     const int version = key.isEmpty() ? kCurrentEditRecipeVersion : key == "effectStack"
         ? kPhotoEffectsEditRecipeVersion : key == "textTypography"
-        ? kPhotoTypographyEditRecipeVersion : kPhotoPaintEditRecipeVersion;
+        ? kPhotoTypographyEditRecipeVersion : key == "paintTiles" ? kPhotoPaintEditRecipeVersion :
+          key == "smartObjectDocument" ? kPhotoComponentObjectTableEditRecipeVersion : kPhotoLayerStyleEditRecipeVersion;
     if (expected.value("recipeVersion").toInt() != version) return false;
     QString error;
     EditorRecipeSaveCheckpoint checkpoint;
@@ -285,6 +319,175 @@ bool supported_recipe_versions_roundtrip() {
   }
   return true;
 }
+
+bool rejected_component_checkpoint_retains_previous() {
+  QTemporaryDir root;
+  EditorRecipeSaveJournal journal;
+  EditorRecipeSaveCheckpoint recovered, checkpoint;
+  QString error;
+  if (!journal.open(root.path(), "component-catalog", &recovered, &error)) return false;
+  EditorRecipeSaveSnapshot snapshot{.asset_id = "component", .file_path = "/component.exr"};
+  const QVariantMap document{{"schema", "looksy.smart-object.document"}, {"version", 1},
+      {"contentId", "00000000-0000-4000-8000-000000000018"}, {"revision", 1},
+      {"canvasWidth", 8}, {"canvasHeight", 6}, {"layers", QVariantList{}}, {"maskStack", QVariantList{}}};
+  snapshot.state.layers = {QVariantMap{{"id", "component-a"}, {"kind", "pixel"},
+      {"smartObjectDocument", document}}};
+  checkpoint.pending = {snapshot};
+  if (!journal.write(checkpoint, &error)) return false;
+  const auto saved = read(journal.path());
+  auto conflicting = document;
+  conflicting.insert("canvasWidth", 9);
+  checkpoint.pending.first().state.layers.append(QVariantMap{{"id", "component-b"},
+      {"kind", "pixel"}, {"smartObjectDocument", conflicting}});
+  if (journal.write(checkpoint, &error) || error.isEmpty() || read(journal.path()) != saved) return false;
+  checkpoint.pending.first().state.layers = {QVariantMap{{"id", "invalid-style"}, {"kind", "pixel"},
+      {"layerStyleStack", "invalid style envelope"}}};
+  return !journal.write(checkpoint, &error) && !error.isEmpty() && read(journal.path()) == saved;
+}
+bool delta_recovery_contracts() {
+  QTemporaryDir root;
+  QString path, error;
+  EditorRecipeSaveCheckpoint checkpoint;
+  EditorRecipeSaveSnapshot snapshot{.asset_id = "delta", .file_path = "/delta.dng"};
+  auto mask = default_mask_definition("brush");
+  mask["id"] = "delta-mask";
+  mask["segmentationWidth"] = 256;
+  mask["segmentationHeight"] = 256;
+  mask["segmentationData"] = QByteArray(256 * 256, 'a');
+  snapshot.state.mask_stack = {mask};
+  checkpoint.pending = {snapshot};
+  QByteArray first, second, third;
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "delta-catalog", &recovered, &error) ||
+        !journal.write(checkpoint, &error)) return false;
+    path = journal.path();
+    first = read(path);
+    checkpoint.pending[0].state.exposure = .125;
+    if (!journal.write(checkpoint, &error)) return false;
+    second = read(path);
+    checkpoint.pending[0].state.exposure += 1e-10;
+    if (!journal.write(checkpoint, &error)) return false;
+    third = read(path);
+    if (!third.startsWith(second) || !second.startsWith(first) ||
+        second.size() - first.size() > 4096 || third.size() - second.size() > 4096 ||
+        materialized(third) != reference_checkpoint_bytes(checkpoint, "delta-catalog")) return false;
+    // Retry on the same writer after an unacknowledged suffix was retained.
+    QFile suffix(path);
+    if (!suffix.open(QIODevice::WriteOnly | QIODevice::Append) ||
+        suffix.write("{torn-active-writer}\n") < 0) return false;
+    suffix.close();
+    const auto saved_exposure = checkpoint.pending[0].state.exposure;
+    checkpoint.pending[0].state.exposure = .5;
+    if (!journal.write(checkpoint, &error) || read(path).contains("torn-active-writer") ||
+        materialized(read(path)) != reference_checkpoint_bytes(checkpoint, "delta-catalog")) return false;
+    checkpoint.pending[0].state.exposure = saved_exposure;
+    if (!journal.write(checkpoint, &error)) return false;
+  }
+  const auto install = [&](const QByteArray& bytes) {
+    QSaveFile output(path);
+    return output.open(QIODevice::WriteOnly) && output.write(bytes) == bytes.size() && output.commit();
+  };
+  // Every sampled torn tail recovers the last complete fsynced revision, then
+  // accepts another edit without retaining an invalid suffix.
+  for (const qsizetype offset : {qsizetype(0), qsizetype(1), (third.size() - second.size()) / 2,
+                                 third.size() - second.size() - 1}) {
+    const auto truncated = third.first(second.size() + offset);
+    if (!install(truncated)) return false;
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "delta-catalog", &recovered, &error) ||
+        recovered.pending.size() != 1 || recovered.pending[0].state.exposure != .125 ||
+        read(path) != truncated) return false;
+    recovered.pending[0].state.exposure = .75;
+    if (!journal.write(recovered, &error) ||
+        materialized(read(path)) != reference_checkpoint_bytes(recovered, "delta-catalog")) return false;
+  }
+  if (!install(second + QByteArray("{torn-body}\n"))) return false;
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "delta-catalog", &recovered, &error) ||
+        recovered.pending[0].state.exposure != .125 || !journal.write(checkpoint, &error)) return false;
+  }
+  // The body is fsynced before the short commit fence. Simulate its delimiter
+  // reaching storage while an earlier fence byte did not: keep the prior head.
+  auto torn_fence = third;
+  const auto fence_start = torn_fence.lastIndexOf("commit:");
+  if (fence_start < 0) return false;
+  torn_fence[fence_start + 8] = '?';
+  if (!install(torn_fence)) return false;
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "delta-catalog", &recovered, &error) ||
+        recovered.pending.size() != 1 || recovered.pending[0].state.exposure != .125 ||
+        read(path) != torn_fence || !journal.write(checkpoint, &error)) return false;
+  }
+  // A complete damaged/reordered body is corruption, never a torn tail.
+  auto corrupt = third;
+  const auto digest = corrupt.lastIndexOf("sha256");
+  if (digest < 0) return false;
+  corrupt[digest + 10] = corrupt[digest + 10] == 'a' ? 'b' : 'a';
+  if (!install(corrupt)) return false;
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (journal.open(root.path(), "delta-catalog", &recovered, &error) ||
+        journal.write({}, &error) || read(path) != corrupt) return false;
+  }
+  if (!install(third)) return false;
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "delta-catalog", &recovered, &error)) return false;
+    for (int i = 0; i < 140; ++i) {
+      recovered.pending[0].state.exposure = static_cast<double>(i) / 1000.0;
+      recovered.pending[0].migration_evidence = i % 2 ? QVariantMap{{"nested", QVariantList{1, 2, 3}}}
+                                                    : QVariantMap{{"nested", QVariantList{1, 4, 3}}, {"extra", true}};
+      if (!journal.write(recovered, &error)) return false;
+    }
+    if (read(path).count('\n') > 257 ||
+        materialized(read(path)) != reference_checkpoint_bytes(recovered, "delta-catalog")) return false;
+  }
+  EditorRecipeSaveJournal reopened;
+  EditorRecipeSaveCheckpoint recovered;
+  return reopened.open(root.path(), "delta-catalog", &recovered, &error) &&
+      recovered.pending.size() == 1 && recovered.pending[0].state.exposure == .139;
+}
+
+bool deep_evidence_delta_roundtrip() {
+  QTemporaryDir root;
+  QString path, error;
+  EditorRecipeSaveCheckpoint checkpoint;
+  EditorRecipeSaveSnapshot snapshot{.asset_id = "deep-evidence", .file_path = "/deep.dng"};
+  // Keep the base above the small-record threshold without changing a raster.
+  snapshot.migration_evidence["padding"] = QString(256 * 1024, QChar('p'));
+  checkpoint.pending = {snapshot};
+  const auto nested = [](int leaf) {
+    QVariant value = leaf;
+    for (int i = 0; i < 900; ++i) value = QVariantMap{{"child", value}};
+    return value;
+  };
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "deep-evidence-catalog", &recovered, &error)) return false;
+    path = journal.path();
+    checkpoint.pending[0].migration_evidence["nested"] = nested(1);
+    if (!journal.write(checkpoint, &error)) return false;
+    checkpoint.pending[0].migration_evidence["nested"] = nested(2);
+    if (!journal.write(checkpoint, &error) ||
+        materialized(read(path)) != reference_checkpoint_bytes(checkpoint, "deep-evidence-catalog")) return false;
+  }
+  EditorRecipeSaveJournal reopened;
+  EditorRecipeSaveCheckpoint recovered;
+  return reopened.open(root.path(), "deep-evidence-catalog", &recovered, &error) &&
+      reference_checkpoint_bytes(recovered, "deep-evidence-catalog") ==
+          reference_checkpoint_bytes(checkpoint, "deep-evidence-catalog");
+}
+
 bool mask_encoding_cache_contracts() {
   EditRecipeMaskEncodingCache cache;
   EditRecipeState state;
@@ -385,6 +588,24 @@ bool shared_mask_payload_contracts() {
 }
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
+  {
+    QTemporaryDir retry_root;
+    EditorRecipeSaveJournal waiting;
+    EditorRecipeSaveCheckpoint recovered;
+    QString retry_error;
+    {
+      EditorRecipeSaveJournal owner;
+      if (!owner.open(retry_root.path(), "lock-retry", &recovered, &retry_error) ||
+          waiting.open(retry_root.path(), "lock-retry", &recovered, &retry_error) ||
+          !waiting.canRetryOpen() || !retry_error.contains("Retry close")) return 1;
+      if (waiting.open(retry_root.path(), "lock-retry", &recovered, &retry_error)) return 1;
+    }
+    if (!require(waiting.open(retry_root.path(), "lock-retry", &recovered, &retry_error) &&
+                     waiting.isOpen() && !waiting.canRetryOpen() && retry_error.isEmpty(),
+                 "The same journal must recover after the other editor releases its lock")) return 1;
+  }
+  if (!require(deep_evidence_delta_roundtrip(), "Deep evidence edits must remain readable after checkpointing")) return 1;
+  if (!require(delta_recovery_contracts(), "Durable edit replay, torn-tail recovery, corruption, or compaction failed")) return 1;
   if (!require(shared_mask_payload_contracts(), "Compatibility and canonical mask payloads differ")) return 1;
   if (!require(mask_encoding_cache_contracts(), "Mask encoding cache invalidation or exact output failed")) return 1;
   if (!require(large_string_checkpoint_contracts(), "Large tile/string encoding must preserve exact recovery bytes")) return 1;
@@ -392,7 +613,7 @@ int main(int argc, char** argv) {
     // Inspect a real checkpoint only through a temporary copy. Never acquire
     // the live editor's lock or write its recovery file.
     const auto bytes = read(app.arguments().at(2));
-    const auto payload = QJsonDocument::fromJson(bytes).object().value("payload").toObject();
+    const auto payload = QJsonDocument::fromJson(materialized(bytes)).object().value("payload").toObject();
     QTemporaryDir root;
     QString path, error;
     {
@@ -442,6 +663,9 @@ int main(int argc, char** argv) {
     auto b = a; b.asset_id = "b"; b.file_path = "/b.jpg";
     queue.enqueue(b);
     if (!journal.write(queue.checkpoint(), &error)) return 3;
+    b.state.vibrance = .314;
+    queue.enqueue(b);
+    if (!journal.write(queue.checkpoint(), &error)) return 3;
     std::cout << "READY\n" << std::flush;
     return app.exec(); // Parent kills this exact process, without destructors.
   }
@@ -450,6 +674,8 @@ int main(int argc, char** argv) {
   if (!require(cached_records_roundtrip(), "Cached record bytes, role transitions, or exact recovery failed")) return 1;
   if (!require(supported_recipe_versions_roundtrip(),
                "Recovery must round-trip every desktop recipe version the writer emits")) return 1;
+  if (!require(rejected_component_checkpoint_retains_previous(),
+               "Rejected component/style writes must preserve the previous recovery checkpoint")) return 1;
   QProcess child;
   child.start(app.applicationFilePath(), {"--crash-writer", root.path()});
   if (!child.waitForStarted(3000) || !child.waitForReadyRead(10000) ||
@@ -479,7 +705,7 @@ int main(int argc, char** argv) {
     if (!active || active->asset_id != "a" || active->state.exposure != 2 || !active->migration_evidence.isEmpty()) return 1;
     queue.complete(true);
     active = queue.begin();
-    if (!active || active->asset_id != "b") return 1;
+    if (!active || active->asset_id != "b" || active->state.vibrance != .314) return 1;
     queue.complete(true);
     const auto previous = read(path);
     if (!independent_envelope_match(previous)) return 1;

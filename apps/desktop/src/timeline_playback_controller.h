@@ -72,6 +72,7 @@ struct TimelinePlaybackAdjustmentGrade final {
 struct TimelinePlaybackFrameImageState final {
   void setImage(QImage image);
   [[nodiscard]] QImage requestImage(QSize* size, const QSize& requested_size) const;
+  [[nodiscard]] QVariantMap resourceDiagnostics() const;
 
  private:
   mutable QMutex mutex_;
@@ -110,6 +111,7 @@ class TimelinePlaybackController final : public QObject {
   Q_PROPERTY(bool hasVideoSource READ hasVideoSource NOTIFY stateChanged)
   Q_PROPERTY(bool mediaReady READ mediaReady NOTIFY stateChanged)
   Q_PROPERTY(QString errorString READ errorString NOTIFY stateChanged)
+  Q_PROPERTY(bool sourceCropPreviewEnabled READ sourceCropPreviewEnabled WRITE setSourceCropPreviewEnabled NOTIFY stateChanged)
   Q_PROPERTY(QString previewQualityMode READ previewQualityMode WRITE setPreviewQualityMode NOTIFY stateChanged)
   Q_PROPERTY(QString activeSourceUrl READ activeSourceUrl NOTIFY stateChanged)
   Q_PROPERTY(bool usingProxy READ usingProxy NOTIFY stateChanged)
@@ -127,6 +129,7 @@ class TimelinePlaybackController final : public QObject {
   Q_PROPERTY(double playbackRangeEnd READ playbackRangeEnd NOTIFY stateChanged)
   Q_PROPERTY(bool interactionActive READ interactionActive WRITE setInteractionActive NOTIFY stateChanged)
   Q_PROPERTY(bool workspaceActive READ workspaceActive WRITE setWorkspaceActive NOTIFY stateChanged)
+  Q_PROPERTY(bool playbackStartPending READ playbackStartPending NOTIFY stateChanged)
   Q_PROPERTY(double activePlaybackRate READ activePlaybackRate NOTIFY stateChanged)
   Q_PROPERTY(double shuttleRate READ shuttleRate NOTIFY stateChanged)
   Q_PROPERTY(bool shuttling READ shuttling NOTIFY stateChanged)
@@ -141,6 +144,7 @@ class TimelinePlaybackController final : public QObject {
   Q_PROPERTY(double audioRmsRight READ audioRmsRight NOTIFY stateChanged)
   Q_PROPERTY(bool audioClipping READ audioClipping NOTIFY stateChanged)
   Q_PROPERTY(QVariantMap playbackDiagnostics READ playbackDiagnostics NOTIFY stateChanged)
+  Q_PROPERTY(QVariantMap playbackResourceDiagnostics READ playbackResourceDiagnostics NOTIFY stateChanged)
   Q_PROPERTY(QVariantMap frameProcessingMetrics READ frameProcessingMetrics NOTIFY stateChanged)
   Q_PROPERTY(QVariantMap colorCacheDiagnostics READ colorCacheDiagnostics NOTIFY stateChanged)
   Q_PROPERTY(int droppedFrameCount READ droppedFrameCount NOTIFY stateChanged)
@@ -151,6 +155,7 @@ class TimelinePlaybackController final : public QObject {
   Q_PROPERTY(QString processedFrameSource READ processedFrameSource NOTIFY processedFrameSourceChanged)
   Q_PROPERTY(qint64 processedFrameTimestampUs READ processedFrameTimestampUs NOTIFY processedFrameSourceChanged)
   Q_PROPERTY(bool processedFrameTimestampEstimated READ processedFrameTimestampEstimated NOTIFY processedFrameSourceChanged)
+  Q_PROPERTY(bool stillPhotoGradePreviewActive READ stillPhotoGradePreviewActive NOTIFY processedFrameSourceChanged)
   Q_PROPERTY(QString colorGradeError READ colorGradeError NOTIFY stateChanged)
   Q_PROPERTY(QString colorSignalProcessingWarning READ colorSignalProcessingWarning NOTIFY stateChanged)
   Q_PROPERTY(QVariantMap colorSignalMetadata READ colorSignalMetadata NOTIFY colorSignalMetadataChanged)
@@ -193,6 +198,7 @@ class TimelinePlaybackController final : public QObject {
   [[nodiscard]] double audioRmsRight() const;
   [[nodiscard]] bool audioClipping() const;
   [[nodiscard]] QVariantMap playbackDiagnostics() const;
+  [[nodiscard]] QVariantMap playbackResourceDiagnostics() const;
   [[nodiscard]] QVariantMap frameProcessingMetrics() const;
   [[nodiscard]] QVariantMap colorCacheDiagnostics() const;
   [[nodiscard]] int droppedFrameCount() const;
@@ -203,15 +209,19 @@ class TimelinePlaybackController final : public QObject {
   [[nodiscard]] QString processedFrameSource() const;
   [[nodiscard]] qint64 processedFrameTimestampUs() const;
   [[nodiscard]] bool processedFrameTimestampEstimated() const;
+  [[nodiscard]] bool stillPhotoGradePreviewActive() const;
   [[nodiscard]] QString colorGradeError() const;
   [[nodiscard]] QString colorSignalProcessingWarning() const;
   [[nodiscard]] QVariantMap colorSignalMetadata() const;
   [[nodiscard]] QQuickImageProvider* createImageProvider();
 
+  [[nodiscard]] bool sourceCropPreviewEnabled() const;
+  void setSourceCropPreviewEnabled(bool enabled);
   void setPreviewQualityMode(const QString& mode);
   void setInteractionActive(bool active);
   [[nodiscard]] bool workspaceActive() const;
   void setWorkspaceActive(bool active);
+  [[nodiscard]] bool playbackStartPending() const;
 
   Q_INVOKABLE void attachVideoOutput(QObject* output);
   Q_INVOKABLE void play();
@@ -270,8 +280,23 @@ class TimelinePlaybackController final : public QObject {
   void recordAdaptiveHealthySample();
   void resetAdaptivePlaybackDetail();
   [[nodiscard]] QString preferredSourceUrl() const;
+  [[nodiscard]] bool canReplayCachedVideoFrame() const;
   [[nodiscard]] QSize frameTargetSize() const;
-  void handleVideoFrame(const QVideoFrame& frame);
+  void dispatchNativeVideoFrame(const QVideoFrame& frame);
+  void handleVideoFrame(
+      const QVideoFrame& frame,
+      quint64 decoder_frame_generation = 0U);
+  [[nodiscard]] qint64 nativePausedTargetPositionMs() const;
+  [[nodiscard]] bool canStartNativePausedPreroll(qint64 target_position_ms) const;
+  void observeNativePausedPrerollSeekPosition(qint64 position_ms);
+  bool startNativePausedPreroll(qint64 target_position_ms);
+  void cancelNativePausedPreroll(bool clear_resume_request = true);
+  void finishNativePausedPreroll(bool timed_out);
+  void attachAudioBufferOutputForPlayback();
+  void queueNativePausedPrerollSeek(quint64 generation);
+  bool tryStartPendingNativePausedPreroll();
+  void armNativePausedPrerollOutputRetry();
+  void disarmNativePausedPrerollOutputRetry();
   void startFrameProcessing(
       const QVideoFrame& frame,
       quint64 generation,
@@ -288,7 +313,10 @@ class TimelinePlaybackController final : public QObject {
       qint64 timestamp_us,
       bool timestamp_estimated);
   void clearProcessedFrame();
+  void syncStillPhotoGradePreview(const QVariantMap& program_clip);
+  void submitStillPhotoGradePreviewFrame();
   void setColorSignalMetadata(QVariantMap metadata);
+  void releaseSuspendedPlaybackResources(quint64 generation);
 
   QPointer<TimelineDocumentController> timeline_document_;
   TimelineAudioOutput audio_output_;
@@ -296,6 +324,13 @@ class TimelinePlaybackController final : public QObject {
   QMediaPlayer player_;
   QMediaPlayer prefetch_player_;
   QFutureWatcher<TimelineProcessedVideoFrame> frame_processing_watcher_;
+  QFutureWatcher<QPair<QImage, QString>> still_photo_source_watcher_;
+  QVariantMap current_program_clip_;
+  QString still_photo_requested_source_key_;
+  QString still_photo_decoding_source_key_;
+  QString still_photo_cached_source_key_;
+  QString still_photo_grade_request_key_;
+  QImage still_photo_source_image_;
   QVideoFrame latest_pending_frame_;
   qint64 pending_frame_source_timestamp_us_ = -1;
   bool pending_frame_source_timestamp_estimated_ = false;
@@ -305,9 +340,12 @@ class TimelinePlaybackController final : public QObject {
   quint64 position_sync_generation_ = 0U;
   quint64 pending_seek_frame_generation_ = 0U;
   QPointer<QQuickItem> video_frame_item_;
+  QMetaObject::Connection native_video_frame_connection_;
+  QMetaObject::Connection native_paused_preroll_output_connection_;
   std::shared_ptr<TimelinePlaybackFrameImageState> frame_image_state_ =
       std::make_shared<TimelinePlaybackFrameImageState>();
   QString current_source_url_;
+  QString active_program_clip_id_;
   QString active_video_source_identity_;
   QString active_video_source_revision_;
   QString active_video_input_transform_;
@@ -333,6 +371,7 @@ class TimelinePlaybackController final : public QObject {
   TimelinePlaybackEffectParameters active_video_effects_;
   int active_sequence_width_ = 0;
   int active_sequence_height_ = 0;
+  bool source_crop_preview_enabled_ = false;
   QString preview_quality_mode_ = QStringLiteral("auto");
   QString error_string_;
   qint64 frame_source_revision_ = 0;
@@ -361,10 +400,36 @@ class TimelinePlaybackController final : public QObject {
   bool has_pending_video_frame_ = false;
   bool interaction_active_ = false;
   bool workspace_active_ = true;
+  bool playback_hibernated_ = false;
+  bool native_paused_preroll_active_ = false;
+  bool native_paused_preroll_first_frame_seen_ = false;
+  bool native_paused_preroll_seek_issued_ = false;
+  bool native_paused_preroll_seek_queued_ = false;
+  bool native_paused_preroll_retarget_pending_ = false;
+  bool native_paused_preroll_seek_acknowledged_ = false;
+  bool native_paused_preroll_play_pending_ = false;
+  bool native_audio_buffer_output_detached_ = false;
+  bool native_paused_preroll_resume_pending_ = false;
+  bool preserve_last_processed_frame_during_pause_ = false;
+  quint64 native_paused_preroll_generation_ = 0U;
+  std::atomic<quint64> native_paused_preroll_frame_generation_{0U};
+  quint64 native_audio_output_resume_generation_ = 0U;
+  int native_paused_preroll_start_count_ = 0;
+  int native_paused_preroll_timeout_count_ = 0;
+  int native_paused_preroll_seek_count_ = 0;
+  QString native_paused_preroll_status_;
+  qint64 native_paused_preroll_target_ms_ = -1;
+  qint64 native_paused_preroll_ack_position_ms_ = -1;
+  qint64 native_paused_preroll_last_target_timestamp_us_ = -1;
+  QString native_paused_preroll_source_url_;
+  quint64 playback_suspend_generation_ = 0U;
+  quint64 playback_resource_release_attempt_count_ = 0U;
+  quint64 playback_resource_release_completed_count_ = 0U;
   bool using_proxy_ = false;
   bool using_render_cache_ = false;
   bool scene_preview_cache_active_ = false;
   bool injecting_scene_preview_frame_ = false;
+  bool still_photo_grade_preview_active_ = false;
   QString scene_preview_frame_key_;
   QString scene_preview_error_;
   double active_playback_rate_ = 1.0;
@@ -379,11 +444,15 @@ class TimelinePlaybackController final : public QObject {
   bool playback_range_looping_ = false;
   double likely_next_edit_seconds_ = -1.0;
   QTimer prefetch_timer_;
+  QTimer native_paused_preroll_timer_;
+  QElapsedTimer native_paused_preroll_elapsed_;
+  qint64 native_paused_preroll_last_seek_elapsed_ms_ = -1;
   QTimer runtime_recovery_timer_;
   QTimer gap_timer_;
   QElapsedTimer gap_elapsed_;
   QElapsedTimer playback_sample_clock_;
   qint64 last_playback_sample_position_ms_ = -1;
+  qint64 last_audio_source_position_ms_ = -1;
   double gap_start_sequence_seconds_ = 0.0;
   bool runtime_recovery_busy_ = false;
   QString runtime_recovery_kind_;

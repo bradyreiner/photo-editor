@@ -9,6 +9,8 @@ static bool gaussian_resolved_source_regression() {
   if (!warm.error.isEmpty() || warm.metrics.value("resolvedSourceReused").toBool() ||
       warm.metrics.value("depthCenterBytes").toULongLong() != 3*sizeof(float)) return false;
   auto edited = base; edited.photo.exposure_ev = 0.75F; edited.photo.look = 1; edited.photo.film = {0.5F,3,0.4F,8,0.2F,99};
+  edited.photo.post = {1,8,1,32,3,20,0.7F,0.1F,2,1.1F};
+  edited.photo.tone = {1.2F,0.65F};
   const auto cached = renderer->render(scene,edited,true);
   const auto independent = make_gaussian_scene_renderer()->render(scene,edited,true);
   if (!cached.error.isEmpty() || cached.image != independent.image || !cached.metrics.value("resolvedSourceReused").toBool() ||
@@ -19,6 +21,12 @@ static bool gaussian_resolved_source_regression() {
       [](auto& c) { c.photo.lens.focus_distance = 4; }, [](auto& c) { c.photo.lens.aperture_radius = 0.1F; },
       [](auto& c) { c.photo.lens.blades = 9; }, [](auto& c) { c.photo.lens.rotation_degrees = 30; },
       [](auto& c) { c.photo.lens.roundness = 0.5F; }, [](auto& c) { c.photo.lens.samples = 32; },
+      [](auto& c) { c.photo.lens.aperture_edge = 3; },
+      [](auto& c) { c.photo.lens.vignetting_distance = 0.2F; },
+      [](auto& c) { c.photo.lens.vignetting_scale = 1.2F; },
+      [](auto& c) { c.photo.lens.spherical_distortion = 0.2F; },
+      [](auto& c) { c.photo.lens.astigmatism = -0.5F; },
+      [](auto& c) { c.photo.lens.field_curvature = 0.4F; },
       [](auto& c) { c = c.resized({64,64}); },
       [](auto& c) { c = navigate_gaussian_camera(c,3,5,2,0,0,0); }};
   for (const auto& change : changes) {

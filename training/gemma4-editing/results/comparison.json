@@ -1,0 +1,28 @@
+{
+  "contract": "looksy-gemma-editing-pilot-comparison-v1",
+  "baseNextActions": {
+    "passed": 14,
+    "total": 24
+  },
+  "rejectedUncausalNextActions": {
+    "passed": 12,
+    "total": 24
+  },
+  "causalAdapterNextActions": {
+    "passed": 18,
+    "total": 24
+  },
+  "scope": "Exact expected next-action matches on small synthetic mechanics cases, not creative editing quality",
+  "causalityProbe": {
+    "padding_mask_forward": 27.5,
+    "model_causal_forward": 0.0
+  },
+  "defaultChanged": false,
+  "selectedAdapter": {
+    "selectedBy": "minimum validation loss before response evaluation",
+    "iteration": 100,
+    "validationLoss": 0.02812656989464393,
+    "validationBatchesPerCheck": 4,
+    "adapterSha256": "a8e3f5822ef031c2dfe8bbbf10a9b9369915dc88bb69553ad8d12d49fb0fd84b"
+  }
+}

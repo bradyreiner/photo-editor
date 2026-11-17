@@ -126,7 +126,7 @@ ColumnLayout {
                 Label { text: "Active toggle"; color: theme.textFaint; font.pixelSize: theme.typeCaption }
                 ActionButton {
                     objectName: "uiPrimitivesActionActive"
-                    text: root.sampleActionActive ? "Pinned" : "Pin"
+                    text: "Pin"
                     iconName: "star"
                     compact: true
                     active: root.sampleActionActive
@@ -334,7 +334,7 @@ ColumnLayout {
                 MenuButton {
                     objectName: "uiPrimitivesMenuMore"
                     text: "More"
-                    iconName: "menu"
+                    iconName: "more"
                     compact: true
                     secondaryActionMenu: true
                     accessibleName: "More sample actions"

@@ -4,6 +4,7 @@ layout(location = 0) in vec2 textureCoordinate;
 layout(location = 0) out vec4 fragmentColor;
 
 layout(binding = 1) uniform sampler2D source;
+layout(binding = 2) uniform sampler2D blurredSource;
 
 layout(std140, binding = 0) uniform buf {
     mat4 qt_Matrix;
@@ -16,6 +17,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 effect3; vec4 geometry3; vec4 mask3;
     vec4 effect4; vec4 geometry4; vec4 mask4;
     vec4 effect5; vec4 geometry5; vec4 mask5;
+    vec4 blurGeometry;
+    vec4 blurMaskShape;
+    vec4 blurSettings;
 } ubuf;
 
 vec3 applyColorAdjustment(vec3 rgb, float code, float amount)
@@ -84,6 +88,14 @@ void main()
     float alpha = color.a;
     vec3 straightRgb = alpha > 0.00001 ? color.rgb / alpha : vec3(0.0);
     vec2 sourceCoordinate = (textureCoordinate - ubuf.contentRect.xy) / ubuf.contentRect.zw;
+    if (ubuf.blurSettings.y > 0.5 && ubuf.blurMaskShape.w > 0.5) {
+        float blurCoverage = maskCoverage(
+            sourceCoordinate, ubuf.blurGeometry, ubuf.blurMaskShape, ubuf.pixelSize.xy);
+        if (ubuf.blurMaskShape.z > 0.5) blurCoverage = 1.0 - blurCoverage;
+        vec4 blurred = texture(blurredSource, textureCoordinate);
+        vec3 blurredStraight = blurred.a > 0.00001 ? blurred.rgb / blurred.a : vec3(0.0);
+        straightRgb = mix(straightRgb, blurredStraight, blurCoverage);
+    }
     straightRgb = applyMaskedEffect(straightRgb, sourceCoordinate, ubuf.pixelSize.xy,
                                     ubuf.effect0, ubuf.geometry0, ubuf.mask0);
     straightRgb = applyMaskedEffect(straightRgb, sourceCoordinate, ubuf.pixelSize.xy,

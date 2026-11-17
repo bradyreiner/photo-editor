@@ -1,0 +1,17 @@
+{
+  "campaign": "04 The last tweak. Again.",
+  "created": "2026-11-16",
+  "artwork": "Original procedural vector-inspired artwork authored in make_campaign.py. No stock imagery or product UI. The recurring poster is an original campaign graphic, not output shown as made in LOOKSi.",
+  "fonts": {
+    "sans": "source/fonts/spacegrotesk/SpaceGrotesk[wght].ttf",
+    "serif": "source/fonts/instrumentserif/InstrumentSerif.ttf",
+    "italic": "source/fonts/instrumentserif/InstrumentSerif-Italic.ttf",
+    "mono": "source/fonts/spacemono/SpaceMono-Regular.ttf"
+  },
+  "font_licenses": "SIL Open Font License files are bundled beside the source fonts.",
+  "audio": "Original synthesized stereo sound design from sine oscillators, deterministic noise, envelopes and authored event timing. No recordings, samples, music library or voice likeness.",
+  "product_claims": "Builder intent and category only. This film makes no claim about version management, time saving, app actions, output fidelity or availability.",
+  "filming_required": false,
+  "outputs": "Hero plus two opening-hook variations use continuous full-length encodes and the same narrative after their optical opening dissolve. Sound-on and silent masters supplied.",
+  "name_status": "Campaign use of LOOKSi; app identity is unchanged."
+}

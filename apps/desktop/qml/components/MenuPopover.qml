@@ -17,6 +17,8 @@ AppPopup {
     property string ownerObjectName: ""
     property bool strongSurface: false
     property int currentFocusIndex: -1
+    property bool activationPending: false
+    transientMenu: true
 
     signal itemTriggered(string key)
 
@@ -40,6 +42,31 @@ AppPopup {
         return -1;
     }
 
+    function activateItem(key) {
+        if (root.activationPending || !root.visible)
+            return
+        root.activationPending = true
+        // Closing or executing an action can synchronously replace the row
+        // model. Let its clicked/activated/Keys handlers finish first.
+        Qt.callLater(root.finishItemActivation, String(key || ""))
+    }
+
+    function finishItemActivation(action) {
+        if (!root.activationPending)
+            return
+        root.activationPending = false
+        if (!root.visible)
+            return
+        root.closeTransient(false)
+        root.itemTriggered(action)
+    }
+
+    Connections {
+        target: root
+        function onAboutToShow() { root.activationPending = false }
+        function onAboutToHide() { root.activationPending = false }
+    }
+
     function checkedIndex() {
         for (let index = 0; index < root.menuItems.length; ++index) {
             if (itemEnabledAt(index) && root.menuItems[index].checked === true)
@@ -49,13 +76,17 @@ AppPopup {
     }
 
     function focusMenuItem(index) {
+        return root.focusMenuItemWithReason(index, Qt.TabFocusReason);
+    }
+
+    function focusMenuItemWithReason(index, reason) {
         if (!itemEnabledAt(index))
             return false;
         const item = menuRepeater.itemAt(index);
         if (!item)
             return false;
         currentFocusIndex = index;
-        item.forceActiveFocus(Qt.TabFocusReason);
+        item.forceActiveFocus(reason === undefined ? Qt.TabFocusReason : reason);
         if (item.y < menuScroll.contentY)
             menuScroll.contentY = item.y;
         else if (item.y + item.height > menuScroll.contentY + menuScroll.height)
@@ -74,6 +105,10 @@ AppPopup {
         }
     }
 
+    function toggleFrom(opener) {
+        return root.toggleTransient(opener)
+    }
+
     y: root.anchorHeight + theme.space6
     margins: theme.space8
     width: Math.min(popupAvailableWidth, Math.max(1, Math.min(root.Overlay.overlay ? Math.max(1, root.Overlay.overlay.width - margins * 2) : root.menuMaximumWidth, root.menuMaximumWidth, Math.max(root.menuMinimumWidth, root.menuWidth, root.anchorWidth, menuColumn.implicitWidth + root.menuPopoverPadding * 2))))
@@ -81,14 +116,18 @@ AppPopup {
     modal: false
     focus: true
     padding: root.menuPopoverPadding
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    closePolicy: Popup.CloseOnPressOutside
     onOpened: {
         currentFocusIndex = checkedIndex();
         if (currentFocusIndex < 0)
             currentFocusIndex = firstEnabledIndex();
         if (currentFocusIndex >= 0)
             Qt.callLater(function () {
-                root.focusMenuItem(currentFocusIndex);
+                // Pointer-opened menus keep keyboard routing without drawing a
+                // keyboard-focus box around the first row before navigation.
+                root.focusMenuItemWithReason(currentFocusIndex,
+                    root.transientOpener && !root.transientOpener.visualFocus
+                        ? Qt.MouseFocusReason : Qt.TabFocusReason);
             });
     }
 
@@ -105,12 +144,16 @@ AppPopup {
 
         ColumnLayout {
             id: menuColumn
+            readonly property bool transientPopupKeyboardScope: true
             width: menuScroll.width
-            spacing: theme.space4
+            spacing: theme.space2
             focus: true
 
             Keys.onPressed: function (event) {
-                if (event.key === Qt.Key_Down) {
+                if (event.key === Qt.Key_Escape) {
+                    root.closeTransient(true);
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_Down) {
                     root.focusNextMenuItem(1);
                     event.accepted = true;
                 } else if (event.key === Qt.Key_Up) {
@@ -133,6 +176,7 @@ AppPopup {
                 model: root.visible ? root.menuItems : []
 
                 delegate: PopupMenuRow {
+                    onDismissRequested: Qt.callLater(root.closeTransient, true)
                     previousItem: index > 0 ? root.menuItems[index - 1] : ({})
                     objectNamePrefix: root.ownerObjectName.length > 0
                                       ? root.ownerObjectName + "Popup"
@@ -144,8 +188,7 @@ AppPopup {
                         root.currentFocusIndex = itemIndex;
                     }
                     onActivated: function (key) {
-                        root.close();
-                        root.itemTriggered(key);
+                        root.activateItem(key);
                     }
                     onNavigateRequested: function (direction) {
                         root.focusNextMenuItem(direction);

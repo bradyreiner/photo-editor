@@ -1,0 +1,84 @@
+{
+  "status": "UNEXECUTED COMMAND PLAN; placeholders are intentionally not app IDs or receipts",
+  "read_only_discovery": [
+    {
+      "name": "app.agent_guide",
+      "arguments": {
+        "workflow": "design"
+      }
+    },
+    {
+      "name": "app.list_commands",
+      "arguments": {
+        "domain": "edit",
+        "query": "addPhotoShape",
+        "offset": 0,
+        "limit": 12
+      }
+    },
+    {
+      "name": "app.list_commands",
+      "arguments": {
+        "domain": "carousel",
+        "query": "createEditCanvas",
+        "offset": 0,
+        "limit": 12
+      }
+    },
+    {
+      "name": "app.command_schema",
+      "arguments": {
+        "commandId": "<EXACT_ID_FROM_LIVE_DISCOVERY>"
+      }
+    },
+    {
+      "name": "photo.inspect_composition",
+      "arguments": {
+        "assetId": "<EXACT_OPEN_BOARD_ASSET_ID>"
+      }
+    }
+  ],
+  "conditional_open_document_edits": [
+    {
+      "precondition": "Exact open canary board and live tool admission; not an existing unrelated document",
+      "name": "photo.edit_composition",
+      "arguments": {
+        "assetId": "<EXACT_OPEN_BOARD_ASSET_ID>",
+        "operation": "add_paragraph_text",
+        "values": {
+          "text": "Native campaign headline",
+          "x": 60,
+          "y": 145,
+          "width": 960,
+          "height": 250
+        }
+      }
+    },
+    {
+      "precondition": "Use createdLayerId from actual successful creation; inspected actual family and face",
+      "name": "photo.edit_composition",
+      "arguments": {
+        "assetId": "<EXACT_OPEN_BOARD_ASSET_ID>",
+        "operation": "typography",
+        "layerId": "<ACTUAL_CREATED_LAYER_ID>",
+        "values": {
+          "family": "<INSPECTED_FAMILY>",
+          "face": "<INSPECTED_FACE>",
+          "size": 100,
+          "weight": 600,
+          "color": "#202522"
+        }
+      }
+    },
+    {
+      "name": "photo.render_current_proof",
+      "arguments": {}
+    },
+    {
+      "name": "photo.validate_edit",
+      "arguments": {}
+    }
+  ],
+  "native_ui_save": "Save Boards invokes syncBoardPhotoEdit() then carouselDocument.saveDocument(); wait for actual Saved.",
+  "important": "No app.invoke_command signature guessed here. Inspect availability and the exact current schema, obey native ownership and customer access, and retain the actual returned receipt."
+}

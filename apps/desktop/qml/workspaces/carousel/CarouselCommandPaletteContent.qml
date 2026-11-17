@@ -36,7 +36,8 @@ ColumnLayout {
         Label {
             text: "Ctrl/Meta+K"
             color: theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 10
             elide: Text.ElideNone
         }
@@ -154,7 +155,8 @@ ColumnLayout {
                               : String(commandResultDelegate.modelData.category) + " · " +
                                 String(commandResultDelegate.modelData.disabledReason)
                         color: commandResultDelegate.enabled ? theme.textMuted : theme.warning
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 9
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         elide: Text.ElideNone
@@ -165,7 +167,8 @@ ColumnLayout {
                     visible: String(commandResultDelegate.modelData.shortcut || "").length > 0
                     text: String(commandResultDelegate.modelData.shortcut || "")
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 9
                     elide: Text.ElideNone
                 }
@@ -190,7 +193,8 @@ ColumnLayout {
               (carouselCommandResultList.count === 1 ? "" : "s") +
               " · Up/Down to navigate · Enter to run · Escape to close"
         color: theme.textFaint
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 9
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
         elide: Text.ElideNone

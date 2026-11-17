@@ -10,13 +10,16 @@ Rectangle {
     property string subhead: ""
     property bool headerVisible: title.length > 0
     property bool framed: true
+    property bool docked: false
+    property bool selected: false
+    readonly property string studioPanelStyleContract: "studio-panel-style:v1|neutral|shallow|border:high-contrast-only"
 
     Theme { id: theme }
 
-    color: theme.ink900
-    border.width: framed ? theme.hairlineWidth : 0
+    color: panel.selected ? theme.editorSelectionFill : theme.ink900
+    border.width: framed && theme.highContrast ? theme.hairlineWidth : 0
     border.color: theme.alpha(theme.controlEdge, 0.7)
-    radius: theme.radiusPanel
+    radius: panel.docked ? 0 : theme.radiusPanel
     clip: true
 
     ColumnLayout {

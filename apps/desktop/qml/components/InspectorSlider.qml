@@ -13,6 +13,7 @@ Item {
     // A symmetric quadratic track gives exposure more room around zero while
     // keeping the value, keyboard increment and saved recipe in actual EV.
     property bool precisionResponse: false
+    property bool fineAdjustmentEnabled: true
     readonly property real displayedPosition: precisionResponse
                                               ? (control.mirrored ? 1 - positionForValue(control.value) : positionForValue(control.value))
                                               : control.visualPosition
@@ -25,19 +26,23 @@ Item {
     property string disabledReason: ""
     property bool showFullLabelTooltip: true
     property int labelColumnWidth: theme.labelMinWidth
-    property int valueColumnWidth: Math.max(theme.valueColumnWidth, 68)
-    property int resetColumnWidth: 28
+    property string styleVariant: "standard"
+    property int valueColumnWidth: root.styleVariant === "compact-hud" ? theme.scaled(48) : theme.inspectorValueWidth
+    property int resetColumnWidth: theme.inspectorResetWidth
     property bool showResetButton: true
+    property bool stackedHeader: false
     property bool throttleDraggedValues: true
     property int dragCommitIntervalMs: 16
     property real pendingDraggedValue: 0
     property bool hasPendingDraggedValue: false
     property real defaultValue: from <= 0 && to >= 0 ? 0 : from
     property real modifiedEpsilon: stepSize > 0 ? Math.max(stepSize / 2, 0.0001) : 0.0001
-    property int controlHeight: theme.scaled(theme.densityComfortable ? 62 : theme.densityCompact ? 50 : 56)
+    property int controlHeight: theme.controlHeight
     property bool forceCompact: false
-    readonly property bool wideRailLayout: !forceCompact && (controlHeight >= theme.scaled(52)
-                                            || width < theme.scaled(280))
+    readonly property bool wideRailLayout: root.stackedHeader || width < theme.scaled(300)
+                                            || labelMetrics.width > compactLabelWidth
+                                            || (!forceCompact && controlHeight >= theme.scaled(52))
+    readonly property real headerHeight: Math.max(theme.controlHeightDense, labelText.implicitHeight)
     readonly property int effectiveResetWidth: showResetButton ? resetColumnWidth : 0
     readonly property real compactLabelWidth: Math.max(
                                                   theme.scaled(32),
@@ -48,13 +53,16 @@ Item {
     readonly property real compactValueX: width - theme.space6 - effectiveResetWidth
                                           - (effectiveResetWidth > 0 ? theme.space8 : 0)
                                           - valueColumnWidth
-    readonly property real resolvedSliderHeight: wideRailLayout
-                                                 ? Math.max(controlHeight, theme.controlHeightDense + theme.scaled(24) + theme.space6)
+    readonly property real resolvedSliderHeight: root.stackedHeader
+                                                 ? theme.space2 + headerHeight + theme.controlHeightDense
+                                                   + theme.scaled(24) + theme.space2
+                                                 : wideRailLayout
+                                                 ? Math.max(controlHeight, headerHeight + theme.scaled(24) + theme.space6)
                                                  : Math.max(controlHeight, theme.controlHeightDense)
     readonly property real sliderScale: theme.interfaceScale
-    readonly property int trackHeight: 3
-    readonly property int thumbRestSize: 12
-    readonly property int thumbPressedSize: 16
+    readonly property int trackHeight: theme.sliderTrackBase
+    readonly property int thumbRestSize: theme.sliderThumbRestBase
+    readonly property int thumbPressedSize: theme.sliderThumbActiveBase
     readonly property int thumbReservedSize: Math.max(thumbRestSize, thumbPressedSize)
     readonly property real thumbVisualScale: thumbReservedSize > 0
                                        ? (root.pressed ? 1.0 : thumbRestSize / thumbReservedSize)
@@ -75,13 +83,16 @@ Item {
     readonly property bool hasTrackGradient: trackColorCount > 1
     readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0
                                                  ? root.label + " - " + root.disabledReason
-                                                 : root.label + (root.precisionResponse ? " · Shift: fine adjustment · Esc: cancel" : "")
-    readonly property string sliderContract: "inspector-slider:v4|layout:adaptive-compact-row-or-label-value-header-wide-rail|label-column:fluid|value-column:" +
+                                                 : root.label + (root.fineAdjustmentEnabled ? " · Shift: fine adjustment · Esc: cancel" : "")
+    readonly property string sliderContract: "inspector-slider:v4|layout:adaptive-compact-row-or-label-value-header-wide-rail|style-variant:" +
+                                             String(styleVariant) +
+                                             "|label-column:fluid|value-column:" +
                                              String(valueColumnWidth) +
                                              "|reset-column:" +
                                              String(resetColumnWidth) +
                                              "|row-height:" +
                                              String(resolvedSliderHeight) +
+                                             "|stacked-header:" + String(stackedHeader) +
                                              "|track:" +
                                              String(trackHeight) +
                                              "|thumb:" +
@@ -110,8 +121,16 @@ Item {
     signal resetRequested()
 
     Theme { id: theme }
+    TextMetrics {
+        id: labelMetrics
+        text: root.label
+        font.family: theme.fontUi
+        font.pixelSize: theme.typeLabel
+        font.weight: theme.weightControl
+    }
 
     implicitHeight: resolvedSliderHeight
+    Accessible.role: Accessible.Grouping
     Accessible.name: root.label
     Accessible.description: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.valueText
 
@@ -148,7 +167,7 @@ Item {
         // but stripping arbitrary characters turns an empty or malformed
         // edit into Number("") === 0. Accept a complete numeric token and an
         // optional unit suffix only.
-        const match = String(text).trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(?:[A-Za-z%°]+)?$/)
+        const match = String(text).trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(?:[A-Za-z%°×]+)?$/)
         if (!match)
             return NaN
         const numeric = Number(match[1])
@@ -175,7 +194,11 @@ Item {
             return false
         }
         const nextValue = clamp(parsedValue, control.from, control.to)
-        root.valueDragged(nextValue)
+        if (Math.abs(nextValue - control.value) > 0.0000001) {
+            root.interactionStarted()
+            root.valueDragged(nextValue)
+            root.interactionFinished()
+        }
         // Typing replaces the text binding. Restore it after committing so a
         // later focus change cannot submit the previous displayed value.
         valueField.text = Qt.binding(function() { return root.valueText })
@@ -214,10 +237,16 @@ Item {
         return control.value
     }
 
+    function requestReset() {
+        root.interactionStarted()
+        root.resetRequested()
+        root.interactionFinished()
+    }
+
     TapHandler {
         acceptedButtons: Qt.LeftButton
         gesturePolicy: TapHandler.DragThreshold
-        onDoubleTapped: root.resetRequested()
+        onDoubleTapped: root.requestReset()
     }
 
     Timer {
@@ -229,21 +258,23 @@ Item {
 
     Label {
         id: labelText
+        objectName: root.objectName.length > 0 ? root.objectName + "Label" : ""
         x: theme.space6
         y: root.wideRailLayout ? theme.space2 : 0
-        width: Math.max(1, root.wideRailLayout
-                           ? root.compactValueX - x - theme.space8
-                           : root.compactLabelWidth)
-        height: root.wideRailLayout ? theme.controlHeightDense : root.resolvedSliderHeight
+        width: Math.max(1, root.stackedHeader
+                           ? root.width - theme.space12
+                           : root.wideRailLayout
+                             ? root.compactValueX - x - theme.space8
+                             : root.compactLabelWidth)
+        height: root.wideRailLayout ? root.headerHeight : root.resolvedSliderHeight
         verticalAlignment: Text.AlignVCenter
         text: root.label
         color: root.enabled
                ? (root.pressed ? theme.textStrong : theme.textMain)
                : theme.textFaint
         elide: Text.ElideNone
-        fontSizeMode: Text.HorizontalFit
-        minimumPixelSize: theme.typeCaption
-        maximumLineCount: 1
+        fontSizeMode: Text.FixedSize
+        wrapMode: root.wideRailLayout ? Text.Wrap : Text.NoWrap
         font.family: theme.fontUi
         font.pixelSize: theme.typeLabel
         font.weight: theme.weightControl
@@ -269,7 +300,8 @@ Item {
         objectName: root.objectName.length > 0 ? root.objectName + "ValueField" : ""
         accessibleLabel: root.label + " value"
         x: root.compactValueX
-        y: root.wideRailLayout ? theme.space2
+        y: root.stackedHeader ? theme.space2 + root.headerHeight
+          : root.wideRailLayout ? theme.space2
                                : Math.round((root.resolvedSliderHeight - height) / 2)
         width: root.valueColumnWidth
         height: root.wideRailLayout ? theme.controlHeightDense
@@ -281,33 +313,39 @@ Item {
         Accessible.description: "Type a value for " + root.label
         text: root.valueText
         color: root.enabled ? theme.textStrong : theme.textFaint
-        font.family: theme.fontUi
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: theme.typeControl
         font.weight: theme.weightControl
         font.letterSpacing: 0
         hoverEnabled: true
         selectByMouse: true
         inputMethodHints: Qt.ImhFormattedNumbersOnly
-        background: Rectangle {
-            color: valueField.activeFocus ? theme.fieldHoverFill
-                   : valueField.hovered ? theme.alpha(theme.fieldFill, 0.8) : "transparent"
-            border.width: valueField.activeFocus ? theme.focusBorderWidth
-                          : valueField.hovered ? theme.hairlineWidth : 0
-            border.color: valueField.activeFocus ? theme.focusRing : theme.alpha(theme.controlEdge, 0.72)
-            radius: theme.radiusControl
-        }
+        numericEntry: true
+        inlineField: true
         onTextEdited: root.valueInputDirty = true
         onAccepted: root.commitValueText()
         onActiveFocusChanged: {
             if (!activeFocus)
                 root.commitValueText()
         }
+        Keys.onEscapePressed: function(event) {
+            if (!root.valueInputDirty) {
+                event.accepted = false
+                return
+            }
+            root.valueInputDirty = false
+            text = Qt.binding(function() { return root.valueText })
+            control.forceActiveFocus()
+            event.accepted = true
+        }
     }
 
     Components.ToolButton {
         objectName: root.objectName.length > 0 ? root.objectName + "ResetButton" : ""
         x: root.width - theme.space6 - width
-        y: root.wideRailLayout ? theme.space2
+        y: root.stackedHeader ? theme.space2 + root.headerHeight
+          : root.wideRailLayout ? theme.space2
                                : Math.round((root.resolvedSliderHeight - height) / 2)
         width: root.effectiveResetWidth
         height: Math.min(theme.controlHeightDense, root.resolvedSliderHeight)
@@ -321,14 +359,17 @@ Item {
         enabled: root.enabled && root.modified
         commandEnabled: root.enabled && root.modified
         disabledReason: root.modified ? "" : "Value is already at its default."
-        onClicked: if (root.modified) root.resetRequested()
+        onClicked: if (root.modified) root.requestReset()
     }
 
     Slider {
         id: control
+        objectName: root.objectName.length > 0 ? root.objectName + "Control" : ""
         x: root.wideRailLayout ? theme.space6 : root.compactTrackX
-        y: root.wideRailLayout
-           ? Math.max(theme.controlHeightDense + theme.space4,
+        y: root.stackedHeader
+           ? theme.space2 + root.headerHeight + theme.controlHeightDense
+           : root.wideRailLayout
+           ? Math.max(root.headerHeight + theme.space4,
                       root.resolvedSliderHeight - height - theme.space2)
            : 0
         width: root.wideRailLayout
@@ -434,7 +475,7 @@ Item {
                         width: parent.width * root.thumbVisualScale
                         height: width
                         radius: width / 2
-                        color: root.pressed ? theme.brandPaper : "#D1D8E2"
+                        color: root.pressed ? theme.brandPaper : theme.textMain
                         border.width: control.visualFocus ? theme.focusBorderWidth : 1
                         border.color: control.visualFocus
                                       ? theme.focusRing
@@ -458,7 +499,7 @@ Item {
                     id: precisionPointer
                     objectName: root.objectName.length > 0 ? root.objectName + "PrecisionPointer" : ""
                     anchors.fill: parent
-                    enabled: root.precisionResponse
+                    enabled: root.fineAdjustmentEnabled
                     preventStealing: true
                     property bool gestureActive: false
                     property real startValue: 0
@@ -524,7 +565,25 @@ Item {
                     if (precisionPointer.gestureActive) {
                         precisionPointer.finish(true)
                         event.accepted = true
+                    } else {
+                        event.accepted = false
                     }
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key !== Qt.Key_Left && event.key !== Qt.Key_Right &&
+                        event.key !== Qt.Key_Up && event.key !== Qt.Key_Down &&
+                        event.key !== Qt.Key_Home && event.key !== Qt.Key_End &&
+                        event.key !== Qt.Key_PageUp && event.key !== Qt.Key_PageDown)
+                        return
+                    const increment = root.stepSize > 0 ? root.stepSize : (root.to-root.from)/100
+                    const direction = event.key === Qt.Key_Left || event.key === Qt.Key_Down || event.key === Qt.Key_PageDown ? -1 : 1
+                    const amount = event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown ? 10 : 1
+                    const next = event.key === Qt.Key_Home ? root.from : event.key === Qt.Key_End ? root.to
+                        : root.clamp(control.value + direction*increment*amount, root.from, root.to)
+                    root.interactionStarted()
+                    root.valueDragged(next)
+                    root.interactionFinished()
+                    event.accepted = true
                 }
 
                 onMoved: root.queueDraggedValue(control.value)

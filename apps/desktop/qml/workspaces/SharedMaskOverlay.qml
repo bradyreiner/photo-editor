@@ -11,22 +11,27 @@ Item {
 
     Theme { id: theme }
 
+    // Studio can supply its component-scoped controller. The global fallback
+    // keeps this shared overlay compatible with legacy MaskView callers.
+    property var previewControllerOverride: null
+    readonly property var previewController: previewControllerOverride || editorPreview
+
     property string objectNamePrefix: ""
     property bool masked: false
-    property bool hasActiveMask: editorPreview.hasActiveMask
-    property bool compareMode: editorPreview.compareMode
-    property bool activeBrushPainting: editorPreview.brushStrokeActive
+    property bool hasActiveMask: root.previewController.hasActiveMask
+    property bool compareMode: root.previewController.compareMode
+    property bool activeBrushPainting: root.previewController.brushStrokeActive
     property bool enablePolygonHandles: true
     property bool enableOutlineSelection: true
     property color accentColor: "#24DCC2"
     property real outlinePhase: 0
     property bool outlineAnimationEnabled: false
     property real outlineVisualScale: 1.0
-    property real cropX: editorPreview.cropRectX
-    property real cropY: editorPreview.cropRectY
-    property real cropWidth: editorPreview.cropRectWidth
-    property real cropHeight: editorPreview.cropRectHeight
-    property real transformRotation: editorPreview.transformRotation
+    property real cropX: root.previewController.cropRectX
+    property real cropY: root.previewController.cropRectY
+    property real cropWidth: root.previewController.cropRectWidth
+    property real cropHeight: root.previewController.cropRectHeight
+    property real transformRotation: root.previewController.transformRotation
     property real genericTintOpacity: 0.18
     property bool outlineActivationDeferred: false
     property bool selectionFillVisible: false
@@ -52,7 +57,8 @@ Item {
     readonly property int maximumCanvasBackingEdge: 2048
     readonly property string settledMaskOutlineContract: "final-alpha-contour|overlay-fill|marching-ants:v2"
     readonly property string outlineTraceContract: "public-outline-trace|source|tolerance|provider|path-count|image-normalized|final-alpha:v2"
-    readonly property var activeOutlineTrace: outlineActivationDeferred ? ({}) : (editorPreview.activeMaskOutlineTrace || ({}))
+    readonly property var activeOutlineTrace: outlineActivationDeferred ? ({}) : root.previewController.editingLayerMask
+        ? ({outline_coordinate_space: "source", outline_brush_viewport_coordinates: false}) : (root.previewController.activeMaskOutlineTrace || ({}))
     readonly property string activeOutlineTraceSource: String(activeOutlineTrace.outline_trace_source || "")
     readonly property int activeOutlineTracePathCount: Math.max(0, Number(activeOutlineTrace.outline_trace_path_count || 0))
     readonly property real activeOutlineTraceTolerancePixels: Math.max(0, Number(activeOutlineTrace.outline_trace_tolerance_pixels || 0))
@@ -122,12 +128,15 @@ Item {
 
     // New brush strokes and their traced alpha already use the visible photo's
     // normalized coordinates. Applying the source crop again displaces them.
-    readonly property bool brushViewportCoordinates: editorPreview.activeMaskKind === "brush" &&
-        ((activeBrushPainting && editorPreview.activeMaskToolRole !== "retouch") ||
+    readonly property bool brushViewportCoordinates: !root.previewController.editingLayerMask && root.previewController.activeMaskKind === "brush" &&
+        ((activeBrushPainting && root.previewController.activeMaskToolRole !== "retouch") ||
          activeOutlineTrace.outline_brush_viewport_coordinates === true)
 
     CanvasCoordinateMapper {
         id: sharedCoordinateMapper
+        geometryMapper: root.previewController
+        inputCoordinateSpace: "source"
+        coordinateSpace: "active"
         contentX: 0
         contentY: 0
         contentWidth: root.width
@@ -205,12 +214,12 @@ Item {
     }
 
     function resolvedOverlayColor(fallbackColor) {
-        const customColor = String(editorPreview.maskPreviewOverlayColor || "")
+        const customColor = String(root.previewController.maskPreviewOverlayColor || "")
         return customColor.length > 0 ? customColor : fallbackColor
     }
 
     function overlayOpacityScale() {
-        return Math.max(0.0, Math.min(1.0, Number(editorPreview.maskPreviewOverlayOpacity || 0)))
+        return Math.max(0.0, Math.min(1.0, Number(root.previewController.maskPreviewOverlayOpacity || 0)))
     }
 
     function stableOutlineWidth(logicalPixels) {
@@ -228,7 +237,7 @@ Item {
     }
 
     Binding {
-        target: editorPreview
+        target: root.previewController
         property: "activeMaskOutlineDisplayScale"
         value: root.outlineScaleFactor()
         when: root.visible && root.masked && root.hasActiveMask
@@ -262,7 +271,7 @@ Item {
     }
 
     function pointSizeValue(point, fallback) {
-        const resolvedFallback = fallback === undefined ? editorPreview.activeMaskBrushSize : fallback
+        const resolvedFallback = fallback === undefined ? root.previewController.activeMaskBrushSize : fallback
         return point && point.size !== undefined ? point.size : resolvedFallback
     }
 
@@ -357,7 +366,7 @@ Item {
     function strokeOutlinePathsWithOffset(ctx, outlinePaths, offsetX, offsetY) {
         if (!outlinePaths || outlinePaths.length === 0)
             return
-        const marching = editorPreview.maskPreviewMode === "marching-ants"
+        const marching = root.previewController.maskPreviewMode === "marching-ants"
         const dashOn = root.stableOutlineDash(7)
         const dashOff = root.stableOutlineDash(7)
         const dashCycle = dashOn + dashOff
@@ -402,10 +411,10 @@ Item {
     }
 
     function fillOutlinePathsWithOffset(ctx, outlinePaths, offsetX, offsetY) {
-        if (!root.selectionFillVisible ||
-                editorPreview.maskPreviewMode === "none" ||
-                editorPreview.maskPreviewMode === "outline" ||
-                editorPreview.maskPreviewMode === "marching-ants" ||
+        if (root.previewImageLayerVisible() || !root.selectionFillVisible ||
+                root.previewController.maskPreviewMode === "none" ||
+                root.previewController.maskPreviewMode === "outline" ||
+                root.previewController.maskPreviewMode === "marching-ants" ||
                 !outlinePaths || outlinePaths.length === 0)
             return
         ctx.beginPath()
@@ -508,31 +517,35 @@ Item {
     }
 
     function previewTemporarilyHidden() {
-        return editorPreview.maskPreviewTemporarilyHidden === true
+        return root.previewController.maskPreviewTemporarilyHidden === true
     }
 
     function usesBlackWhiteImageContext() {
         return !root.previewTemporarilyHidden() &&
-               (editorPreview.maskPreviewMode === "color-on-bw" ||
-               editorPreview.maskPreviewMode === "image-on-bw"
+               (root.previewController.maskPreviewMode === "color-on-bw" ||
+               root.previewController.maskPreviewMode === "image-on-bw"
                )
     }
 
     function previewSourceOpacity(activeBrushPainting) {
         if (root.previewTemporarilyHidden())
             return 0.0
-        if (editorPreview.maskPreviewMode === "overlay")
+        if (["white-on-black", "black-on-white"].indexOf(root.previewController.maskPreviewMode) >= 0)
+            return 1.0
+        if (root.previewController.maskPreviewMode === "overlay")
             return root.overlayOpacityScale()
-        if (editorPreview.maskPreviewMode === "on-black" ||
-                editorPreview.maskPreviewMode === "on-white" ||
-                editorPreview.maskPreviewMode === "black-on-white" ||
-                editorPreview.maskPreviewMode === "white-on-black")
+        if (root.previewController.maskPreviewMode === "on-black" ||
+                root.previewController.maskPreviewMode === "on-white" ||
+                root.previewController.maskPreviewMode === "black-on-white" ||
+                root.previewController.maskPreviewMode === "white-on-black")
             return root.overlayOpacityScale()
         return 0.64 * root.overlayOpacityScale()
     }
 
     function previewImageLayerVisible() {
-        return false
+        return root.previewController.activeMaskToolRole === "selection" &&
+               ["overlay", "grayscale", "color-on-bw", "image-on-bw", "on-black", "on-white",
+                "black-on-white", "white-on-black"].indexOf(root.previewController.maskPreviewMode) >= 0
     }
 
     Rectangle {
@@ -548,19 +561,19 @@ Item {
         id: maskCanvasOverlay
         objectName: root.overlayObjectName("MaskCanvasOverlay", "maskCanvasOverlay")
         anchors.fill: parent
-        readonly property string previewSource: ""
-        readonly property string liveBrushPreviewSource: String(editorPreview.activeMaskLiveBrushPreviewSource || "")
-        readonly property var liveBrushPoints: editorPreview.activeMaskLiveBrushPoints || []
+        readonly property string previewSource: root.previewImageLayerVisible() ? String(root.previewController.activeMaskPreviewSource || "") : ""
+        readonly property string liveBrushPreviewSource: String(root.previewController.activeMaskLiveBrushPreviewSource || "")
+        readonly property var liveBrushPoints: root.previewController.activeMaskLiveBrushPoints || []
         readonly property bool activeBrushPainting:
             root.activeBrushPainting || liveBrushPoints.length > 0
         readonly property bool nativeLiveBrushPreviewVisible:
-            activeBrushPainting && editorPreview.activeMaskLiveBrushPreviewNativeAvailable
+            activeBrushPainting && root.previewController.activeMaskLiveBrushPreviewNativeAvailable
         readonly property bool immediateLiveBrushPreviewVisible:
             activeBrushPainting && liveBrushPoints.length > 0 &&
-            !editorPreview.activeMaskBrushAutoMask && liveBrushPreviewSource.length === 0
+            !root.previewController.activeMaskBrushAutoMask && !root.previewController.activeMaskBrushProtectEdges && liveBrushPreviewSource.length === 0
         readonly property bool vectorLiveBrushPreviewVisible:
             activeBrushPainting && liveBrushPoints.length > 0 &&
-            editorPreview.activeMaskBrushAutoMask && liveBrushPreviewSource.length === 0
+            (root.previewController.activeMaskBrushAutoMask || root.previewController.activeMaskBrushProtectEdges) && liveBrushPreviewSource.length === 0
         readonly property string effectivePreviewSource:
             activeBrushPainting
             ? liveBrushPreviewSource
@@ -579,19 +592,25 @@ Item {
                  root.hasActiveMask &&
                  !root.previewTemporarilyHidden() &&
                  !root.compareMode &&
-                 (editorPreview.maskPreviewMode !== "none" || activeBrushPainting)
+                 (root.previewController.maskPreviewMode !== "none" || activeBrushPainting)
 
         Rectangle {
             objectName: root.overlayObjectName("MaskPreviewBwBackdrop", "maskPreviewBwBackdrop")
             anchors.fill: parent
-            visible: root.previewImageLayerVisible() && root.usesBlackWhiteImageContext()
-            color: "#d8dce0"
-            opacity: 0.34
+            readonly property bool literalMatte: ["white-on-black", "black-on-white"].indexOf(root.previewController.maskPreviewMode) >= 0
+            visible: root.previewImageLayerVisible() && (literalMatte || root.usesBlackWhiteImageContext())
+            color: literalMatte ? (root.previewController.maskPreviewMode === "white-on-black" ? "#000000" : "#ffffff") : "#d8dce0"
+            opacity: literalMatte ? 1.0 : 0.34
         }
 
         Image {
             objectName: root.overlayObjectName("LiveBrushRasterImage", "liveBrushRasterImage")
-            anchors.fill: parent
+            readonly property rect imageRect: parent.activeBrushPainting
+                ? (root.previewController.activeMaskLiveBrushPreviewRect || Qt.rect(0, 0, 1, 1)) : Qt.rect(0, 0, 1, 1)
+            x: imageRect.x * parent.width
+            y: imageRect.y * parent.height
+            width: imageRect.width * parent.width
+            height: imageRect.height * parent.height
             visible: parent.effectivePreviewSource.length > 0
             source: visible ? parent.effectivePreviewSource : ""
             fillMode: Image.Stretch
@@ -604,14 +623,14 @@ Item {
         BrushLivePreviewItem {
             anchors.fill: parent
             visible: parent.nativeLiveBrushPreviewVisible
-            controller: editorPreview
+            controller: root.previewController
             opacity: root.previewSourceOpacity(parent.activeBrushPainting)
         }
 
         BrushLivePreviewItem {
             objectName: root.overlayObjectName("ImmediateBrushCoverage", "immediateBrushCoverage")
             anchors.fill: parent
-            controller: editorPreview
+            controller: root.previewController
             immediate: true
             tint: root.activeOperationColor
             visible: parent.immediateLiveBrushPreviewVisible
@@ -655,11 +674,11 @@ Item {
             opacity: Math.max(root.previewSourceOpacity(true), 0.54)
 
             function pointX(point) {
-                return root.pointXValue(point) * root.width - x
+                return root.viewPointForImage(root.pointXValue(point), root.pointYValue(point)).x - x
             }
 
             function pointY(point) {
-                return root.pointYValue(point) * root.height - y
+                return root.viewPointForImage(root.pointXValue(point), root.pointYValue(point)).y - y
             }
 
             function pointDiameter(point) {
@@ -700,7 +719,7 @@ Item {
             onHeightChanged: root.scheduleLiveBrushVectorCanvasPaint()
 
             Connections {
-                target: editorPreview
+                target: root.previewController
 
                 function onActiveBrushStrokeChanged() {
                     liveBrushVectorCanvas.recordFramePhase("strokeSignal")
@@ -725,33 +744,33 @@ Item {
             readonly property string liveLassoRenderContract: "live-lasso|solid-fill|high-contrast-outline:v1"
             readonly property bool liveLassoFillVisible:
                 visible &&
-                editorPreview.activeMaskKind === "lasso" &&
-                editorPreview.activeMaskPolygonPointCount >= 3 &&
+                root.previewController.activeMaskKind === "lasso" &&
+                root.previewController.activeMaskPolygonPointCount >= 3 &&
                 parent.geometricFillOpacity > 0.0
             readonly property bool liveLassoOutlineVisible:
                 visible &&
-                editorPreview.activeMaskKind === "lasso" &&
-                editorPreview.activeMaskPolygonPointCount > 0 &&
+                root.previewController.activeMaskKind === "lasso" &&
+                root.previewController.activeMaskPolygonPointCount > 0 &&
                 parent.geometricStrokeOpacity > 0.0
-            visible: parent.previewSource.length === 0 &&
+            visible: !root.previewImageLayerVisible() && parent.previewSource.length === 0 &&
                      !parent.activeBrushPainting &&
                      !root.deepZoomCanvasMode
             opacity: parent.activeBrushPainting ? 0.0 : parent.geometricOverlayOpacity
             readonly property bool polygonFeatherVisualizationActive:
                 visible &&
-                (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") &&
-                editorPreview.activeMaskPolygonPointCount >= 3 &&
-                editorPreview.activeMaskFeather > 0.001
+                (root.previewController.activeMaskKind === "polygon" || root.previewController.activeMaskKind === "lasso") &&
+                root.previewController.activeMaskPolygonPointCount >= 3 &&
+                root.previewController.activeMaskFeather > 0.001
             readonly property real polygonFeatherVisualizationWidth:
                 polygonFeatherVisualizationActive
-                ? Math.max(6, Math.min(96, Math.min(width, height) * editorPreview.activeMaskFeather * 2))
+                ? Math.max(6, Math.min(96, Math.min(width, height) * root.previewController.activeMaskFeather * 2))
                 : 0
             onVisibleChanged: root.scheduleGeometricMaskCanvasPaint()
             onWidthChanged: root.scheduleGeometricMaskCanvasPaint()
             onHeightChanged: root.scheduleGeometricMaskCanvasPaint()
 
             Connections {
-                target: editorPreview
+                target: root.previewController
                 function onControlsChanged() { root.scheduleGeometricMaskCanvasPaint() }
                 function onMaskOverlayChanged() { root.scheduleGeometricMaskCanvasPaint() }
             }
@@ -763,11 +782,11 @@ Item {
                 ctx.lineWidth = root.stableOutlineWidth(2)
                 ctx.strokeStyle = theme.alpha(root.activeOperationColor, parent.geometricStrokeOpacity)
                 ctx.fillStyle = theme.alpha(root.activeOperationColor, parent.geometricFillOpacity)
-                if (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") {
-                    const points = editorPreview.activeMaskPolygonPoints || []
+                if (root.previewController.activeMaskKind === "polygon" || root.previewController.activeMaskKind === "lasso") {
+                    const points = root.previewController.activeMaskPolygonPoints || []
                     const count = points.length
                     if (count > 0) {
-                        const warning = editorPreview.activeMaskPolygonSelfIntersecting
+                        const warning = root.previewController.activeMaskPolygonSelfIntersecting
                         ctx.strokeStyle = warning ? theme.alpha(theme.warning, 0.88)
                                                   : theme.alpha(root.activeOperationColor, parent.geometricStrokeOpacity)
                         ctx.fillStyle = warning ? theme.alpha(theme.warning, 0.08)
@@ -823,35 +842,35 @@ Item {
                             ctx.stroke()
                         }
                     }
-                } else if (editorPreview.activeMaskKind === "rectangle") {
-                    const cx = root.width * editorPreview.activeMaskCenterX - x
-                    const cy = root.height * editorPreview.activeMaskCenterY - y
-                    const rx = Math.max(12, root.width * editorPreview.activeMaskRadiusX)
-                    const ry = Math.max(12, root.height * editorPreview.activeMaskRadiusY)
+                } else if (root.previewController.activeMaskKind === "rectangle") {
+                    const cx = root.width * root.previewController.activeMaskCenterX - x
+                    const cy = root.height * root.previewController.activeMaskCenterY - y
+                    const rx = Math.max(12, root.width * root.previewController.activeMaskRadiusX)
+                    const ry = Math.max(12, root.height * root.previewController.activeMaskRadiusY)
                     ctx.save()
                     ctx.translate(cx, cy)
-                    ctx.rotate(editorPreview.activeMaskRotation * Math.PI / 180.0)
+                    ctx.rotate(root.previewController.activeMaskRotation * Math.PI / 180.0)
                     ctx.beginPath()
                     ctx.rect(-rx, -ry, rx * 2, ry * 2)
                     ctx.fill()
                     ctx.stroke()
                     ctx.restore()
-                } else if (editorPreview.activeMaskKind === "radial" || editorPreview.activeMaskKind === "ellipse") {
-                    const cx = root.width * editorPreview.activeMaskCenterX - x
-                    const cy = root.height * editorPreview.activeMaskCenterY - y
-                    const rx = Math.max(12, root.width * editorPreview.activeMaskRadiusX)
-                    const ry = Math.max(12, root.height * editorPreview.activeMaskRadiusY)
+                } else if (root.previewController.activeMaskKind === "radial" || root.previewController.activeMaskKind === "ellipse") {
+                    const cx = root.width * root.previewController.activeMaskCenterX - x
+                    const cy = root.height * root.previewController.activeMaskCenterY - y
+                    const rx = Math.max(12, root.width * root.previewController.activeMaskRadiusX)
+                    const ry = Math.max(12, root.height * root.previewController.activeMaskRadiusY)
                     ctx.save()
                     ctx.translate(cx, cy)
-                    ctx.rotate(editorPreview.activeMaskRotation * Math.PI / 180.0)
+                    ctx.rotate(root.previewController.activeMaskRotation * Math.PI / 180.0)
                     ctx.beginPath()
                     ctx.ellipse(-rx, -ry, rx * 2, ry * 2)
                     ctx.fill()
                     ctx.stroke()
                     ctx.restore()
-                } else if (editorPreview.activeMaskKind === "linear") {
-                    const position = root.height * editorPreview.activeMaskPosition - y
-                    const feather = Math.max(18, root.height * editorPreview.activeMaskFeather)
+                } else if (root.previewController.activeMaskKind === "linear") {
+                    const position = root.height * root.previewController.activeMaskPosition - y
+                    const feather = Math.max(18, root.height * root.previewController.activeMaskFeather)
                     ctx.fillRect(-x, position - feather / 2, root.width, Math.min(feather, root.height))
                     ctx.beginPath()
                     ctx.moveTo(-x, position)
@@ -863,16 +882,16 @@ Item {
 
         Repeater {
             model: root.enablePolygonHandles &&
-                   editorPreview.activeMaskKind === "polygon" &&
-                   editorPreview.activeMaskPolygonPointCount >= 3
-                   ? (editorPreview.activeMaskPolygonPoints || [])
+                   root.previewController.activeMaskKind === "polygon" &&
+                   root.previewController.activeMaskPolygonPointCount >= 3
+                   ? (root.previewController.activeMaskPolygonPoints || [])
                    : []
 
             delegate: Rectangle {
                 required property var modelData
                 required property int index
                 property int edgeIndex: index
-                readonly property var allPoints: editorPreview.activeMaskPolygonPoints || []
+                readonly property var allPoints: root.previewController.activeMaskPolygonPoints || []
                 readonly property var nextPoint: allPoints.length > 0
                                                  ? allPoints[(edgeIndex + 1) % allPoints.length]
                                                  : modelData
@@ -928,7 +947,7 @@ Item {
 
                     onClicked: function(mouse) {
                         mouse.accepted = true
-                        editorPreview.insertActivePolygonPointAfter(
+                        root.previewController.insertActivePolygonPointAfter(
                                     parent.edgeIndex,
                                     parent.normalizedX,
                                     parent.normalizedY)
@@ -938,8 +957,8 @@ Item {
         }
 
         Repeater {
-            model: root.enablePolygonHandles && editorPreview.activeMaskKind === "polygon"
-                   ? (editorPreview.activeMaskPolygonPoints || [])
+            model: root.enablePolygonHandles && root.previewController.activeMaskKind === "polygon"
+                   ? (root.previewController.activeMaskPolygonPoints || [])
                    : []
 
             delegate: Rectangle {
@@ -955,7 +974,7 @@ Item {
                 visible: !maskCanvasOverlay.activeBrushPainting
                 x: viewPoint.x - width / 2
                 y: viewPoint.y - height / 2
-                width: pointIndex === 0 && editorPreview.activeMaskPolygonPointCount >= 3 ? 18 : 14
+                width: pointIndex === 0 && root.previewController.activeMaskPolygonPointCount >= 3 ? 18 : 14
                 height: width
                 radius: width / 2
                 color: "transparent"
@@ -981,7 +1000,7 @@ Item {
                 Rectangle {
                     anchors.fill: parent
                     radius: width / 2
-                    color: pointIndex === 0 && editorPreview.activeMaskPolygonPointCount >= 3
+                    color: pointIndex === 0 && root.previewController.activeMaskPolygonPointCount >= 3
                            ? root.handleWarningFillColor()
                            : theme.alpha(root.activeOperationColor, 0.88)
                 }
@@ -1010,7 +1029,7 @@ Item {
                         const localY = parent.y + mouse.y - parent.grabOffsetY + parent.height / 2
                         const point = root.imagePointFromLocal(localX, localY)
                         if (point.valid)
-                            editorPreview.moveActivePolygonPoint(
+                            root.previewController.moveActivePolygonPoint(
                                         parent.pointIndex,
                                         root.clamp(point.x, 0, 1),
                                         root.clamp(point.y, 0, 1))
@@ -1023,13 +1042,13 @@ Item {
         Rectangle {
             objectName: "polygonSnapCloseTarget"
             readonly property string handleReadabilityContract: root.handleReadabilityContract
-            readonly property var snapPoints: editorPreview.activeMaskPolygonPoints || []
+            readonly property var snapPoints: root.previewController.activeMaskPolygonPoints || []
             readonly property var firstPoint: snapPoints.length > 0 ? snapPoints[0] : ({ "x": 0.5, "y": 0.5 })
             readonly property var viewPoint: root.viewPointForImage(Number(firstPoint.x || 0), Number(firstPoint.y || 0))
             visible: root.enablePolygonHandles &&
-                     editorPreview.activeMaskKind === "polygon" &&
-                     editorPreview.activeMaskPolygonPointCount >= 3 &&
-                     !editorPreview.activeMaskPolygonSelfIntersecting &&
+                     root.previewController.activeMaskKind === "polygon" &&
+                     root.previewController.activeMaskPolygonPointCount >= 3 &&
+                     !root.previewController.activeMaskPolygonSelfIntersecting &&
                      !parent.activeBrushPainting
             x: viewPoint.x - width / 2
             y: viewPoint.y - height / 2
@@ -1088,16 +1107,16 @@ Item {
             root.masked &&
             root.hasActiveMask &&
             !root.previewTemporarilyHidden() &&
-            editorPreview.maskPreviewMode !== "none" &&
+            root.previewController.maskPreviewMode !== "none" &&
             !root.outlineActivationDeferred &&
             !root.compareMode
-            ? editorPreview.activeMaskOutlinePaths
+            ? (root.previewController.editingLayerMask ? root.previewController.workingSelectionOutlinePaths : root.previewController.activeMaskOutlinePaths)
             : []
         readonly property var normalizedOutlinePathsCache: root.normalizedOutlinePaths(outlinePaths)
         visible: root.masked &&
                  root.hasActiveMask &&
                  !root.previewTemporarilyHidden() &&
-                 editorPreview.maskPreviewMode !== "none" &&
+                 root.previewController.maskPreviewMode !== "none" &&
                  !root.compareMode &&
                  !root.activeBrushPainting &&
                  normalizedOutlinePathsCache.length > 0
@@ -1108,7 +1127,7 @@ Item {
         onHeightChanged: root.scheduleActiveSelectionOutlinePaint()
 
         Connections {
-            target: editorPreview
+            target: root.previewController
             function onControlsChanged() { root.scheduleActiveSelectionOutlinePaint() }
             function onMaskOverlayChanged() { root.scheduleActiveSelectionOutlinePaint() }
         }
@@ -1208,7 +1227,8 @@ Item {
                     anchors.centerIn: parent
                     text: String(groundingCandidate.index + 1)
                     color: theme.ink950
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 11
                     font.bold: true
                 }
@@ -1222,27 +1242,27 @@ Item {
         readonly property var focusCenter: root.viewPointForImage(
                                                     root.hasExternalFocusRegion
                                                     ? Number(root.externalFocusRegion.centerX)
-                                                    : Number(editorPreview.activeMaskCenterX || 0.5),
+                                                    : Number(root.previewController.activeMaskCenterX || 0.5),
                                                     root.hasExternalFocusRegion
                                                     ? Number(root.externalFocusRegion.centerY)
-                                                    : Number(editorPreview.activeMaskCenterY || 0.5))
+                                                    : Number(root.previewController.activeMaskCenterY || 0.5))
         width: Math.max(28, root.width *
                         (root.hasExternalFocusRegion
                          ? Number(root.externalFocusRegion.radiusX)
-                         : Number(editorPreview.activeMaskRadiusX || 0.1)) * 2)
+                         : Number(root.previewController.activeMaskRadiusX || 0.1)) * 2)
         height: Math.max(28, root.height *
                          (root.hasExternalFocusRegion
                           ? Number(root.externalFocusRegion.radiusY)
-                          : Number(editorPreview.activeMaskRadiusY || 0.1)) * 2)
+                          : Number(root.previewController.activeMaskRadiusY || 0.1)) * 2)
         x: focusCenter.x - width / 2
         y: focusCenter.y - height / 2
         opacity: 0
         scale: 0.72
         visible: opacity > 0.01 && (root.hasExternalFocusRegion ||
                  (root.hasActiveMask &&
-                  (editorPreview.activeMaskKind === "radial" ||
-                  editorPreview.activeMaskKind === "ellipse" ||
-                  editorPreview.activeMaskKind === "rectangle")))
+                  (root.previewController.activeMaskKind === "radial" ||
+                  root.previewController.activeMaskKind === "ellipse" ||
+                  root.previewController.activeMaskKind === "rectangle")))
         z: 8
 
         Canvas {
@@ -1349,7 +1369,8 @@ Item {
             anchors.topMargin: 6
             text: "TARGET SEED"
             color: theme.selectionAccent
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 9
             font.weight: Font.Bold
         }

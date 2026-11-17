@@ -13,7 +13,7 @@ MouseArea {
     acceptedButtons: Qt.LeftButton
     hoverEnabled: true
     preventStealing: viewport.maskGestureKind.length > 0
-    cursorShape: workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || workspace.brushToolReady()
+    cursorShape: workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || viewport.canvasBrushActive
                  ? Qt.CrossCursor
                  : (workspace.spacePanActive || viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
     property real pressX: 0
@@ -21,12 +21,7 @@ MouseArea {
     property real startPanX: 0
     property real startPanY: 0
 
-    onWheel: function(wheel) {
-        const zoomFactor = viewport.wheelZoomFactor(wheel)
-        if (Math.abs(zoomFactor - 1.0) > 0.0001)
-            viewport.setZoom(viewport.zoom * zoomFactor, wheel.x, wheel.y)
-        wheel.accepted = true
-    }
+    onWheel: function(wheel) { viewport.handleViewportWheel(wheel) }
 
     onPressed: function(mouse) {
         if (workspace.spacePanActive) {
@@ -58,7 +53,7 @@ MouseArea {
         viewport.updatePixelInspectorAt(mouse.x, mouse.y)
         startPanX = viewport.panX
         startPanY = viewport.panY
-        cursorShape = workspace.pixelExactToolReady() || workspace.brushToolReady()
+        cursorShape = workspace.pixelExactToolReady() || viewport.canvasBrushActive
                       ? Qt.CrossCursor
                       : (viewport.zoom > 1.0 ? Qt.ClosedHandCursor : Qt.ArrowCursor)
     }
@@ -69,7 +64,7 @@ MouseArea {
         workspace.loupeX = mouse.x
         workspace.loupeY = mouse.y
         if (pressed && workspace.spacePanActive) {
-            if (viewport.zoom > 1.0) {
+            if (viewport.boardStageActive || viewport.zoom > 1.0) {
                 viewport.panX = startPanX + mouse.x - pressX
                 viewport.panY = startPanY + mouse.y - pressY
             }
@@ -87,7 +82,7 @@ MouseArea {
         }
         if (pressed && workspace.pixelInspectorSamplingActive)
             viewport.updatePixelInspectorAt(mouse.x, mouse.y)
-        if (!pressed || viewport.zoom <= 1.0)
+        if (!pressed || (viewport.zoom <= 1.0 && !viewport.boardStageActive))
             return
         viewport.panX = startPanX + mouse.x - pressX
         viewport.panY = startPanY + mouse.y - pressY
@@ -101,14 +96,14 @@ MouseArea {
             return
         }
         if (viewport.handleSamplingPointerReleased(mouse)) {
-            cursorShape = workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || workspace.brushToolReady()
+            cursorShape = workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || viewport.canvasBrushActive
                           ? Qt.CrossCursor
                           : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
             return
         }
         viewport.handleMaskPointerReleased()
         workspace.finishPixelInspectorSampling()
-        cursorShape = workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || workspace.brushToolReady()
+        cursorShape = workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || viewport.canvasBrushActive
                       ? Qt.CrossCursor
                       : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
     }
@@ -118,7 +113,7 @@ MouseArea {
             previewController.cancelActiveLuminanceRangeSample()
         viewport.handleMaskPointerReleased()
         workspace.finishPixelInspectorSampling()
-        cursorShape = workspace.pixelExactToolReady() || workspace.brushToolReady()
+        cursorShape = workspace.pixelExactToolReady() || viewport.canvasBrushActive
                       ? Qt.CrossCursor
                       : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
     }

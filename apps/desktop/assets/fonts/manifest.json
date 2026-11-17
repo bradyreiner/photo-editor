@@ -159,6 +159,43 @@
           "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/outfit/Outfit%5Bwght%5D.ttf"
         }
       ]
+    },
+    {
+      "family": "Anton",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "anton/OFL.txt",
+          "sha256": "ee67e6ee22790b7929f1a3769ca2801d565c64b5a9096942c1adf5596de9c9e4",
+          "source": "marketing/animated-trailer/public/fonts/rebuild/Anton-OFL.txt"
+        },
+        {
+          "path": "anton/Anton.ttf",
+          "sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+          "source": "marketing/animated-trailer/public/fonts/rebuild/Anton.ttf"
+        }
+      ]
+    },
+    {
+      "family": "Instrument Serif",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "instrumentserif/OFL.txt",
+          "sha256": "129ed7618959716959f2941fdd5b49e0ad6e6c1d78726761786a00253d865521",
+          "source": "marketing/animated-trailer/public/fonts/rebuild/InstrumentSerif-OFL.txt"
+        },
+        {
+          "path": "instrumentserif/InstrumentSerif.ttf",
+          "sha256": "498efd461f6ddfcb7a111bf9a565709d2085d48201d501ead960d93e84ffbb88",
+          "source": "marketing/animated-trailer/public/fonts/rebuild/InstrumentSerif.ttf"
+        },
+        {
+          "path": "instrumentserif/InstrumentSerif-Italic.ttf",
+          "sha256": "08939b8bdf534afec24ae0ef5e03f948940cd9a8fe08e7fecbad040e62327385",
+          "source": "marketing/animated-trailer/public/fonts/rebuild/InstrumentSerif-Italic.ttf"
+        }
+      ]
     }
   ]
 }

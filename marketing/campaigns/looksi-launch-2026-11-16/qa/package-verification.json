@@ -1,0 +1,191 @@
+{
+  "deliverables": 15,
+  "editable_svg_files": 10,
+  "local_html_links_checked": 57,
+  "rendered_copy_timing_agreement": "passed",
+  "video_full_decode": "all 5 passed",
+  "browser_rendering": "not performed; file protocol blocked by browser tool policy; no workaround used",
+  "product_execution_proof": "not asserted; 01\u201303 retain clearly labeled capture requirements",
+  "manifest": [
+    {
+      "path": "boards/01-board.png",
+      "bytes": 97365,
+      "sha256": "cb898a0f9f5ec8301ab62bb166940c69a5742f0a614d5701926ab179911ec315"
+    },
+    {
+      "path": "boards/01-board.svg",
+      "bytes": 534321,
+      "sha256": "6b2156770c0ec875aa95aa4912d9c792bf9b87f2cb0fde4063a1257fd1a54b8f"
+    },
+    {
+      "path": "images/01-image.png",
+      "bytes": 71944,
+      "sha256": "06135cbf1acc7a9a1449f8c8736a18ccf92cffda260f180fce1bd54cf6391f33"
+    },
+    {
+      "path": "images/01-image.svg",
+      "bytes": 532185,
+      "sha256": "728ff39b4e70b65d82d8557f660703f562e48f5f66c0aede039a4f89292a3a2b"
+    },
+    {
+      "path": "videos/01-video.mp4",
+      "bytes": 601097,
+      "sha256": "a2bdaaa287538fdf1b175640c17b5dc47e90aad2faade28cdad7d385cd418ecc",
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "fps": 24,
+      "duration_seconds": 18.0,
+      "codecs": [
+        "h264",
+        "aac"
+      ],
+      "full_decode": "passed"
+    },
+    {
+      "path": "boards/02-board.png",
+      "bytes": 101488,
+      "sha256": "0a76417081ce9963d497ae40bf1ed757ba7f919b69676fa4c4e94b8a3013b336"
+    },
+    {
+      "path": "boards/02-board.svg",
+      "bytes": 534578,
+      "sha256": "f9316ebdc9f95f24fe15ad4f867b38727d3bc8a3052d9d720a94b52ad08ccfb5"
+    },
+    {
+      "path": "images/02-image.png",
+      "bytes": 71783,
+      "sha256": "9145ed3abc1e91eeabfc9329c0a030d8a376f1d9fa024936e1a7b47070025672"
+    },
+    {
+      "path": "images/02-image.svg",
+      "bytes": 532429,
+      "sha256": "c0a719924d745ce9b80bc38bc134d2e12f4d86bb778a3e855e4421fbfcf048f9"
+    },
+    {
+      "path": "videos/02-video.mp4",
+      "bytes": 588126,
+      "sha256": "98fd95ccbbe4e9a47c77e1f10157b5699dfdef222f3bc5eb1cf389db9036722b",
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "fps": 24,
+      "duration_seconds": 18.0,
+      "codecs": [
+        "h264",
+        "aac"
+      ],
+      "full_decode": "passed"
+    },
+    {
+      "path": "boards/03-board.png",
+      "bytes": 96411,
+      "sha256": "4227250752bb00c7e6d0fb06b6fcee9c93fd67d4e7153756c22075e85b35070f"
+    },
+    {
+      "path": "boards/03-board.svg",
+      "bytes": 534167,
+      "sha256": "6a45feaf03f42dd0625bdf7bf0fd4357d811291dfea12026e198ca65bdcf4382"
+    },
+    {
+      "path": "images/03-image.png",
+      "bytes": 62660,
+      "sha256": "0b3ea4cafd07312eb098864d4e60772655ce49b2103b8a022b416dace529d71f"
+    },
+    {
+      "path": "images/03-image.svg",
+      "bytes": 532017,
+      "sha256": "f0482b962b24d6daacedc00aa3de0e5920c19dc903a580241906a45d62196479"
+    },
+    {
+      "path": "videos/03-video.mp4",
+      "bytes": 613977,
+      "sha256": "fa47d32d7f78c593563703fa558dba0213bd7e282e18a94e5914a5b0ea792b47",
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "fps": 24,
+      "duration_seconds": 18.0,
+      "codecs": [
+        "h264",
+        "aac"
+      ],
+      "full_decode": "passed"
+    },
+    {
+      "path": "boards/04-board.png",
+      "bytes": 85217,
+      "sha256": "0dc0080d4444f8bd72fc49842d5acba49a68aa8a1c5dfeb4ad1c3c50b2dae071"
+    },
+    {
+      "path": "boards/04-board.svg",
+      "bytes": 533866,
+      "sha256": "a0411389ba16ed1ed682edde3df3099fa1286957f52bc6b1655cf4c4bab4dd83"
+    },
+    {
+      "path": "images/04-image.png",
+      "bytes": 48129,
+      "sha256": "325358e278a1bf8eb82089047c24e748a1b9ddfc115b11d8ddabf1153ea3fd23"
+    },
+    {
+      "path": "images/04-image.svg",
+      "bytes": 531709,
+      "sha256": "f40291d80d2c7025c17e2e254b445fea9f833f65813e2169ef36d7353f0835f0"
+    },
+    {
+      "path": "videos/04-video.mp4",
+      "bytes": 767750,
+      "sha256": "3158a62549a966a658b57793be31af1969386973eae1d1c5e9841d1bba346fa7",
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "fps": 24,
+      "duration_seconds": 18.0,
+      "codecs": [
+        "h264",
+        "aac"
+      ],
+      "full_decode": "passed"
+    },
+    {
+      "path": "boards/05-board.png",
+      "bytes": 647157,
+      "sha256": "070186e77d484c30c9751d2f056b6c1dca47612f13025a482dca6ed6897485a5"
+    },
+    {
+      "path": "boards/05-board.svg",
+      "bytes": 3060627,
+      "sha256": "8bb06e867890b7dcd3c2738ebc5ece295a8ffa71fa8d8ee33a2f6e730f17a6fa"
+    },
+    {
+      "path": "images/05-image.png",
+      "bytes": 1204873,
+      "sha256": "31f0c0c7a6399267164e6dd3ce2c708a155b1da92ac907a296151596df5ea1c0"
+    },
+    {
+      "path": "images/05-image.svg",
+      "bytes": 3058567,
+      "sha256": "3048a4fca3c9a050209e237d06eca5a018292d7d5bf84aba0c38608c4354f5f0"
+    },
+    {
+      "path": "videos/05-video.mp4",
+      "bytes": 1200502,
+      "sha256": "a8cb06ecbb09816a49efa57929bb7dd3408f5113d46aaae5879a2a7cee26d782",
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "fps": 24,
+      "duration_seconds": 18.0,
+      "codecs": [
+        "h264",
+        "aac"
+      ],
+      "full_decode": "passed"
+    }
+  ]
+}

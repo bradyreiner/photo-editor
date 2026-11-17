@@ -2,6 +2,8 @@
 #include "gaussian_ply_validation.h"
 #include "gaussian_training_schedule.h"
 #include "gaussian_scene_process.h"
+#include "gaussian_scene_import.h"
+#include "gaussian_photo_capture_options.h"
 
 #include <QDir>
 #include <QFile>
@@ -60,6 +62,10 @@ GaussianSceneController::GaussianSceneController(QObject* parent) : QObject(pare
     const auto result = preparation_.result();
     if (canceled_->load()) { fail(QStringLiteral("Scene operation canceled; originals are unchanged.")); return; }
     if (!result.value("ok").toBool()) { fail(result.value("error").toString()); return; }
+    if (stage_ == 8) {
+      state_ = result; state_.remove("ok"); project_ = QFileInfo(result.value("projectPath").toString()).canonicalFilePath();
+      read_only_project_ = true; busy_ = false; emit changed(); return;
+    }
     if (stage_ == 7) {
       if (result.value("artifactSha256") != state_.value("artifactValidation").toMap().value("artifactSha256")) {
         fail("The 4D artifact does not match its saved integrity receipt."); return;
@@ -188,6 +194,25 @@ QVariantMap GaussianSceneController::snapshot() const {
   return snapshot;
 }
 
+QVariantList GaussianSceneController::exampleScenes() const {
+  const auto root = QFileInfo(qEnvironmentVariable("PHOTO_EDITOR_SCENE_LIBRARY_DIR")).canonicalFilePath();
+  if (root.isEmpty()) return {};
+  QFile index(QDir(root).filePath("index.json"));
+  if (!index.open(QIODevice::ReadOnly) || index.size() > 65536) return {};
+  const auto entries = QJsonDocument::fromJson(index.readAll()).toVariant().toMap().value("scenes").toList();
+  QVariantList result;
+  for (const auto& entry : entries) {
+    const auto item = entry.toMap();
+    const auto name = item.value("name").toString().trimmed().left(100);
+    const auto project = QFileInfo(QDir(root).filePath(item.value("project").toString())).canonicalFilePath();
+    if (name.isEmpty() || !project.startsWith(root + QDir::separator()) ||
+        !QFileInfo(QDir(project).filePath("scene.json")).isFile()) continue;
+    result.append(QVariantMap{{"key", project}, {"label", name}, {"viewId", item.value("viewId").toString()}});
+    if (result.size() >= 32) break;
+  }
+  return result;
+}
+
 bool GaussianSceneController::publish() {
   bool saved = true;
   if (!project_.isEmpty() && !read_only_project_) {
@@ -249,6 +274,11 @@ QVariantMap GaussianSceneController::startTimedCapture(const QString& manifest, 
 
 QVariantMap GaussianSceneController::startCapture(const QString& source_folder, const QString& new_project_folder,
                                                  int training_steps, int maximum_edge, int max_splats) {
+  return startPhotoCapture(source_folder, new_project_folder, training_steps, maximum_edge, max_splats, false, false);
+}
+
+QVariantMap GaussianSceneController::startPhotoCapture(const QString& source_folder, const QString& new_project_folder,
+    int training_steps, int maximum_edge, int max_splats, bool same_camera_and_zoom, bool strict_matching) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return {{QStringLiteral("ok"), false}, {QStringLiteral("errorCode"), QStringLiteral("access_required")}, {QStringLiteral("error"), QStringLiteral("Editing requires an active trial or purchase.")}};
   if (busy_ || preparation_active_ || process_active_) return rejected("A scene operation is already running.");
@@ -270,11 +300,12 @@ QVariantMap GaussianSceneController::startCapture(const QString& source_folder, 
     if (extensions.contains(info.suffix().toLower()) && !info.isSymLink()) inputs.append(info.canonicalFilePath());
   }
   if (inputs.size() < 8 || inputs.size() > 2000) return rejected("A static scene needs 8–2000 overlapping photos of the same unmoving subject.");
-  return beginCapture(source, target, inputs, training_steps, maximum_edge, max_splats);
+  return beginCapture(source, target, inputs, training_steps, maximum_edge, max_splats, 0, false,
+      same_camera_and_zoom, strict_matching);
 }
 
 QVariantMap GaussianSceneController::startVideo(const QString& video, const QString& new_project_folder,
-    int training_steps, int maximum_edge, int max_splats, int frame_count) {
+    int training_steps, int maximum_edge, int max_splats, int frame_count, bool prefer_sharp_frames) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return {{QStringLiteral("ok"), false}, {QStringLiteral("errorCode"), QStringLiteral("access_required")}, {QStringLiteral("error"), QStringLiteral("Editing requires an active trial or purchase.")}};
   if (busy_ || preparation_active_ || process_active_) return rejected("A scene operation is already running.");
@@ -286,11 +317,12 @@ QVariantMap GaussianSceneController::startVideo(const QString& video, const QStr
   if (frame_count < 16 || frame_count > 1920) return rejected("Choose 16–1920 video frames.");
   if (binary("PHOTO_EDITOR_FFMPEG_BINARY", "ffmpeg").isEmpty() || binary("PHOTO_EDITOR_FFPROBE_BINARY", "ffprobe").isEmpty())
     return rejected("Video import needs installed FFmpeg and FFprobe.");
-  return beginCapture(source.canonicalFilePath(), target, {}, training_steps, maximum_edge, max_splats, frame_count);
+  return beginCapture(source.canonicalFilePath(), target, {}, training_steps, maximum_edge, max_splats, frame_count, prefer_sharp_frames);
 }
 
 QVariantMap GaussianSceneController::beginCapture(const QString& source, const QString& target, const QStringList& inputs,
-    int training_steps, int maximum_edge, int max_splats, int video_frames) {
+    int training_steps, int maximum_edge, int max_splats, int video_frames, bool prefer_sharp_frames,
+    bool same_camera_and_zoom, bool strict_matching) {
   if (training_steps < 200 || training_steps > 100000 || maximum_edge < 256 || maximum_edge > 4096 ||
       gaussian_training_schedule(training_steps, 8, max_splats).isEmpty())
     return rejected("Choose 200–100000 training steps, a 256–4096 image edge and 100,000–2,000,000 splats.");
@@ -314,11 +346,16 @@ QVariantMap GaussianSceneController::beginCapture(const QString& source, const Q
   state_ = {{"schema", "framehouse-gaussian-scene-v1"}, {"state", "preparing"}, {"mode", "static-3d"},
       {"sourceFolder", source}, {"sourceCount", inputs.size()}, {"trainingSteps", steps_}, {"maximumEdge", maximum_edge_}, {"maxSplats", max_splats_},
       {"trainingColorSpace", "sRGB-display-referred"}, {"originalsModified", false}, {"colmapBinary", colmap_}, {"trainerBinary", trainer_}};
+  if (!video_frames) {
+    state_.insert("photoSharedIntrinsics", same_camera_and_zoom);
+    state_.insert("photoStrictMatching", strict_matching);
+  }
   if (video_frames) {
     state_.insert("state", "extracting-video");
     state_.insert("sourceVideo", source);
     state_.insert("requestedFrames", video_frames);
     state_.insert("extractedFrames", 0);
+    state_.insert("preferSharpFrames", prefer_sharp_frames);
   }
   if (!publish()) return rejected(state_.value("error").toString());
   const auto prepare = prepare_;
@@ -329,9 +366,12 @@ QVariantMap GaussianSceneController::beginCapture(const QString& source, const Q
   auto log = std::make_shared<GaussianProcessLog>();
   if (video_frames) { process_log_ = log; process_log_timer_.start(); }
   preparation_.setFuture(QtConcurrent::run([prepare, video_prepare, source, inputs, target, maximum_edge, canceled,
-      video_frames, ffmpeg, ffprobe, log] {
-    if (!video_frames) return prepare(inputs, target, maximum_edge, canceled);
-    const auto extracted = video_prepare(source, target, maximum_edge, video_frames, ffmpeg, ffprobe, canceled, log);
+      video_frames, ffmpeg, ffprobe, log, prefer_sharp_frames, same_camera_and_zoom] {
+    if (!video_frames) {
+      auto result = prepare(inputs, target, maximum_edge, canceled);
+      return same_camera_and_zoom ? gaussian_share_photo_intrinsics(std::move(result)) : result;
+    }
+    const auto extracted = video_prepare(source, target, maximum_edge, video_frames, ffmpeg, ffprobe, canceled, log, prefer_sharp_frames);
     if (!extracted.value("ok").toBool()) return extracted;
     const auto frames = extracted.value("frames").toStringList();
     if (frames.size() < 8 || frames.size() > video_frames) return rejected("Video did not produce enough usable frames.");
@@ -356,7 +396,8 @@ void GaussianSceneController::runStage() {
       arguments = {"feature_extractor", "--image_path", images, "--database_path", database,
           "--FeatureExtraction.use_gpu", "0", "--FeatureExtraction.num_threads", "4",
           "--SiftExtraction.max_image_size", QString::number(maximum_edge_)};
-      if (state_.contains("sourceVideo")) arguments.append({"--ImageReader.single_camera", "1", "--ImageReader.camera_model", "SIMPLE_RADIAL"});
+      if (state_.contains("sourceVideo") || state_.value("photoSharedIntrinsics").toBool())
+        arguments.append({"--ImageReader.single_camera", "1", "--ImageReader.camera_model", "SIMPLE_RADIAL"});
       if (!camera_groups_.isEmpty()) {
         const auto group = camera_groups_[camera_group_].toMap();
         const auto relative = QStringLiteral("camera-group-%1.txt").arg(camera_group_, 4, 10, QLatin1Char('0'));
@@ -384,7 +425,10 @@ void GaussianSceneController::runStage() {
         arguments.append({"--SequentialMatching.overlap", "20", "--SequentialMatching.quadratic_overlap", "1",
             "--SequentialMatching.loop_detection", "0", "--FeatureMatching.guided_matching", "1"});
         state_.insert("matchingStrategy", "video-sequential-guided-20");
-      }
+      } else if (state_.value("photoStrictMatching").toBool()) {
+        arguments.append({"--SiftMatching.max_ratio", "0.65"});
+        state_.insert("matchingStrategy", "photo-exhaustive-strict-065");
+      } else state_.insert("matchingStrategy", "photo-exhaustive-default");
       break;
     case 2:
       state_.insert("state", "reconstructing-cameras");
@@ -413,9 +457,14 @@ void GaussianSceneController::runStage() {
       state_.insert("registeredViews", QVariant::fromValue(registered));
       state_.insert("unregisteredViews", sources_.size() - static_cast<qsizetype>(registered));
       if (registered < 8 || (!partial_build_authorized_ && registered * 2 < static_cast<quint64>(sources_.size()))) {
-        fail(QString("Only %1 of %2 frames connected in the largest reconstruction; at least %3 are required. "
-            "Try denser video sampling or a shorter continuous section with clear overlapping views.")
-            .arg(registered).arg(sources_.size()).arg(qMax<qsizetype>(8, (sources_.size() + 1) / 2))); return;
+        auto message = QString("Only %1 of %2 frames connected in the largest reconstruction; at least %3 are required. ")
+            .arg(registered).arg(sources_.size()).arg(qMax<qsizetype>(8, (sources_.size() + 1) / 2));
+        message += state_.contains("sourceVideo") ?
+            "Try denser video sampling or a shorter continuous section with clear overlapping views." :
+            "Try more overlapping photos and check the camera and lens settings.";
+        if (state_.value("preferSharpFrames").toBool()) message += " Also compare uniform sampling with Prefer sharper frames turned off; focus ranking can reduce overlap.";
+        if (state_.value("photoStrictMatching").toBool()) message += " Also compare with Reject ambiguous matches turned off; stricter matching can connect fewer photos.";
+        fail(message); return;
       }
       state_.insert("state", "undistorting");
       if (partial_build_authorized_) {
@@ -535,6 +584,24 @@ QVariantMap GaussianSceneController::buildPartialScene() {
   return {{"ok", busy_}, {"error", busy_ ? QString() : state_.value("error").toString()}};
 }
 
+QVariantMap GaussianSceneController::importPly(const QString& artifact, const QString& new_project_folder) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return rejected("Scene import requires editing access.");
+  if (busy_ || preparation_active_ || process_active_) return rejected("Finish the current scene operation before importing.");
+  const auto source = local_path(artifact), target = QDir::cleanPath(local_path(new_project_folder));
+  if (!QFileInfo(source).isFile() || !QFileInfo(target).isAbsolute() || QFileInfo::exists(target))
+    return rejected("Choose a Gaussian PLY and a new project folder that does not exist.");
+  project_.clear(); log_tail_.clear(); read_only_project_ = true;
+  state_ = {{"schema", "framehouse-gaussian-scene-v1"}, {"mode", "static-3d"}, {"state", "importing-ply"}};
+  stage_ = 8; busy_ = preparation_active_ = true; canceled_ = std::make_shared<std::atomic_bool>(false);
+  const auto canceled = canceled_;
+  preparation_.setFuture(QtConcurrent::run([source, target, canceled] {
+    try { return import_gaussian_ply(source, target, canceled); }
+    catch (const std::exception& error) { return rejected(QStringLiteral("Scene import failed: %1").arg(QString::fromUtf8(error.what()).left(512))); }
+    catch (...) { return rejected("Scene import failed unexpectedly."); }
+  }));
+  emit changed(); return {{"ok", true}};
+}
 QVariantMap GaussianSceneController::openProject(const QString& folder) {
   if (busy_ || preparation_active_ || process_active_)
     return rejected("Finish or cancel the active scene first.");

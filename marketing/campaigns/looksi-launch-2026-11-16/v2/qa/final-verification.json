@@ -1,0 +1,863 @@
+{
+  "primary_campaigns": 5,
+  "core_deliverables": 15,
+  "primary_films": 5,
+  "alternate_hook_films": 10,
+  "silent_masters": 15,
+  "carousel_slides": 31,
+  "profiled_still_files": 48,
+  "portable_vector_files": 42,
+  "director_book_pages": 20,
+  "source_records_hash_checked": 20,
+  "local_review_links_checked": 114,
+  "native_photo_pair": {
+    "same_size": [
+      1800,
+      1200
+    ],
+    "different_pixel_values": 6473186,
+    "chosen_sha256": "ed9c980585ae74e18ab2f9dbd383e988f5b79c7329da69b9878ccc9099054830",
+    "treatment": "5900K,+12%contrast,+0.15EV combined endpoint"
+  },
+  "all_video_decodes": "passed",
+  "proof_boundary": "Native output/dated captures, not current continuous source-to-export proof; no independent display/color accuracy qualification.",
+  "browser_layout": "Local file protocol blocked by browser tool; layouts reviewed through image/PDF renders, no policy workaround.",
+  "videos": [
+    {
+      "path": "campaign01/videos/hero.mp4",
+      "sha256": "3a9dc36a703f5dd4bff82363c122e39ee94e8bc50b29f17343046cd301ad0c58",
+      "frames": 960,
+      "seconds": 32.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign01/videos/hero-silent.mp4",
+      "sha256": "93764f0541cb6973100e653129722b70b12a3e2ff6dfb734cadd9c9e808aadeb",
+      "frames": 960,
+      "seconds": 32.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign01/videos/hook-b.mp4",
+      "sha256": "b33093878450dc1be9592c411452fe464db22827abe745264c897822de2f9814",
+      "frames": 960,
+      "seconds": 32.021029,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign01/videos/hook-b-silent.mp4",
+      "sha256": "e8c48a36be179bd92fadb5212e6c6ce1e9fa0f9eaa234135e495a969e281a6be",
+      "frames": 960,
+      "seconds": 32.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign01/videos/hook-c.mp4",
+      "sha256": "c271cccd54ee7f76a41a44206ea84c7c37c256fe441cd546a88c500707e99d1c",
+      "frames": 960,
+      "seconds": 32.021029,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign01/videos/hook-c-silent.mp4",
+      "sha256": "b91988660c0b7cf55292fe7c9b7cd905d3ed12c81fcf77a42aec380900d4e61d",
+      "frames": 960,
+      "seconds": 32.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign02/videos/hero.mp4",
+      "sha256": "c98bde96cae93ace617db0de02c3ac00200577a5ed852f0139668bbd07ce4a9a",
+      "frames": 1260,
+      "seconds": 42.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign02/videos/hero-silent.mp4",
+      "sha256": "a585429e577fa9c2e3c33c523f46a642b053f7efbf431315ca6f1b9b691adcba",
+      "frames": 1260,
+      "seconds": 42.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign02/videos/hook-b.mp4",
+      "sha256": "606671261e21e2a64e5eb5e4ff1059407bfb14bffdd6dcdd6c3fccf00e211408",
+      "frames": 1260,
+      "seconds": 42.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign02/videos/hook-b-silent.mp4",
+      "sha256": "c3f0c2bf38925a6b54b9181cb28ac04cc04c758ae33b2c5b6ee5e1eabd67df07",
+      "frames": 1260,
+      "seconds": 42.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign02/videos/hook-c.mp4",
+      "sha256": "e345283c6cf8e18afc6601462f27fb82a5247a2e2c000053db69afbb76da2862",
+      "frames": 1260,
+      "seconds": 42.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign02/videos/hook-c-silent.mp4",
+      "sha256": "b32835004de5a1e9ce6c1429258d3faa383c5950360871582697ed5ce958ab71",
+      "frames": 1260,
+      "seconds": 42.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign03/videos/hero.mp4",
+      "sha256": "6ab65cd7f5ce55df66d4ab282aea4fcf55a0f3aa064b5f071dd6ba283b775e4a",
+      "frames": 990,
+      "seconds": 33.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign03/videos/hero-silent.mp4",
+      "sha256": "1ab398514a3885125866f4c5b659f49948bce8adbdf4479d3d122f2a9e1f0008",
+      "frames": 990,
+      "seconds": 33.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign03/videos/hook-b.mp4",
+      "sha256": "d837a2c3ec6afc73d423986b1952da71752db068b9d3ebfc2fbb0deba4d7bea1",
+      "frames": 990,
+      "seconds": 33.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign03/videos/hook-b-silent.mp4",
+      "sha256": "ed93d5c9d3ce21852f325164485fd616d34196c80e4418ae0c88bd459669833f",
+      "frames": 990,
+      "seconds": 33.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign03/videos/hook-c.mp4",
+      "sha256": "4cc7c380051aa9b73ce11dc679eba2bdd89910346dfa3182d50359cd1d3b6076",
+      "frames": 990,
+      "seconds": 33.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign03/videos/hook-c-silent.mp4",
+      "sha256": "f5c8a0ecbd3124d5e8424f0981005a8758ffdb282cf8a7d55dee2e73bf93a07d",
+      "frames": 990,
+      "seconds": 33.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign04/videos/hero.mp4",
+      "sha256": "8465a12a3a9b49dc4426a21f54ffdde9b67b630d290fea2f1dfecb884e859122",
+      "frames": 576,
+      "seconds": 24.0,
+      "fps": 24,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign04/videos/hero-silent.mp4",
+      "sha256": "e3dbc5c4337cfb8ff31bb53d3896e530ff10d7c1beb29603f82aaa36cdabf190",
+      "frames": 576,
+      "seconds": 24.0,
+      "fps": 24,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign04/videos/hook-b.mp4",
+      "sha256": "bd2fd9df63edcab102c7bd1935e5d8e68febc98ac5f2c8e8515e4c5bb46d740f",
+      "frames": 576,
+      "seconds": 24.0,
+      "fps": 24,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign04/videos/hook-b-silent.mp4",
+      "sha256": "9dfc81fa8ae96e3715fdfb409de75dc5bbfe2256bea1ab3853f0a04e0eb3e6ee",
+      "frames": 576,
+      "seconds": 24.0,
+      "fps": 24,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign04/videos/hook-c.mp4",
+      "sha256": "851b0c1277af11191c12964a7aff2285287f9d9dc25f89ac5d1b36caef083895",
+      "frames": 576,
+      "seconds": 24.0,
+      "fps": 24,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign04/videos/hook-c-silent.mp4",
+      "sha256": "feb98010d33e5bbaec30a9bf62bc4ae13d497f03c0d5a3c9e74a3ba5e509f6e8",
+      "frames": 576,
+      "seconds": 24.0,
+      "fps": 24,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign05/videos/hero.mp4",
+      "sha256": "6d0ccc6d571380dee024ccbb16a7a7c226c50b61cdde80bdcc3de5e9e07c0cc8",
+      "frames": 1080,
+      "seconds": 36.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign05/videos/hero-silent.mp4",
+      "sha256": "19de79a9793d5d22d96ea7f8159ee0dd6e1cc91e4b87c394598727471497e645",
+      "frames": 1080,
+      "seconds": 36.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign05/videos/hook-b.mp4",
+      "sha256": "e21fe3de2aef16c76df686e7320b9321475ec131bf67bc42d1b940875d586f9a",
+      "frames": 1080,
+      "seconds": 36.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign05/videos/hook-b-silent.mp4",
+      "sha256": "a6cce50319c2d0382d628f15cb840f93dac262fb7a5970f7b1a62f0d354cda91",
+      "frames": 1080,
+      "seconds": 36.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign05/videos/hook-c.mp4",
+      "sha256": "65ae4447cade233b104d5c42a389fa965bf76c1d7c30903e5b43fecb57efa6f2",
+      "frames": 1080,
+      "seconds": 36.0,
+      "fps": 30,
+      "silent": false,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    },
+    {
+      "path": "campaign05/videos/hook-c-silent.mp4",
+      "sha256": "f201a7ec69b88f7d44cad9e917aa935af0947aceedcb695bfb6d0b870c3c3e00",
+      "frames": 1080,
+      "seconds": 36.0,
+      "fps": 30,
+      "silent": true,
+      "decode": "passed",
+      "color_properties": [
+        "tv",
+        "bt709",
+        "bt709",
+        "bt709"
+      ]
+    }
+  ],
+  "stills": [
+    {
+      "path": "campaign01/images/01-i-wanted-to-make-this.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/images/cover.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/storyboard/board.png",
+      "size": [
+        2520,
+        1820
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/carousel/01-slide.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/carousel/02-slide.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/carousel/03-slide.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/carousel/04-slide.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/carousel/05-slide.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign01/carousel/06-slide.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/images/cover.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/storyboard/board.png",
+      "size": [
+        2400,
+        1500
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/carousels/slide-01.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/carousels/slide-02.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/carousels/slide-03.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/carousels/slide-04.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/carousels/slide-05.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign02/carousels/slide-06.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/images/cover.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/storyboard/board.png",
+      "size": [
+        2400,
+        1500
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/carousels/slide-01.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/carousels/slide-02.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/carousels/slide-03.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/carousels/slide-04.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/carousels/slide-05.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/carousels/slide-06.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign03/carousels/slide-07.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/images/cover.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/images/original-artwork.png",
+      "size": [
+        960,
+        1220
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/storyboard/board.png",
+      "size": [
+        2400,
+        1500
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/storyboard/panel-01.png",
+      "size": [
+        1080,
+        1920
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/storyboard/panel-02.png",
+      "size": [
+        1080,
+        1920
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/storyboard/panel-03.png",
+      "size": [
+        1080,
+        1920
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/storyboard/panel-04.png",
+      "size": [
+        1080,
+        1920
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/storyboard/panel-05.png",
+      "size": [
+        1080,
+        1920
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/carousels/slide-01.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/carousels/slide-02.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/carousels/slide-03.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/carousels/slide-04.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/carousels/slide-05.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign04/carousels/slide-06.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/images/cover.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/storyboard/board.png",
+      "size": [
+        2400,
+        1500
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/carousels/slide-01.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/carousels/slide-02.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/carousels/slide-03.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/carousels/slide-04.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/carousels/slide-05.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    },
+    {
+      "path": "campaign05/carousels/slide-06.png",
+      "size": [
+        1080,
+        1350
+      ],
+      "icc_profile": true
+    }
+  ]
+}

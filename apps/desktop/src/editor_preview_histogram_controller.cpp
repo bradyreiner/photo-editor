@@ -2,6 +2,8 @@
 
 #include "observability.h"
 #include "worker_queue_registry.h"
+#include <QDateTime>
+#include <cmath>
 
 namespace photo_editor::desktop {
 
@@ -17,6 +19,9 @@ void EditorPreviewController::computeHistogram(const QImage& image) {
 
 void EditorPreviewController::applyHistogramResult(const HistogramComputationResult& result) {
   histogram_scope_session_.publish(result);
+  scope_published_at_msecs_ = QDateTime::currentMSecsSinceEpoch();
+  scope_published_domain_ = scopeDomain();
+  scope_published_region_ = scope_region_;
   emit histogramChanged();
 }
 
@@ -25,12 +30,88 @@ void EditorPreviewController::setScopesVisible(bool visible) {
     return;
   }
   emit controlsChanged();
+  if (visible) refreshScopeSettings();
+}
+
+QVariantMap EditorPreviewController::scopeFrame() const {
+  const auto& result = histogram_scope_session_.published();
+  return {{QStringLiteral("red"), result.density_red},
+          {QStringLiteral("green"), result.density_green},
+          {QStringLiteral("blue"), result.density_blue},
+          {QStringLiteral("luma"), result.density_luminance},
+          {QStringLiteral("vectors"), result.vectorscope_points},
+          {QStringLiteral("traceRed"), result.waveform_red},
+          {QStringLiteral("traceGreen"), result.waveform_green},
+          {QStringLiteral("traceBlue"), result.waveform_blue},
+          {QStringLiteral("traceLuma"), result.waveform_luminance},
+          {QStringLiteral("histogramRed"), result.red},
+          {QStringLiteral("histogramGreen"), result.green},
+          {QStringLiteral("histogramBlue"), result.blue},
+          {QStringLiteral("histogramLuminance"), result.luminance},
+          {QStringLiteral("shadowClipCount"), result.shadow_clip_count},
+          {QStringLiteral("highlightClipCount"), result.highlight_clip_count},
+          {QStringLiteral("sampleCount"), result.sample_count},
+          {QStringLiteral("rejectedSamples"), result.rejected_sample_count},
+          {QStringLiteral("columns"), result.columns},
+          {QStringLiteral("levels"), result.levels},
+          {QStringLiteral("minimum"), result.minimum},
+          {QStringLiteral("maximum"), result.maximum},
+          {QStringLiteral("domain"), scope_published_domain_},
+          {QStringLiteral("region"), scope_published_region_},
+          {QStringLiteral("generation"), result.generation},
+          {QStringLiteral("publishedAt"), scope_published_at_msecs_},
+          {QStringLiteral("computeMs"), result.elapsed_ms}};
+}
+
+void EditorPreviewController::refreshScopeSettings() {
+  ++scope_configuration_;
+  if (!hasAsset() || !scopesVisible() || scopes_frozen_) return;
+  submitEditIntent(EditIntent{
+      .operation = QStringLiteral("scope_settings"),
+      .dirty_domain = QStringLiteral("histogram_scope"),
+      .render_reason = QStringLiteral("scope_settings_change"),
+      .schedule_full_resolution = false,
+  });
+}
+
+void EditorPreviewController::setScopeSamplingMode(const QString& mode) {
+  if ((mode != QStringLiteral("Fast") && mode != QStringLiteral("Balanced") &&
+       mode != QStringLiteral("Precise")) || mode == scope_sampling_mode_) return;
+  scope_sampling_mode_ = mode;
+  emit controlsChanged();
+  refreshScopeSettings();
+}
+
+void EditorPreviewController::setScopeRangeMode(const QString& mode) {
+  if ((mode != QStringLiteral("SDR") && mode != QStringLiteral("Extended") &&
+       mode != QStringLiteral("HDR")) || mode == scope_range_mode_) return;
+  scope_range_mode_ = mode;
+  emit controlsChanged();
+  refreshScopeSettings();
+}
+
+void EditorPreviewController::setScopeRegion(const QRectF& region) {
+  if (!std::isfinite(region.x()) || !std::isfinite(region.y()) ||
+      !std::isfinite(region.width()) || !std::isfinite(region.height())) return;
+  const auto bounded = region.normalized().intersected(QRectF(0, 0, 1, 1));
+  if (bounded.isEmpty() || bounded == scope_region_) return;
+  scope_region_ = bounded;
+  emit controlsChanged();
+  refreshScopeSettings();
+}
+
+void EditorPreviewController::setScopesFrozen(bool frozen) {
+  if (frozen == scopes_frozen_) return;
+  scopes_frozen_ = frozen;
+  emit controlsChanged();
+  refreshScopeSettings();
 }
 
 void EditorPreviewController::setScopeDomain(const QString& domain) {
   if (!histogram_scope_session_.setDomain(domain, soft_proof_enabled_)) {
     return;
   }
+  ++scope_configuration_;
   emit controlsChanged();
   if (hasAsset()) {
     submitEditIntent(EditIntent{
@@ -110,15 +191,15 @@ void EditorPreviewController::startHistogramUpdate(
     return;
   }
 
-  publishImmediateHistogramPreview(
-      image,
-      generation,
-      full_resolution,
-      raw_clip_sample_count,
-      raw_shadow_clip_count,
-      raw_highlight_clip_count,
-      render_reason,
-      interaction_mode);
+  if (scopes_frozen_) return;
+  auto options = histogram_scope_options(scope_sampling_mode_,
+      interaction_mode == QStringLiteral("draft_interactive"));
+  options.region = scope_region_;
+  if (scope_range_mode_ == QStringLiteral("Extended")) {
+    options.minimum = -0.25; options.maximum = 4.0;
+  } else if (scope_range_mode_ == QStringLiteral("HDR")) {
+    options.maximum = 16.0;
+  }
 
   const auto was_active = histogram_scope_coordinator_.active();
   const auto disposition = histogram_scope_coordinator_.submit(
@@ -131,6 +212,8 @@ void EditorPreviewController::startHistogramUpdate(
           .full_resolution = full_resolution,
           .render_reason = render_reason,
           .interaction_mode = interaction_mode,
+          .options = options,
+          .configuration = scope_configuration_,
       });
   if (!was_active) {
     emit histogramActivityChanged();
@@ -151,6 +234,15 @@ void EditorPreviewController::startHistogramUpdate(
 void EditorPreviewController::handleHistogramFinished() {
   const auto result = histogram_scope_coordinator_.result();
   const auto had_pending_request = histogram_scope_coordinator_.pending();
+  // A newer requested edit does not make the currently displayed frame stale.
+  // Let its scopes publish while the next render runs, but never move backward
+  // or publish across asset/configuration changes.
+  const auto displayed_generation = std::max(preview_session_.lastInteractiveGeneration(),
+                                              preview_session_.lastFullGeneration());
+  const bool publishable =
+      (preview_session_.isCurrent(result.generation) || result.generation == displayed_generation) &&
+      result.generation >= histogram_scope_session_.published().generation &&
+      result.configuration == scope_configuration_ && !scopes_frozen_;
   WorkerQueueRegistry::logSummary(
       QStringLiteral("histogram-scope"),
       QStringLiteral("histogram"),
@@ -160,9 +252,9 @@ void EditorPreviewController::handleHistogramFinished() {
       1,
       0,
       result.elapsed_ms,
-      preview_session_.isCurrent(result.generation) ? 1 : 0,
-      preview_session_.isCurrent(result.generation) ? 0 : 1);
-  if (preview_session_.isCurrent(result.generation)) {
+      publishable ? 1 : 0,
+      publishable ? 0 : 1);
+  if (publishable) {
     applyHistogramResult(result);
     observability::logInfo(
         photoEditorPerfLog(),

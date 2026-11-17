@@ -66,7 +66,8 @@ Item {
         color: !root.enabled
                ? theme.alpha(theme.textMuted, 0.82)
                : (root.checked ? root.checkedColor : theme.textMain)
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: theme.typeCaption
         font.weight: Font.DemiBold
         horizontalAlignment: Text.AlignHCenter

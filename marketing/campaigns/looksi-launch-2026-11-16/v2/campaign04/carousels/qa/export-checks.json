@@ -1,0 +1,56 @@
+[
+  {
+    "slide": 1,
+    "size": [
+      1080,
+      1350
+    ],
+    "sha256": "f598b7a1aae451ae89a78daafc21e79c2483393ee0743ae60a51818521bebadf",
+    "font_parity": "PNG rasterized from portable outlined SVG, so no font substitution in export"
+  },
+  {
+    "slide": 2,
+    "size": [
+      1080,
+      1350
+    ],
+    "sha256": "a7fb6ad5565aa3a4a63c02d882acea24bf71e5247ec9eb9b61f061bd38637d8d",
+    "font_parity": "PNG rasterized from portable outlined SVG, so no font substitution in export"
+  },
+  {
+    "slide": 3,
+    "size": [
+      1080,
+      1350
+    ],
+    "sha256": "6c78ab6982e4dcdd0962c4ea0d5f626f104cfc9cb552c5ef59bc7e62fe1168d9",
+    "font_parity": "PNG rasterized from portable outlined SVG, so no font substitution in export"
+  },
+  {
+    "slide": 4,
+    "size": [
+      1080,
+      1350
+    ],
+    "sha256": "352d11abb22ccce1958ef98b2884343f5d9a5c5769bb6819272fed6dbe07f680",
+    "font_parity": "PNG rasterized from portable outlined SVG, so no font substitution in export"
+  },
+  {
+    "slide": 5,
+    "size": [
+      1080,
+      1350
+    ],
+    "sha256": "a594182f1e81514dfad11ab5678c3915a1256bd5d59c8cc7c236c415888afdf7",
+    "font_parity": "PNG rasterized from portable outlined SVG, so no font substitution in export"
+  },
+  {
+    "slide": 6,
+    "size": [
+      1080,
+      1350
+    ],
+    "sha256": "4ad1efba591dcba5a638875c119b867f95226a9b4fd6c70386d4f6406b5dc28c",
+    "font_parity": "PNG rasterized from portable outlined SVG, so no font substitution in export"
+  }
+]

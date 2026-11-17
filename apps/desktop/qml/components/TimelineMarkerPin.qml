@@ -12,6 +12,13 @@ Item {
     property real previewSeconds: seconds
     property real anchorPositionPixels: 0
     property bool dragging: false
+    property bool compactPresentation: false
+    property bool reviewNote: false
+    property bool resolved: false
+    property bool draggable: !reviewNote
+    property real noteHeadSize: 22
+    property real rangeStartPixels: anchorPositionPixels
+    property real rangeEndPixels: anchorPositionPixels
 
     signal jumpRequested(string markerId)
     signal editRequested(string markerId)
@@ -20,18 +27,24 @@ Item {
 
     Theme { id: theme }
 
-    readonly property string timelineMarkerPinContract: "timeline-marker-pin:v2|line:true|label-fit:true|jump-edit:true|drag-preview-commit:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true"
-    readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
+    readonly property string timelineMarkerPinContract: "timeline-marker-pin:v3|line:true|label:contextual-fixed-size|input:head-only|jump-edit:true|drag-preview-commit:true|keyboard:true|tooltip-full:true|readable-text:true"
+    readonly property string readableTextContract: "readable-text:v3|ellipsis:before-font-shrink|tooltip-full:true|accessibility-full:true"
 
     width: Math.min(140, Math.max(44, markerLabel.implicitWidth + theme.space12))
     activeFocusOnTab: true
     Accessible.role: Accessible.Button
     Accessible.name: root.label
-    Accessible.description: "Timeline marker"
+    Accessible.description: reviewNote ? (resolved ? "Resolved timeline note" : "Timeline note. Open to edit.") : "Timeline marker"
+    Accessible.onPressAction: root.activate()
 
-    Keys.onReturnPressed: root.jumpRequested(root.markerId)
-    Keys.onEnterPressed: root.jumpRequested(root.markerId)
-    Keys.onSpacePressed: root.jumpRequested(root.markerId)
+    function activate() {
+        if (reviewNote) editRequested(markerId)
+        else jumpRequested(markerId)
+    }
+
+    Keys.onReturnPressed: root.activate()
+    Keys.onEnterPressed: root.activate()
+    Keys.onSpacePressed: root.activate()
 
     Rectangle {
         id: markerLine
@@ -40,15 +53,48 @@ Item {
         width: 2
         height: root.height
         color: root.accent
-        opacity: markerMouse.containsMouse || root.activeFocus ? 0.92 : 0.70
+        opacity: markerMouse.containsMouse || root.activeFocus || root.dragging ? 0.72 : root.reviewNote ? 0.08 : 0.22
+    }
+
+    Rectangle {
+        id: noteRange
+        objectName: "timelineElectricNoteRange"
+        visible: root.reviewNote && root.rangeEndPixels > root.rangeStartPixels
+        x: root.rangeStartPixels - root.x
+        y: root.noteHeadSize / 2 - height / 2 + 1
+        width: Math.max(0, root.rangeEndPixels - root.rangeStartPixels)
+        height: 3
+        radius: 1.5
+        color: theme.alpha(root.accent, root.resolved ? 0.3 : 0.6)
+    }
+
+    Rectangle {
+        id: noteHead
+        objectName: "timelineElectricNoteHead"
+        visible: root.reviewNote
+        x: Math.max(0, Math.min(root.width - width, root.anchorPositionPixels - root.x - width / 2))
+        y: 1
+        width: root.noteHeadSize
+        height: root.noteHeadSize
+        radius: 7
+        color: theme.alpha(root.accent, markerMouse.containsMouse ? 0.28 : 0.14)
+        border.width: 1
+        border.color: theme.alpha(root.accent, root.resolved ? 0.35 : 0.85)
+        AppIcon {
+            anchors.centerIn: parent
+            width: 13; height: 13
+            name: root.resolved ? "check" : "edit"
+            color: root.accent
+        }
     }
 
     Rectangle {
         id: markerLabelSurface
+        visible: (!root.compactPresentation && !root.reviewNote) || markerMouse.containsMouse || root.activeFocus || root.dragging
         anchors.top: parent.top
-        anchors.topMargin: 2
+        anchors.topMargin: root.reviewNote ? 26 : 2
         radius: theme.radius6
-        color: root.accent
+        color: theme.ink800
         width: root.width
         height: markerLabel.implicitHeight + theme.space6
         x: 0
@@ -60,35 +106,44 @@ Item {
             anchors.centerIn: parent
             width: parent.width - theme.space12
             text: root.label
-            color: theme.ink950
-            font.family: theme.fontMono
+            color: theme.textMain
+            font.family: theme.fontUi
             font.pixelSize: theme.typeMicro
             font.weight: Font.DemiBold
             horizontalAlignment: Text.AlignHCenter
             maximumLineCount: 1
-            elide: Text.ElideNone
-            fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 6
+            elide: Text.ElideRight
+            fontSizeMode: Text.FixedSize
         }
     }
 
     MouseArea {
         id: markerMouse
-        anchors.fill: parent
+        // Only the marker head receives input; its guide must never intercept
+        // clip selection or trimming throughout a full-height label-width strip.
+        x: root.reviewNote ? noteHead.x : root.compactPresentation ? Math.max(0, root.anchorPositionPixels - root.x - 6) : 0
+        y: 0
+        width: root.reviewNote ? noteHead.width : root.compactPresentation ? 12 : root.width
+        height: root.reviewNote ? noteHead.height : markerLabelSurface.height + theme.space4
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         hoverEnabled: true
-        cursorShape: root.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        cursorShape: root.draggable ? (root.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.PointingHandCursor
         property real pressGlobalX: 0
         property real pressSeconds: 0
         property bool moved: false
 
         onPressed: function(mouse) {
+            if (mouse.button === Qt.RightButton) {
+                root.editRequested(root.markerId)
+                return
+            }
             pressGlobalX = mapToGlobal(mouse.x, mouse.y).x
             pressSeconds = root.seconds
             root.previewSeconds = root.seconds
             moved = false
         }
         onPositionChanged: function(mouse) {
-            if (!pressed)
+            if (!pressed || !root.draggable)
                 return
             const deltaPixels = mapToGlobal(mouse.x, mouse.y).x - pressGlobalX
             if (Math.abs(deltaPixels) < 3 && !moved)
@@ -98,11 +153,12 @@ Item {
             const proposed = Math.max(0, pressSeconds + deltaPixels / Math.max(1, root.pixelsPerSecond))
             root.movePreviewRequested(root.markerId, proposed)
         }
-        onReleased: {
+        onReleased: function(mouse) {
+            if (mouse.button === Qt.RightButton) return
             if (moved)
                 root.moveCommittedRequested(root.markerId, root.previewSeconds)
             else
-                root.jumpRequested(root.markerId)
+                root.activate()
             root.dragging = false
             moved = false
         }

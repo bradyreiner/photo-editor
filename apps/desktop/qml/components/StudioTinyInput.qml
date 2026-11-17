@@ -7,6 +7,7 @@ Rectangle {
 
     property alias text: input.text
     property string placeholder: ""
+    property string helpText: ""
     property bool highlighted: false
     property color accent: theme.accentWarm400
     property int rightInset: 12
@@ -35,6 +36,11 @@ Rectangle {
 
     TextInput {
         id: input
+        objectName: field.objectName.length > 0 ? field.objectName + "Input" : ""
+        Accessible.role: Accessible.EditableText
+        Accessible.name: field.placeholder
+        Accessible.description: field.helpText
+        activeFocusOnTab: true
         anchors.fill: parent
         anchors.leftMargin: 14
         anchors.rightMargin: field.rightInset

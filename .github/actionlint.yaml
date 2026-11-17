@@ -1,0 +1,3 @@
+self-hosted-runner:
+  labels:
+    - looksy-m4-pro

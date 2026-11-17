@@ -15,6 +15,20 @@
 
 namespace photo_editor::desktop {
 struct CarouselPreviewTestAccess {
+  static void markSaved(CarouselDocumentController& controller) {
+    controller.saved_document_id_ = QStringLiteral("navigation-fixture");
+    controller.rememberSavedContent();
+    controller.document_dirty_ = false;
+    controller.save_state_ = QStringLiteral("Saved");
+    controller.save_error_.clear();
+    controller.last_saved_at_ = QStringLiteral("no-save-requested");
+    controller.autosave_timer_->stop();
+  }
+  static quint64 requestRevision(const CarouselDocumentController& controller) { return controller.preview_request_revision_; }
+  static void markSaveFailure(CarouselDocumentController& controller) {
+    controller.save_state_ = QStringLiteral("Save failed");
+    controller.save_error_ = QStringLiteral("fixture failure");
+  }
   static QThreadPool& pool() { return CarouselDocumentController::previewThreadPool(); }
   static bool idle(const CarouselDocumentController& controller) {
     return !controller.preview_worker_active_ && controller.pending_preview_boards_.isEmpty() &&
@@ -117,6 +131,29 @@ int main(int argc, char** argv) {
     for (int board = 0; board < 3; ++board)
       if (!matches(controller, board)) return fail("Latest coalesced board output differs from synchronous rendering");
     std::cout << "Three-board creation returned in " << creation_ms << " ms while worker was held; heartbeat continued.\n";
+  }
+  {
+    CarouselPreviewTestAccess::markSaved(controller);
+    Gate gate;
+    CarouselPreviewTestAccess::refresh(controller);
+    if (!wait_until([&] { return CarouselPreviewTestAccess::active(controller); })) return fail("No navigation preview fixture");
+    const auto revision = CarouselPreviewTestAccess::requestRevision(controller);
+    controller.selectSlide(0);
+    controller.selectSlide(2);
+    if (CarouselPreviewTestAccess::requestRevision(controller) != revision || controller.documentDirty() ||
+        !controller.saveDocument() || controller.lastSavedAt() != QStringLiteral("no-save-requested"))
+      return fail("Clean Board navigation must retain queued thumbnails and avoid rewriting the document");
+    gate.open();
+    if (!wait_until([&] { return CarouselPreviewTestAccess::idle(controller); }) || !matches(controller, 2))
+      return fail("Thumbnails finish after clean Board navigation");
+    controller.setCurrentSlideBackgroundColor("#122334");
+    if (!controller.documentDirty() || !controller.saveDocument() || controller.documentDirty() ||
+        controller.lastSavedAt() == QStringLiteral("no-save-requested"))
+      return fail("A real Board edit still saves through normal persistence");
+    CarouselPreviewTestAccess::markSaveFailure(controller);
+    if (!controller.saveDocument() || !controller.saveError().isEmpty() || controller.saveState() != QStringLiteral("Saved"))
+      return fail("A failed unchanged save remains retryable");
+    if (!wait_until([&] { return CarouselPreviewTestAccess::idle(controller); })) return fail("Save retry preview fixture settles");
   }
   const auto item_source = CarouselPreviewTestAccess::itemSource(controller, photo_item_id);
   const QImage item_image(QUrl(item_source).toLocalFile());

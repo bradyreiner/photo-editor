@@ -6,14 +6,27 @@
 #include <memory>
 
 #include <QCoreApplication>
+#include <QColor>
+#include <QDateTime>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QImage>
+#include <QRunnable>
+#include <QSemaphore>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QThreadPool>
+#include <QTimer>
 
 #include "editor_preview_controller.h"
 #include "editor_preview_texture.h"
 #include "editor_preview_image_sink.h"
+#include "photo_render_utils.h"
+#include "render_plan_store.h"
+#include "edit_adjustment_patch.h"
+#include "preview_display_publication.h"
+#include <QDir>
+#include <QFile>
 
 namespace photo_editor::desktop {
 
@@ -42,6 +55,17 @@ struct EditorPreviewControllerTestAccess {
 
   static RenderResult render_preview_request_sync(const RenderRequest& request) {
     return render_preview_request_for_test(request);
+  }
+
+  static void start_interactive_render_stage(
+      EditorPreviewController& controller,
+      const RenderRequest& request) {
+    controller.startRenderStage(false, request);
+  }
+
+  static RenderResult interactive_render_result(
+      const EditorPreviewController& controller) {
+    return controller.interactive_render_watcher_.result();
   }
 
   static bool interactive_render_timer_active(const EditorPreviewController& controller) {
@@ -196,6 +220,133 @@ bool within_first_frame_budget(const std::function<void()>& action) {
   return timer.elapsed() <= 33;
 }
 
+int preview_queue_telemetry_only(const QString& runtime_directory) {
+  using namespace photo_editor::desktop;
+  qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
+
+  QImage source(32, 24, QImage::Format_ARGB32);
+  source.fill(QColor(56, 92, 138));
+  const auto source_path =
+      QDir(runtime_directory).filePath(QStringLiteral("queue-telemetry-source.png"));
+  if (!source.save(source_path)) {
+    return fail("preview queue telemetry fixture should be writable");
+  }
+
+  QThreadPool* const pool = QThreadPool::globalInstance();
+  const auto previous_max_thread_count = pool->maxThreadCount();
+  if (!pool->waitForDone(10000)) {
+    return fail("global worker pool should be idle before the held-pool probe");
+  }
+
+  photo_editor::desktop::FeedbackImageSink image_sink;
+  EditorPreviewController controller;
+  controller.setImageProvider(&image_sink);
+  controller.loadAsset(
+      QStringLiteral("preview-queue-telemetry"),
+      source_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(controller, 10000) ||
+      !pool->waitForDone(10000)) {
+    return fail("tiny preview fixture should settle before the held-pool probe");
+  }
+
+  struct PoolRestore final {
+    QThreadPool* pool = nullptr;
+    QSemaphore* release_blocker = nullptr;
+    int previous_max_thread_count = 0;
+    bool blocker_started = false;
+    bool blocker_released = false;
+    bool restored = false;
+
+    void release() {
+      if (blocker_started && !blocker_released) {
+        blocker_released = true;
+        release_blocker->release();
+      }
+    }
+
+    void restore() {
+      if (restored) return;
+      release();
+      static_cast<void>(pool->waitForDone(10000));
+      pool->setMaxThreadCount(previous_max_thread_count);
+      restored = true;
+    }
+
+    ~PoolRestore() { restore(); }
+  };
+
+  QSemaphore blocker_started;
+  QSemaphore release_blocker;
+  PoolRestore pool_restore{
+      .pool = pool,
+      .release_blocker = &release_blocker,
+      .previous_max_thread_count = previous_max_thread_count,
+  };
+  pool->setMaxThreadCount(1);
+  pool->start(QRunnable::create([&blocker_started, &release_blocker]() {
+    blocker_started.release();
+    release_blocker.acquire();
+  }));
+  pool_restore.blocker_started = true;
+  if (!blocker_started.tryAcquire(1, 5000)) {
+    return fail("single-thread pool blocker should start before preview submission");
+  }
+
+  auto request = EditorPreviewControllerTestAccess::interactive_render_request(controller);
+  request.requested_at_msecs = QDateTime::currentMSecsSinceEpoch();
+  request.render_reason = QStringLiteral("preview_queue_telemetry_probe");
+  constexpr int kPoolHoldMs = 240;
+  QTimer release_timer;
+  release_timer.setSingleShot(true);
+  QObject::connect(&release_timer, &QTimer::timeout, &controller,
+      [&pool_restore]() { pool_restore.release(); });
+  release_timer.start(kPoolHoldMs);
+  EditorPreviewControllerTestAccess::start_interactive_render_stage(controller, request);
+  if (!wait_for_preview_idle(controller, 10000)) {
+    return fail("preview worker should start after the held pool is released");
+  }
+
+  const auto result =
+      EditorPreviewControllerTestAccess::interactive_render_result(controller);
+  pool_restore.restore();
+  const auto request_dispatch_wait_ms = result.queue_wait_ms;
+  const auto worker_pool_queue_wait_ms = result.worker_pool_queue_wait_ms;
+  const auto request_to_completion_ms =
+      result.render_completed_at_msecs - result.request_started_at_msecs;
+  const auto accounted_request_to_completion_ms =
+      request_dispatch_wait_ms + worker_pool_queue_wait_ms + result.total_elapsed_ms;
+  const auto accounting_error_ms = request_to_completion_ms > accounted_request_to_completion_ms
+      ? request_to_completion_ms - accounted_request_to_completion_ms
+      : accounted_request_to_completion_ms - request_to_completion_ms;
+
+  if (!result.success || result.preview_image.isNull() ||
+      result.request_started_at_msecs != request.requested_at_msecs ||
+      request_dispatch_wait_ms >= 100 ||
+      worker_pool_queue_wait_ms < 100 ||
+      worker_pool_queue_wait_ms <= request_dispatch_wait_ms ||
+      request_to_completion_ms < worker_pool_queue_wait_ms ||
+      accounting_error_ms > 100) {
+    std::cerr << "preview queue telemetry probe: success=" << result.success
+              << " dispatch_ms=" << request_dispatch_wait_ms
+              << " worker_pool_ms=" << worker_pool_queue_wait_ms
+              << " render_ms=" << result.total_elapsed_ms
+              << " request_to_completion_ms=" << request_to_completion_ms
+              << " accounting_error_ms=" << accounting_error_ms << '\n';
+    return fail("preview telemetry should separate GUI dispatch, worker-pool wait, and render time");
+  }
+
+  std::cout << "preview_queue_telemetry_only dispatch_ms=" << request_dispatch_wait_ms
+            << " worker_pool_ms=" << worker_pool_queue_wait_ms
+            << " render_ms=" << result.total_elapsed_ms
+            << " request_to_completion_ms=" << request_to_completion_ms << '\n';
+  return EXIT_SUCCESS;
+}
+
 int maximum_channel_delta(const QImage& left, const QImage& right) {
   if (left.isNull() || right.isNull() || left.size() != right.size()) {
     return 255;
@@ -219,6 +370,59 @@ int maximum_channel_delta(const QImage& left, const QImage& right) {
 
 }  // namespace
 
+// Optional real-media parity probe; all output and caches stay in isolated storage.
+int raw_thumbnail_color_probe() {
+  using namespace photo_editor::desktop;
+  QFile recipe(qEnvironmentVariable("PHOTO_EDITOR_COLOR_PROBE_RECIPE"));
+  if (!recipe.open(QIODevice::ReadOnly)) return EXIT_FAILURE;
+  const auto parsed = parse_adjustment_payload_or_legacy_recipe(QString::fromUtf8(recipe.readAll()));
+  if (!parsed.ok()) return EXIT_FAILURE;
+  auto state = *parsed.state;
+  state.monitor_color_profile = qEnvironmentVariable("PHOTO_EDITOR_COLOR_PROBE_MONITOR", QStringLiteral("sRGB"));
+  const auto path = qEnvironmentVariable("PHOTO_EDITOR_COLOR_PROBE_SOURCE");
+  const auto output = qEnvironmentVariable("PHOTO_EDITOR_COLOR_PROBE_OUTPUT");
+  if (!QDir().mkpath(output)) return EXIT_FAILURE;
+  for (const int edge : {1024, 0}) {
+    QImage source;
+    photo_editor::pipeline::DecodedImageMetadata metadata;
+    if (!decode_source_image(path, &source, edge, state, &metadata)) return EXIT_FAILURE;
+    const auto admission = RenderPlanStore::shared().admit(
+        QStringLiteral("raw-thumbnail-color-probe"), path, state, source.size(),
+        photo_editor::pipeline::RenderPurpose::Thumbnail,
+        photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation,
+        std::nullopt, &metadata);
+    if (!admission.admitted) return EXIT_FAILURE;
+    const auto crop = crop_rect_for_image(source.size(), state);
+    const auto geometry = DesktopSourceGeometry{source.size(), crop};
+    auto thumbnail = render_output_image(
+        source.copy(crop), state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+        &metadata, nullptr,
+        RenderMaskOptions{.rebuild_editable_masks_at_output_resolution = true,
+          .camera_profile_source_area = geometry.edge_area(), .source_geometry = geometry,
+          .full_source = source}, photo_editor::pipeline::RemovalQuality::Final,
+        RenderOutputPolicy::DisplayReferred, &*admission.plan);
+    publish_preview_image_to_display(&thumbnail, state, {});
+    if (thumbnail.isNull() || !thumbnail.save(QDir(output).filePath(QStringLiteral("thumbnail-%1.png").arg(edge)))) return EXIT_FAILURE;
+    RenderRequest request;
+    request.file_path = path;
+    request.source_asset_id = QStringLiteral("raw-thumbnail-color-probe");
+    request.state = state;
+    request.full_resolution = edge == 0;
+    request.max_edge = edge;
+    request.use_in_memory_preview = true;
+    request.require_cpu_preview_image = true;
+    request.require_canonical_render_plan = true;
+    const auto result = render_preview_request_for_test(request);
+    std::cout << "edge=" << edge << " success=" << result.success << " status="
+              << result.status.toStdString() << " failure=" << result.failure_detail.toStdString()
+              << " max_delta=" << maximum_channel_delta(thumbnail, result.preview_image) << std::endl;
+    if (state.monitor_color_profile == QStringLiteral("sRGB") &&
+        maximum_channel_delta(thumbnail, result.preview_image) > 1) return EXIT_FAILURE;
+    if (!result.success || !result.preview_image.save(QDir(output).filePath(QStringLiteral("editor-%1.png").arg(edge)))) return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}
+
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   QTemporaryDir runtime_root;
@@ -226,6 +430,26 @@ int main(int argc, char** argv) {
     return fail("preview feedback proof should create isolated runtime storage");
   }
   qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  if (app.arguments().contains(QStringLiteral("--preview-queue-telemetry-only"))) {
+    return preview_queue_telemetry_only(runtime_root.path());
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_COLOR_PROBE_SOURCE")) return raw_thumbnail_color_probe();
+
+  {
+    photo_editor::desktop::EditorPreviewController display_controller;
+    auto notifications = 0;
+    QObject::connect(&display_controller,
+        &photo_editor::desktop::EditorPreviewController::thumbnailDisplayColorSpaceChanged,
+        [&notifications]() { ++notifications; });
+    display_controller.setMonitorColorProfile(QStringLiteral("Display P3"));
+    if (display_controller.thumbnailDisplayColorSpace() != QColorSpace(QColorSpace::DisplayP3))
+      return fail("thumbnail display target must follow the preview's manual monitor profile");
+    display_controller.setMonitorColorProfile(QStringLiteral("sRGB"));
+    if (display_controller.thumbnailDisplayColorSpace() != QColorSpace(QColorSpace::SRgb) ||
+        notifications < 2)
+      return fail("thumbnail display target changes must notify QML and invalidate converted images");
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_THUMBNAIL_DISPLAY_TARGET_ONLY")) return EXIT_SUCCESS;
 
   QImage source(640, 480, QImage::Format_ARGB32);
   for (int y = 0; y < source.height(); ++y) {
@@ -275,6 +499,20 @@ int main(int argc, char** argv) {
       QString());
   if (!wait_for_preview_idle(controller)) {
     return fail("preview feedback controller should settle its initial full-resolution preview");
+  }
+  const auto identity_request =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_request(
+          controller);
+  const auto identity_result =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_preview_request_sync(
+          identity_request);
+  if (!identity_result.success ||
+      identity_request.source_asset_id != QStringLiteral("preview-feedback-asset") ||
+      identity_result.source_asset_id != identity_request.source_asset_id ||
+      identity_result.file_path != identity_request.file_path ||
+      identity_result.mask_work_revision != identity_request.mask_work_revision) {
+    return fail(
+        "Production render requests must preserve source asset, path and mask revision in their result");
   }
 
   QImage fidelity_source(256, 192, QImage::Format_ARGB32);
@@ -396,9 +634,13 @@ int main(int argc, char** argv) {
     return fail("resetting crop should restore source-resolution native backing");
   }
 
+  const auto layer_count_before_selection = controller.photoLayerCount();
   controller.addMask(QStringLiteral("linear"));
   if (!wait_for_preview_idle(controller)) {
     return fail("mask setup should settle before immediate feedback checks");
+  }
+  if (controller.photoLayerCount() != layer_count_before_selection) {
+    return fail("creating a working selection should not create an adjustment layer");
   }
   if (!within_first_frame_budget([&]() { controller.setActiveMaskExposure(0.31); }) ||
       !photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_active(
@@ -416,6 +658,14 @@ int main(int argc, char** argv) {
   if (photo_editor::desktop::EditorPreviewControllerTestAccess::last_full_preview_generation(controller) !=
       photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(controller)) {
     return fail("mask color edits must restore the current full-resolution generation");
+  }
+
+  const auto selection_masks_before_layer = controller.maskStack();
+  if (!controller.addAdjustmentLayer(QStringLiteral("Feedback Adjustment")) ||
+      controller.photoLayerCount() != layer_count_before_selection + 1 ||
+      controller.maskStack() != selection_masks_before_layer ||
+      !wait_for_preview_idle(controller)) {
+    return fail("the layer feedback fixture should create an explicit adjustment layer without taking ownership of the working selection");
   }
 
   if (controller.photoLayerCount() < 1 ||

@@ -88,7 +88,8 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.assetLabel
                 color: theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 wrapMode: Text.WrapAnywhere
                 maximumLineCount: 2
@@ -125,7 +126,8 @@ Rectangle {
                 visible: root.detailsExpanded && root.detailsText.length > 0
                 text: root.detailsText
                 color: theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 8
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 3
@@ -151,7 +153,8 @@ Rectangle {
                     anchors.centerIn: parent
                     text: root.statusText
                     color: root.statusColor
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 9
                     horizontalAlignment: Text.AlignHCenter
                     fontSizeMode: Text.HorizontalFit

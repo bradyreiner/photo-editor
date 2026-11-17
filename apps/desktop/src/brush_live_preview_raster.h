@@ -17,7 +17,8 @@ struct BrushLivePreviewRaster final {
   QRect append(const QSize& size, const QVector<BrushPreviewPoint>& points,
       const BrushPreviewStyle& style, const QImage* source = nullptr,
       double tolerance = 0.18, bool protect_edges = false,
-      photo_editor::pipeline::CancellationToken cancellation = {}) {
+      photo_editor::pipeline::CancellationToken cancellation = {},
+      bool auto_mask = true) {
     if (!size.isValid() || cancellation.cancelled()) return {};
     QRect dirty;
     if (image.size() != size) {
@@ -30,7 +31,7 @@ struct BrushLivePreviewRaster final {
       // to the target mask by the commit worker, not to this empty overlay.
       dirty = dirty.united(rasterize_brush_point_into_alpha(&alpha,
           size.width(), size.height(), source, point.x, point.y, point.size,
-          point.flow, point.opacity, style.feather, false, source != nullptr,
+          point.flow, point.opacity, style.feather, false, source != nullptr && auto_mask,
           tolerance, point.auto_mask_anchor_x, point.auto_mask_anchor_y,
           protect_edges, cancellation, nullptr, nullptr, nullptr,
           {.circular = style.circular, .hardness = style.hardness}));
@@ -57,6 +58,8 @@ struct BrushLivePreviewRaster final {
 struct BrushLivePreviewFrame final {
   BrushLivePreviewRaster raster;
   QImage source;
+  QImage display_image;
+  QRectF display_rect = QRectF(0, 0, 1, 1);
   bool source_attempted = false;
   bool auto_mask = false;
   int generation = 0;

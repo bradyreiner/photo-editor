@@ -119,7 +119,8 @@ publish_canonical_native_device_suffix(
     const std::shared_ptr<const photo_editor::pipeline::IccTransformLut3D>& device_lut,
     const photo_editor::pipeline::CompiledIccTransform& exact_device_transform,
     photo_editor::pipeline::ColorAdjustmentTelemetry* telemetry,
-    photo_editor::pipeline::CancellationToken cancellation) {
+    photo_editor::pipeline::CancellationToken cancellation,
+    bool allow_parallel_cpu_device_transform = false) {
   if (!input.has_value() || device_lut == nullptr || cancellation.cancelled()) {
     return {.failure_reason = "canonical native device suffix input is unavailable"};
   }
@@ -127,9 +128,13 @@ publish_canonical_native_device_suffix(
       output_pipeline,
       photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
       quality);
-  const auto retained = std::dynamic_pointer_cast<const
+  auto retained = std::dynamic_pointer_cast<const
       photo_editor::pipeline::metal::MetalWorkingSurface>(input->backing);
   auto& metal = photo_editor::pipeline::metal::shared_metal_pipeline_backend();
+  if (retained == nullptr && input->ensure_cpu_pixels(cancellation)) {
+    retained = metal.upload_working_surface(input->pixels, input->descriptor,
+                                           telemetry, cancellation);
+  }
   auto surface = retained != nullptr
                      ? metal.publish_aces2_output_lut_icc_bgra8_surface(
                            retained,
@@ -164,26 +169,34 @@ publish_canonical_native_device_suffix(
   auto pixels = std::move(input->pixels);
   photo_editor::pipeline::apply_aces2_output_lut_target_application(
       pixels, application);
-  auto device_pixels = std::vector<photo_editor::pipeline::IccRgbaFloat>{};
-  device_pixels.reserve(pixels.size());
-  for (const auto& pixel : pixels) {
-    device_pixels.push_back({
-        .red = pixel.red,
-        .green = pixel.green,
-        .blue = pixel.blue,
-        .alpha = pixel.alpha,
-    });
-  }
-  if (!exact_device_transform.apply(device_pixels) || cancellation.cancelled()) {
-    return {.failure_reason = "canonical device CPU fallback transform failed"};
-  }
-  for (auto index = std::size_t{0}; index < pixels.size(); ++index) {
-    pixels[index] = photo_editor::pipeline::ColorPixel{
-        .red = device_pixels[index].red,
-        .green = device_pixels[index].green,
-        .blue = device_pixels[index].blue,
-        .alpha = device_pixels[index].alpha,
-    };
+  auto parallel_used = false;
+  if (allow_parallel_cpu_device_transform) {
+    if (!photo_editor::pipeline::apply_cpu_icc_transform(
+            &pixels, exact_device_transform, cancellation, true, &parallel_used)) {
+      return {.failure_reason = "canonical device CPU fallback transform failed"};
+    }
+  } else {
+    auto device_pixels = std::vector<photo_editor::pipeline::IccRgbaFloat>{};
+    device_pixels.reserve(pixels.size());
+    for (const auto& pixel : pixels) {
+      device_pixels.push_back({
+          .red = pixel.red,
+          .green = pixel.green,
+          .blue = pixel.blue,
+          .alpha = pixel.alpha,
+      });
+    }
+    if (!exact_device_transform.apply(device_pixels) || cancellation.cancelled()) {
+      return {.failure_reason = "canonical device CPU fallback transform failed"};
+    }
+    for (auto index = std::size_t{0}; index < pixels.size(); ++index) {
+      pixels[index] = photo_editor::pipeline::ColorPixel{
+          .red = device_pixels[index].red,
+          .green = device_pixels[index].green,
+          .blue = device_pixels[index].blue,
+          .alpha = device_pixels[index].alpha,
+      };
+    }
   }
   return {
       .output = photo_editor::pipeline::RenderSurface{
@@ -192,7 +205,8 @@ publish_canonical_native_device_suffix(
           .identity =
               "surface:canonical-cpu-device-publish:" + invocation.stage_cache_key,
       },
-      .backend = "cpu-reference-fused-fallback",
+      .backend = parallel_used ? "cpu-reference-fused-fallback-parallel-icc"
+                               : "cpu-reference-fused-fallback",
       .fallback_reason = fallback_reason.empty()
                              ? "metal-native-device-publication-failed"
                              : fallback_reason,

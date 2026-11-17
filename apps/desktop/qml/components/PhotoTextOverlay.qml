@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 import PhotoEditor
 
 Item {
@@ -15,20 +14,28 @@ Item {
     required property int layerIndex
     required property var transformFrame
     property bool active: false
+    property Item commandsParent: null
+    property real commandsRightInset: 0
+    readonly property real commandsHeight: editActionFlow.implicitHeight
     property bool editing: false
     property bool pathHandlesActive: false
     property string editingLayerId: ""
     property int editingLayerIndex: -1
     property string originalText: ""
     property string editError: ""
-    readonly property int textSelectionStart: input.selectionStart
-    readonly property int textSelectionEnd: input.selectionEnd
-    readonly property bool textSelectionActive: input.selectionStart >= 0 && input.selectionEnd >= 0 &&
-        input.selectionStart !== input.selectionEnd
+    property var selectionEditor: input
+    readonly property int textSelectionStart: selectionEditor.selectionStart
+    readonly property int textSelectionEnd: selectionEditor.selectionEnd
+    readonly property bool textSelectionActive: textSelectionStart >= 0 && textSelectionEnd >= 0 &&
+        textSelectionStart !== textSelectionEnd
+    readonly property string draftText: input.text
+    readonly property string textSelectionContent: input.text
     property var creationBox: null
     property var creationViewport: null
     readonly property var displayedLayer: creationBox
-        ? ({kind: "text", pixelWidth: creationBox.width, pixelHeight: creationBox.height, fontSize: creationBox.fontSize || 48}) : layerData
+        ? Object.assign({kind: "text", id: "draft", text: creationBox.styleText === undefined ? String(creationBox.text || "") : creationBox.styleText, pixelWidth: creationBox.width,
+            pixelHeight: creationBox.height, fontSize: creationBox.fontSize || 48},
+            {textTypography: creationBox.textTypography, textAlignment: creationBox.textAlignment || "left"}) : layerData
     readonly property var baseFrame: creationBox && creationViewport ? ({
         frameX: creationViewport.imageX + creationBox.x * creationViewport.imageWidth / creationBox.canvasWidth,
         frameY: creationViewport.imageY + creationBox.y * creationViewport.imageHeight / creationBox.canvasHeight,
@@ -45,7 +52,7 @@ Item {
     readonly property var pathPoints: root.creationBox ? [] : (root.style.pathPoints || [])
     readonly property bool pathHandlesVisible: root.active && root.pathHandlesActive && !root.editing &&
         root.layerData && String(root.layerData.kind || "") === "text" && root.pathPoints.length > 1
-    readonly property bool styledText: Number(style.version || 0) >= 1 && Number(style.version || 0) <= 8
+    readonly property bool styledText: Number(style.version || 0) >= 1 && Number(style.version || 0) <= 10
     readonly property bool straightTextDraftNotice: pathPoints.length > 1 ||
         String(style.material || "none") !== "none"
     readonly property bool pointText: styledText && style.mode === "point"
@@ -70,7 +77,7 @@ Item {
     }
     signal editFinished(bool committed, bool created)
     onPathPointsChanged: baselineCanvas.requestPaint()
-    onStyleChanged: baselineCanvas.requestPaint()
+    onStyleChanged: { baselineCanvas.requestPaint(); recordSessionState() }
 
     readonly property int pathHandleCount: Math.min(64, root.pathPoints.length)
 
@@ -100,6 +107,115 @@ Item {
 
     property bool pathHandleDragActive: false
     property int draggedPathPoint: -1
+    property bool editTransactionOpen: false
+    property var sessionHistory: []
+    property int sessionHistoryPosition: -1
+    property bool restoringHistory: false
+    property bool finishing: false
+    readonly property bool canUndoSession: editing && sessionHistoryPosition > 0
+    readonly property bool canRedoSession: editing && sessionHistoryPosition + 1 < sessionHistory.length
+
+    function snapshotStyle() {
+        const value = !creationBox && typeof controller.photoLayerTypography === "function"
+            ? controller.photoLayerTypography(layerIndex) : style
+        const source = String(displayedLayer.text === undefined ? input.text : displayedLayer.text)
+        const normalized = typeof controller.photoTextDraftTypography === "function" && source !== input.text
+            ? controller.photoTextDraftTypography(value, input.text, ({}), -1, -1, source) : value
+        return JSON.parse(JSON.stringify(normalized || ({})))
+    }
+    function recordSessionState() {
+        if (!editing || restoringHistory || finishing || sessionHistoryPosition < 0) return
+        const state = {text: input.text, style: snapshotStyle(), alignment: String(displayedLayer.textAlignment || "left")}
+        if (JSON.stringify(state) === JSON.stringify(sessionHistory[sessionHistoryPosition])) return
+        const entries = sessionHistory.slice(0, sessionHistoryPosition + 1)
+        entries.push(state)
+        // Bound large copy snapshots; the transaction retains the complete Cancel baseline.
+        if (entries.length > 200) entries.splice(1, 1)
+        sessionHistory = entries
+        sessionHistoryPosition = entries.length - 1
+    }
+    function startSessionHistory() {
+        sessionHistory = [{text: input.text, style: snapshotStyle(), alignment: String(displayedLayer.textAlignment || "left")}]
+        sessionHistoryPosition = 0
+        selectionEditor = input
+    }
+    function restoreSessionState(position) {
+        if (!editing || position < 0 || position >= sessionHistory.length) return false
+        const state = sessionHistory[position]
+        restoringHistory = true
+        if (creationBox) {
+            creationBox = Object.assign({}, creationBox, {textTypography: state.style, textAlignment: state.alignment, styleText: state.text})
+        } else if (position === 0) {
+            // Restore the exact native baseline, including legacy field absence
+            // and point geometry, without traversing another global undo item.
+            controller.cancelCoalescedEdit()
+            controller.beginCoalescedEdit()
+        } else if (typeof controller.restorePhotoLayerTextState === "function") {
+            if (!controller.restorePhotoLayerTextState(editingLayerId, state.text, state.style, state.alignment)) {
+                restoringHistory = false
+                editError = qsTr("Could not restore this text style. Your draft is retained.")
+                return false
+            }
+        } else if (JSON.stringify(snapshotStyle()) !== JSON.stringify(state.style)) {
+            restoringHistory = false
+            return false
+        }
+        input.text = state.text
+        sessionHistoryPosition = position
+        restoringHistory = false
+        return true
+    }
+    function undoSession() { return canUndoSession && restoreSessionState(sessionHistoryPosition - 1) }
+    function redoSession() { return canRedoSession && restoreSessionState(sessionHistoryPosition + 1) }
+    function updateDraft(text) {
+        if (!editing) return false
+        if (input.text !== text) input.text = text
+        return true
+    }
+    // Publish copy inside the open session for range styling without ending it.
+    function flushPendingText() {
+        if (!editing || creationBox) return editing
+        if (editingDocumentId !== documentId || editingLayerId !== String(layerData.id)) return false
+        if (input.text === String(layerData.text === undefined ? "" : layerData.text)) return true
+        const accepted = typeof controller.setPhotoLayerTextById === "function"
+            ? controller.setPhotoLayerTextById(editingLayerId, input.text)
+            : controller.setPhotoLayerText(layerIndex, input.text)
+        if (!accepted) editError = qsTr("Could not save this text. Your draft is retained; retry Done or cancel.")
+        return accepted
+    }
+    function applyDraftTypography(changes, start, end) {
+        if (!creationBox || typeof controller.photoTextDraftTypography !== "function") return false
+        const styleChanges = Object.assign({}, changes)
+        const alignment = styleChanges.alignment === undefined
+            ? String(creationBox.textAlignment || "left") : String(styleChanges.alignment)
+        delete styleChanges.alignment
+        const next = controller.photoTextDraftTypography(style, input.text, styleChanges,
+            start === undefined ? -1 : start, end === undefined ? -1 : end,
+            creationBox.styleText === undefined ? input.text : creationBox.styleText)
+        if (!next || !Object.keys(next).length) return false
+        creationBox = Object.assign({}, creationBox, {textTypography: next, textAlignment: alignment, styleText: input.text})
+        recordSessionState()
+        return true
+    }
+    function focusCanvas() { selectionEditor = input; input.forceActiveFocus() }
+    function handleEditorKey(event) {
+        const primary = event.modifiers & (Qt.ControlModifier | Qt.MetaModifier)
+        if (primary && event.key === Qt.Key_Z) {
+            if (event.modifiers & Qt.ShiftModifier) redoSession()
+            else undoSession()
+            event.accepted = true
+        } else if (primary && event.key === Qt.Key_Y) {
+            redoSession()
+            event.accepted = true
+        } else if (primary && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+            finish(true)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Escape) {
+            if (selectionEditor.inputMethodComposing) Qt.inputMethod.reset()
+            else finish(false)
+            event.accepted = true
+        }
+    }
 
     function beginCreation(box, viewport) {
         if (editing || pathHandlesActive || !active || box.width < 16 || box.height < 16 ||
@@ -111,64 +227,103 @@ Item {
         editError = ""
         input.text = box.text === undefined ? "" : String(box.text)
         editing = true
+        controller.beginCoalescedEdit()
+        editTransactionOpen = true
+        startSessionHistory()
         draftViewport.contentY = 0
         input.forceActiveFocus()
         input.selectAll()
         return true
     }
 
-    function beginEditing() {
+    function beginEditing() { return beginEditingWithFocus(true) }
+    function beginEditingFromInspector() { return beginEditingWithFocus(false) }
+    function beginEditingWithFocus(focusInput) {
         if (editing || pathHandlesActive || !active || layerIndex < 0 || !String(layerData.id || "") ||
                 layerData.locked || String(layerData.kind) !== "text") return false
         editError = ""
         editingDocumentId = documentId
         editingLayerId = String(layerData.id)
         editingLayerIndex = layerIndex
+        if (controller.photoTextEditingLayerId !== undefined)
+            controller.photoTextEditingLayerId = editingLayerId
         originalText = layerData.text === undefined ? "Text" : String(layerData.text)
         input.text = originalText
         editing = true
+        controller.beginCoalescedEdit()
+        editTransactionOpen = true
+        startSessionHistory()
         draftViewport.contentY = 0
-        input.forceActiveFocus()
+        if (focusInput !== false) input.forceActiveFocus()
         input.selectAll()
         return true
     }
     function finish(commit) {
-        if (!editing) return
-        // Qt exposes QInputMethod through QObject in its QML type metadata.
-        // qmllint disable missing-property
+        if (!editing) return true
+        if (finishing) return false
+        finishing = true
+        // Settle IME before inspecting the draft. Popup/IME Escape is owned locally.
         if (commit) Qt.inputMethod.commit()
-        // qmllint enable missing-property
         const created = creationBox !== null
-        const shouldCommit = commit && editingDocumentId === documentId && (created ||
-            (editingLayerId === String(layerData.id) && editingLayerIndex === layerIndex))
-        editing = false
+        const sameTarget = editingDocumentId === documentId && (created ||
+            editingLayerId === String(layerData.id))
+        if (commit && !sameTarget) {
+            finishing = false
+            editError = qsTr("The text target changed. Your draft is retained; cancel to continue.")
+            return false
+        }
+        const shouldCommit = commit && (!created || input.text.length > 0)
         let accepted = true
+        // Prevent controller notifications from treating our own publish as an external edit.
+        editing = false
         if (shouldCommit && created) {
             const box = creationBox
-            controller.beginCoalescedEdit()
             accepted = box.pointText
                 ? controller.addPointTextLayer(input.text, box.x, box.y, box.canvasWidth, box.canvasHeight)
                 : controller.addParagraphTextLayer(input.text, box.x, box.y,
                     box.width, box.height, box.canvasWidth, box.canvasHeight)
-            if (accepted && (box.fontFamily !== undefined || box.fontSize !== undefined || box.color !== undefined)) {
+            if (accepted && box.textTypography && typeof controller.restorePhotoLayerTextState === "function") {
+                const newLayer = controller.photoLayers[0] || ({})
+                accepted = controller.restorePhotoLayerTextState(String(newLayer.id || ""), input.text,
+                    controller.photoTextDraftTypography(box.textTypography, input.text, ({}), -1, -1,
+                        box.styleText === undefined ? input.text : box.styleText), box.textAlignment || "left")
+                if (!accepted) {
+                    controller.cancelCoalescedEdit()
+                    controller.beginCoalescedEdit()
+                }
+            } else if (accepted && (box.fontFamily !== undefined || box.fontSize !== undefined || box.color !== undefined)) {
                 controller.setPhotoLayerTextStyle(0, box.fontFamily || "Helvetica",
                     Number(box.fontSize || 48), box.color || "#ffffff", "regular", "left")
             }
-            controller.endCoalescedEdit()
-        } else if (shouldCommit && input.text !== originalText) {
-            accepted = controller.setPhotoLayerText(editingLayerIndex, input.text)
+        } else if (shouldCommit && input.text !== String(layerData.text === undefined ? "" : layerData.text)) {
+            accepted = typeof controller.setPhotoLayerTextById === "function"
+                ? controller.setPhotoLayerTextById(editingLayerId, input.text)
+                : controller.setPhotoLayerText(layerIndex, input.text)
         }
         if (!accepted) {
             editing = true
+            finishing = false
             editError = pointGeometry.error ? String(pointGeometry.error)
                 : qsTr("Could not save this text. Your draft is retained; retry Done or cancel.")
-            input.forceActiveFocus()
-            return
+            selectionEditor.forceActiveFocus()
+            return false
+        }
+        if (editTransactionOpen) {
+            editTransactionOpen = false
+            if (shouldCommit) controller.endCoalescedEdit()
+            else controller.cancelCoalescedEdit()
         }
         input.focus = false
+        if (selectionEditor !== input) selectionEditor.focus = false
+        if (controller.photoTextEditingLayerId !== undefined)
+            controller.photoTextEditingLayerId = ""
         creationBox = null
         creationViewport = null
+        sessionHistory = []
+        sessionHistoryPosition = -1
+        finishing = false
         editFinished(shouldCommit, created)
+        return true
     }
 
     Connections {
@@ -188,13 +343,20 @@ Item {
     }
     onLayerIndexChanged: {
         pathHandlesActive = false
-        if (editing && !creationBox) finish(false)
+        if (editing && !creationBox && String(layerData.id) === editingLayerId)
+            editingLayerIndex = layerIndex
     }
     onLayerDataChanged: {
         if (pathHandlesActive && (!root.pathPoints.length || root.layerData.locked || root.creationBox))
             pathHandlesActive = false
-        if (editing && !creationBox && (String(layerData.id) !== editingLayerId || layerData.locked ||
-                String(layerData.text === undefined ? "Text" : layerData.text) !== originalText)) finish(false)
+        if (editing && !creationBox && !restoringHistory) {
+            const nextText = String(layerData.text === undefined ? "Text" : layerData.text)
+            if (String(layerData.id) !== editingLayerId || layerData.locked) finish(false)
+            else if (nextText !== originalText) {
+                if (nextText !== input.text) finish(false)
+            }
+            recordSessionState()
+        }
     }
     visible: active && (editing || pathHandlesVisible)
     enabled: visible
@@ -327,8 +489,9 @@ Item {
         rotation: root.displayedFrame.layerRotation
         transformOrigin: Item.Center
         Rectangle {
+            objectName: "photoTextEditingOutline"
             anchors.fill: parent
-            color: "#ee202428"
+            color: "transparent"
             border.color: theme.primaryAccent
             border.width: 1
         }
@@ -385,41 +548,45 @@ Item {
                     id: textDocumentStyle
                     document: input.textDocument
                     style: root.style
+                    sourceText: String(root.displayedLayer.text || "")
                 }
                 horizontalAlignment: root.displayedLayer.textAlignment === "center" ? TextEdit.AlignHCenter
                     : root.displayedLayer.textAlignment === "right" ? TextEdit.AlignRight
                     : root.displayedLayer.textAlignment === "justify" ? TextEdit.AlignJustify : TextEdit.AlignLeft
                 Accessible.name: qsTr("Edit text on canvas")
                 Keys.onShortcutOverride: function(event) { event.accepted = true }
-                Keys.onEscapePressed: function(event) { root.finish(false); event.accepted = true }
-                Keys.onPressed: function(event) {
-                    if ((event.modifiers & Qt.ControlModifier || event.modifiers & Qt.MetaModifier)
-                            && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
-                        root.finish(true)
-                        event.accepted = true
-                    }
-                }
+                onTextChanged: root.recordSessionState()
+                onActiveFocusChanged: if (activeFocus) root.selectionEditor = input
+                Keys.priority: Keys.BeforeItem
+                Keys.onPressed: function(event) { root.handleEditorKey(event) }
             }
         }
     }
-    RowLayout {
+    Flow {
+        id: editActionFlow
+        objectName: "photoTextEditActions"
+        parent: root.commandsParent || root
         visible: root.editing
-        x: Math.max(0, Math.min(root.width - width, frame.x))
-        y: Math.max(0, Math.min(root.height - height, frame.y + frame.height + 8))
+        width: Math.max(1, Math.min(parent.width - theme.space16 - root.commandsRightInset, theme.scaled(520)))
+        height: implicitHeight
+        spacing: theme.space4
+        x: Math.max(0, (parent.width - root.commandsRightInset - width) / 2)
+        y: root.commandsParent ? Math.max(0, (parent.height - height) / 2) : theme.space8
+        z: 40
         Label {
             visible: root.editError.length > 0
+            width: Math.min(theme.scaled(240), editActionFlow.width)
             text: root.editError
             color: "white"
             wrapMode: Text.WordWrap
-            Layout.maximumWidth: 240
         }
         Label {
             objectName: "photoTextDraftStyleNotice"
             visible: root.straightTextDraftNotice
-            text: qsTr("Draft shows straight text. Done applies the saved path or material effect.")
+            width: Math.min(theme.scaled(240), editActionFlow.width)
+            text: qsTr("Path/material applied on Done")
             color: theme.textMuted
             wrapMode: Text.WordWrap
-            Layout.maximumWidth: 240
             Accessible.name: text
         }
         ActionButton {

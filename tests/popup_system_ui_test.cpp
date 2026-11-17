@@ -32,8 +32,14 @@ QQuickItem* item(QObject* object, const char* property) {
   return qvariant_cast<QQuickItem*>(object->property(property));
 }
 bool inside(QQuickWindow* window, QQuickItem* content) {
-  return content && window->contentItem()->boundingRect().contains(
-      content->mapRectToItem(window->contentItem(), content->boundingRect()));
+  if (!content) return false;
+  const auto viewport = window->contentItem()->boundingRect();
+  const auto bounds = content->mapRectToItem(window->contentItem(), content->boundingRect());
+  if (!viewport.contains(bounds)) {
+    qWarning() << "Popup bounds" << bounds << "outside viewport" << viewport;
+    return false;
+  }
+  return true;
 }
 }
 
@@ -187,8 +193,8 @@ ApplicationWindow {
     for (const auto corner : {QPointF(0, 0), QPointF(size.width() - 80, size.height() - 36)}) {
       opener->setPosition(corner);
       QMetaObject::invokeMethod(menu, "open"); settle();
-      if (!inside(window, item(menu, "contentItem"))) return fail("Menu must remain inside screen edges");
       if (!capture(QString("menu-%1-%2").arg(size.width()).arg(corner.y() == 0 ? "top" : "bottom"))) return fail("Menu capture failed");
+      if (!inside(window, item(menu, "contentItem"))) return fail("Menu must remain inside screen edges");
       escape(window);
       QMetaObject::invokeMethod(tooltip, "open"); settle();
       if (!inside(window, item(tooltip, "contentItem"))) return fail("Tooltip must remain inside screen edges");

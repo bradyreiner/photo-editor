@@ -66,7 +66,39 @@ int main(int argc, char** argv) {
       !gaussian_saved_camera(physical_path->sample(0.5).resized({333,251}).description())) return 1;
   physical.focus_distance_m = 3;
   physical_views[1] = QVariantMap{{"id","b"},{"camera",make_gaussian_physical_camera(b,a.image_size,physical).camera->description()}};
-  if (gaussian_camera_path(settings,physical_views)) return 1; // Do not silently interpolate inconsistent calibration.
+  const auto manual_focus_path=gaussian_camera_path(settings,physical_views);
+  if (!manual_focus_path || manual_focus_path->sample(0.5).physical->settings.focus_distance_m!=2.5 ||
+      !gaussian_physical_camera_consistent(manual_focus_path->sample(0.5))) return 1;
+  physical.focal_length_mm=135;
+  auto zoom_end=make_gaussian_physical_camera(b,a.image_size,physical);
+  if (!zoom_end.camera) return 1;
+  physical_views[1]=QVariantMap{{"id","b"},{"camera",zoom_end.camera->description()}};
+  const auto zoom_path=gaussian_camera_path(settings,physical_views);
+  if (!zoom_path) return 1;
+  for (int i=0;i<=100;++i) {
+    const double time=i/100.0,t=time*time*(3-2*time);
+    const auto sample=zoom_path->sample(time);
+    const double focal=50+(135-50)*t,focus=2+t;
+    const double image_distance=focal*focus*1000/(focus*1000-focal);
+    if (!sample.physical || !gaussian_saved_camera(sample.description()) || !gaussian_physical_camera_consistent(sample) ||
+        std::abs(sample.physical->settings.focal_length_mm-focal)>1e-4 ||
+        std::abs(sample.fx-image_distance*sample.image_size.width()/sample.physical->gate_width_mm)>0.002 ||
+        std::abs(sample.photo.lens.aperture_radius-focal/(2000*physical.f_number*physical.metres_per_scene_unit))>1e-7) return 1;
+  }
+  auto wrong_scale=physical; wrong_scale.metres_per_scene_unit=1;
+  auto incompatible=physical_views;
+  incompatible[1]=QVariantMap{{"id","b"},{"camera",make_gaussian_physical_camera(b,a.image_size,wrong_scale).camera->description()}};
+  if (gaussian_camera_path(settings,incompatible)) return 1;
+  physical.focal_length_mm=50;
+  physical_views[1]=QVariantMap{{"id","b"},{"camera",make_gaussian_physical_camera(b,a.image_size,physical).camera->description()}};
+  for (auto& value : physical_views) {
+    auto view = value.toMap(); auto camera = gaussian_saved_camera(view.value("camera").toMap());
+    if (!camera) return 1;
+    camera->photo.lens.auto_focus = true; view["camera"] = camera->description(); value = view;
+  }
+  const auto physical_af_path = gaussian_camera_path(settings,physical_views);
+  if (!physical_af_path || physical_af_path->sample(0.5).physical->settings.focus_distance_m != 2.5) return 1;
+  for (int i = 0; i <= 100; ++i) if (!gaussian_saved_camera(physical_af_path->sample(i/100.0).description())) return 1;
   auto film_views = views; auto film_a = a, film_b = b;
   film_b.photo.film.grain_amount = 0.3F;
   film_views[1] = QVariantMap{{"id", "b"}, {"camera", film_b.description()}};
@@ -75,6 +107,44 @@ int main(int argc, char** argv) {
   film_views[0] = QVariantMap{{"id", "a"}, {"camera", film_a.description()}};
   const auto film_path = gaussian_camera_path(settings, film_views);
   if (!film_path || film_path->sample(0.5).photo.film != film_a.photo.film) return 1;
+  film_b.photo.post.glare_amount = 0.5F;
+  film_views[1] = QVariantMap{{"id", "b"}, {"camera", film_b.description()}};
+  if (gaussian_camera_path(settings,film_views)) return 1;
+  film_a.photo.post = film_b.photo.post;
+  film_views[0] = QVariantMap{{"id", "a"}, {"camera", film_a.description()}};
+  const auto post_path = gaussian_camera_path(settings,film_views);
+  if (!post_path || post_path->sample(0.5).photo.post != film_a.photo.post) return 1;
+  {
+    auto tone_views = views; auto tone_a = a, tone_b = b;
+    tone_a.photo.tone = {0.5F,0.2F,-0.5F,-0.2F,-0.3F,0.02F}; tone_b.photo.tone = {1.5F,0.8F,0.5F,0.2F,0.3F,0.08F};
+    tone_views[0] = QVariantMap{{"id","a"},{"camera",tone_a.description()}};
+    tone_views[1] = QVariantMap{{"id","b"},{"camera",tone_b.description()}};
+    const auto tone_path = gaussian_camera_path(settings,tone_views);
+    if (!tone_path || std::abs(tone_path->sample(0.5).photo.tone.contrast-1) > 1e-6F ||
+        std::abs(tone_path->sample(0.5).photo.tone.highlight_compression-0.5F) > 1e-6F ||
+        std::abs(tone_path->sample(0.5).photo.tone.warmth)>1e-6F ||
+        std::abs(tone_path->sample(0.5).photo.tone.fade-0.05F)>1e-6F) return 1;
+    for (int i = 0; i <= 200; ++i) if (!gaussian_saved_camera(tone_path->sample(i/100.0).description())) return 1;
+  }
+  for (int feature = 0; feature < 10; ++feature) {
+    auto lens_views = film_views; auto changed = film_b;
+    if (feature == 0) changed.photo.lens.aperture_edge = 3;
+    if (feature == 1) changed.photo.lens.vignetting_distance = 0.1F;
+    if (feature == 2) changed.photo.lens.vignetting_scale = 1.2F;
+    if (feature == 3) changed.photo.lens.spherical_distortion = 0.2F;
+    if (feature == 4) changed.photo.lens.astigmatism = -0.5F;
+    if (feature == 5) changed.photo.lens.field_curvature = 0.3F;
+    if (feature == 6) changed.photo.lens.auto_focus = true;
+    if (feature == 7) changed.photo.lens.bokeh_aspect = 2;
+    if (feature == 8) changed.photo.lens.ray_traced = true;
+    if (feature == 9) changed.photo.lens.pupil_softness = 1.5F;
+    lens_views[1] = QVariantMap{{"id","b"},{"camera",changed.description()}};
+    if (gaussian_camera_path(settings,lens_views)) return 1;
+    auto matching = film_a; matching.photo.lens = changed.photo.lens;
+    lens_views[0] = QVariantMap{{"id","a"},{"camera",matching.description()}};
+    const auto lens_path = gaussian_camera_path(settings,lens_views);
+    if (!lens_path || lens_path->sample(0.5).photo.lens != matching.photo.lens) return 1;
+  }
   film_a.photo.lens.samples = film_b.photo.lens.samples = 4096;
   film_views[0] = QVariantMap{{"id", "a"}, {"camera", film_a.description()}};
   film_views[1] = QVariantMap{{"id", "b"}, {"camera", film_b.description()}};
@@ -106,5 +176,5 @@ int main(int argc, char** argv) {
   auto invalid = saved_settings; invalid["viewIds"] = QVariantList{"missing", "shot"};
   if (save_gaussian_camera_path(project, scene, invalid).value("ok").toBool() ||
       load_gaussian_saved_views(project, scene).value("cameraPath").toMap() != saved_settings) return 1;
-  std::cout << "Path endpoints, easing, shortest arc, 2001 orthonormal samples, validation and persistence passed\n";
+  std::cout << "Path endpoints, easing, shortest arc, 2001 orthonormal samples, lens-model compatibility and persistence passed\n";
 }

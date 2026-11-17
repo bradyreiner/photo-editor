@@ -1,5 +1,6 @@
 #include "gaussian_scene_controller.h"
 #include "gaussian_scene_viewport.h"
+#include "gaussian_saved_views.h"
 #include "gaussian_spacetime_artifact.h"
 #include "gaussian_spacetime.h"
 #include <QGuiApplication>
@@ -173,6 +174,28 @@ int main(int argc,char** argv) {
     if(!path_result.value("ok").toBool() || path_receipt.value("segmentSeconds").toDouble()!=.5 ||
         path_receipt.value("viewIds").toStringList()!=QStringList{first_view.value("id").toString(),last_view.value("id").toString()} ||
         film_view.status().value("cameraPath").toMap().value("segmentSeconds").toDouble()!=1) return 1;
+    const auto frames=QDir(root).filePath("timed-frames");
+    if(!film_view.exportTimedFrameSequence(frames,path_plan,257).value("ok").toBool()) return 1;
+    film_view.seekSceneTime(0); film_view.orbit(30,0);
+    if(!wait_for([&] { return !film_view.status().value("filmExporting").toBool(); })) return 1;
+    const auto sequence_result=film_view.status().value("filmResult").toMap();
+    QFile sequence_file(QDir(frames).filePath("camera-path.json"));
+    if(!sequence_result.value("ok").toBool() || !sequence_file.open(QIODevice::ReadOnly)) return 1;
+    const auto sequence_receipt=QJsonDocument::fromJson(sequence_file.readAll()).toVariant().toMap();
+    const auto time_map=sequence_receipt.value("sceneTime").toMap();
+    if(sequence_receipt.value("schema")!="framehouse-gaussian-frame-sequence-v1" || time_map.value("startSeconds").toDouble()!=86399.25 ||
+        time_map.value("endSeconds").toDouble()!=86400.75 || sequence_result.value("receipt").toMap().contains("frames")) return 1;
+    GaussianCameraPath frozen_path; frozen_path.segment_seconds=sequence_receipt.value("segmentSeconds").toDouble(); frozen_path.fps=24;
+    for(const auto& value:sequence_receipt.value("keyframes").toList()) { const auto key=gaussian_saved_camera(value.toMap()); if(!key) return 1; frozen_path.cameras.push_back(*key); }
+    const QSize output_size(sequence_receipt.value("width").toInt(),sequence_receipt.value("height").toInt());
+    for(int index=0;index<12;++index) {
+      const double seconds=static_cast<double>(index)/24;
+      const auto expected=renderer->render(scene,frozen_path.sample(seconds).resized(output_size),true,std::lerp(86399.25,86400.75,seconds/.5));
+      const QImage actual(QDir(frames).filePath(QStringLiteral("frame-%1.png").arg(index,6,10,QChar('0'))));
+      if(!expected.error.isEmpty() || actual.convertToFormat(QImage::Format_RGBA8888)!=expected.image.convertToFormat(QImage::Format_RGBA8888)) {
+        std::cerr<<"Timed PNG sequence changed frozen camera/time pixels\n"; return 1;
+      }
+    }
     timed_film_verified=true;
   }
   const QVariantMap result{{"ok",true},{"projectPath",project},{"queuedPhotoTimeFrozen",true},

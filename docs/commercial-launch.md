@@ -3,7 +3,7 @@
 ## Agreed product
 
 - Both subscriptions and one-time licenses for the purchased major version.
-- Apple silicon Mac first; Intel and Windows are deferred.
+- Direct downloads for Apple silicon Macs and Windows x64; Intel Macs are deferred.
 - Lemon Squeezy hosted checkout, receipts, and purchase recovery.
 - Price is undecided. Legal publisher and domain are undecided.
 - After expiry, viewing, saving and exporting existing work remain available;
@@ -71,10 +71,10 @@ publisher. Confirm name availability and ownership before buying a domain or
 registering accounts. Keep the existing app bundle identifier stable.
 
 Use `release/production.env.example` as the non-secret configuration inventory.
-For the first launch, configure the Apple credentials, Sparkle keys, public
-binary release repository, Cloudflare Pages project/domain and support email
-listed in `production-launch-checklist.md`. Windows credentials are not required
-for the selected Apple silicon release.
+For launch, configure the Apple and Windows signing credentials, Sparkle keys,
+public binary release repository, Cloudflare Pages project/domain and support
+email listed in `production-launch-checklist.md`. Both selected platforms must
+pass their signing and installed-package checks before publication.
 
 Serve an update feed dedicated to the purchased major version. Do not repoint
 that feed at a later paid major version. Verify the feed and download destinations

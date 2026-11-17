@@ -219,6 +219,7 @@ Item {
         AppPopup {
             id: shapeTypePopup
             objectName: "photoShapeTypePopup"
+            transientMenu: true
             parent: Overlay.overlay
             modal: false
             focus: true
@@ -266,7 +267,7 @@ Item {
                             { label: qsTr("Line"), value: "line" },
                             { label: qsTr("Arrow"), value: "arrow" }
                         ]
-                        delegate: Button {
+                        delegate: ActionButton {
                             id: shapeOption
                             required property var modelData
                             required property int index
@@ -277,25 +278,13 @@ Item {
                             Layout.preferredHeight: theme.scaled(76)
                             padding: theme.space4
                             checkable: true
+                            active: checked
                             checked: root.shapeType === modelData.value
                             Accessible.name: modelData.label
                             Accessible.description: checked ? qsTr("Selected shape type") : qsTr("Select shape type")
                             onClicked: {
                                 photoShapeControls.setShapeType(modelData.value)
-                                shapeTypePopup.close()
-                            }
-                            background: Rectangle {
-                                radius: theme.radiusControl
-                                color: shapeOption.activeFocus ? theme.interactionFill
-                                       : shapeOption.pressed ? theme.actionSecondaryPressed
-                                       : shapeOption.checked ? theme.interactionFill
-                                       : shapeOption.hovered ? theme.actionSecondaryHover : theme.surfaceInset
-                                border.width: shapeOption.checked || shapeOption.activeFocus
-                                              ? theme.focusBorderWidth : theme.hairlineWidth
-                                border.color: shapeOption.checked || shapeOption.activeFocus
-                                              ? theme.interaction300 : theme.lineSoft
-                                Behavior on color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
-                                Behavior on border.color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
+                                shapeTypePopup.closeTransient(true)
                             }
                             contentItem: ColumnLayout {
                                 spacing: theme.space2
@@ -353,7 +342,7 @@ Item {
                     font.pixelSize: theme.typeCaption
                     Accessible.name: qsTr("Create a new editable shape layer")
                 }
-                Button {
+                ActionButton {
                     id: shapeTypeChooser
                     objectName: "photoShapeTypeChooser"
                     Layout.fillWidth: root.controlsParent !== null
@@ -361,7 +350,8 @@ Item {
                     Layout.minimumWidth: theme.scaled(152)
                     Layout.preferredHeight: theme.controlHeightDense
                     padding: theme.space4
-                    onClicked: shapeTypePopup.open()
+                    active: shapeTypePopup.visible
+                    onClicked: shapeTypePopup.toggleTransient(shapeTypeChooser)
                     Accessible.name: qsTr("Shape: %1").arg(photoShapeControls.shapeTypeLabel(root.shapeType))
                     Accessible.description: qsTr("Choose a shape to draw.")
                     AppToolTip {
@@ -370,16 +360,6 @@ Item {
                         text: qsTr("Choose a shape to draw.")
                         visible: shapeTypeChooser.visible && (shapeTypeChooser.hovered)
                         delay: theme.durationSlow
-                    }
-                    background: Rectangle {
-                        radius: theme.radiusControl
-                        color: shapeTypeChooser.activeFocus ? theme.interactionFill
-                               : shapeTypeChooser.pressed ? theme.actionSecondaryPressed
-                               : shapeTypeChooser.hovered ? theme.actionSecondaryHover : theme.actionSecondaryFill
-                        border.width: shapeTypeChooser.activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
-                        border.color: shapeTypeChooser.activeFocus ? theme.focusRing : theme.controlEdge
-                        Behavior on color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
-                        Behavior on border.color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
                     }
                     contentItem: RowLayout {
                         spacing: theme.space4
@@ -502,7 +482,8 @@ Item {
                     Label {
                         text: Math.round(root.strokeWidth) + " px"
                         color: theme.textStrong
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: theme.typeCaption
                     }
                 }

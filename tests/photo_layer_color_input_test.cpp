@@ -5,13 +5,20 @@
 #include "working_image.h"
 #include "photo_layer_effect_codec.h"
 #include "photo_text_style.h"
+#include "photo_editor/pipeline/color_profile_asset.h"
+#include "photo_editor/pipeline/color_transform.h"
 
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QElapsedTimer>
+#include <QDateTime>
+#include <QFile>
+#include <QFileInfo>
 #include <memory>
 #include <QTemporaryDir>
 #include <iostream>
+#include <cstring>
 
 int image_delta(const QImage& a, const QImage& b) {
   if (a.isNull() || a.size() != b.size()) return 255;
@@ -40,7 +47,323 @@ int main(int argc, char** argv) {
   QByteArray png;
   QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly);
   if (!source.save(&buffer, "PNG") || !source.save(root.filePath("placed.png"))) return 1;
+  {
+    QImage prepared_source(32, 24, QImage::Format_RGB32);
+    prepared_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+    for (int y = 0; y < prepared_source.height(); ++y) {
+      for (int x = 0; x < prepared_source.width(); ++x) {
+        prepared_source.setPixelColor(x, y, QColor(20 + x * 5, 18 + y * 7,
+            35 + (x + y) * 3));
+      }
+    }
+    const auto prepared_source_path = root.filePath("prepared-placed-source.bmp");
+    if (!prepared_source.save(prepared_source_path, "BMP")) return 1;
+
+    EditRecipeState prepared_source_recipe;
+    prepared_source_recipe.photographic_rendering_model = QStringLiteral("legacy-oklch-v1");
+    const auto prepared_source_recipe_json = serialize_edit_recipe_json(prepared_source_recipe);
+    QVariantMap prepared_layer{
+        {"id", "prepared-source"}, {"kind", "source"},
+        {"sourcePath", prepared_source_path}, {"sourceAssetId", "prepared-source-test"},
+        {"sourceRecipeJson", prepared_source_recipe_json},
+        {"sourcePixelWidth", 32}, {"sourcePixelHeight", 24},
+        {"pixelWidth", 32}, {"pixelHeight", 24},
+        {"canvasWidth", 128}, {"canvasHeight", 96},
+        {"x", 16}, {"y", 24}, {"scale", 2.0}, {"rotation", 15.0}, {"opacity", 0.75},
+        {"boardPhotoCrop", QVariantMap{{"x", 0.25}, {"y", 0.25},
+            {"width", 0.5}, {"height", 0.5}}},
+    };
+    const auto compile_prepared_source = [&](const QVariantMap& layer,
+                                                const QString& profile,
+                                                const QSize& output_size) {
+      ColorPipelineConfig config;
+      config.working_profile = working_color_profile_from_name(profile.toStdString());
+      return compile_pipeline_photo_layers({layer}, {}, LocalMaskRasterPolicy::UseStoredRaster,
+          output_size, {}, config, DesktopRenderPurpose::Preview);
+    };
+    const auto same_source_pixels = [](const auto& left, const auto& right) {
+      return left.size() == 1 && right.size() == 1 &&
+          left[0].pixel_width == right[0].pixel_width &&
+          left[0].pixel_height == right[0].pixel_height &&
+          left[0].pixels.size() == right[0].pixels.size() && !left[0].pixels.empty() &&
+          std::memcmp(left[0].pixels.data(), right[0].pixels.data(),
+              left[0].pixels.size() * sizeof(ColorPixel)) == 0;
+    };
+
+    const auto first_prepared_source = compile_prepared_source(prepared_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (first_prepared_source.size() != 1 || first_prepared_source[0].content_error.size() != 0 ||
+        first_prepared_source[0].pixel_width != 32 || first_prepared_source[0].pixel_height != 24 ||
+        first_prepared_source[0].x != 32 || first_prepared_source[0].y != 36 ||
+        first_prepared_source[0].transform_scale != 1.0 ||
+        first_prepared_source[0].transform_rotation != 15.0) {
+      std::cerr << "Prepared source cache must retain framed pixels and crop placement metadata\n";
+      return 1;
+    }
+
+    auto moved_prepared_layer = prepared_layer;
+    moved_prepared_layer.insert("x", 42);
+    moved_prepared_layer.insert("y", -6);
+    moved_prepared_layer.insert("rotation", 31.0);
+    moved_prepared_layer.insert("opacity", 0.3);
+    const auto moved_prepared_source = compile_prepared_source(moved_prepared_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (!same_source_pixels(first_prepared_source, moved_prepared_source) ||
+        moved_prepared_source[0].x != 58 || moved_prepared_source[0].y != 6 ||
+        moved_prepared_source[0].transform_rotation != 31.0 ||
+        moved_prepared_source[0].opacity != 0.3) {
+      std::cerr << "Moving or styling a framed source must preserve its exact prepared pixels\n";
+      return 1;
+    }
+
+    auto rescaled_prepared_layer = prepared_layer;
+    rescaled_prepared_layer.insert("scale", 1.25);
+    const auto rescaled_prepared_source = compile_prepared_source(rescaled_prepared_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (rescaled_prepared_source.size() != 1 ||
+        rescaled_prepared_source[0].pixel_width != 20 ||
+        rescaled_prepared_source[0].pixel_height != 15 ||
+        rescaled_prepared_source[0].x != 26 || rescaled_prepared_source[0].y != 32 ||
+        rescaled_prepared_source[0].transform_scale != 1.0) {
+      std::cerr << "Framed source raster reuse must key the placement scale\n";
+      return 1;
+    }
+
+    auto recropped_prepared_layer = prepared_layer;
+    recropped_prepared_layer.insert("boardPhotoCrop", QVariantMap{
+        {"x", 0.5}, {"y", 0.25}, {"width", 0.25}, {"height", 0.5}});
+    const auto recropped_prepared_source = compile_prepared_source(recropped_prepared_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (recropped_prepared_source.size() != 1 ||
+        recropped_prepared_source[0].pixel_width != 16 ||
+        recropped_prepared_source[0].pixel_height != 24 ||
+        recropped_prepared_source[0].x != 48 || recropped_prepared_source[0].y != 36 ||
+        same_source_pixels(first_prepared_source, recropped_prepared_source)) {
+      std::cerr << "Changing a board photo crop must rebuild the prepared frame\n";
+      return 1;
+    }
+
+    auto resized_authored_layer = prepared_layer;
+    resized_authored_layer.insert("pixelWidth", 40);
+    const auto resized_authored_source = compile_prepared_source(resized_authored_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (resized_authored_source.size() != 1 || resized_authored_source[0].pixel_width != 40 ||
+        resized_authored_source[0].pixel_height != 24) {
+      std::cerr << "Changing authored source dimensions must rebuild the prepared frame\n";
+      return 1;
+    }
+
+    const auto larger_raster_source = compile_prepared_source(prepared_layer,
+        QStringLiteral("Linear sRGB"), QSize(256, 192));
+    if (larger_raster_source.size() != 1 || larger_raster_source[0].pixel_width != 64 ||
+        larger_raster_source[0].pixel_height != 48) {
+      std::cerr << "Changing requested raster dimensions must rebuild the prepared frame\n";
+      return 1;
+    }
+
+    const auto p3_prepared_source = compile_prepared_source(prepared_layer,
+        QStringLiteral("Linear Display P3"), QSize(128, 96));
+    const auto p3_fresh_source_path = root.filePath("prepared-source-profile-fresh.bmp");
+    if (!QFile::copy(prepared_source_path, p3_fresh_source_path)) return 1;
+    auto p3_fresh_layer = prepared_layer;
+    p3_fresh_layer.insert("sourcePath", p3_fresh_source_path);
+    const auto p3_fresh_source = compile_prepared_source(p3_fresh_layer,
+        QStringLiteral("Linear Display P3"), QSize(128, 96));
+    if (p3_prepared_source.size() != 1 || p3_fresh_source.size() != 1 ||
+        p3_prepared_source[0].content_error.size() != 0 ||
+        !same_source_pixels(p3_prepared_source, p3_fresh_source)) {
+      std::cerr << "Prepared source pixels must remain isolated by working profile\n";
+      return 1;
+    }
+
+    auto exposure_recipe = prepared_source_recipe;
+    exposure_recipe.exposure = 1.0;
+    auto graded_prepared_layer = prepared_layer;
+    graded_prepared_layer.insert("sourceRecipeJson", serialize_edit_recipe_json(exposure_recipe));
+    const auto graded_prepared_source = compile_prepared_source(graded_prepared_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (graded_prepared_source.size() != 1 ||
+        same_source_pixels(first_prepared_source, graded_prepared_source)) {
+      std::cerr << "Changing a source recipe must not reuse stale prepared pixels\n";
+      return 1;
+    }
+
+    const auto source_file_info = QFileInfo(prepared_source_path);
+    const auto source_size_before_rewrite = source_file_info.size();
+    const auto source_mtime_before_rewrite = source_file_info.lastModified();
+    QImage replacement_source(32, 24, QImage::Format_RGB32);
+    replacement_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+    replacement_source.fill(QColor("#e91b31"));
+    if (!replacement_source.save(prepared_source_path, "BMP")) return 1;
+    QFile changed_source_file(prepared_source_path);
+    if (!changed_source_file.open(QIODevice::ReadWrite) ||
+        !changed_source_file.setFileTime(QDateTime::currentDateTime().addSecs(5),
+            QFileDevice::FileModificationTime)) return 1;
+    changed_source_file.close();
+    QFileInfo changed_source_info(prepared_source_path);
+    changed_source_info.refresh();
+    if (changed_source_info.size() != source_size_before_rewrite ||
+        changed_source_info.lastModified() == source_mtime_before_rewrite) {
+      std::cerr << "Prepared-source invalidation fixture must change mtime while preserving file size\n";
+      return 1;
+    }
+    const auto changed_file_source = compile_prepared_source(prepared_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (changed_file_source.size() != 1 ||
+        same_source_pixels(first_prepared_source, changed_file_source)) {
+      std::cerr << "Changing a source file's content and mtime must invalidate prepared pixels\n";
+      return 1;
+    }
+
+    auto& default_profile_registry =
+        photo_editor::pipeline::default_icc_profile_asset_registry();
+    default_profile_registry.clear();
+    const auto external_profile_payload =
+        photo_editor::pipeline::builtin_rgb_icc_profile_payload(
+            photo_editor::pipeline::make_display_p3_color_space());
+    const auto external_profile_path = root.filePath("source-input-profile.icc");
+    QFile external_profile_file(external_profile_path);
+    if (external_profile_payload.empty() ||
+        !external_profile_file.open(QIODevice::WriteOnly) ||
+        external_profile_file.write(
+            reinterpret_cast<const char*>(external_profile_payload.data()),
+            static_cast<qint64>(external_profile_payload.size())) !=
+            static_cast<qint64>(external_profile_payload.size())) {
+      return 1;
+    }
+    external_profile_file.close();
+    auto external_profile_recipe = prepared_source_recipe;
+    external_profile_recipe.output_color_space = QStringLiteral("Display P3");
+    external_profile_recipe.export_icc_profile_asset = IccProfileAssetState{
+        .asset_id = QStringLiteral("icc:prepared-source-cache-test"),
+        .payload_sha256 = QString::fromStdString(
+            photo_editor::pipeline::color_payload_sha256(external_profile_payload)),
+        .display_name = QStringLiteral("Prepared Source Cache Test"),
+        .source_uri = external_profile_path,
+        .source_kind = QStringLiteral("test-generated"),
+        .byte_size = static_cast<qint64>(external_profile_payload.size()),
+    };
+    auto external_profile_layer = prepared_layer;
+    external_profile_layer.insert("sourceRecipeJson",
+        serialize_edit_recipe_json(external_profile_recipe));
+    const auto resolved_external_profile_source = compile_prepared_source(
+        external_profile_layer, QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (resolved_external_profile_source.size() != 1 ||
+        !resolved_external_profile_source[0].content_error.empty()) {
+      std::cerr << "A valid external export profile should render before invalidation: "
+                << (resolved_external_profile_source.empty() ? "no compiled layer" :
+                    resolved_external_profile_source[0].content_error) << '\n';
+      default_profile_registry.clear();
+      return 1;
+    }
+    external_profile_file.remove();
+    default_profile_registry.clear();
+    const auto missing_external_profile_source = compile_prepared_source(
+        external_profile_layer, QStringLiteral("Linear sRGB"), QSize(128, 96));
+    default_profile_registry.clear();
+    if (missing_external_profile_source.size() != 1 ||
+        missing_external_profile_source[0].content_error.empty()) {
+      std::cerr << "A warm source must not hide a missing external profile dependency\n";
+      return 1;
+    }
+
+    auto invalid_recipe_layer = prepared_layer;
+    invalid_recipe_layer.insert("sourceRecipeJson", QStringLiteral("not a valid recipe"));
+    const auto invalid_recipe_source = compile_prepared_source(invalid_recipe_layer,
+        QStringLiteral("Linear sRGB"), QSize(128, 96));
+    if (invalid_recipe_source.size() != 1 || invalid_recipe_source[0].content_error.empty()) {
+      std::cerr << "Prepared-pixel hits must not bypass invalid source-recipe errors\n";
+      return 1;
+    }
+  }
   if (gui) {
+    // Exercise the same source-pixel compiler used by interactive text moves.
+    // Placement must change while glyph values remain bit-identical.
+    auto moving_text = QVariantMap{{"id", "moving-title"}, {"kind", "text"},
+        {"text", "A quiet portrait"}, {"pixelWidth", 720}, {"pixelHeight", 160},
+        {"canvasWidth", 1600}, {"canvasHeight", 1000}, {"fontSize", 64},
+        {"fontFamily", "Helvetica"}, {"textColor", "#80eaa251"}};
+    const auto compile_moving_text = [&] {
+      return compile_pipeline_photo_layers({moving_text}, {}, LocalMaskRasterPolicy::UseStoredRaster,
+          QSize(1600, 1000), {}, {}, DesktopRenderPurpose::Preview);
+    };
+    const auto reference_text = compile_moving_text();
+    if (reference_text.size() != 1 || reference_text[0].pixels.empty()) return 1;
+    constexpr int move_samples = 40;
+    QElapsedTimer move_timer;
+    move_timer.start();
+    for (int sample = 0; sample < move_samples; ++sample) {
+      moving_text.insert("x", sample * 3);
+      moving_text.insert("y", sample * 2);
+      const auto next = compile_moving_text();
+      if (next.size() != 1 || next[0].x != sample * 3 || next[0].y != sample * 2 ||
+          next[0].pixels.size() != reference_text[0].pixels.size()) return 1;
+      if (std::memcmp(next[0].pixels.data(), reference_text[0].pixels.data(),
+              next[0].pixels.size() * sizeof(ColorPixel)) != 0) {
+        std::cerr << "Moving text must preserve exact source glyph pixels\n";
+        return 1;
+      }
+    }
+    std::cout << "text_move_compile samples=" << move_samples
+              << " elapsed_ns=" << move_timer.nsecsElapsed() << '\n';
+    const auto moving_baseline = moving_text;
+    const auto same_pixels = [](const auto& left, const auto& right) {
+      return left.size() == 1 && right.size() == 1 &&
+          left[0].pixel_width == right[0].pixel_width && left[0].pixel_height == right[0].pixel_height &&
+          left[0].pixels.size() == right[0].pixels.size() &&
+          std::memcmp(left[0].pixels.data(), right[0].pixels.data(),
+              left[0].pixels.size() * sizeof(ColorPixel)) == 0;
+    };
+    auto changed_style = PhotoTextStyle{};
+    changed_style.size = 44.25;
+    changed_style.tracking = 2.5;
+    changed_style.color = QColor("#70ff5080");
+    const QVariantList source_changes{
+        QVariantMap{{"text", "A different portrait"}}, QVariantMap{{"fontFamily", "Georgia"}},
+        QVariantMap{{"fontSize", 51.5}}, QVariantMap{{"fontWeight", "bold"}},
+        QVariantMap{{"textColor", "#4022aacc"}}, QVariantMap{{"textAlignment", "center"}},
+        QVariantMap{{"textPerspectiveHorizontal", 0.35}}, QVariantMap{{"pixelWidth", 600}},
+        QVariantMap{{"pixelHeight", 220}},
+        QVariantMap{{"textTypography", encode_photo_text_style(changed_style).toVariantMap()}}};
+    for (const auto& patch : source_changes) {
+      moving_text = moving_baseline;
+      static_cast<void>(compile_moving_text());
+      const auto values = patch.toMap();
+      for (auto it = values.cbegin(); it != values.cend(); ++it) moving_text.insert(it.key(), it.value());
+      const auto warm_change = compile_moving_text();
+      if (!QMetaObject::invokeMethod(app.get(), "fontDatabaseChanged", Qt::DirectConnection)) return 1;
+      const auto fresh_change = compile_moving_text();
+      if (!same_pixels(warm_change, fresh_change)) {
+        std::cerr << "Text source changes must match a fresh compile after font invalidation\n";
+        return 1;
+      }
+    }
+    for (const auto& field : {QStringLiteral("text"), QStringLiteral("pixelWidth"), QStringLiteral("fontSize")}) {
+      moving_text = moving_baseline;
+      moving_text.remove(field);
+      static_cast<void>(compile_moving_text());
+      moving_text.insert(field, QVariant{});
+      const auto explicit_null = compile_moving_text();
+      QMetaObject::invokeMethod(app.get(), "fontDatabaseChanged", Qt::DirectConnection);
+      if (!same_pixels(explicit_null, compile_moving_text())) {
+        std::cerr << "Missing text fields and explicit nulls must keep their distinct raster defaults\n";
+        return 1;
+      }
+    }
+    moving_text = moving_baseline;
+    for (const auto& profile : {"Linear sRGB", "Linear Display P3", "Linear Rec.2020"}) {
+      ColorPipelineConfig profile_config;
+      profile_config.working_profile = working_color_profile_from_name(profile);
+      const auto warm = compile_pipeline_photo_layers({moving_text}, {}, LocalMaskRasterPolicy::UseStoredRaster,
+          QSize(1600, 1000), {}, profile_config, DesktopRenderPurpose::Preview);
+      QMetaObject::invokeMethod(app.get(), "fontDatabaseChanged", Qt::DirectConnection);
+      const auto fresh = compile_pipeline_photo_layers({moving_text}, {}, LocalMaskRasterPolicy::UseStoredRaster,
+          QSize(1600, 1000), {}, profile_config, DesktopRenderPurpose::Preview);
+      if (!same_pixels(warm, fresh)) {
+        std::cerr << "Text pixel reuse must preserve each working color profile exactly\n";
+        return 1;
+      }
+    }
     const QVariantMap text_layer{{"id", "scaled-text"}, {"kind", "text"}, {"text", "Caption"},
         {"pixelWidth", 200}, {"pixelHeight", 100}, {"canvasWidth", 400}, {"canvasHeight", 400}, {"x", 40}, {"y", 60}};
     const auto compiled = compile_pipeline_photo_layers({text_layer}, {}, LocalMaskRasterPolicy::UseStoredRaster,

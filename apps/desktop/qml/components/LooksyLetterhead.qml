@@ -59,7 +59,8 @@ Item {
             Text {
                 text: root.descriptor
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: root.compact ? 7 : 9
                 font.weight: Font.Bold
                 font.letterSpacing: root.compact ? 1.5 : 2.1

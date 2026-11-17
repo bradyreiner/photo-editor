@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
   controller.initializeFromStore();
   std::cout << "Export history initialization returned in " << timer.elapsed() << " ms\n";
   if (timer.elapsed() >= 100 || !controller.loading()) return 1;
-  if (!wait_for([&] { return !controller.loading(); }) || controller.historyError().isEmpty() || ticks < 20) {
+  if (!wait_for([&] { return !controller.loading(); }) || controller.historyError().isEmpty()) {
     std::cerr << "Outage check: loading=" << controller.loading() << "; ticks=" << ticks
               << "; error=" << controller.historyError().toStdString() << '\n';
     return 1;
@@ -66,8 +66,18 @@ int main(int argc, char** argv) {
     if (++state->calls == 1) { state->release.acquire(); return record("obsolete"); }
     auto result = record("fresh"); result.records[0].status = "Running"; return result;
   });
+  const auto ticks_before_blocked_read = ticks;
   controller.initializeFromStore();
   if (!wait_for([&] { return state->calls.load() == 1; })) return 1;
+  // A real outage may return immediately. Prove event-loop responsiveness
+  // while a controlled read stays pending instead of requiring a slow outage.
+  const bool heartbeat_progressed = wait_for(
+      [&] { return ticks >= ticks_before_blocked_read + 20; }, 2000);
+  if (!heartbeat_progressed || !controller.loading() || state->calls != 1) {
+    state->release.release();
+    std::cerr << "Blocked history reader did not preserve GUI heartbeat responsiveness\n";
+    return 1;
+  }
   for (int i = 0; i < 100; ++i) jobStoreNotifier()->notifyJobsChanged();
   state->release.release();
   if (!wait_for([&] { return !controller.loading(); }) || state->calls != 2 || obsolete_published || wrong_thread ||

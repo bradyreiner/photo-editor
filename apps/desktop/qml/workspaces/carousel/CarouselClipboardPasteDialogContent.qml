@@ -17,6 +17,11 @@ ColumnLayout {
     spacing: content.theme.space12
 
     function focusInitialTarget() { preserveSourceChip.forceActiveFocus(Qt.TabFocusReason) }
+    function fileNameForPath(value) {
+        const normalized = String(value || "").replace(/\\/g, "/")
+        const fileName = normalized.split("/").pop()
+        return fileName.length > 0 ? fileName : normalized
+    }
 
     RowLayout {
         objectName: "carouselClipboardPasteHeader"
@@ -42,7 +47,7 @@ ColumnLayout {
                 text: String(content.carouselClipboardPasteDialog.preview.sourceDocumentName || "Another Carousel") +
                       " · " + String(content.carouselClipboardPasteDialog.preview.sourceFormat || "custom")
                 color: content.theme.textMuted
-                font.family: content.theme.fontMono
+                font.family: content.theme.fontUi
                 font.pixelSize: content.theme.typeCaption
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 elide: Text.ElideNone
@@ -114,14 +119,24 @@ ColumnLayout {
                 Repeater {
                     model: content.carouselClipboardPasteDialog.preview.missingAssets || []
                     delegate: Label {
+                        id: missingAssetLabel
                         required property var modelData
                         Layout.fillWidth: true
-                        text: "Missing asset · " + String(modelData.name || modelData.path || "Unknown file")
+                        readonly property string missingPath: String(modelData.path || "")
+                        text: "Missing asset · " + String(modelData.name || content.fileNameForPath(missingPath) || "Unknown file")
                         color: content.theme.warning
                         font.family: content.theme.fontUi
                         font.pixelSize: content.theme.typeCaption
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         elide: Text.ElideNone
+                        Accessible.description: missingPath
+                        HoverHandler { id: missingAssetHover }
+                        AppToolTip {
+                            targetItem: missingAssetLabel
+                            visible: missingAssetLabel.visible && missingAssetHover.hovered && missingAssetLabel.missingPath.length > 0
+                            delay: 350
+                            text: missingAssetLabel.missingPath
+                        }
                     }
                 }
 

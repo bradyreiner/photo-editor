@@ -1,0 +1,28 @@
+{
+    "assetCount": 40,
+    "captures": [
+        {
+            "height": 1834,
+            "name": "library-startup-loading",
+            "path": "/private/tmp/looksy-library-startup-final/library-startup-loading.png",
+            "width": 3200
+        },
+        {
+            "height": 1834,
+            "name": "library-empty",
+            "path": "/private/tmp/looksy-library-startup-final/library-empty.png",
+            "width": 3200
+        },
+        {
+            "height": 1834,
+            "name": "library-startup-ready",
+            "path": "/private/tmp/looksy-library-startup-final/library-startup-ready.png",
+            "width": 3200
+        }
+    ],
+    "delayedThumbnailsReady": true,
+    "inspectorReady": true,
+    "ok": true,
+    "resizeSettled": true,
+    "startupReadyAfterPublication": true
+}

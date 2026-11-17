@@ -1,0 +1,28 @@
+{
+  "primary_track": "Minimal Techno 01",
+  "artist": "Alejandro Maga\u00f1a (A. M.)",
+  "catalog": "https://mixkit.co/free-stock-music/techno/",
+  "asset": "https://assets.mixkit.co/music/162/162.mp3",
+  "license": "https://mixkit.co/license/modal/musicFree/",
+  "source_duration": 123.68979591836735,
+  "pitch_preserving_tempo_factor": 1.030748299319728,
+  "film_duration": 120,
+  "arrangement": "Entire produced cue, pitch-preserving fit to 120 seconds; no repeated middle phrase or arbitrary crossfade. Section gain is authored in the film.",
+  "status": "Production selection; auditory fit requires human review",
+  "source_sha256": "ba1c747e0e1ade47d474f3407985c74cac4671bf3e21805c25c2f8545ac74c2a",
+  "sfx": [
+    {
+      "title": "Interface click",
+      "source": "https://assets.mixkit.co/active_storage/sfx/1126/1126-preview.mp3"
+    },
+    {
+      "title": "Single classic click",
+      "source": "https://assets.mixkit.co/active_storage/sfx/1116/1116-preview.mp3"
+    },
+    {
+      "title": "Quick air woosh",
+      "source": "https://assets.mixkit.co/active_storage/sfx/2605/2605-preview.mp3"
+    }
+  ],
+  "sfx_license": "https://mixkit.co/license/modal/sfxFree/"
+}

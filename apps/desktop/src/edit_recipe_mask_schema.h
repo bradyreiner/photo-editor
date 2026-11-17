@@ -3,10 +3,94 @@
 #include "edit_recipe_state.h"
 #include "edit_recipe_mask_types.h"
 
+#include <algorithm>
+#include <initializer_list>
+#include <iterator>
+
 namespace photo_editor::desktop {
 
 inline constexpr qint64 kMaxMaskPayloadBytes = 64LL * 1024LL * 1024LL;
 inline constexpr int kMaxMaskPayloadEdge = 16384;
+inline constexpr qint64 kMaxComponentRangeSourcePngBytes = 8LL * 1024LL * 1024LL;
+inline constexpr int kMaxComponentRangeSourceEdge = 1024;
+inline constexpr qint64 kMaxComponentRangeSourcePixels = 1024LL * 1024LL;
+
+inline bool valid_component_range_source_snapshot(
+    const QByteArray& data,
+    int width,
+    int height,
+    int version) {
+  if (version != 1 || data.size() < 33 ||
+      static_cast<qint64>(data.size()) > kMaxComponentRangeSourcePngBytes ||
+      width <= 0 || height <= 0 ||
+      width > kMaxComponentRangeSourceEdge || height > kMaxComponentRangeSourceEdge ||
+      static_cast<qint64>(width) * static_cast<qint64>(height) >
+          kMaxComponentRangeSourcePixels) {
+    return false;
+  }
+  static constexpr unsigned char png_signature[] =
+      {0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU};
+  const auto* bytes = reinterpret_cast<const unsigned char*>(data.constData());
+  if (!std::equal(std::begin(png_signature), std::end(png_signature), bytes) ||
+      bytes[8] != 0U || bytes[9] != 0U || bytes[10] != 0U || bytes[11] != 13U ||
+      bytes[12] != static_cast<unsigned char>('I') ||
+      bytes[13] != static_cast<unsigned char>('H') ||
+      bytes[14] != static_cast<unsigned char>('D') ||
+      bytes[15] != static_cast<unsigned char>('R')) {
+    return false;
+  }
+  const auto be32 = [bytes](int offset) {
+    return (static_cast<quint32>(bytes[offset]) << 24U) |
+           (static_cast<quint32>(bytes[offset + 1]) << 16U) |
+           (static_cast<quint32>(bytes[offset + 2]) << 8U) |
+           static_cast<quint32>(bytes[offset + 3]);
+  };
+  if (be32(16) != static_cast<quint32>(width) ||
+      be32(20) != static_cast<quint32>(height)) {
+    return false;
+  }
+  const auto bit_depth = bytes[24];
+  const auto color_type = bytes[25];
+  const auto valid_depth = [bit_depth](std::initializer_list<unsigned char> depths) {
+    return std::find(depths.begin(), depths.end(), bit_depth) != depths.end();
+  };
+  const auto valid_color_depth =
+      (color_type == 0U && valid_depth({1U, 2U, 4U, 8U, 16U})) ||
+      (color_type == 2U && valid_depth({8U, 16U})) ||
+      (color_type == 3U && valid_depth({1U, 2U, 4U, 8U})) ||
+      (color_type == 4U && valid_depth({8U, 16U})) ||
+      (color_type == 6U && valid_depth({8U, 16U}));
+  return valid_color_depth && bytes[26] == 0U && bytes[27] == 0U && bytes[28] <= 1U;
+}
+
+inline void copy_component_range_source_snapshot(
+    QVariantMap* target,
+    const QVariantMap& source) {
+  if (target == nullptr) {
+    return;
+  }
+  const auto has_snapshot_fields = source.contains(QStringLiteral("componentRangeSourceData")) ||
+      source.contains(QStringLiteral("componentRangeSourceWidth")) ||
+      source.contains(QStringLiteral("componentRangeSourceHeight")) ||
+      source.contains(QStringLiteral("componentRangeSourceVersion"));
+  const auto required = source.value(QStringLiteral("componentRangeSourceRequired")).toBool() ||
+      has_snapshot_fields;
+  if (!required) {
+    return;
+  }
+  target->insert(QStringLiteral("componentRangeSourceRequired"), true);
+  const auto data = source.value(QStringLiteral("componentRangeSourceData")).toByteArray();
+  const auto width = source.value(QStringLiteral("componentRangeSourceWidth")).toInt();
+  const auto height = source.value(QStringLiteral("componentRangeSourceHeight")).toInt();
+  const auto version = source.value(QStringLiteral("componentRangeSourceVersion")).toInt();
+  if (!valid_component_range_source_snapshot(data, width, height, version)) {
+    return;
+  }
+  target->insert(QStringLiteral("componentRangeSourceData"), data);
+  target->insert(QStringLiteral("componentRangeSourceWidth"), width);
+  target->insert(QStringLiteral("componentRangeSourceHeight"), height);
+  target->insert(QStringLiteral("componentRangeSourceVersion"), version);
+}
 
 inline bool valid_segmentation_payload(const QByteArray& data, int width, int height) {
   if (width <= 0 || height <= 0) {
@@ -52,6 +136,10 @@ inline void copy_inpaint_patch_payload(QVariantMap* target, const QVariantMap& s
   target->insert(
       QStringLiteral("inpaintModelName"),
       source.value(QStringLiteral("inpaintModelName")).toString());
+  for (const auto* key : {"inpaintRuntimeProvider", "inpaintAccelerationWarning"}) {
+    const auto name = QString::fromLatin1(key);
+    if (source.contains(name)) target->insert(name, source.value(name).toString());
+  }
   const auto source_mask_data = source.value(QStringLiteral("inpaintSourceMaskData")).toByteArray();
   const auto source_mask_width = source.value(QStringLiteral("inpaintSourceMaskWidth")).toInt();
   const auto source_mask_height = source.value(QStringLiteral("inpaintSourceMaskHeight")).toInt();
@@ -280,6 +368,10 @@ inline void read_inpaint_patch_payload(QVariantMap* target, const QJsonObject& g
   target->insert(
       QStringLiteral("inpaintModelName"),
       geometry.value(QStringLiteral("inpaintModelName")).toString());
+  for (const auto* key : {"inpaintRuntimeProvider", "inpaintAccelerationWarning"}) {
+    const auto name = QString::fromLatin1(key);
+    if (geometry.contains(name)) target->insert(name, geometry.value(name).toString());
+  }
   const auto source_mask_data =
       detail::read_byte_array(geometry, QStringLiteral("inpaintSourceMaskData"));
   const auto source_mask_width = geometry.value(QStringLiteral("inpaintSourceMaskWidth")).toInt();
@@ -512,6 +604,10 @@ inline void write_inpaint_patch_payload(QJsonObject* geometry, const QVariantMap
   geometry->insert(
       QStringLiteral("inpaintModelName"),
       mask_definition.value(QStringLiteral("inpaintModelName")).toString());
+  for (const auto* key : {"inpaintRuntimeProvider", "inpaintAccelerationWarning"}) {
+    const auto name = QString::fromLatin1(key);
+    if (mask_definition.contains(name)) geometry->insert(name, mask_definition.value(name).toString());
+  }
   const auto source_mask_data =
       mask_definition.value(QStringLiteral("inpaintSourceMaskData")).toByteArray();
   const auto source_mask_width = mask_definition.value(QStringLiteral("inpaintSourceMaskWidth")).toInt();
@@ -1389,6 +1485,17 @@ inline QVariantList normalized_depth_range_samples(const QVariantList& sample_va
 inline QVariantMap normalized_mask_definition(const QVariantMap& candidate, int ordinal = 1) {
   const auto normalized_kind = normalized_mask_kind(candidate.value(QStringLiteral("kind")).toString());
   QVariantMap mask = default_mask_definition(normalized_kind, ordinal);
+  // Explicit new-tool coordinates survive normalization and persistence. Missing
+  // metadata keeps legacy recipes on their original coordinate interpretation.
+  if (candidate.value(QStringLiteral("brushCompositeSource")).toBool())
+    mask.insert(QStringLiteral("brushCompositeSource"), true);
+  const auto coordinate_space = candidate.value(QStringLiteral("coordinateSpace")).toString();
+  if (coordinate_space == QStringLiteral("source") || coordinate_space == QStringLiteral("source-area")) {
+    mask.insert(QStringLiteral("coordinateSpace"), coordinate_space);
+    if (coordinate_space == QStringLiteral("source-area")) {
+      mask.insert(QStringLiteral("coordinateArea"), candidate.value(QStringLiteral("coordinateArea")).toMap());
+    }
+  }
   const auto id = candidate.value(QStringLiteral("id")).toString().simplified();
   const auto name = candidate.value(QStringLiteral("name")).toString().simplified();
   mask.insert(
@@ -1464,6 +1571,10 @@ inline QVariantMap normalized_mask_definition(const QVariantMap& candidate, int 
     return QStringLiteral("selection");
   }();
   mask.insert(QStringLiteral("toolRole"), inferred_tool_role);
+  if (inferred_tool_role == QStringLiteral("retouch")) {
+    const auto repair_id = candidate.value(QStringLiteral("repairId")).toString().simplified();
+    mask.insert(QStringLiteral("repairId"), repair_id.isEmpty() ? mask.value(QStringLiteral("id")).toString() : repair_id);
+  }
   insert_mask_source_truth_metadata(&mask, candidate, normalized_kind, inferred_tool_role);
   if (is_selection_mask_tool_role(inferred_tool_role)) {
     const auto fallback_set_id = QStringLiteral("%1-set").arg(mask.value(QStringLiteral("id")).toString());
@@ -1610,6 +1721,21 @@ inline QVariantMap normalized_mask_definition(const QVariantMap& candidate, int 
       candidate.contains(QStringLiteral("retouchMode"))
           ? candidate.value(QStringLiteral("retouchMode")).toString().trimmed().toLower()
           : QString());
+  const auto component_retouch_version =
+      candidate.value(QStringLiteral("componentPostCompositeRetouchVersion")).toInt();
+  const auto component_canvas_width =
+      candidate.value(QStringLiteral("componentRetouchCanvasWidth")).toInt();
+  const auto component_canvas_height =
+      candidate.value(QStringLiteral("componentRetouchCanvasHeight")).toInt();
+  const auto component_canvas_pixels =
+      static_cast<qint64>(component_canvas_width) * component_canvas_height;
+  if (inferred_tool_role == QStringLiteral("retouch") &&
+      component_retouch_version == 1 && component_canvas_width > 0 &&
+      component_canvas_height > 0 && component_canvas_pixels <= 64LL * 1000LL * 1000LL) {
+    mask.insert(QStringLiteral("componentPostCompositeRetouchVersion"), 1);
+    mask.insert(QStringLiteral("componentRetouchCanvasWidth"), component_canvas_width);
+    mask.insert(QStringLiteral("componentRetouchCanvasHeight"), component_canvas_height);
+  }
   mask.insert(
       QStringLiteral("retouchOrder"),
       normalized_mask_tool_role(mask.value(QStringLiteral("toolRole")).toString()) == QStringLiteral("retouch")
@@ -2350,6 +2476,9 @@ inline QVariantMap normalized_mask_definition(const QVariantMap& candidate, int 
     mask.insert(
         QStringLiteral("colorSamples"),
         normalized_color_range_samples(candidate.value(QStringLiteral("colorSamples")).toList()));
+    if (candidate.value(QStringLiteral("colorSampleMode")).toString() == QStringLiteral("union")) {
+      mask.insert(QStringLiteral("colorSampleMode"), QStringLiteral("union"));
+    }
   } else if (normalized_kind == QStringLiteral("depth")) {
     auto min_value = candidate.contains(QStringLiteral("depthMin"))
                          ? candidate.value(QStringLiteral("depthMin")).toDouble()
@@ -2464,6 +2593,10 @@ inline QVariantMap normalized_mask_definition(const QVariantMap& candidate, int 
       }
     }
   }
+  if (normalized_kind == QStringLiteral("color") ||
+      normalized_kind == QStringLiteral("luminance")) {
+    copy_component_range_source_snapshot(&mask, candidate);
+  }
   copy_inpaint_patch_payload(&mask, candidate);
   copy_generated_mask_metadata(&mask, candidate);
   return mask;
@@ -2472,7 +2605,8 @@ inline QVariantMap normalized_mask_definition(const QVariantMap& candidate, int 
 inline bool mask_definition_affects_render(const QVariantMap& candidate, int ordinal = 1) {
   const auto mask = normalized_mask_definition(candidate, ordinal);
   return !(mask.value(QStringLiteral("toolRole")).toString() == QStringLiteral("retouch") &&
-           !mask.value(QStringLiteral("committed")).toBool());
+           !mask.value(QStringLiteral("committed")).toBool() &&
+           mask.value(QStringLiteral("inpaintPatchData")).toByteArray().isEmpty());
 }
 
 inline void copy_selection_adjustments(QVariantMap* target, const QVariantMap& source) {
@@ -2669,6 +2803,7 @@ inline bool mask_component_constraint_key(const QString& key) {
          key == QStringLiteral("rangeFeather") ||
          key == QStringLiteral("luminanceSamples") ||
          key == QStringLiteral("colorSamples") ||
+         key == QStringLiteral("colorSampleMode") ||
          key == QStringLiteral("depthSamples");
 }
 
@@ -2691,6 +2826,12 @@ inline bool mask_component_metadata_key(const QString& key) {
          key == QStringLiteral("maskCoordinateSpace") ||
          key == QStringLiteral("sourceImageRevision") ||
          key == QStringLiteral("retouchOrder") ||
+         key == QStringLiteral("repairId") ||
+         key == QStringLiteral("componentPostCompositeRetouchVersion") ||
+         key == QStringLiteral("componentRetouchCanvasWidth") ||
+         key == QStringLiteral("componentRetouchCanvasHeight") ||
+         key == QStringLiteral("inpaintRuntimeProvider") ||
+         key == QStringLiteral("inpaintAccelerationWarning") ||
          key == QStringLiteral("opacity") ||
          key == QStringLiteral("density") ||
          key == QStringLiteral("invert") ||

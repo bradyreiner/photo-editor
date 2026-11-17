@@ -1,0 +1,4 @@
+source	/private/tmp/looksy-dense-timeline-v7iaxqgh/cache/timeline-render-cache/3db4e4fb-6737-415c-b6ee-dde766e7c237-native-generator-sources/e5529164c713099a45bcc488418724cc86874aaa221b47a4cba516a7f2a8f262/frame_000000.png	1920x1080	1a19bfc893e8bb3acd3c0b84b5814aa009548ce8f7ee0572835ff14d58bfe16c
+variant	11	29.0703	47147	1a19bfc893e8bb3acd3c0b84b5814aa009548ce8f7ee0572835ff14d58bfe16c	EXACT
+variant	1	27.9412	8308808	1a19bfc893e8bb3acd3c0b84b5814aa009548ce8f7ee0572835ff14d58bfe16c	EXACT
+variant	0	26.8747	8308808	1a19bfc893e8bb3acd3c0b84b5814aa009548ce8f7ee0572835ff14d58bfe16c	EXACT

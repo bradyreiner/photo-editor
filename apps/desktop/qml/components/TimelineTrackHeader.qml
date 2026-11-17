@@ -24,10 +24,12 @@ Rectangle {
     property int reorderPreviewDirection: 0
     property bool reorderHandlePressed: false
     property var trackMenuInstance: null
+    property var lazyTrackPopupInstances: ({})
 
     signal resizeRequested(real delta)
     signal heightPresetRequested(real height)
     signal automationLaneRequested(string parameter)
+    signal inspectRequested()
 
     readonly property var documentController: timelineDocument !== undefined && timelineDocument !== null ? timelineDocument : null
     // These methods are part of the required controller contract. QML does
@@ -54,12 +56,45 @@ Rectangle {
         ? trackOrderData.independentAudioPosition : -1)
     readonly property int independentAudioCount: Number(trackOrderData.independentAudioCount || 0)
     readonly property bool isGroupHead: trackOrderData.isGroupHead === true
+    readonly property string compactTrackName: {
+        const customName = String(trackData.customName || "").trim()
+        if (customName.length > 0)
+            return customName
+        if (trackData.trackKind === "audio")
+            return "Audio"
+        if (trackData.isStandaloneVisual === true)
+            return "Graphics"
+        if (trackData.isCaptionTrack === true)
+            return "Captions"
+        return "Video"
+    }
+    readonly property string compactTrackCode: {
+        const displayLabel = String(trackData.displayLabel || "Track").trim()
+        const separatorIndex = displayLabel.indexOf(" · ")
+        const code = separatorIndex >= 0
+                ? displayLabel.slice(0, separatorIndex).trim() : displayLabel
+        return code.slice(0, 6) || "Track"
+    }
+    readonly property string compactTrackAccessibleName: {
+        const displayLabel = String(trackData.displayLabel || "").trim()
+        const customName = String(root.compactTrackName || "").trim()
+        const labelHasName = customName.length > 0
+                && (displayLabel === customName || displayLabel.endsWith(" · " + customName))
+        const label = displayLabel.length > 0 ? displayLabel : customName || "track"
+        return "Inspect " + label
+                + (customName.length > 0 && !labelHasName ? " · " + customName : "")
+    }
     readonly property string groupHeadingText: {
         const trackLabel = String(trackData.displayLabel || "Track")
+        const customName = String(trackData.customName || "").trim()
         const groupName = String(trackData.groupName || "")
+        const labelAlreadyHasCustomName = customName.length > 0
+                && (trackLabel === customName || trackLabel.endsWith(" · " + customName))
+        const namedTrack = customName.length > 0 && !labelAlreadyHasCustomName
+                ? trackLabel + " · " + customName : trackLabel
         return root.isGroupHead && groupName.length > 0
-                ? trackLabel + " · " + groupName
-                : trackLabel
+                ? namedTrack + " · " + groupName
+                : namedTrack
     }
     readonly property var trackGroupData: {
         const groups = documentController ? documentController.trackGroups : []
@@ -144,10 +179,56 @@ Rectangle {
             documentController.toggleTrackLocked(trackData.trackIndex)
     }
 
-    function commitTrackRename() {
+    function openTrackPopup(key, popupComponent) {
+        let popup = lazyTrackPopupInstances[key]
+        if (!popup) {
+            popup = popupComponent.createObject(root)
+            if (!popup)
+                return false
+            const instances = lazyTrackPopupInstances
+            instances[key] = popup
+            lazyTrackPopupInstances = instances
+        }
+        popup.open()
+        return true
+    }
+
+    function commitTrackRename(name) {
         if (documentController)
-            documentController.renameTrackRow(trackData.trackIndex, trackNameField.text)
-        trackRenamePopup.close()
+            documentController.renameTrackRow(trackData.trackIndex,
+                                               String(name === undefined ? "" : name))
+    }
+
+    function openTrackRename() {
+        return root.openTrackPopup("trackRename", trackRenamePopupComponent)
+    }
+
+    function openGroupTransformPopup() {
+        return root.openTrackPopup("groupTransform", groupTransformPopupComponent)
+    }
+
+    function openCreateTrackGroupPopup() {
+        return root.openTrackPopup("createTrackGroup", createTrackGroupPopupComponent)
+    }
+
+    function openAddToTrackGroupPopup() {
+        return root.openTrackPopup("addToTrackGroup", addToTrackGroupPopupComponent)
+    }
+
+    function openRenameTrackGroupPopup() {
+        return root.openTrackPopup("renameTrackGroup", renameTrackGroupPopupComponent)
+    }
+
+    function openNestTrackGroupPopup() {
+        return root.openTrackPopup("nestTrackGroup", nestTrackGroupPopupComponent)
+    }
+
+    function openDeleteTrackConfirmation() {
+        return root.openTrackPopup("deleteTrack", deleteTrackConfirmationComponent)
+    }
+
+    function openAutomationPopup() {
+        return root.openTrackPopup("automation", automationPopupComponent)
     }
 
     function openTrackMenu() {
@@ -206,7 +287,7 @@ Rectangle {
         return "Opacity"
     }
 
-    readonly property string timelineTrackHeaderStyleContract: "timeline-track-header-style:v3|surface:quiet-editorial|padding:compact|type:shared|targets:32|states:patched-locked-muted-solo-hidden|patch:independent-exclusive-stream-destination|target:accent-rail|edges:structural-only|resize:intrinsic"
+    readonly property string timelineTrackHeaderStyleContract: "timeline-track-header-style:v4|surface:quiet-editorial|padding:compact|type:shared|targets:32|compact:track-id-name-40px|rename:double-click|states:patched-locked-muted-solo-hidden|patch:independent-exclusive-stream-destination|target:accent-rail|edges:structural-only|resize:intrinsic"
     readonly property string timelineTrackMixerContract: "timeline-track-mixer:v3|popup:gain-pan-processing|automation:inline-lanes-contextual|routing:main-dialogue-music-sfx|processing:progressive-three-band-eq-compressor-ducking|meters:contextual-stereo-peak-clip|default-density:unchanged|controls:shared"
 
     radius: 0
@@ -242,8 +323,16 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: root.height < theme.scaled(56) ? theme.space4 : theme.space6
+        anchors.topMargin: root.height <= theme.scaled(40)
+                           ? theme.space2 : root.height < theme.scaled(56)
+                             ? theme.space4 : theme.space6
+        anchors.bottomMargin: root.height <= theme.scaled(40)
+                              ? theme.space2 : root.height < theme.scaled(56)
+                                ? theme.space4 : theme.space6
         anchors.leftMargin: (root.height < theme.scaled(56) ? theme.space4 : theme.space6)
-                            + Math.min(root.groupDepth, 4) * theme.scaled(12)
+                            + (root.height < theme.scaled(56)
+                               ? Math.min(root.groupDepth, 2) * theme.scaled(6)
+                               : Math.min(root.groupDepth, 4) * theme.scaled(12))
         spacing: theme.space4
 
         RowLayout {
@@ -252,16 +341,43 @@ Rectangle {
             spacing: theme.space6
 
             Label {
+                objectName: "timelineTrackHeaderName"
                 Layout.fillWidth: true
                 text: root.groupHeadingText
                 color: theme.textStrong
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: theme.typeLabel
                 font.weight: Font.DemiBold
                 elide: Text.ElideRight
+                Accessible.role: Accessible.Button
+                Accessible.name: "Inspect " + root.groupHeadingText
+                Accessible.description: "Single-click or press to inspect this track. Double-click to rename it."
+                Accessible.onPressAction: root.inspectRequested()
+
+                TapHandler {
+                    objectName: "timelineTrackRenameGesture"
+                    acceptedButtons: Qt.LeftButton
+                    onTapped: root.inspectRequested()
+                    onDoubleTapped: root.openTrackRename()
+                }
+
+                HoverHandler {
+                    id: trackRenameHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+                AppToolTip {
+                    id: trackRenameTooltip
+                    targetItem: parent
+                    visible: trackRenameHover.hovered
+                    text: "Click to inspect · double-click to rename this track"
+                }
             }
 
-            Button {
+            ActionButton {
+                embedded: true
+                compact: true
+                leftPadding: 0
+                rightPadding: 0
                 visible: root.isGroupHead && root.height >= theme.scaled(56)
                 Layout.preferredWidth: visible ? theme.scaled(18) : 0
                 Layout.preferredHeight: visible ? theme.scaled(18) : 0
@@ -417,7 +533,182 @@ Rectangle {
         }
 
         RowLayout {
+            objectName: "timelineTrackCompactHeader"
+            visible: root.height < theme.scaled(56)
             Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: theme.controlHeightDense
+            spacing: theme.space4
+
+            Item {
+                id: compactTrackNameHitTarget
+                objectName: "timelineTrackCompactNameHitTarget"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumWidth: theme.scaled(34)
+                Accessible.role: Accessible.Button
+                Accessible.name: root.compactTrackAccessibleName
+                Accessible.description: "Single-click or press to inspect this track. Double-click to rename it."
+                                         + (trackData.locked === true ? " Track is locked." : "")
+                                         + (trackData.trackKind === "audio" && trackData.solo === true
+                                            ? " Track is soloed." : "")
+                                         + (trackData.trackKind === "audio" && trackData.muted === true
+                                            ? " Track is muted." : "")
+                Accessible.onPressAction: root.inspectRequested()
+
+                ColumnLayout {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: theme.space2
+
+                    RowLayout {
+                        objectName: "timelineTrackCompactIdentityRow"
+                        Layout.fillWidth: true
+                        spacing: theme.space4
+
+                        Label {
+                            objectName: "timelineTrackCompactId"
+                            text: root.compactTrackCode
+                            color: theme.alpha(root.patchAccent, 0.78)
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
+                            font.pixelSize: theme.typeMicro
+                            font.weight: Font.DemiBold
+                            Layout.preferredWidth: implicitWidth
+                            Layout.minimumWidth: implicitWidth
+                        }
+
+                        Label {
+                            objectName: "timelineTrackCompactName"
+                            Layout.fillWidth: true
+                            text: root.compactTrackName
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeLabel
+                            font.weight: Font.Medium
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    RowLayout {
+                        objectName: "timelineTrackCompactStateIndicators"
+                        visible: trackData.locked === true
+                                 || trackData.trackKind === "audio" && trackData.solo === true
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: visible ? theme.scaled(12) : 0
+                        spacing: theme.space4
+
+                        Item {
+                            id: compactLockedIndicator
+                            objectName: "timelineTrackCompactLockedIndicator"
+                            visible: trackData.locked === true
+                            Layout.preferredWidth: visible ? theme.scaled(12) : 0
+                            Layout.preferredHeight: theme.scaled(12)
+                            Accessible.role: Accessible.Indicator
+                            Accessible.name: "Track locked"
+
+                            AppIcon {
+                                anchors.centerIn: parent
+                                width: theme.scaled(12)
+                                height: width
+                                name: "lock"
+                                color: theme.warning
+                            }
+
+                            HoverHandler { id: compactLockedHover }
+                            AppToolTip {
+                                targetItem: compactLockedIndicator
+                                visible: compactLockedHover.hovered
+                                text: "Track locked"
+                            }
+                        }
+
+                        Item {
+                            id: compactSoloIndicator
+                            objectName: "timelineTrackCompactSoloIndicator"
+                            visible: trackData.trackKind === "audio" && trackData.solo === true
+                            Layout.preferredWidth: visible ? theme.scaled(12) : 0
+                            Layout.preferredHeight: theme.scaled(12)
+                            Accessible.role: Accessible.Indicator
+                            Accessible.name: "Track soloed"
+
+                            AppIcon {
+                                anchors.centerIn: parent
+                                width: theme.scaled(12)
+                                height: width
+                                name: "solo"
+                                color: theme.audioAccent
+                            }
+
+                            HoverHandler { id: compactSoloHover }
+                            AppToolTip {
+                                targetItem: compactSoloIndicator
+                                visible: compactSoloHover.hovered
+                                text: "Track soloed"
+                            }
+                        }
+                    }
+                }
+
+                TapHandler {
+                    objectName: "timelineTrackCompactRenameGesture"
+                    acceptedButtons: Qt.LeftButton
+                    onTapped: root.inspectRequested()
+                    onDoubleTapped: root.openTrackRename()
+                }
+
+                HoverHandler {
+                    id: compactTrackRenameHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+                AppToolTip {
+                    id: compactTrackRenameTooltip
+                    targetItem: compactTrackNameHitTarget
+                    visible: compactTrackRenameHover.hovered
+                    text: "Click to inspect · double-click to rename "
+                          + String(trackData.displayLabel || "track")
+                }
+            }
+
+            Components.ToolButton {
+                objectName: "timelineTrackCompactPrimaryToggle"
+                Layout.preferredWidth: theme.controlHeightDense
+                Layout.preferredHeight: theme.controlHeightDense
+                compact: true
+                label: trackData.trackKind === "video"
+                       ? (trackData.visible ? "Hide Video Track" : "Show Video Track")
+                       : (trackData.muted ? "Unmute Audio Track" : "Mute Audio Track")
+                iconName: trackData.trackKind === "video"
+                          ? (trackData.effectiveVisible === true ? "visible" : "hidden")
+                          : (trackData.muted ? "audio-muted" : "audio")
+                active: trackData.trackKind === "video"
+                        ? trackData.effectiveVisible !== true : trackData.muted === true
+                accent: trackData.trackKind === "video" ? theme.accentCool500 : theme.error
+                enabled: canTogglePrimary
+                         && !(trackData.trackKind === "video" && trackData.hiddenByGroup === true)
+                Accessible.role: Accessible.Button
+                Accessible.checked: trackData.trackKind === "video"
+                                    ? trackData.effectiveVisible === true : trackData.muted === true
+                onClicked: root.togglePrimaryTrackState()
+            }
+
+            Components.ToolButton {
+                objectName: "timelineTrackCompactMoreButton"
+                Layout.preferredWidth: theme.controlHeightDense
+                Layout.preferredHeight: theme.controlHeightDense
+                compact: true
+                iconName: "more"
+                label: "More actions for " + String(trackData.displayLabel || "track")
+                onClicked: root.openTrackMenu()
+            }
+        }
+
+        RowLayout {
+            objectName: "timelineTrackStandardControls"
+            visible: root.height >= theme.scaled(56)
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
             spacing: theme.space2
 
             Components.ToolButton {
@@ -509,7 +800,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.automationParameterLabel(root.automationLaneParameter).toUpperCase()
                 color: theme.accentCool300
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: theme.typeMicro
                 font.weight: Font.DemiBold
             }
@@ -537,15 +828,9 @@ Rectangle {
         }
     }
 
-    MouseArea {
-        anchors.fill: parent
+    TapHandler {
         acceptedButtons: Qt.RightButton
-        onPressed: function(mouse) {
-            if (mouse.button === Qt.RightButton) {
-                root.openTrackMenu()
-                mouse.accepted = true
-            }
-        }
+        onTapped: root.openTrackMenu()
     }
 
     Rectangle {
@@ -573,7 +858,7 @@ Rectangle {
             anchors.centerIn: parent
             text: root.reorderPreviewDirection < 0 ? "MOVE UP" : "MOVE DOWN"
             color: root.patchAccent
-            font.family: theme.fontMono
+            font.family: theme.fontUi
             font.pixelSize: theme.typeMicro
             font.weight: Font.Bold
         }
@@ -630,6 +915,7 @@ Rectangle {
 
         AppMenu {
             id: trackMenu
+            transientMenu: true
             objectName: "timelineTrackContextMenu"
             accent: trackData.trackKind === "video" ? theme.accentCool500 : theme.audioAccent
             onClosed: {
@@ -644,7 +930,7 @@ Rectangle {
                 iconName: "edit"
                 accent: root.patchAccent
                 onTriggered: {
-                    trackRenamePopup.open()
+                    root.openTrackRename()
                 }
             }
 
@@ -661,7 +947,7 @@ Rectangle {
                 text: "Create Track Group…"
                 iconName: "plus"
                 accent: root.patchAccent
-                onTriggered: createTrackGroupPopup.open()
+                onTriggered: root.openCreateTrackGroupPopup()
             }
 
             AppMenuItem {
@@ -671,7 +957,7 @@ Rectangle {
                 text: "Add to Track Group…"
                 iconName: "layers"
                 accent: root.patchAccent
-                onTriggered: addToTrackGroupPopup.open()
+                onTriggered: root.openAddToTrackGroupPopup()
             }
 
             AppMenuItem {
@@ -679,7 +965,7 @@ Rectangle {
                 text: "Rename Group…"
                 iconName: "edit"
                 accent: root.patchAccent
-                onTriggered: renameTrackGroupPopup.open()
+                onTriggered: root.openRenameTrackGroupPopup()
             }
 
             AppMenuItem {
@@ -688,7 +974,7 @@ Rectangle {
                 text: "Nest Group Under…"
                 iconName: "layers"
                 accent: root.patchAccent
-                onTriggered: nestTrackGroupPopup.open()
+                onTriggered: root.openNestTrackGroupPopup()
             }
 
             AppMenuItem {
@@ -722,7 +1008,7 @@ Rectangle {
                 text: "Group Transform…"
                 iconName: "crop"
                 accent: root.patchAccent
-                onTriggered: groupTransformPopup.open()
+                onTriggered: root.openGroupTransformPopup()
             }
 
             AppMenuItem {
@@ -847,7 +1133,7 @@ Rectangle {
                 enabled: root.canDeleteTrack
                 onTriggered: {
                     if (Number(trackData.clipCount || 0) > 0)
-                        deleteTrackConfirmation.open()
+                        root.openDeleteTrackConfirmation()
                     else
                         documentController.removeTrackRow(trackData.trackIndex, false)
                 }
@@ -877,7 +1163,7 @@ Rectangle {
                 text: trackData.trackKind === "audio" ? "Track mixer…" : "Track opacity automation…"
                 iconName: "curve"
                 accent: root.patchAccent
-                onTriggered: automationPopup.open()
+                onTriggered: root.openAutomationPopup()
             }
 
             AppMenuItem {
@@ -1007,911 +1293,1000 @@ Rectangle {
         }
     }
 
-    AppPopup {
-        id: groupTransformPopup
-        objectName: "timelineTrackGroupTransformPopup"
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(340, Math.max(280, root.width * 1.9))))
-        height: Math.min(popupAvailableHeight, Math.max(1, groupTransformContent.implicitHeight + root.theme.space20))
-        x: root.width - width
-        y: Math.max(0, (root.height - height) / 2)
-        padding: standardPopupPadding
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onOpened: {
-            root.groupTransformScaleDraft = Math.round(
-                        Number(root.trackGroupData.transformScale || 1) * 100)
-            root.groupTransformOffsetXDraft = Math.round(
-                        Number(root.trackGroupData.transformOffsetX || 0) * 100)
-            root.groupTransformOffsetYDraft = Math.round(
-                        Number(root.trackGroupData.transformOffsetY || 0) * 100)
-            root.groupTransformRotationDraft = Math.round(
-                        Number(root.trackGroupData.transformRotationDegrees || 0))
-        }
-        background: PopupSurface {}
-        contentItem: ColumnLayout {
-            id: groupTransformContent
-            spacing: root.theme.space8
-
-            Label {
-                Layout.fillWidth: true
-                text: "Transform “" + String(root.trackData.groupName || "Track Group") + "”"
-                color: root.theme.textStrong
-                font.family: root.theme.fontUi
-                font.pixelSize: root.theme.typeControl
-                font.weight: Font.DemiBold
-                elide: Text.ElideRight
+    Component {
+        id: groupTransformPopupComponent
+        AppPopup {
+            id: groupTransformPopup
+            parent: root
+            property bool contentCreated: false
+            objectName: "timelineTrackGroupTransformPopup"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(340, Math.max(280, root.width * 1.9))))
+            height: Math.min(popupAvailableHeight, Math.max(1,
+                             (groupTransformContentLoader.item
+                              ? groupTransformContentLoader.item.implicitHeight : 0)
+                             + root.theme.space20))
+            x: root.width - width
+            y: Math.max(0, (root.height - height) / 2)
+            padding: standardPopupPadding
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onAboutToShow: contentCreated = true
+            onOpened: {
+                root.groupTransformScaleDraft = Math.round(
+                            Number(root.trackGroupData.transformScale || 1) * 100)
+                root.groupTransformOffsetXDraft = Math.round(
+                            Number(root.trackGroupData.transformOffsetX || 0) * 100)
+                root.groupTransformOffsetYDraft = Math.round(
+                            Number(root.trackGroupData.transformOffsetY || 0) * 100)
+                root.groupTransformRotationDraft = Math.round(
+                            Number(root.trackGroupData.transformRotationDegrees || 0))
             }
+            background: PopupSurface {}
+            contentItem: Loader {
+                id: groupTransformContentLoader
+                active: groupTransformPopup.contentCreated || groupTransformPopup.visible
+                onLoaded: groupTransformPopup.contentCreated = true
+                sourceComponent: Component {
+                    ColumnLayout {
+                        id: groupTransformContent
+                        spacing: root.theme.space8
 
-            Label {
-                Layout.fillWidth: true
-                text: "Applies to every visual track in this group and its nested groups."
-                color: root.theme.textMuted
-                font.family: root.theme.fontUi
-                font.pixelSize: root.theme.typeCaption
-                wrapMode: Text.WordWrap
-            }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Transform “" + String(root.trackData.groupName || "Track Group") + "”"
+                            color: root.theme.textStrong
+                            font.family: root.theme.fontUi
+                            font.pixelSize: root.theme.typeControl
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Label {
-                    Layout.fillWidth: true
-                    text: "Scale"
-                    color: root.theme.textMain
-                    font.family: root.theme.fontUi
-                    font.pixelSize: root.theme.typeControl
-                }
-                ToneSpinBox {
-                    objectName: "timelineGroupTransformScale"
-                    from: 25
-                    to: 200
-                    stepSize: 1
-                    editable: true
-                    value: root.groupTransformScaleDraft
-                    valueUnit: "%"
-                    accessibleLabel: "Group scale percent"
-                    onValueChanged: root.groupTransformScaleDraft = value
-                }
-            }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Applies to every visual track in this group and its nested groups."
+                            color: root.theme.textMuted
+                            font.family: root.theme.fontUi
+                            font.pixelSize: root.theme.typeCaption
+                            wrapMode: Text.WordWrap
+                        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Label {
-                    Layout.fillWidth: true
-                    text: "Horizontal position"
-                    color: root.theme.textMain
-                    font.family: root.theme.fontUi
-                    font.pixelSize: root.theme.typeControl
-                }
-                ToneSpinBox {
-                    objectName: "timelineGroupTransformOffsetX"
-                    from: -50
-                    to: 50
-                    stepSize: 1
-                    editable: true
-                    value: root.groupTransformOffsetXDraft
-                    valueUnit: "% frame"
-                    accessibleLabel: "Group horizontal position percent"
-                    onValueChanged: root.groupTransformOffsetXDraft = value
-                }
-            }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Scale"
+                                color: root.theme.textMain
+                                font.family: root.theme.fontUi
+                                font.pixelSize: root.theme.typeControl
+                            }
+                            ToneSpinBox {
+                                objectName: "timelineGroupTransformScale"
+                                from: 25
+                                to: 200
+                                stepSize: 1
+                                editable: true
+                                value: root.groupTransformScaleDraft
+                                valueUnit: "%"
+                                accessibleLabel: "Group scale percent"
+                                onValueChanged: root.groupTransformScaleDraft = value
+                            }
+                        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Label {
-                    Layout.fillWidth: true
-                    text: "Vertical position"
-                    color: root.theme.textMain
-                    font.family: root.theme.fontUi
-                    font.pixelSize: root.theme.typeControl
-                }
-                ToneSpinBox {
-                    objectName: "timelineGroupTransformOffsetY"
-                    from: -50
-                    to: 50
-                    stepSize: 1
-                    editable: true
-                    value: root.groupTransformOffsetYDraft
-                    valueUnit: "% frame"
-                    accessibleLabel: "Group vertical position percent"
-                    onValueChanged: root.groupTransformOffsetYDraft = value
-                }
-            }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Horizontal position"
+                                color: root.theme.textMain
+                                font.family: root.theme.fontUi
+                                font.pixelSize: root.theme.typeControl
+                            }
+                            ToneSpinBox {
+                                objectName: "timelineGroupTransformOffsetX"
+                                from: -50
+                                to: 50
+                                stepSize: 1
+                                editable: true
+                                value: root.groupTransformOffsetXDraft
+                                valueUnit: "% frame"
+                                accessibleLabel: "Group horizontal position percent"
+                                onValueChanged: root.groupTransformOffsetXDraft = value
+                            }
+                        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Label {
-                    Layout.fillWidth: true
-                    text: "Rotation"
-                    color: root.theme.textMain
-                    font.family: root.theme.fontUi
-                    font.pixelSize: root.theme.typeControl
-                }
-                ToneSpinBox {
-                    objectName: "timelineGroupTransformRotation"
-                    from: -180
-                    to: 180
-                    stepSize: 1
-                    editable: true
-                    value: root.groupTransformRotationDraft
-                    valueUnit: "°"
-                    accessibleLabel: "Group rotation degrees"
-                    onValueChanged: root.groupTransformRotationDraft = value
-                }
-            }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Vertical position"
+                                color: root.theme.textMain
+                                font.family: root.theme.fontUi
+                                font.pixelSize: root.theme.typeControl
+                            }
+                            ToneSpinBox {
+                                objectName: "timelineGroupTransformOffsetY"
+                                from: -50
+                                to: 50
+                                stepSize: 1
+                                editable: true
+                                value: root.groupTransformOffsetYDraft
+                                valueUnit: "% frame"
+                                accessibleLabel: "Group vertical position percent"
+                                onValueChanged: root.groupTransformOffsetYDraft = value
+                            }
+                        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: root.theme.space6
-                ActionButton {
-                    text: "Reset"
-                    compact: true
-                    onClicked: {
-                        root.documentController.setTrackGroupTransform(
-                                    String(root.trackData.groupId || ""), 1, 0, 0, 0)
-                        groupTransformPopup.close()
-                    }
-                }
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    text: "Cancel"
-                    compact: true
-                    onClicked: groupTransformPopup.close()
-                }
-                ActionButton {
-                    text: "Apply"
-                    compact: true
-                    onClicked: {
-                        root.documentController.setTrackGroupTransform(
-                                    String(root.trackData.groupId || ""),
-                                    root.groupTransformScaleDraft / 100,
-                                    root.groupTransformOffsetXDraft / 100,
-                                    root.groupTransformOffsetYDraft / 100,
-                                    root.groupTransformRotationDraft)
-                        groupTransformPopup.close()
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Rotation"
+                                color: root.theme.textMain
+                                font.family: root.theme.fontUi
+                                font.pixelSize: root.theme.typeControl
+                            }
+                            ToneSpinBox {
+                                objectName: "timelineGroupTransformRotation"
+                                from: -180
+                                to: 180
+                                stepSize: 1
+                                editable: true
+                                value: root.groupTransformRotationDraft
+                                valueUnit: "°"
+                                accessibleLabel: "Group rotation degrees"
+                                onValueChanged: root.groupTransformRotationDraft = value
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: root.theme.space6
+                            ActionButton {
+                                text: "Reset"
+                                compact: true
+                                onClicked: {
+                                    root.documentController.setTrackGroupTransform(
+                                                String(root.trackData.groupId || ""), 1, 0, 0, 0)
+                                    groupTransformPopup.close()
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                            ActionButton {
+                                text: "Cancel"
+                                compact: true
+                                onClicked: groupTransformPopup.close()
+                            }
+                            ActionButton {
+                                text: "Apply"
+                                compact: true
+                                onClicked: {
+                                    root.documentController.setTrackGroupTransform(
+                                                String(root.trackData.groupId || ""),
+                                                root.groupTransformScaleDraft / 100,
+                                                root.groupTransformOffsetXDraft / 100,
+                                                root.groupTransformOffsetYDraft / 100,
+                                                root.groupTransformRotationDraft)
+                                    groupTransformPopup.close()
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    AppPopup {
-        id: createTrackGroupPopup
-        objectName: "timelineCreateTrackGroupPopup"
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
-        height: Math.min(popupAvailableHeight, Math.max(1, createTrackGroupContent.implicitHeight + root.theme.space20))
-        x: root.width - width
-        y: Math.max(0, (root.height - height) / 2)
-        padding: standardPopupPadding
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onOpened: {
-            newTrackGroupName.text = ""
-            Qt.callLater(function() { newTrackGroupName.forceActiveFocus(Qt.PopupFocusReason) })
-        }
-        background: PopupSurface {}
-        contentItem: ColumnLayout {
-            id: createTrackGroupContent
-            spacing: root.theme.space8
-            Label {
-                Layout.fillWidth: true
-                text: "Create a Track Group"
-                color: root.theme.textStrong
-                font.family: root.theme.fontUi
-                font.pixelSize: root.theme.typeControl
-                font.weight: Font.DemiBold
+    Component {
+        id: createTrackGroupPopupComponent
+        AppPopup {
+            id: createTrackGroupPopup
+            parent: root
+            objectName: "timelineCreateTrackGroupPopup"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+            height: Math.min(popupAvailableHeight, Math.max(1, createTrackGroupContent.implicitHeight + root.theme.space20))
+            x: root.width - width
+            y: Math.max(0, (root.height - height) / 2)
+            padding: standardPopupPadding
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onOpened: {
+                newTrackGroupName.text = ""
+                Qt.callLater(function() { newTrackGroupName.forceActiveFocus(Qt.PopupFocusReason) })
             }
-            ToneTextField {
-                id: newTrackGroupName
-                objectName: "timelineTrackGroupNameField"
-                Layout.fillWidth: true
-                accessibleLabel: "Track group name"
-                placeholderText: "Enter a group name"
-                maximumLength: 48
-                selectByMouse: true
-                onAccepted: {
-                    if (root.documentController.createTrackGroup(root.trackData.trackIndex,
-                                                                 newTrackGroupName.text))
-                        createTrackGroupPopup.close()
+            background: PopupSurface {}
+            contentItem: ColumnLayout {
+                id: createTrackGroupContent
+                spacing: root.theme.space8
+                Label {
+                    Layout.fillWidth: true
+                    text: "Create a Track Group"
+                    color: root.theme.textStrong
+                    font.family: root.theme.fontUi
+                    font.pixelSize: root.theme.typeControl
+                    font.weight: Font.DemiBold
                 }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    text: "Cancel"
-                    compact: true
-                    onClicked: createTrackGroupPopup.close()
-                }
-                ActionButton {
-                    text: "Create Group"
-                    compact: true
-                    enabled: newTrackGroupName.text.trim().length > 0
-                    onClicked: {
+                ToneTextField {
+                    id: newTrackGroupName
+                    objectName: "timelineTrackGroupNameField"
+                    Layout.fillWidth: true
+                    accessibleLabel: "Track group name"
+                    placeholderText: "Enter a group name"
+                    maximumLength: 48
+                    selectByMouse: true
+                    onAccepted: {
                         if (root.documentController.createTrackGroup(root.trackData.trackIndex,
                                                                      newTrackGroupName.text))
                             createTrackGroupPopup.close()
                     }
                 }
-            }
-        }
-    }
-
-    AppPopup {
-        id: addToTrackGroupPopup
-        objectName: "timelineAddToTrackGroupPopup"
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
-        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(root.theme.scaled(420),
-                         groupPickerContent.implicitHeight + root.theme.space20)))
-        x: root.width - width
-        y: Math.max(0, (root.height - height) / 2)
-        padding: standardPopupPadding
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: PopupSurface {}
-        contentItem: ColumnLayout {
-            id: groupPickerContent
-            spacing: root.theme.space6
-            Label {
-                Layout.fillWidth: true
-                text: "Add to Track Group"
-                color: root.theme.textStrong
-                font.family: root.theme.fontUi
-                font.pixelSize: root.theme.typeControl
-                font.weight: Font.DemiBold
-            }
-            Repeater {
-                model: root.documentController ? root.documentController.trackGroups : []
-                delegate: ActionButton {
-                    required property var modelData
+                RowLayout {
                     Layout.fillWidth: true
-                    text: String(modelData.name || "Track Group")
-                    compact: true
-                    tooltipText: String(modelData.trackCount || 0) + " tracks"
-                    onClicked: {
-                        root.documentController.setTrackGroup(root.trackData.trackIndex,
-                                                              String(modelData.groupId || ""))
-                        addToTrackGroupPopup.close()
+                    Item { Layout.fillWidth: true }
+                    ActionButton {
+                        text: "Cancel"
+                        compact: true
+                        onClicked: createTrackGroupPopup.close()
+                    }
+                    ActionButton {
+                        text: "Create Group"
+                        compact: true
+                        enabled: newTrackGroupName.text.trim().length > 0
+                        onClicked: {
+                            if (root.documentController.createTrackGroup(root.trackData.trackIndex,
+                                                                         newTrackGroupName.text))
+                                createTrackGroupPopup.close()
+                        }
                     }
                 }
             }
-            ActionButton {
-                Layout.alignment: Qt.AlignRight
-                text: "Cancel"
-                compact: true
-                onClicked: addToTrackGroupPopup.close()
+        }
+    }
+
+    Component {
+        id: addToTrackGroupPopupComponent
+        AppPopup {
+            id: addToTrackGroupPopup
+            parent: root
+            property bool contentCreated: false
+            objectName: "timelineAddToTrackGroupPopup"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+            height: Math.min(popupAvailableHeight, Math.max(1, Math.min(root.theme.scaled(420),
+                             (groupPickerContentLoader.item
+                              ? groupPickerContentLoader.item.implicitHeight : 0)
+                             + root.theme.space20)))
+            x: root.width - width
+            y: Math.max(0, (root.height - height) / 2)
+            padding: standardPopupPadding
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onAboutToShow: contentCreated = true
+            background: PopupSurface {}
+            contentItem: Loader {
+                id: groupPickerContentLoader
+                active: addToTrackGroupPopup.contentCreated || addToTrackGroupPopup.visible
+                onLoaded: addToTrackGroupPopup.contentCreated = true
+                sourceComponent: Component {
+                    ColumnLayout {
+                        id: groupPickerContent
+                        spacing: root.theme.space6
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Add to Track Group"
+                            color: root.theme.textStrong
+                            font.family: root.theme.fontUi
+                            font.pixelSize: root.theme.typeControl
+                            font.weight: Font.DemiBold
+                        }
+                        Repeater {
+                            model: root.documentController ? root.documentController.trackGroups : []
+                            delegate: ActionButton {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                text: String(modelData.name || "Track Group")
+                                compact: true
+                                tooltipText: String(modelData.trackCount || 0) + " tracks"
+                                onClicked: {
+                                    root.documentController.setTrackGroup(root.trackData.trackIndex,
+                                                                          String(modelData.groupId || ""))
+                                    addToTrackGroupPopup.close()
+                                }
+                            }
+                        }
+                        ActionButton {
+                            Layout.alignment: Qt.AlignRight
+                            text: "Cancel"
+                            compact: true
+                            onClicked: addToTrackGroupPopup.close()
+                        }
+                    }
+                }
             }
         }
     }
 
-    AppPopup {
-        id: renameTrackGroupPopup
-        objectName: "timelineRenameTrackGroupPopup"
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
-        height: Math.min(popupAvailableHeight, Math.max(1, renameTrackGroupContent.implicitHeight + root.theme.space20))
-        x: root.width - width
-        y: Math.max(0, (root.height - height) / 2)
-        padding: standardPopupPadding
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onOpened: {
-            renamedTrackGroupName.text = String(root.trackData.groupName || "")
-            Qt.callLater(function() { renamedTrackGroupName.forceActiveFocus(Qt.PopupFocusReason) })
-        }
-        background: PopupSurface {}
-        contentItem: ColumnLayout {
-            id: renameTrackGroupContent
-            spacing: root.theme.space8
-            Label {
-                Layout.fillWidth: true
-                text: "Rename Track Group"
-                color: root.theme.textStrong
-                font.family: root.theme.fontUi
-                font.pixelSize: root.theme.typeControl
-                font.weight: Font.DemiBold
+    Component {
+        id: renameTrackGroupPopupComponent
+        AppPopup {
+            id: renameTrackGroupPopup
+            parent: root
+            objectName: "timelineRenameTrackGroupPopup"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+            height: Math.min(popupAvailableHeight, Math.max(1, renameTrackGroupContent.implicitHeight + root.theme.space20))
+            x: root.width - width
+            y: Math.max(0, (root.height - height) / 2)
+            padding: standardPopupPadding
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onOpened: {
+                renamedTrackGroupName.text = String(root.trackData.groupName || "")
+                Qt.callLater(function() { renamedTrackGroupName.forceActiveFocus(Qt.PopupFocusReason) })
             }
-            ToneTextField {
-                id: renamedTrackGroupName
-                Layout.fillWidth: true
-                accessibleLabel: "New track group name"
-                maximumLength: 48
-                selectByMouse: true
-                onAccepted: {
-                    if (root.documentController.renameTrackGroup(
-                                String(root.trackData.groupId || ""), renamedTrackGroupName.text))
-                        renameTrackGroupPopup.close()
+            background: PopupSurface {}
+            contentItem: ColumnLayout {
+                id: renameTrackGroupContent
+                spacing: root.theme.space8
+                Label {
+                    Layout.fillWidth: true
+                    text: "Rename Track Group"
+                    color: root.theme.textStrong
+                    font.family: root.theme.fontUi
+                    font.pixelSize: root.theme.typeControl
+                    font.weight: Font.DemiBold
                 }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    text: "Cancel"
-                    compact: true
-                    onClicked: renameTrackGroupPopup.close()
-                }
-                ActionButton {
-                    text: "Save Name"
-                    compact: true
-                    enabled: renamedTrackGroupName.text.trim().length > 0
-                    onClicked: {
+                ToneTextField {
+                    id: renamedTrackGroupName
+                    Layout.fillWidth: true
+                    accessibleLabel: "New track group name"
+                    maximumLength: 48
+                    selectByMouse: true
+                    onAccepted: {
                         if (root.documentController.renameTrackGroup(
                                     String(root.trackData.groupId || ""), renamedTrackGroupName.text))
                             renameTrackGroupPopup.close()
                     }
                 }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    ActionButton {
+                        text: "Cancel"
+                        compact: true
+                        onClicked: renameTrackGroupPopup.close()
+                    }
+                    ActionButton {
+                        text: "Save Name"
+                        compact: true
+                        enabled: renamedTrackGroupName.text.trim().length > 0
+                        onClicked: {
+                            if (root.documentController.renameTrackGroup(
+                                        String(root.trackData.groupId || ""), renamedTrackGroupName.text))
+                                renameTrackGroupPopup.close()
+                        }
+                    }
+                }
             }
         }
     }
 
-    AppPopup {
-        id: nestTrackGroupPopup
-        objectName: "timelineNestTrackGroupPopup"
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(340, Math.max(280, root.width * 1.9))))
-        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(root.theme.scaled(400), nestGroupContent.implicitHeight + root.theme.space20)))
-        x: root.width - width
-        y: Math.max(0, (root.height - height) / 2)
-        padding: standardPopupPadding
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: PopupSurface {}
-        contentItem: ColumnLayout {
-            id: nestGroupContent
-            spacing: root.theme.space6
-            Label {
-                Layout.fillWidth: true
-                text: "Nest “" + String(root.trackData.groupName || "Track Group") + "” under"
-                color: root.theme.textStrong
-                font.family: root.theme.fontUi
-                font.pixelSize: root.theme.typeControl
-                font.weight: Font.DemiBold
-                elide: Text.ElideRight
-            }
-            ActionButton {
-                visible: String(root.trackData.groupParentId || "").length > 0
-                Layout.fillWidth: true
-                text: "Top Level"
-                compact: true
-                onClicked: {
-                    root.documentController.setTrackGroupParent(String(root.trackData.groupId || ""), "")
-                    nestTrackGroupPopup.close()
-                }
-            }
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(root.theme.scaled(280), nestableGroupList.implicitHeight)
-                clip: true
-                Column {
-                    id: nestableGroupList
-                    width: parent.width
-                    spacing: root.theme.space4
-                    Repeater {
-                        model: root.nestableTrackGroups
-                        delegate: ActionButton {
-                            required property var modelData
-                            width: nestableGroupList.width
-                            text: {
-                                let indentation = ""
-                                const depth = Math.min(5, Number(modelData.depth || 0))
-                                for (let index = 0; index < depth; ++index)
-                                    indentation += "  "
-                                return indentation + String(modelData.name || "Track Group")
-                            }
+    Component {
+        id: nestTrackGroupPopupComponent
+        AppPopup {
+            id: nestTrackGroupPopup
+            parent: root
+            property bool contentCreated: false
+            objectName: "timelineNestTrackGroupPopup"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(340, Math.max(280, root.width * 1.9))))
+            height: Math.min(popupAvailableHeight, Math.max(1, Math.min(root.theme.scaled(400),
+                             (nestGroupContentLoader.item
+                              ? nestGroupContentLoader.item.implicitHeight : 0)
+                             + root.theme.space20)))
+            x: root.width - width
+            y: Math.max(0, (root.height - height) / 2)
+            padding: standardPopupPadding
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onAboutToShow: contentCreated = true
+            background: PopupSurface {}
+            contentItem: Loader {
+                id: nestGroupContentLoader
+                active: nestTrackGroupPopup.contentCreated || nestTrackGroupPopup.visible
+                onLoaded: nestTrackGroupPopup.contentCreated = true
+                sourceComponent: Component {
+                    ColumnLayout {
+                        id: nestGroupContent
+                        spacing: root.theme.space6
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Nest “" + String(root.trackData.groupName || "Track Group") + "” under"
+                            color: root.theme.textStrong
+                            font.family: root.theme.fontUi
+                            font.pixelSize: root.theme.typeControl
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                        ActionButton {
+                            visible: String(root.trackData.groupParentId || "").length > 0
+                            Layout.fillWidth: true
+                            text: "Top Level"
                             compact: true
                             onClicked: {
-                                root.documentController.setTrackGroupParent(
-                                            String(root.trackData.groupId || ""),
-                                            String(modelData.groupId || ""))
+                                root.documentController.setTrackGroupParent(String(root.trackData.groupId || ""), "")
                                 nestTrackGroupPopup.close()
                             }
                         }
-                    }
-                    Label {
-                        visible: root.nestableTrackGroups.length === 0
-                                 && String(root.trackData.groupParentId || "").length === 0
-                        width: nestableGroupList.width
-                        text: "No other groups available"
-                        color: root.theme.textMuted
-                        font.family: root.theme.fontUi
-                        font.pixelSize: root.theme.typeCaption
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-            ActionButton {
-                Layout.alignment: Qt.AlignRight
-                text: "Cancel"
-                compact: true
-                onClicked: nestTrackGroupPopup.close()
-            }
-        }
-    }
-
-    AppPopup {
-        id: trackRenamePopup
-        objectName: "timelineRenameTrackPopup"
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
-        height: Math.min(popupAvailableHeight, Math.max(1, renameTrackContent.implicitHeight + theme.space20))
-        x: root.width - width
-        y: Math.max(0, (root.height - height) / 2)
-        padding: standardPopupPadding
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onOpened: {
-            trackNameField.text = String(trackData.customName || "")
-            Qt.callLater(function() {
-                trackNameField.forceActiveFocus(Qt.PopupFocusReason)
-                trackNameField.selectAll()
-            })
-        }
-
-        background: PopupSurface {}
-
-        contentItem: ColumnLayout {
-            id: renameTrackContent
-            spacing: theme.space8
-
-            Label {
-                Layout.fillWidth: true
-                text: "Rename " + trackData.displayLabel
-                color: theme.textStrong
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeControl
-                font.weight: Font.DemiBold
-                elide: Text.ElideRight
-            }
-
-            ToneTextField {
-                id: trackNameField
-                objectName: "timelineTrackNameField"
-                Layout.fillWidth: true
-                accessibleLabel: "Track name"
-                text: String(trackData.customName || "")
-                placeholderText: "Enter a track name"
-                maximumLength: 48
-                selectByMouse: true
-                onAccepted: root.commitTrackRename()
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Leave the name empty to restore the default label."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
-                wrapMode: Text.Wrap
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-
-                ActionButton {
-                    text: "Cancel"
-                    compact: true
-                    onClicked: trackRenamePopup.close()
-                }
-
-                ActionButton {
-                    objectName: "timelineSaveTrackNameButton"
-                    text: "Save Name"
-                    compact: true
-                    onClicked: root.commitTrackRename()
-                }
-            }
-        }
-    }
-
-    AppPopup {
-        id: deleteTrackConfirmation
-        objectName: "timelineDeleteTrackConfirmation"
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(360, Math.max(300, root.width * 2))))
-        height: Math.min(popupAvailableHeight, Math.max(1, deleteTrackContent.implicitHeight + theme.space20))
-        x: root.width - width
-        y: Math.max(0, (root.height - height) / 2)
-        padding: standardPopupPadding
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: PopupSurface {}
-
-        contentItem: ColumnLayout {
-            id: deleteTrackContent
-            spacing: theme.space8
-
-            Label {
-                Layout.fillWidth: true
-                text: trackData.isStandaloneVisual === true
-                      ? "Delete " + trackData.displayLabel + " graphics track?"
-                      : root.isIndependentVideo
-                        ? "Delete " + trackData.displayLabel + " video lane?"
-                      : trackData.trackKind === "audio" && trackData.isIndependent === true
-                        ? "Delete " + trackData.displayLabel + " track?"
-                        : "Delete " + trackData.displayLabel + " track pair?"
-                color: theme.textStrong
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeControl
-                font.weight: Font.DemiBold
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: (trackData.isStandaloneVisual === true
-                       ? "This removes this graphics lane and "
-                       : root.isIndependentVideo
-                         ? "This removes this video lane and "
-                       : trackData.trackKind === "audio" && trackData.isIndependent === true
-                         ? "This removes this audio lane and "
-                         : "This removes the paired video and audio lanes and ")
-                      + Number(trackData.clipCount || 0) + " visible clip"
-                      + (Number(trackData.clipCount || 0) === 1 ? "" : "s")
-                      + ". You can undo the deletion."
-                color: theme.textMain
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeBody
-                wrapMode: Text.WordWrap
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: theme.space6
-
-                Item { Layout.fillWidth: true }
-
-                ActionButton {
-                    text: "Cancel"
-                    compact: true
-                    onClicked: deleteTrackConfirmation.close()
-                }
-
-                ActionButton {
-                    objectName: "timelineConfirmDeleteTrackButton"
-                    text: "Delete Track"
-                    compact: true
-                    tone: "danger"
-                    onClicked: {
-                        deleteTrackConfirmation.close()
-                        documentController.removeTrackRow(trackData.trackIndex, true)
+                        ScrollView {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(root.theme.scaled(280), nestableGroupList.implicitHeight)
+                            clip: true
+                            Column {
+                                id: nestableGroupList
+                                objectName: "timelineNestGroupList"
+                                width: parent.width
+                                spacing: root.theme.space4
+                                Repeater {
+                                    model: root.nestableTrackGroups
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        width: nestableGroupList.width
+                                        text: {
+                                            let indentation = ""
+                                            const depth = Math.min(5, Number(modelData.depth || 0))
+                                            for (let index = 0; index < depth; ++index)
+                                                indentation += "  "
+                                            return indentation + String(modelData.name || "Track Group")
+                                        }
+                                        compact: true
+                                        onClicked: {
+                                            root.documentController.setTrackGroupParent(
+                                                        String(root.trackData.groupId || ""),
+                                                        String(modelData.groupId || ""))
+                                            nestTrackGroupPopup.close()
+                                        }
+                                    }
+                                }
+                                Label {
+                                    visible: root.nestableTrackGroups.length === 0
+                                             && String(root.trackData.groupParentId || "").length === 0
+                                    width: nestableGroupList.width
+                                    text: "No other groups available"
+                                    color: root.theme.textMuted
+                                    font.family: root.theme.fontUi
+                                    font.pixelSize: root.theme.typeCaption
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+                        ActionButton {
+                            Layout.alignment: Qt.AlignRight
+                            text: "Cancel"
+                            compact: true
+                            onClicked: nestTrackGroupPopup.close()
+                        }
                     }
                 }
             }
         }
     }
 
-    AppPopup {
-        id: automationPopup
-        property bool contentCreated: false
-        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(380, Math.max(300, root.width * 1.9))))
-        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(680,
-                         (automationContentLoader.item
-                          ? automationContentLoader.item.contentImplicitHeight : 0)
-                         + theme.space20)))
-        x: root.width - width
-        y: theme.space8
-        padding: theme.space10
-        modal: false
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        onAboutToShow: contentCreated = true
+    Component {
+        id: trackRenamePopupComponent
+        AppPopup {
+            id: trackRenamePopup
+            parent: root
+            objectName: "timelineRenameTrackPopup"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+            height: Math.min(popupAvailableHeight, Math.max(1, renameTrackContent.implicitHeight + theme.space20))
+            x: root.width - width
+            y: Math.max(0, (root.height - height) / 2)
+            padding: standardPopupPadding
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onOpened: {
+                trackNameField.text = String(trackData.customName || "")
+                Qt.callLater(function() {
+                    trackNameField.forceActiveFocus(Qt.PopupFocusReason)
+                    trackNameField.selectAll()
+                })
+            }
 
-        background: PopupSurface {}
+            background: PopupSurface {}
 
-        contentItem: Loader {
-            id: automationContentLoader
-            active: automationPopup.contentCreated || automationPopup.visible
-            onLoaded: automationPopup.contentCreated = true
-            sourceComponent: Component {
-                ScrollView {
-                    id: mixerScroll
-                    property real contentImplicitHeight: automationContent.implicitHeight
-                    clip: true
-                    contentWidth: availableWidth
-                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            contentItem: ColumnLayout {
+                id: renameTrackContent
+                spacing: theme.space8
 
+                Label {
+                    Layout.fillWidth: true
+                    text: "Rename " + trackData.displayLabel
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeControl
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                }
+
+                ToneTextField {
+                    id: trackNameField
+                    objectName: "timelineTrackNameField"
+                    Layout.fillWidth: true
+                    accessibleLabel: "Track name"
+                    text: String(trackData.customName || "")
+                    placeholderText: "Enter a track name"
+                    maximumLength: 48
+                    selectByMouse: true
+                    onAccepted: {
+                        root.commitTrackRename(trackNameField.text)
+                        trackRenamePopup.close()
+                    }
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Leave the name empty to restore the default label."
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                    wrapMode: Text.Wrap
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+
+                    ActionButton {
+                        text: "Cancel"
+                        compact: true
+                        onClicked: trackRenamePopup.close()
+                    }
+
+                    ActionButton {
+                        objectName: "timelineSaveTrackNameButton"
+                        text: "Save Name"
+                        compact: true
+                        onClicked: {
+                            root.commitTrackRename(trackNameField.text)
+                            trackRenamePopup.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: deleteTrackConfirmationComponent
+        AppPopup {
+            id: deleteTrackConfirmation
+            parent: root
+            property bool contentCreated: false
+            objectName: "timelineDeleteTrackConfirmation"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(360, Math.max(300, root.width * 2))))
+            height: Math.min(popupAvailableHeight, Math.max(1,
+                             (deleteTrackContentLoader.item
+                              ? deleteTrackContentLoader.item.implicitHeight : 0)
+                             + theme.space20))
+            x: root.width - width
+            y: Math.max(0, (root.height - height) / 2)
+            padding: standardPopupPadding
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onAboutToShow: contentCreated = true
+
+            background: PopupSurface {}
+
+            contentItem: Loader {
+                id: deleteTrackContentLoader
+                active: deleteTrackConfirmation.contentCreated || deleteTrackConfirmation.visible
+                onLoaded: deleteTrackConfirmation.contentCreated = true
+                sourceComponent: Component {
                     ColumnLayout {
-                        id: automationContent
-                        width: mixerScroll.availableWidth
+                        id: deleteTrackContent
                         spacing: theme.space8
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: theme.space6
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space2
-
-                            Label {
-                                text: trackData.displayLabel + (trackData.trackKind === "audio" ? " · Mixer" : " · Opacity")
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: theme.typeControl
-                                font.weight: Font.DemiBold
-                            }
-
-                            Label {
-                                text: (trackData.automationKeyframes || []).length + " automation points"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: theme.typeCaption
-                            }
-                        }
-
-                        ActionButton {
-                            showText: false
-                            compact: true
-                            iconName: root.hasAutomationKeyAtPlayhead(root.automationParameter) ? "keyframe-filled" : "keyframe"
-                            active: root.hasAutomationKeyAtPlayhead(root.automationParameter)
-                            tooltipText: root.hasAutomationKeyAtPlayhead(root.automationParameter)
-                                         ? "Remove the track keyframe at the playhead."
-                                         : "Add a track keyframe at the playhead."
-                            onClicked: documentController.toggleTrackAutomationKeyframe(
-                                           trackData.trackIndex, root.automationParameter)
-                        }
-                    }
-
-                    InspectorSlider {
-                        Layout.fillWidth: true
-                        label: trackData.trackKind === "audio" ? "Gain" : "Opacity"
-                        valueText: trackData.trackKind === "audio"
-                                   ? Number(root.automationValue).toFixed(1) + " dB"
-                                   : Math.round(root.automationValue * 100) + "%"
-                        from: trackData.trackKind === "audio" ? -36 : 0
-                        to: trackData.trackKind === "audio" ? 0 : 1
-                        stepSize: trackData.trackKind === "audio" ? 0.5 : 0.01
-                        value: root.automationValue
-                        defaultValue: trackData.trackKind === "audio" ? 0 : 1
-                        valueInputMode: trackData.trackKind === "audio" ? "raw" : "percentNormalized"
-                        onInteractionStarted: documentController.beginContinuousEdit()
-                        onValueDragged: function(nextValue) {
-                            documentController.setTrackAutomationValue(
-                                        trackData.trackIndex, root.automationParameter, nextValue)
-                        }
-                        onInteractionFinished: documentController.endContinuousEdit()
-                        onResetRequested: documentController.setTrackAutomationValue(
-                                              trackData.trackIndex,
-                                              root.automationParameter,
-                                              trackData.trackKind === "audio" ? 0 : 1)
-                    }
-
-                    RowLayout {
-                        visible: trackData.trackKind === "audio"
-                        Layout.fillWidth: true
-                        spacing: theme.space6
-
-                        InspectorSlider {
-                            Layout.fillWidth: true
-                            label: "Pan"
-                            valueText: Math.abs(root.panValue) < 0.005
-                                       ? "Center"
-                                       : (root.panValue < 0
-                                          ? "L " + Math.round(Math.abs(root.panValue) * 100)
-                                          : "R " + Math.round(root.panValue * 100))
-                            from: -1
-                            to: 1
-                            stepSize: 0.01
-                            value: root.panValue
-                            defaultValue: 0
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) {
-                                documentController.setTrackAutomationValue(
-                                            trackData.trackIndex, "audioPan", nextValue)
-                            }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAutomationValue(
-                                                  trackData.trackIndex, "audioPan", 0)
-                        }
-
-                        ActionButton {
-                            showText: false
-                            compact: true
-                            iconName: root.hasAutomationKeyAtPlayhead("audioPan") ? "keyframe-filled" : "keyframe"
-                            active: root.hasAutomationKeyAtPlayhead("audioPan")
-                            tooltipText: root.hasAutomationKeyAtPlayhead("audioPan")
-                                         ? "Remove the pan keyframe at the playhead."
-                                         : "Add a pan keyframe at the playhead."
-                            onClicked: documentController.toggleTrackAutomationKeyframe(
-                                           trackData.trackIndex, "audioPan")
-                        }
-                    }
-
-                    InspectorSection {
-                        visible: trackData.trackKind === "audio"
-                        Layout.fillWidth: true
-                        title: "Processing"
-                        subtitle: "Bus routing, tone, dynamics, and dialogue priority"
-                        accent: theme.accentWarm500
-                        expandable: true
-                        expanded: false
-                        changed: String(trackData.audioBus || "main") !== "main"
-                                 || Math.abs(Number(trackData.audioEqLowDb || 0)) > 0.01
-                                 || Math.abs(Number(trackData.audioEqMidDb || 0)) > 0.01
-                                 || Math.abs(Number(trackData.audioEqHighDb || 0)) > 0.01
-                                 || trackData.audioCompressorEnabled === true
-                                 || trackData.audioDuckingEnabled === true
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            Label {
-                                text: "Route"
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: theme.typeCaption
-                                Layout.fillWidth: true
-                            }
-
-                            ToneComboBox {
-                                id: audioBusSelector
-                                accessibleLabel: qsTr("Audio route bus")
-                                Layout.preferredWidth: 132
-                                model: ["Main", "Dialogue", "Music", "SFX"]
-                                currentIndex: root.audioBusIndex(trackData.audioBus)
-                                accent: theme.accentWarm500
-                                onActivated: documentController.setTrackAudioSetting(
-                                                 trackData.trackIndex,
-                                                 "audioBus",
-                                                 String(currentText).toLowerCase())
-                            }
-                        }
-
                         Label {
-                            text: "THREE-BAND EQ"
-                            color: theme.textFaint
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeCaption
+                            Layout.fillWidth: true
+                            text: trackData.isStandaloneVisual === true
+                                  ? "Delete " + trackData.displayLabel + " graphics track?"
+                                  : root.isIndependentVideo
+                                    ? "Delete " + trackData.displayLabel + " video lane?"
+                                  : trackData.trackKind === "audio" && trackData.isIndependent === true
+                                    ? "Delete " + trackData.displayLabel + " track?"
+                                    : "Delete " + trackData.displayLabel + " track pair?"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeControl
                             font.weight: Font.DemiBold
                         }
 
-                        InspectorSlider {
+                        Label {
                             Layout.fillWidth: true
-                            label: "Low · 120 Hz"
-                            valueText: Number(trackData.audioEqLowDb || 0).toFixed(1) + " dB"
-                            from: -12; to: 12; stepSize: 0.5
-                            value: Number(trackData.audioEqLowDb || 0)
-                            defaultValue: 0
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqLowDb", nextValue) }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqLowDb", 0)
+                            text: (trackData.isStandaloneVisual === true
+                                   ? "This removes this graphics lane and "
+                                   : root.isIndependentVideo
+                                     ? "This removes this video lane and "
+                                   : trackData.trackKind === "audio" && trackData.isIndependent === true
+                                     ? "This removes this audio lane and "
+                                     : "This removes the paired video and audio lanes and ")
+                                  + Number(trackData.clipCount || 0) + " visible clip"
+                                  + (Number(trackData.clipCount || 0) === 1 ? "" : "s")
+                                  + ". You can undo the deletion."
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeBody
+                            wrapMode: Text.WordWrap
                         }
 
-                        InspectorSlider {
+                        RowLayout {
                             Layout.fillWidth: true
-                            label: "Mid · 1 kHz"
-                            valueText: Number(trackData.audioEqMidDb || 0).toFixed(1) + " dB"
-                            from: -12; to: 12; stepSize: 0.5
-                            value: Number(trackData.audioEqMidDb || 0)
-                            defaultValue: 0
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqMidDb", nextValue) }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqMidDb", 0)
-                        }
+                            spacing: theme.space6
 
-                        InspectorSlider {
-                            Layout.fillWidth: true
-                            label: "High · 8 kHz"
-                            valueText: Number(trackData.audioEqHighDb || 0).toFixed(1) + " dB"
-                            from: -12; to: 12; stepSize: 0.5
-                            value: Number(trackData.audioEqHighDb || 0)
-                            defaultValue: 0
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqHighDb", nextValue) }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqHighDb", 0)
-                        }
+                            Item { Layout.fillWidth: true }
 
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: trackData.audioCompressorEnabled === true ? "Compressor on" : "Enable compressor"
-                            iconName: "curve"
-                            compact: true
-                            active: trackData.audioCompressorEnabled === true
-                            accent: theme.accentWarm500
-                            onClicked: documentController.setTrackAudioSetting(
-                                           trackData.trackIndex,
-                                           "audioCompressorEnabled",
-                                           trackData.audioCompressorEnabled !== true)
-                        }
+                            ActionButton {
+                                text: "Cancel"
+                                compact: true
+                                onClicked: deleteTrackConfirmation.close()
+                            }
 
-                        InspectorSlider {
-                            visible: trackData.audioCompressorEnabled === true
-                            Layout.fillWidth: true
-                            label: "Threshold"
-                            valueText: Number(trackData.audioCompressorThresholdDb !== undefined ? trackData.audioCompressorThresholdDb : -18).toFixed(0) + " dB"
-                            from: -48; to: -1; stepSize: 1
-                            value: Number(trackData.audioCompressorThresholdDb !== undefined ? trackData.audioCompressorThresholdDb : -18)
-                            defaultValue: -18
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorThresholdDb", nextValue) }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorThresholdDb", -18)
-                        }
-
-                        InspectorSlider {
-                            visible: trackData.audioCompressorEnabled === true
-                            Layout.fillWidth: true
-                            label: "Ratio"
-                            valueText: Number(trackData.audioCompressorRatio !== undefined ? trackData.audioCompressorRatio : 4).toFixed(1) + ":1"
-                            from: 1; to: 20; stepSize: 0.5
-                            value: Number(trackData.audioCompressorRatio !== undefined ? trackData.audioCompressorRatio : 4)
-                            defaultValue: 4
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorRatio", nextValue) }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorRatio", 4)
-                        }
-
-                        InspectorSlider {
-                            visible: trackData.audioCompressorEnabled === true
-                            Layout.fillWidth: true
-                            label: "Makeup"
-                            valueText: "+" + Number(trackData.audioCompressorMakeupDb || 0).toFixed(1) + " dB"
-                            from: 0; to: 18; stepSize: 0.5
-                            value: Number(trackData.audioCompressorMakeupDb || 0)
-                            defaultValue: 0
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorMakeupDb", nextValue) }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorMakeupDb", 0)
-                        }
-
-                        ActionButton {
-                            visible: String(trackData.audioBus || "main") !== "dialogue"
-                            Layout.fillWidth: true
-                            text: trackData.audioDuckingEnabled === true ? "Dialogue ducking on" : "Duck under dialogue"
-                            iconName: "audio"
-                            compact: true
-                            active: trackData.audioDuckingEnabled === true
-                            accent: theme.accentCool500
-                            tooltipText: "Automatically lower this track whenever the Dialogue bus is active."
-                            onClicked: documentController.setTrackAudioSetting(
-                                           trackData.trackIndex,
-                                           "audioDuckingEnabled",
-                                           trackData.audioDuckingEnabled !== true)
-                        }
-
-                        InspectorSlider {
-                            visible: trackData.audioDuckingEnabled === true
-                                     && String(trackData.audioBus || "main") !== "dialogue"
-                            Layout.fillWidth: true
-                            label: "Duck amount"
-                            valueText: Number(trackData.audioDuckingAmountDb !== undefined ? trackData.audioDuckingAmountDb : -12).toFixed(0) + " dB"
-                            from: -30; to: 0; stepSize: 1
-                            value: Number(trackData.audioDuckingAmountDb !== undefined ? trackData.audioDuckingAmountDb : -12)
-                            defaultValue: -12
-                            valueInputMode: "raw"
-                            onInteractionStarted: documentController.beginContinuousEdit()
-                            onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioDuckingAmountDb", nextValue) }
-                            onInteractionFinished: documentController.endContinuousEdit()
-                            onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioDuckingAmountDb", -12)
+                            ActionButton {
+                                objectName: "timelineConfirmDeleteTrackButton"
+                                text: "Delete Track"
+                                compact: true
+                                tone: "danger"
+                                onClicked: {
+                                    deleteTrackConfirmation.close()
+                                    documentController.removeTrackRow(trackData.trackIndex, true)
+                                }
+                            }
                         }
                     }
+                }
+            }
+        }
+    }
 
-                        ActionButton {
-                            Layout.alignment: Qt.AlignRight
-                            text: "Clear automation"
-                            compact: true
-                            enabled: (trackData.automationKeyframes || []).length > 0
-                            tooltipText: "Remove every automation point from this track."
-                            onClicked: documentController.clearTrackAutomation(
-                                           trackData.trackIndex,
-                                           trackData.trackKind === "audio" ? "" : root.automationParameter)
+    Component {
+        id: automationPopupComponent
+        AppPopup {
+            id: automationPopup
+            parent: root
+            property bool contentCreated: false
+            objectName: "timelineTrackAutomationPopup"
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(380, Math.max(300, root.width * 1.9))))
+            height: Math.min(popupAvailableHeight, Math.max(1, Math.min(680,
+                             (automationContentLoader.item
+                              ? automationContentLoader.item.contentImplicitHeight : 0)
+                             + theme.space20)))
+            x: root.width - width
+            y: theme.space8
+            padding: theme.space10
+            modal: false
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            onAboutToShow: contentCreated = true
+
+            background: PopupSurface {}
+
+            contentItem: Loader {
+                id: automationContentLoader
+                active: automationPopup.contentCreated || automationPopup.visible
+                onLoaded: automationPopup.contentCreated = true
+                sourceComponent: Component {
+                    ScrollView {
+                        id: mixerScroll
+                        property real contentImplicitHeight: automationContent.implicitHeight
+                        clip: true
+                        contentWidth: availableWidth
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                        ColumnLayout {
+                            id: automationContent
+                            width: mixerScroll.availableWidth
+                            spacing: theme.space8
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space6
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space2
+
+                                Label {
+                                    text: trackData.displayLabel + (trackData.trackKind === "audio" ? " · Mixer" : " · Opacity")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeControl
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Label {
+                                    text: (trackData.automationKeyframes || []).length + " automation points"
+                                    color: theme.textMuted
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
+                                    font.pixelSize: theme.typeCaption
+                                }
+                            }
+
+                            ActionButton {
+                                showText: false
+                                compact: true
+                                iconName: root.hasAutomationKeyAtPlayhead(root.automationParameter) ? "keyframe-filled" : "keyframe"
+                                active: root.hasAutomationKeyAtPlayhead(root.automationParameter)
+                                tooltipText: root.hasAutomationKeyAtPlayhead(root.automationParameter)
+                                             ? "Remove the track keyframe at the playhead."
+                                             : "Add a track keyframe at the playhead."
+                                onClicked: documentController.toggleTrackAutomationKeyframe(
+                                               trackData.trackIndex, root.automationParameter)
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: trackData.trackKind === "audio" ? "Gain" : "Opacity"
+                            valueText: trackData.trackKind === "audio"
+                                       ? Number(root.automationValue).toFixed(1) + " dB"
+                                       : Math.round(root.automationValue * 100) + "%"
+                            from: trackData.trackKind === "audio" ? -36 : 0
+                            to: trackData.trackKind === "audio" ? 0 : 1
+                            stepSize: trackData.trackKind === "audio" ? 0.5 : 0.01
+                            value: root.automationValue
+                            defaultValue: trackData.trackKind === "audio" ? 0 : 1
+                            valueInputMode: trackData.trackKind === "audio" ? "raw" : "percentNormalized"
+                            onInteractionStarted: documentController.beginContinuousEdit()
+                            onValueDragged: function(nextValue) {
+                                documentController.setTrackAutomationValue(
+                                            trackData.trackIndex, root.automationParameter, nextValue)
+                            }
+                            onInteractionFinished: documentController.endContinuousEdit()
+                            onResetRequested: documentController.setTrackAutomationValue(
+                                                  trackData.trackIndex,
+                                                  root.automationParameter,
+                                                  trackData.trackKind === "audio" ? 0 : 1)
+                        }
+
+                        RowLayout {
+                            visible: trackData.trackKind === "audio"
+                            Layout.fillWidth: true
+                            spacing: theme.space6
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Pan"
+                                valueText: Math.abs(root.panValue) < 0.005
+                                           ? "Center"
+                                           : (root.panValue < 0
+                                              ? "L " + Math.round(Math.abs(root.panValue) * 100)
+                                              : "R " + Math.round(root.panValue * 100))
+                                from: -1
+                                to: 1
+                                stepSize: 0.01
+                                value: root.panValue
+                                defaultValue: 0
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) {
+                                    documentController.setTrackAutomationValue(
+                                                trackData.trackIndex, "audioPan", nextValue)
+                                }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAutomationValue(
+                                                      trackData.trackIndex, "audioPan", 0)
+                            }
+
+                            ActionButton {
+                                showText: false
+                                compact: true
+                                iconName: root.hasAutomationKeyAtPlayhead("audioPan") ? "keyframe-filled" : "keyframe"
+                                active: root.hasAutomationKeyAtPlayhead("audioPan")
+                                tooltipText: root.hasAutomationKeyAtPlayhead("audioPan")
+                                             ? "Remove the pan keyframe at the playhead."
+                                             : "Add a pan keyframe at the playhead."
+                                onClicked: documentController.toggleTrackAutomationKeyframe(
+                                               trackData.trackIndex, "audioPan")
+                            }
+                        }
+
+                        InspectorSection {
+                            visible: trackData.trackKind === "audio"
+                            Layout.fillWidth: true
+                            title: "Processing"
+                            subtitle: "Bus routing, tone, dynamics, and dialogue priority"
+                            accent: theme.accentWarm500
+                            expandable: true
+                            expanded: false
+                            changed: String(trackData.audioBus || "main") !== "main"
+                                     || Math.abs(Number(trackData.audioEqLowDb || 0)) > 0.01
+                                     || Math.abs(Number(trackData.audioEqMidDb || 0)) > 0.01
+                                     || Math.abs(Number(trackData.audioEqHighDb || 0)) > 0.01
+                                     || trackData.audioCompressorEnabled === true
+                                     || trackData.audioDuckingEnabled === true
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space8
+
+                                Label {
+                                    text: "Route"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeCaption
+                                    Layout.fillWidth: true
+                                }
+
+                                ToneComboBox {
+                                    id: audioBusSelector
+                                    accessibleLabel: qsTr("Audio route bus")
+                                    Layout.preferredWidth: 132
+                                    model: ["Main", "Dialogue", "Music", "SFX"]
+                                    currentIndex: root.audioBusIndex(trackData.audioBus)
+                                    accent: theme.accentWarm500
+                                    onActivated: documentController.setTrackAudioSetting(
+                                                     trackData.trackIndex,
+                                                     "audioBus",
+                                                     String(currentText).toLowerCase())
+                                }
+                            }
+
+                            Label {
+                                text: "THREE-BAND EQ"
+                                color: theme.textFaint
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
+                                font.pixelSize: theme.typeCaption
+                                font.weight: Font.DemiBold
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Low · 120 Hz"
+                                valueText: Number(trackData.audioEqLowDb || 0).toFixed(1) + " dB"
+                                from: -12; to: 12; stepSize: 0.5
+                                value: Number(trackData.audioEqLowDb || 0)
+                                defaultValue: 0
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqLowDb", nextValue) }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqLowDb", 0)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Mid · 1 kHz"
+                                valueText: Number(trackData.audioEqMidDb || 0).toFixed(1) + " dB"
+                                from: -12; to: 12; stepSize: 0.5
+                                value: Number(trackData.audioEqMidDb || 0)
+                                defaultValue: 0
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqMidDb", nextValue) }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqMidDb", 0)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "High · 8 kHz"
+                                valueText: Number(trackData.audioEqHighDb || 0).toFixed(1) + " dB"
+                                from: -12; to: 12; stepSize: 0.5
+                                value: Number(trackData.audioEqHighDb || 0)
+                                defaultValue: 0
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqHighDb", nextValue) }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioEqHighDb", 0)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: trackData.audioCompressorEnabled === true ? "Compressor on" : "Enable compressor"
+                                iconName: "curve"
+                                compact: true
+                                active: trackData.audioCompressorEnabled === true
+                                accent: theme.accentWarm500
+                                onClicked: documentController.setTrackAudioSetting(
+                                               trackData.trackIndex,
+                                               "audioCompressorEnabled",
+                                               trackData.audioCompressorEnabled !== true)
+                            }
+
+                            InspectorSlider {
+                                visible: trackData.audioCompressorEnabled === true
+                                Layout.fillWidth: true
+                                label: "Threshold"
+                                valueText: Number(trackData.audioCompressorThresholdDb !== undefined ? trackData.audioCompressorThresholdDb : -18).toFixed(0) + " dB"
+                                from: -48; to: -1; stepSize: 1
+                                value: Number(trackData.audioCompressorThresholdDb !== undefined ? trackData.audioCompressorThresholdDb : -18)
+                                defaultValue: -18
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorThresholdDb", nextValue) }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorThresholdDb", -18)
+                            }
+
+                            InspectorSlider {
+                                visible: trackData.audioCompressorEnabled === true
+                                Layout.fillWidth: true
+                                label: "Ratio"
+                                valueText: Number(trackData.audioCompressorRatio !== undefined ? trackData.audioCompressorRatio : 4).toFixed(1) + ":1"
+                                from: 1; to: 20; stepSize: 0.5
+                                value: Number(trackData.audioCompressorRatio !== undefined ? trackData.audioCompressorRatio : 4)
+                                defaultValue: 4
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorRatio", nextValue) }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorRatio", 4)
+                            }
+
+                            InspectorSlider {
+                                visible: trackData.audioCompressorEnabled === true
+                                Layout.fillWidth: true
+                                label: "Makeup"
+                                valueText: "+" + Number(trackData.audioCompressorMakeupDb || 0).toFixed(1) + " dB"
+                                from: 0; to: 18; stepSize: 0.5
+                                value: Number(trackData.audioCompressorMakeupDb || 0)
+                                defaultValue: 0
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorMakeupDb", nextValue) }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioCompressorMakeupDb", 0)
+                            }
+
+                            ActionButton {
+                                visible: String(trackData.audioBus || "main") !== "dialogue"
+                                Layout.fillWidth: true
+                                text: trackData.audioDuckingEnabled === true ? "Dialogue ducking on" : "Duck under dialogue"
+                                iconName: "audio"
+                                compact: true
+                                active: trackData.audioDuckingEnabled === true
+                                accent: theme.accentCool500
+                                tooltipText: "Automatically lower this track whenever the Dialogue bus is active."
+                                onClicked: documentController.setTrackAudioSetting(
+                                               trackData.trackIndex,
+                                               "audioDuckingEnabled",
+                                               trackData.audioDuckingEnabled !== true)
+                            }
+
+                            InspectorSlider {
+                                visible: trackData.audioDuckingEnabled === true
+                                         && String(trackData.audioBus || "main") !== "dialogue"
+                                Layout.fillWidth: true
+                                label: "Duck amount"
+                                valueText: Number(trackData.audioDuckingAmountDb !== undefined ? trackData.audioDuckingAmountDb : -12).toFixed(0) + " dB"
+                                from: -30; to: 0; stepSize: 1
+                                value: Number(trackData.audioDuckingAmountDb !== undefined ? trackData.audioDuckingAmountDb : -12)
+                                defaultValue: -12
+                                valueInputMode: "raw"
+                                onInteractionStarted: documentController.beginContinuousEdit()
+                                onValueDragged: function(nextValue) { documentController.setTrackAudioSetting(trackData.trackIndex, "audioDuckingAmountDb", nextValue) }
+                                onInteractionFinished: documentController.endContinuousEdit()
+                                onResetRequested: documentController.setTrackAudioSetting(trackData.trackIndex, "audioDuckingAmountDb", -12)
+                            }
+                        }
+
+                            ActionButton {
+                                Layout.alignment: Qt.AlignRight
+                                text: "Clear automation"
+                                compact: true
+                                enabled: (trackData.automationKeyframes || []).length > 0
+                                tooltipText: "Remove every automation point from this track."
+                                onClicked: documentController.clearTrackAutomation(
+                                               trackData.trackIndex,
+                                               trackData.trackKind === "audio" ? "" : root.automationParameter)
+                            }
                         }
                     }
                 }

@@ -82,7 +82,8 @@ ColumnLayout {
               " · " + Number(selection.selectedCount || 0) + " linked layer" +
               (Number(selection.selectedCount || 0) === 1 ? "" : "s")
         color: theme.textMuted
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 10
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
         elide: Text.ElideNone

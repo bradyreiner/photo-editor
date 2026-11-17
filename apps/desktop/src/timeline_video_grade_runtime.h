@@ -66,8 +66,8 @@ struct TimelineVideoGradeFrame final {
 [[nodiscard]] const QColorSpace& timeline_video_rec709_color_space();
 
 // Playback renders the photo recipe's complete graph at the visible frame
-// dimensions. CUBE compilation is available only for pointwise recipes; the
-// current sequence exporter consumes that LUT form.
+// dimensions. Pointwise sequence exports can use a validated CUBE LUT;
+// supported spatial and animated grades use the shared full-frame stream.
 [[nodiscard]] QString normalize_timeline_video_grade_recipe(
     const QString& recipe_json,
     QString* normalized_recipe_json);

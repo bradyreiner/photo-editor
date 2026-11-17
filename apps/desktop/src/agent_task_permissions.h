@@ -30,4 +30,31 @@ inline QStringList agent_task_capabilities_for_plan(const QVariantMap& plan) {
   return capabilities;
 }
 
+// Native Timeline tasks have a broader, still explicit scope than one photo
+// walkthrough. Keep this separate so the existing six-action photo contract
+// does not silently expand.
+inline QStringList agent_timeline_task_capabilities_for_plan(const QVariantMap& plan) {
+  QStringList capabilities;
+  const auto append = [&capabilities](const QStringList& values) {
+    for (const auto& value : values)
+      if (!capabilities.contains(value)) capabilities.append(value);
+  };
+  const auto actions = plan.value(QStringLiteral("actions")).toList();
+  if (actions.isEmpty() || actions.size() > 9) return {};
+  for (const auto& value : actions) {
+    const auto action = value.toMap();
+    const auto summary = action.value(QStringLiteral("summary")).toString().trimmed();
+    if (summary.isEmpty() || summary.size() > 180 || action.size() != 2) return {};
+    const auto kind = action.value(QStringLiteral("kind")).toString();
+    if (kind == "color") append({"global_color", "curves", "hsl", "color_grading", "detail"});
+    else if (kind == "framing") append({"crop"});
+    else if (kind == "masking") append({"masks"});
+    else if (kind == "text") append({"graphics", "layers_luts"});
+    else if (kind == "layers" || kind == "effects" || kind == "audio" ||
+             kind == "media" || kind == "delivery") append({"layers_luts"});
+    else return {};
+  }
+  return capabilities;
+}
+
 }  // namespace photo_editor::desktop

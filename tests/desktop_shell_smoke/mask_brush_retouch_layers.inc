@@ -874,7 +874,7 @@
     return fail("Escape should exit brush mode without deleting or deselecting the active brush selection");
   }
   const auto mask_count_before_shortcut_create = editor_preview.maskCount();
-  const auto inverted_before_shortcut = editor_preview.activeMaskSelectionInverted();
+  const auto inverted_before_shortcut = editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value("maskSetSelectionInvert").toBool();
   QVariant mask_shortcut_signature;
   QVariant mask_shortcut_created;
   QVariant mask_shortcut_add;
@@ -907,7 +907,7 @@
           Q_RETURN_ARG(QVariant, mask_shortcut_signature)) ||
       mask_shortcut_signature.toString() !=
           QStringLiteral(
-              "select:V|brush:B|erase:E|lasso:L|polygon:P|create:Ctrl+Shift+M|add:Ctrl+Shift+A|subtract:Ctrl+Shift+S|intersect:Ctrl+Shift+I|invert:Ctrl+Shift+V|overlay:Ctrl+Shift+O|outline:Ctrl+Shift+U|layer-target:Ctrl+Shift+L|layer-target-prev:Ctrl+Alt+Shift+L|mask-target:Ctrl+Shift+K|mask-target-prev:Ctrl+Alt+Shift+K|base-image:Ctrl+Shift+B|temp-erase:X-hold|temporary-hide:H-hold|delete:Delete|rename:F2") ||
+              "select:V|brush:B|erase:E|lasso:L|polygon:P|create:Ctrl+Shift+M|add:Ctrl+Shift+A|subtract:Ctrl+Shift+S|intersect:Ctrl+Alt+Shift+I|invert:Ctrl+Shift+I|overlay:Ctrl+Shift+O|outline:Ctrl+Shift+U|layer-target:Ctrl+Shift+L|layer-target-prev:Ctrl+Alt+Shift+L|mask-target:Ctrl+Shift+K|mask-target-prev:Ctrl+Alt+Shift+K|base-image:Ctrl+Shift+B|temp-erase:X-hold|temporary-hide:H-hold|delete:Delete|rename:F2") ||
       !mask_create_shortcut->property("enabled").toBool() ||
       !QMetaObject::invokeMethod(
           edit_workspace,
@@ -946,7 +946,7 @@
           "invertActiveMaskFromShortcut",
           Q_RETURN_ARG(QVariant, mask_shortcut_inverted)) ||
       !mask_shortcut_inverted.toBool() ||
-      editor_preview.activeMaskSelectionInverted() == inverted_before_shortcut ||
+      editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value("maskSetSelectionInvert").toBool() == inverted_before_shortcut ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "toggleActiveMaskOverlayFromShortcut",
@@ -1743,36 +1743,61 @@
       find_named_object(edit_workspace, QStringLiteral("activeToolVariantChip"));
   auto* retouch_mode_menu_button =
       find_named_object(edit_workspace, QStringLiteral("retouchHudModeMenuButton"));
+  auto* retouch_remove_method_button =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudRemoveButton"));
+  auto* retouch_heal_method_button =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudHealButton"));
+  auto* retouch_patch_method_button =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudPatchButton"));
+  auto* retouch_clone_method_button =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudCloneButton"));
+  auto* retouch_guidance_label =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudGuidanceLabel"));
+  auto* retouch_brush_size_slider =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudBrushSizeSlider"));
+  auto* retouch_review_before_button =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudReviewBeforeButton"));
+  auto* retouch_review_after_button =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudReviewAfterButton"));
+  auto* retouch_clone_source_button =
+      find_named_item(edit_workspace, QStringLiteral("retouchHudClonePickSourceButton"));
   const auto retouch_inpaint_capability =
       editor_preview.aiInpaintAvailable() ? QStringLiteral("model-ready") : QStringLiteral("local-fallback");
   QVariant retouch_visibility_signature;
   QVariant retouch_action_signature;
   if (retouch_tool_hud == nullptr || retouch_status_label == nullptr ||
       retouch_apply_button == nullptr || retouch_more_menu_button == nullptr ||
-      retouch_mode_menu_button == nullptr ||
+      retouch_mode_menu_button == nullptr || retouch_remove_method_button == nullptr ||
+      retouch_heal_method_button == nullptr || retouch_patch_method_button == nullptr ||
+      retouch_clone_method_button == nullptr || retouch_guidance_label == nullptr ||
+      retouch_brush_size_slider == nullptr || retouch_review_before_button == nullptr ||
+      retouch_review_after_button == nullptr || retouch_clone_source_button == nullptr ||
       edit_zoom_toolbar_for_retouch == nullptr || edit_action_toolbar_for_retouch == nullptr ||
       active_tool_variant_chip_for_retouch == nullptr ||
       !retouch_tool_hud->property("visible").toBool() ||
-      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v3|tool:retouch")) ||
-      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("component:ToolCommandBar")) ||
-      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("single-row:true")) ||
-      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("mode-change-animation:true")) ||
-      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("secondary-actions:more-menu")) ||
-      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("no-elide:true")) ||
-      !retouch_tool_hud->property("modeChangeAnimationEnabled").toBool() ||
-      !retouch_tool_hud->property("modeChangeMotionContract").toString().contains(
-          QStringLiteral("mode-change-motion:v1|enabled:true")) ||
+      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v4|tool:retouch|component:RetouchToolHud")) ||
+      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("visible-modes:remove-heal-patch-clone")) ||
+      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("review:before-after")) ||
       retouch_tool_hud->property("visibilityContract").toString() !=
           QStringLiteral(
-              "retouch-tool-visibility:v2|family:Retouch|variant:Heal|mode:heal|status:Heal / Paint area / After|last:heal|hud:true|layout:single-row-command-bar|primary:Apply|inline:0|more:9|text:no-elide-no-overlap|menus:secondary-actions") ||
+              "retouch-tool-visibility:v2|family:Retouch|variant:Heal|mode:heal|status:Heal / Paint area / After|last:heal|hud:true|layout:grouped-workflow-panel|primary:Apply|inline:0|more:11|mode-buttons:remove-heal-patch-clone|guidance:true|brush:size-presets|review:before-after|source:contextual|text:readable|menus:advanced-options") ||
       active_tool_variant_chip_for_retouch->property("text").toString() != QStringLiteral("Heal") ||
-      retouch_mode_menu_button->property("text").toString() != QStringLiteral("Heal") ||
+      retouch_mode_menu_button->property("text").toString() != QStringLiteral("Other tools") ||
       !retouch_mode_menu_button->property("visible").toBool() ||
-      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("items:8")) ||
-      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("checked:1")) ||
-      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:2")) ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("items:2")) ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("checked:0")) ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:0")) ||
       !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled-reasons-complete:true")) ||
       !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("danger:0")) ||
+      !retouch_remove_method_button->property("visible").toBool() || !retouch_heal_method_button->property("visible").toBool() ||
+      !retouch_patch_method_button->property("visible").toBool() || !retouch_clone_method_button->property("visible").toBool() ||
+      !retouch_remove_method_button->property("showLeadingIcon").toBool() ||
+      !retouch_heal_method_button->property("showLeadingIcon").toBool() ||
+      !retouch_patch_method_button->property("showLeadingIcon").toBool() ||
+      !retouch_clone_method_button->property("showLeadingIcon").toBool() ||
+      !retouch_guidance_label->property("text").toString().contains(QStringLiteral("blemish")) ||
+      !retouch_brush_size_slider->property("visible").toBool() || !retouch_review_before_button->property("visible").toBool() ||
+      !retouch_review_after_button->property("visible").toBool() || retouch_clone_source_button->property("visible").toBool() ||
       !edit_workspace->property("activeCanvasToolChromeReduced").toBool() ||
       edit_zoom_toolbar_for_retouch->property("visible").toBool() ||
       edit_action_toolbar_for_retouch->property("visible").toBool() ||
@@ -1787,8 +1812,8 @@
       retouch_apply_button->property("text").toString() != QStringLiteral("Apply") ||
       !retouch_apply_button->property("tooltip").toString().contains(QStringLiteral("edit recipe")) ||
       !retouch_apply_button->property("tooltip").toString().contains(QStringLiteral("original file is unchanged")) ||
-      retouch_more_menu_button->property("text").toString() != QStringLiteral("More") ||
-      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:9")) ||
+      retouch_more_menu_button->property("text").toString() != QStringLiteral("Options") ||
+      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:11")) ||
       !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:1")) ||
       !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled-reasons-complete:true")) ||
       !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("danger:0")) ||
@@ -1811,7 +1836,7 @@
           Q_RETURN_ARG(QVariant, retouch_visibility_signature)) ||
       retouch_visibility_signature.toString() !=
           QStringLiteral(
-              "retouch-tool-visibility:v2|family:Retouch|variant:Heal|mode:heal|status:Heal / Paint area / After|last:heal|hud:true|layout:single-row-command-bar|primary:Apply|inline:0|more:9|text:no-elide-no-overlap|menus:secondary-actions") ||
+              "retouch-tool-visibility:v2|family:Retouch|variant:Heal|mode:heal|status:Heal / Paint area / After|last:heal|hud:true|layout:grouped-workflow-panel|primary:Apply|inline:0|more:11|mode-buttons:remove-heal-patch-clone|guidance:true|brush:size-presets|review:before-after|source:contextual|text:readable|menus:advanced-options") ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "retouchActionSignature",
@@ -1845,15 +1870,15 @@
   auto* patch_source_label =
       edit_workspace->findChild<QObject*>(QStringLiteral("editImageViewportPatchSourceLabel"));
   QVariant patch_source_signature;
-  if (retouch_mode_menu_button->property("text").toString() != QStringLiteral("Patch") ||
+  if (retouch_mode_menu_button->property("text").toString() != QStringLiteral("Other tools") ||
       patch_source_region == nullptr || patch_source_label == nullptr ||
       !patch_source_region->property("visible").toBool() ||
       !patch_source_label->property("visible").toBool() ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Patch")) ||
       retouch_tool_hud->property("visibilityContract").toString() !=
           QStringLiteral(
-              "retouch-tool-visibility:v2|family:Retouch|variant:Patch|mode:patch|status:Patch / Paint area / After|last:patch|hud:true|layout:single-row-command-bar|primary:Apply|inline:0|more:10|text:no-elide-no-overlap|menus:secondary-actions") ||
-      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:10")) ||
+              "retouch-tool-visibility:v2|family:Retouch|variant:Patch|mode:patch|status:Patch / Paint area / After|last:patch|hud:true|layout:grouped-workflow-panel|primary:Apply|inline:0|more:12|mode-buttons:remove-heal-patch-clone|guidance:true|brush:size-presets|review:before-after|source:contextual|text:readable|menus:advanced-options") ||
+      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:12")) ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "retouchPatchSourceSignature",
@@ -1903,11 +1928,11 @@
     return retouch_remove_add_button != nullptr && retouch_remove_subtract_button != nullptr;
   });
   if (!remove_inline_actions_ready ||
-      retouch_mode_menu_button->property("text").toString() != QStringLiteral("Remove") ||
+      retouch_mode_menu_button->property("text").toString() != QStringLiteral("Other tools") ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Remove")) ||
       retouch_tool_hud->property("visibilityContract").toString() !=
           QStringLiteral(
-              "retouch-tool-visibility:v2|family:Retouch|variant:Remove|mode:remove|status:Remove / Paint area / After|last:remove|hud:true|layout:single-row-command-bar|primary:Apply|inline:2|more:5|text:no-elide-no-overlap|menus:secondary-actions") ||
+              "retouch-tool-visibility:v2|family:Retouch|variant:Remove|mode:remove|status:Remove / Paint area / After|last:remove|hud:true|layout:grouped-workflow-panel|primary:Apply|inline:2|more:7|mode-buttons:remove-heal-patch-clone|guidance:true|brush:size-presets|review:before-after|source:contextual|text:readable|menus:advanced-options") ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "retouchWorkflowSignature",
@@ -1995,14 +2020,15 @@
     return fail("retouch HUD should start clone stamp directly");
   }
   QCoreApplication::processEvents();
-  if (retouch_mode_menu_button->property("text").toString() != QStringLiteral("Clone Stamp") ||
+  if (retouch_mode_menu_button->property("text").toString() != QStringLiteral("Other tools") ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Clone Stamp")) ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Pick source")) ||
+      !retouch_clone_source_button->property("visible").toBool() ||
       active_tool_variant_chip_for_retouch->property("text").toString() != QStringLiteral("Clone Stamp") ||
       retouch_tool_hud->property("visibilityContract").toString() !=
           QStringLiteral(
-              "retouch-tool-visibility:v2|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After|last:clone|hud:true|layout:single-row-command-bar|primary:Apply|inline:0|more:9|text:no-elide-no-overlap|menus:secondary-actions") ||
-      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:9")) ||
+              "retouch-tool-visibility:v2|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After|last:clone|hud:true|layout:grouped-workflow-panel|primary:Apply|inline:0|more:8|mode-buttons:remove-heal-patch-clone|guidance:true|brush:size-presets|review:before-after|source:contextual|text:readable|menus:advanced-options") ||
+      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:8")) ||
       !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:1")) ||
       !QMetaObject::invokeMethod(
           edit_workspace,
@@ -2016,7 +2042,7 @@
           Q_RETURN_ARG(QVariant, retouch_visibility_signature)) ||
 	      retouch_visibility_signature.toString() !=
 	          QStringLiteral(
-	              "retouch-tool-visibility:v2|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After|last:clone|hud:true|layout:single-row-command-bar|primary:Apply|inline:0|more:9|text:no-elide-no-overlap|menus:secondary-actions")) {
+              "retouch-tool-visibility:v2|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After|last:clone|hud:true|layout:grouped-workflow-panel|primary:Apply|inline:0|more:8|mode-buttons:remove-heal-patch-clone|guidance:true|brush:size-presets|review:before-after|source:contextual|text:readable|menus:advanced-options")) {
 	    return fail("clone stamp HUD should clearly require a source before painting");
 	  }
   trace_smoke_progress("brush layer adjustments checked");
@@ -2039,7 +2065,7 @@
 	      !retouch_tool_hud->property("visible").toBool() ||
 	      retouch_tool_hud->property("visibilityContract").toString() !=
 	          QStringLiteral(
-	              "retouch-tool-visibility:v2|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After|last:clone|hud:true|layout:single-row-command-bar|primary:Apply|inline:0|more:9|text:no-elide-no-overlap|menus:secondary-actions")) {
+              "retouch-tool-visibility:v2|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After|last:clone|hud:true|layout:grouped-workflow-panel|primary:Apply|inline:0|more:8|mode-buttons:remove-heal-patch-clone|guidance:true|brush:size-presets|review:before-after|source:contextual|text:readable|menus:advanced-options")) {
 	    return fail("primary Retouch activation should restore the last-used retouch variant without restoring stale clone source state");
 	  }
 	  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_RETOUCH")) {
@@ -2069,7 +2095,7 @@
       clone_target_preview->property("cloneMode").toString() != QStringLiteral("aligned") ||
       clone_transform_badge->property("text").toString().isEmpty() ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Source set")) ||
-      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:9")) ||
+      !retouch_more_menu_button->property("menuContract").toString().contains(QStringLiteral("items:8")) ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "retouchWorkflowSignature",
@@ -2880,8 +2906,12 @@
       return fail("photo layer hierarchy drag fixture should collapse the target group before dropping");
     process_layout_events();
     auto* drag_window = source_drag_area->window();
-    const auto source_pointer = source_drag_area->mapToScene(
-        QPointF(source_drag_area->width() * 0.5, source_drag_area->height() * 0.5));
+    auto* source_name_label = qobject_cast<QQuickItem*>(source_layer_row->findChild<QObject*>(
+        QStringLiteral("photoLayerNameLabel")));
+    if (source_name_label == nullptr || !item_visible(source_name_label))
+      return fail("photo layer hierarchy drag fixture should expose the source name as a drag target");
+    const auto source_pointer = source_name_label->mapToScene(
+        QPointF(source_name_label->width() * 0.5, source_name_label->height() * 0.5));
     const auto target_pointer = pointer_item->mapToScene(QPointF(pointer_x, pointer_y));
     if (drag_window == nullptr)
       return fail("photo layer hierarchy drag fixture should be attached to the live editor window");
@@ -2976,7 +3006,7 @@
       photo_layer_inline_actions_contract !=
           QStringLiteral("layer-actions:v2|lazy:true|active:false|hover-instantiates:false|precision-controls:properties-panel|keyboard-accessible:properties-panel|disabled-reasons:true") ||
       photo_layer_fixed_state_action_zone_contract !=
-          QStringLiteral("layer-row-action-zone:v6|component:LayerRowActionZone|normal-width:edit-visibility-more|brush-width:edit-more|edit:labeled|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-no-shift:true|no-elide:true") ||
+          QStringLiteral("layer-row-action-zone:v7|component:LayerRowActionZone|wide:edit-visibility-more|medium:edit-more|compact:more|brush:more|edit:labeled|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-no-shift:true|no-elide:true") ||
       photo_layer_structure_actions_contract !=
           QStringLiteral("layer-structure-actions:v2|lazy:true|active:false|hover-instantiates:false|reorder:properties-menu|overflow-menu:true|destructive-separated:true|disabled-reasons:true") ||
       photo_layer_reorder_contract !=

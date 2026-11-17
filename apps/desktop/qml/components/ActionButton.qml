@@ -5,7 +5,7 @@ import QtQuick.Layouts
 Button {
     id: root
 
-    property string tone: "secondary"
+    property string tone: "quiet"
     property bool active: false
     property color accent: theme.accentWarm400
     property string iconName: ""
@@ -17,8 +17,12 @@ Button {
     property string disabledFallbackReason: "Unavailable in the current state."
     property bool compact: false
     property bool showText: true
+    property bool showLeadingIcon: false
+    readonly property bool commandIconVisible: (!showText || text.length === 0 || showLeadingIcon) && (iconName.length > 0 || iconText.length > 0)
     property bool allowLabelWrap: false
     property bool embedded: false
+    property bool alignTextLeft: false
+    property int surfaceVerticalInset: 0
     property bool square: !showText && (iconName.length > 0 || iconText.length > 0)
     property string role: square ? "icon" : tone
     property bool slashAccent: false
@@ -29,6 +33,12 @@ Button {
     readonly property bool primaryTone: root.tone === "primary"
     readonly property bool dangerTone: root.tone === "danger"
     readonly property bool quietTone: root.embedded || root.tone === "quiet" || root.tone === "tertiary"
+    // Measure the text directly: a parent Layout may still hold the previous
+    // implicit width for a frame when an action's label changes.
+    readonly property real commandContentWidth: Math.ceil((root.showText ? contentLabel.implicitWidth : 0)
+        + (root.commandIconVisible ? (root.iconName.length > 0 ? theme.scaled(root.compact ? 14 : 16) : iconLabel.implicitWidth) : 0)
+        + (root.showText && root.commandIconVisible ? theme.gapDense : 0))
+    readonly property real commandNaturalWidth: commandContentWidth + leftPadding + rightPadding + theme.space2
     readonly property int minimumPointerHeight: root.primaryTone || root.dangerTone
                                                 ? theme.controlHeightPrimary
                                                 : (root.compact
@@ -85,9 +95,9 @@ Button {
                        : minimumPointerHeight)
     implicitWidth: !showText && (iconName.length > 0 || iconText.length > 0)
                    ? implicitHeight
-                   : Math.max(compact ? 54 : 58,
+                   : Math.max(theme.scaled(compact ? 44 : 48),
                               minimumReadableWidth,
-                              contentRow.implicitWidth + leftPadding + rightPadding
+                              commandNaturalWidth
                               + (root.slashAccent && root.clippedShape && !root.embedded ? theme.space8 : 0))
     font.family: theme.fontUi
     font.pixelSize: compact ? theme.typeBody : theme.typeControl
@@ -130,26 +140,32 @@ Button {
     }
 
     background: CommandButtonSurface {
+        tone: root.tone
+        anchors.fill: parent
+        anchors.topMargin: root.surfaceVerticalInset
+        anchors.bottomMargin: root.surfaceVerticalInset
         cornerRadius: theme.radiusControl
         hovered: root.hovered
         pressed: root.down
         selected: root.active
         interactiveEnabled: root.enabled
         fillColor: theme.commandFill(root.tone, root.active, root.hovered, root.down, root.enabled, root.quietTone)
-        borderWidth: theme.commandBorderWidth(root.visualFocus)
-        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
+        focused: root.visualFocus
     }
 
     contentItem: Item {
         RowLayout {
             id: contentRow
-            anchors.centerIn: parent
-            width: Math.min(implicitWidth, Math.max(0, parent.width))
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.horizontalCenter: root.alignTextLeft ? undefined : parent.horizontalCenter
+            anchors.left: root.alignTextLeft ? parent.left : undefined
+            width: Math.min(root.commandContentWidth, Math.max(0, parent.width))
             height: implicitHeight
-            spacing: (root.iconName.length > 0 || root.iconText.length > 0) && root.showText ? theme.gapDense : 0
+            spacing: root.commandIconVisible && root.showText ? theme.gapDense : 0
 
             AppIcon {
-                visible: root.iconName.length > 0
+                objectName: "sharedCommandIcon"
+                visible: root.commandIconVisible && root.iconName.length > 0
                 name: root.iconName
                 color: root.tone === "primary"
                        ? (!root.enabled ? theme.textMuted
@@ -163,7 +179,8 @@ Button {
             }
 
             Text {
-                visible: root.iconName.length === 0 && root.iconText.length > 0
+                id: iconLabel
+                visible: root.commandIconVisible && root.iconName.length === 0 && root.iconText.length > 0
                 text: root.iconText
                 color: root.tone === "primary"
                        ? (!root.enabled ? theme.textMuted
@@ -171,7 +188,7 @@ Button {
                        : (root.tone === "danger" && root.enabled
                           ? root.resolvedAccent
                           : (root.enabled ? (root.active ? root.accent : theme.textMain) : theme.alpha(theme.textMuted, 0.84)))
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: root.compact ? theme.typeLabel : theme.typeControl
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignHCenter
@@ -181,6 +198,7 @@ Button {
 
             Text {
                 id: contentLabel
+                objectName: "sharedCommandLabel"
                 visible: root.showText
                 text: root.text
                 color: root.tone === "primary"
@@ -197,9 +215,10 @@ Button {
                 font.letterSpacing: 0
                 wrapMode: root.allowLabelWrap ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap
                 elide: Text.ElideNone
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 10
+                fontSizeMode: Text.FixedSize
                 maximumLineCount: root.allowLabelWrap ? 2 : 1
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.alignment: Qt.AlignCenter
             }
         }

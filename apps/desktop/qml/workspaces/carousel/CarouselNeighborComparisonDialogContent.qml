@@ -54,7 +54,8 @@ ColumnLayout {
                 Layout.fillWidth: true
                 text: "Live board previews · temporary comparison · never exports"
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 elide: Text.ElideNone

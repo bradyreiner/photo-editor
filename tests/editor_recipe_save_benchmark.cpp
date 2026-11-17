@@ -15,8 +15,25 @@
 #include <cmath>
 #include <iostream>
 #include <cstring>
+#if defined(Q_OS_UNIX)
+#include <sys/resource.h>
+#endif
 
 namespace {
+qint64 process_peak_rss_bytes() {
+#if defined(Q_OS_UNIX)
+  struct rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage) == 0) {
+#if defined(Q_OS_DARWIN)
+    return static_cast<qint64>(usage.ru_maxrss);
+#else
+    return static_cast<qint64>(usage.ru_maxrss) * 1024;
+#endif
+  }
+#endif
+  return 0;
+}
+
 int paint_checkpoint_benchmark() {
   using namespace photo_editor::desktop;
   QTemporaryDir root;
@@ -85,12 +102,322 @@ int paint_checkpoint_benchmark() {
       .toJson(QJsonDocument::Compact).constData() << '\n';
   return 0;
 }
+
+int sparse_paint_checkpoint_benchmark(bool dense) {
+  using namespace photo_editor::desktop;
+  QTemporaryDir root;
+  if (!root.isValid()) return 1;
+  constexpr int tile_count = 192;
+  const int iterations = dense ? 7 : 33;
+  QByteArray raw(kPhotoPaintTileEdge * kPhotoPaintTileEdge * 16, '\0');
+  quint32 random = 0x12345678U;
+  for (int pixel = 0; pixel < kPhotoPaintTileEdge * kPhotoPaintTileEdge; ++pixel) {
+    for (int channel = 0; channel < 4; ++channel) {
+      random ^= random << 13; random ^= random >> 17; random ^= random << 5;
+      const float value = channel == 3 ? 1.0f : static_cast<float>(random & 0xffffU) / 65535.0f;
+      quint32 bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      qToLittleEndian(bits, raw.data() + pixel * 16 + channel * 4);
+    }
+  }
+  auto changed_raw = raw;
+  const float changed_red = 0.5f;
+  quint32 changed_red_bits;
+  std::memcpy(&changed_red_bits, &changed_red, sizeof(changed_red));
+  qToLittleEndian(changed_red_bits, changed_raw.data());
+  const auto original_tile = QString::fromLatin1(qCompress(raw, 1).toBase64());
+  const auto changed_tile = QString::fromLatin1(qCompress(changed_raw, 1).toBase64());
+  if (original_tile == changed_tile) return 1;
+  EditRecipeState state;
+  for (int layer_index = 0; layer_index < 2; ++layer_index) {
+    auto payload = empty_photo_paint_tiles(QColorSpace(QColorSpace::SRgbLinear));
+    QVariantMap tiles;
+    for (int index = 0; index < tile_count; ++index)
+      tiles.insert(QStringLiteral("%1,%2").arg(index % 48).arg(index / 48), original_tile);
+    payload.insert("tiles", tiles);
+    state.layers.append(QVariantMap{{"id", QStringLiteral("cutout-%1").arg(layer_index)},
+        {"kind", "pixel"}, {"name", "Cutout"}, {"pixelWidth", 6144}, {"pixelHeight", 4096},
+        {"x", 0}, {"paintTiles", payload}});
+  }
+  state.layers.append(QVariantMap{{"id", "text"}, {"kind", "text"}, {"text", "Trip"}});
+  state = parse_edit_recipe_json(serialize_edit_recipe_json(state));
+
+  QVector<double> samples;
+  QJsonArray raw_sample_ms;
+  double cold_ms = 0;
+  qint64 initial_bytes = 0;
+  qint64 bytes = 0;
+  qint64 write_peak_rss = 0;
+  bool use_changed_tile = false;
+  QString error;
+  const auto snapshot = [&]() {
+    EditorRecipeSaveCheckpoint checkpoint;
+    checkpoint.pending.append({.asset_id = "paint-asset", .file_path = "/benchmark.png", .state = state});
+    return checkpoint;
+  };
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "sparse-paint-checkpoint-benchmark", &recovered, &error)) return 1;
+    QElapsedTimer cold_timer;
+    cold_timer.start();
+    if (!journal.write(snapshot(), &error)) { std::cerr << error.toStdString(); return 1; }
+    cold_ms = static_cast<double>(cold_timer.nsecsElapsed()) / 1e6;
+    initial_bytes = QFileInfo(journal.path()).size();
+
+    for (int sample = 0; sample < iterations; ++sample) {
+      use_changed_tile = !use_changed_tile;
+      auto layer = state.layers[0].toMap();
+      auto paint = layer.value("paintTiles").toMap();
+      auto tiles = paint.value("tiles").toMap();
+      if (dense) {
+        for (int index = 0; index < tile_count; ++index) {
+          const auto key = QStringLiteral("%1,%2").arg(index % 48).arg(index / 48);
+          tiles.insert(key, use_changed_tile ? changed_tile : original_tile);
+        }
+      } else {
+        tiles.insert("0,0", use_changed_tile ? changed_tile : original_tile);
+      }
+      paint.insert("tiles", tiles);
+      layer.insert("paintTiles", paint);
+      state.layers[0] = layer;
+
+      const auto checkpoint = snapshot();
+      QElapsedTimer timer;
+      timer.start();
+      if (!journal.write(checkpoint, &error)) { std::cerr << error.toStdString(); return 1; }
+      const auto elapsed = static_cast<double>(timer.nsecsElapsed()) / 1e6;
+      samples.append(elapsed);
+      raw_sample_ms.append(elapsed);
+    }
+    bytes = QFileInfo(journal.path()).size();
+#if defined(Q_OS_UNIX)
+    write_peak_rss = process_peak_rss_bytes();
+#endif
+  }
+
+  // The journal namespace also incorporates the configured catalog authority.
+  // Locate the one isolated checkpoint instead of reconstructing its filename.
+  QDir outbox(QDir(root.path()).filePath(QStringLiteral("recipe-outbox")));
+  const auto checkpoint_files = outbox.entryInfoList({QStringLiteral("*.json")}, QDir::Files);
+  if (checkpoint_files.size() != 1) return 1;
+  QFile input(checkpoint_files.first().absoluteFilePath());
+  if (!input.open(QIODevice::ReadOnly)) return 1;
+  const auto journal_bytes = input.readAll();
+  const auto hash = QString::fromLatin1(
+      QCryptographicHash::hash(journal_bytes, QCryptographicHash::Sha256).toHex());
+  input.close();
+
+  EditorRecipeSaveJournal reopened;
+  EditorRecipeSaveCheckpoint recovered;
+  QElapsedTimer recovery_timer;
+  recovery_timer.start();
+  const bool opened = reopened.open(root.path(), "sparse-paint-checkpoint-benchmark", &recovered, &error);
+  const double recovery_ms = static_cast<double>(recovery_timer.nsecsElapsed()) / 1e6;
+  if (!opened || recovered.pending.size() != 1 || recovered.active || recovered.retry_migration ||
+      recovered.pending.first().state.layers != state.layers) return 1;
+  PhotoPaintSurface surface;
+  const auto recovered_layer = recovered.pending.first().state.layers.first().toMap();
+  if (!surface.load(recovered_layer, &error) ||
+      surface.tile(0, 0).isNull() || (dense && surface.tile(47, 3).isNull())) return 1;
+  const auto expected_other_tile = dense ? changed_tile : original_tile;
+  if (!use_changed_tile || surface.tiles.value("0,0").toString() != changed_tile ||
+      surface.tiles.value(dense ? "47,3" : "1,0").toString() != expected_other_tile) return 1;
+  const auto process_peak_rss = process_peak_rss_bytes();
+  const bool journal_uses_delta_records = journal_bytes.contains("photo-editor-recipe-delta:v1");
+  if (dense && journal_uses_delta_records) return 1;
+
+  std::sort(samples.begin(), samples.end());
+  const auto percentile = [&](double p) {
+    return samples.at(static_cast<qsizetype>(std::ceil(p * samples.size())) - 1);
+  };
+  std::cout << QJsonDocument(QJsonObject{{"scenario", dense ? "two-cutouts-all-tiles-changing" : "two-cutouts-one-changing-tile"},
+      {"iterations", iterations}, {"checkpoint_bytes", bytes}, {"initial_checkpoint_bytes", initial_bytes},
+      {"journal_growth_bytes", bytes - initial_bytes}, {"cold_ms", cold_ms},
+      {"tile_string_bytes", original_tile.toLatin1().size()}, {"p50_ms", percentile(0.50)},
+      {"p95_ms", percentile(0.95)}, {"max_ms", samples.last()}, {"samples_ms", raw_sample_ms},
+      {"recovery_ms", recovery_ms},
+      {"write_peak_rss_bytes", write_peak_rss}, {"peak_rss_bytes", process_peak_rss},
+      {"sha256", hash}, {"journal_uses_delta_records", journal_uses_delta_records},
+      {"reopen_exact", true}, {"tile_decode", true}})
+      .toJson(QJsonDocument::Compact).constData() << '\n';
+  return 0;
+}
+
+int mixed_paint_checkpoint_benchmark() {
+  using namespace photo_editor::desktop;
+  QTemporaryDir root;
+  if (!root.isValid()) return 1;
+  constexpr int tile_count = 192;
+  constexpr int cycles = 7;
+  QByteArray raw(kPhotoPaintTileEdge * kPhotoPaintTileEdge * 16, '\0');
+  quint32 random = 0x12345678U;
+  for (int pixel = 0; pixel < kPhotoPaintTileEdge * kPhotoPaintTileEdge; ++pixel) {
+    for (int channel = 0; channel < 4; ++channel) {
+      random ^= random << 13; random ^= random >> 17; random ^= random << 5;
+      const float value = channel == 3 ? 1.0f : static_cast<float>(random & 0xffffU) / 65535.0f;
+      quint32 bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      qToLittleEndian(bits, raw.data() + pixel * 16 + channel * 4);
+    }
+  }
+  auto changed_raw = raw;
+  const float changed_red = 0.5f;
+  quint32 changed_red_bits;
+  std::memcpy(&changed_red_bits, &changed_red, sizeof(changed_red));
+  qToLittleEndian(changed_red_bits, changed_raw.data());
+  const auto original_tile = QString::fromLatin1(qCompress(raw, 1).toBase64());
+  const auto changed_tile = QString::fromLatin1(qCompress(changed_raw, 1).toBase64());
+  if (original_tile == changed_tile) return 1;
+
+  EditRecipeState state;
+  for (int layer_index = 0; layer_index < 2; ++layer_index) {
+    auto payload = empty_photo_paint_tiles(QColorSpace(QColorSpace::SRgbLinear));
+    QVariantMap tiles;
+    for (int index = 0; index < tile_count; ++index)
+      tiles.insert(QStringLiteral("%1,%2").arg(index % 48).arg(index / 48), original_tile);
+    payload.insert("tiles", tiles);
+    state.layers.append(QVariantMap{{"id", QStringLiteral("cutout-%1").arg(layer_index)},
+        {"kind", "pixel"}, {"name", "Cutout"}, {"pixelWidth", 6144}, {"pixelHeight", 4096},
+        {"x", 0}, {"paintTiles", payload}});
+  }
+  state.layers.append(QVariantMap{{"id", "text"}, {"kind", "text"}, {"text", "Trip"}});
+  state = parse_edit_recipe_json(serialize_edit_recipe_json(state));
+
+  QString error;
+  QVector<double> tile_samples;
+  QVector<double> exposure_samples;
+  QVector<double> transform_samples;
+  double cold_ms = 0.0;
+  qint64 initial_bytes = 0;
+  qint64 checkpoint_bytes = 0;
+  qint64 write_peak_rss = 0;
+  bool use_changed_tile = false;
+  const auto snapshot = [&]() {
+    EditorRecipeSaveCheckpoint checkpoint;
+    checkpoint.pending.append({.asset_id = "paint-asset", .file_path = "/benchmark.png", .state = state});
+    return checkpoint;
+  };
+
+  QString path;
+  {
+    EditorRecipeSaveJournal journal;
+    EditorRecipeSaveCheckpoint recovered;
+    if (!journal.open(root.path(), "mixed-paint-checkpoint-benchmark", &recovered, &error)) {
+      std::cerr << error.toStdString();
+      return 1;
+    }
+    path = journal.path();
+    QElapsedTimer cold_timer;
+    cold_timer.start();
+    if (!journal.write(snapshot(), &error)) { std::cerr << error.toStdString(); return 1; }
+    cold_ms = static_cast<double>(cold_timer.nsecsElapsed()) / 1e6;
+    initial_bytes = QFileInfo(path).size();
+
+    const auto write_sample = [&](QVector<double>* samples) {
+      const auto checkpoint = snapshot();
+      QElapsedTimer timer;
+      timer.start();
+      if (!journal.write(checkpoint, &error)) return false;
+      samples->append(static_cast<double>(timer.nsecsElapsed()) / 1e6);
+      return true;
+    };
+    for (int cycle = 0; cycle < cycles; ++cycle) {
+      use_changed_tile = !use_changed_tile;
+      auto first_layer = state.layers[0].toMap();
+      auto paint = first_layer.value("paintTiles").toMap();
+      auto tiles = paint.value("tiles").toMap();
+      tiles.insert("0,0", use_changed_tile ? changed_tile : original_tile);
+      paint.insert("tiles", tiles);
+      first_layer.insert("paintTiles", paint);
+      state.layers[0] = first_layer;
+      if (!write_sample(&tile_samples)) { std::cerr << error.toStdString(); return 1; }
+
+      state.exposure = 0.01 * static_cast<double>(cycle + 1);
+      if (!write_sample(&exposure_samples)) { std::cerr << error.toStdString(); return 1; }
+
+      first_layer = state.layers[0].toMap();
+      first_layer.insert("x", cycle + 1);
+      state.layers[0] = first_layer;
+      if (!write_sample(&transform_samples)) { std::cerr << error.toStdString(); return 1; }
+    }
+    checkpoint_bytes = QFileInfo(path).size();
+#if defined(Q_OS_UNIX)
+    write_peak_rss = process_peak_rss_bytes();
+#endif
+  }
+
+  QFile input(path);
+  if (!input.open(QIODevice::ReadOnly)) return 1;
+  const auto journal_bytes = input.readAll();
+  const auto hash = QString::fromLatin1(
+      QCryptographicHash::hash(journal_bytes, QCryptographicHash::Sha256).toHex());
+  input.close();
+
+  EditorRecipeSaveJournal reopened;
+  EditorRecipeSaveCheckpoint recovered;
+  QElapsedTimer recovery_timer;
+  recovery_timer.start();
+  const bool opened = reopened.open(root.path(), "mixed-paint-checkpoint-benchmark", &recovered, &error);
+  const double recovery_ms = static_cast<double>(recovery_timer.nsecsElapsed()) / 1e6;
+  if (!opened || recovered.pending.size() != 1 || recovered.active || recovered.retry_migration ||
+      recovered.pending.first().state != state ||
+      recovered.pending.first().state.layers != state.layers ||
+      recovered.pending.first().state.exposure != state.exposure) return 1;
+  const auto recovered_layer = recovered.pending.first().state.layers.first().toMap();
+  if (recovered_layer.value("x").toDouble() != cycles) return 1;
+  PhotoPaintSurface surface;
+  if (!surface.load(recovered_layer, &error) ||
+      surface.tiles.value("0,0").toString() != changed_tile ||
+      surface.tiles.value("1,0").toString() != original_tile) return 1;
+  const auto decoded_tile = surface.tile(0, 0, &error);
+  QImage expected_tile(reinterpret_cast<const uchar*>(changed_raw.constData()),
+      kPhotoPaintTileEdge, kPhotoPaintTileEdge, kPhotoPaintTileEdge * 16,
+      QImage::Format_RGBA32FPx4_Premultiplied);
+  expected_tile.setColorSpace(QColorSpace(QColorSpace::SRgbLinear));
+  if (decoded_tile.isNull() || decoded_tile != expected_tile) return 1;
+
+  const auto summarize = [](const QVector<double>& samples) {
+    auto sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+    double sum = 0.0;
+    QJsonArray raw_samples;
+    for (const auto sample : samples) {
+      sum += sample;
+      raw_samples.append(sample);
+    }
+    const auto percentile = [&](double p) {
+      return sorted.at(static_cast<qsizetype>(std::ceil(p * sorted.size())) - 1);
+    };
+    return QJsonObject{{"samples_ms", raw_samples},
+        {"mean_ms", sum / samples.size()}, {"p50_ms", percentile(0.50)},
+        {"p95_ms", percentile(0.95)}, {"max_ms", sorted.last()}};
+  };
+  const auto process_peak_rss = process_peak_rss_bytes();
+  std::cout << QJsonDocument(QJsonObject{
+      {"scenario", "two-cutouts-tile-exposure-transform-interleaved"},
+      {"cycles", cycles}, {"writes_per_kind", cycles}, {"total_writes", cycles * 3},
+      {"write_order", QJsonArray{"tile", "exposure", "layer_x"}},
+      {"checkpoint_bytes", checkpoint_bytes}, {"initial_checkpoint_bytes", initial_bytes},
+      {"journal_growth_bytes", checkpoint_bytes - initial_bytes}, {"cold_ms", cold_ms},
+      {"tile_string_bytes", original_tile.toLatin1().size()},
+      {"tile", summarize(tile_samples)}, {"exposure", summarize(exposure_samples)},
+      {"transform", summarize(transform_samples)},
+      {"recovery_ms", recovery_ms},
+      {"write_peak_rss_bytes", write_peak_rss}, {"peak_rss_bytes", process_peak_rss},
+      {"sha256", hash}, {"reopen_exact", true}, {"changed_tile_decoded_exact", true}})
+      .toJson(QJsonDocument::Compact).constData() << '\n';
+  return 0;
+}
 }
 
 using namespace photo_editor::desktop;
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   if (app.arguments().contains("--paint-tiles")) return paint_checkpoint_benchmark();
+  if (app.arguments().contains("--paint-sparse")) return sparse_paint_checkpoint_benchmark(false);
+  if (app.arguments().contains("--paint-dense")) return sparse_paint_checkpoint_benchmark(true);
+  if (app.arguments().contains("--paint-mixed")) return mixed_paint_checkpoint_benchmark();
   if (argc == 2) {
     QJsonArray matrix;
     for (const auto* kind : {"brush", "alpha", "subject", "background", "sky", "depth", "linear", "radial"}) {
@@ -194,23 +521,37 @@ int main(int argc, char** argv) {
       }
     }
     if (edge > 0 && bytes < static_cast<qint64>(edge) * edge) return 1;
+    double recovery_ms = 0.0;
     {
       EditorRecipeSaveJournal reopened;
       EditorRecipeSaveCheckpoint recovered;
-      if (!reopened.open(root.path(), "benchmark-catalog", &recovered, &error) ||
+      QElapsedTimer recovery_timer;
+      recovery_timer.start();
+      const bool opened = reopened.open(root.path(), "benchmark-catalog", &recovered, &error);
+      recovery_ms = static_cast<double>(recovery_timer.nsecsElapsed()) / 1e6;
+      if (!opened ||
           recovered.pending.size() != 1 || recovered.active || recovered.retry_migration ||
           serialize_edit_recipe_json(recovered.pending.first().state) != serialize_edit_recipe_json(state) ||
           recovered.rejected.size() != (retained_rejected ? 1 : 0) ||
           (retained_rejected && serialize_edit_recipe_json(recovered.rejected.first().state) !=
                                    serialize_edit_recipe_json(retained_state))) return 1;
     }
+    QJsonArray raw_sample_us;
+    double sample_sum_us = 0.0;
+    for (const auto sample : samples) {
+      raw_sample_us.append(sample);
+      sample_sum_us += sample;
+    }
     std::sort(samples.begin(), samples.end());
     const auto percentile = [&](double p) { return samples.at(static_cast<qsizetype>(std::ceil(p * samples.size())) - 1); };
     results.append(QJsonObject{{"scenario", scenario}, {"iterations", iterations}, {"checkpoint_bytes", bytes},
-        {"cold_us", cold_us}, {"p50_us", percentile(0.5)}, {"p95_us", percentile(0.95)}, {"max_us", samples.last()},
+        {"cold_us", cold_us}, {"mean_us", sample_sum_us / samples.size()},
+        {"samples_us", raw_sample_us}, {"p50_us", percentile(0.5)},
+        {"p95_us", percentile(0.95)}, {"max_us", samples.last()}, {"recovery_ms", recovery_ms},
         {"reopen_exact", true}});
   }
   std::cout << QJsonDocument(QJsonObject{{"schema", "recipe-checkpoint-benchmark:v1"},
-      {"changed_edit_each_iteration", true}, {"results", results}}).toJson(QJsonDocument::Indented).toStdString();
+      {"changed_edit_each_iteration", true},
+      {"peak_rss_bytes", process_peak_rss_bytes()}, {"results", results}}).toJson(QJsonDocument::Indented).toStdString();
   return 0;
 }

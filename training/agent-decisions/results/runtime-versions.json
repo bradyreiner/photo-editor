@@ -1,0 +1,7 @@
+{
+  "mlx": "0.32.4",
+  "mlx-lm": "0.32.2",
+  "mlx-vlm": "0.7.12",
+  "transformers": "5.23.0",
+  "jsonschema": "4.26.0"
+}

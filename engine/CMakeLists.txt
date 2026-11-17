@@ -6,6 +6,7 @@ set(photo_engine_sources
   src/pipeline/color_blur_runtime.cpp
   src/pipeline/photo_effects.cpp
   src/pipeline/photo_effect_codec.cpp
+  src/pipeline/layer_styles.cpp
   src/pipeline/photo_optical_effects.cpp
   src/pipeline/photo_artistic_effects.cpp
   src/pipeline/color_control_semantics.cpp

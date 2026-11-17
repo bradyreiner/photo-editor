@@ -1,3 +1,4 @@
+#include "qml_style_policy.h"
 #include <QAccessible>
 #include <QCoreApplication>
 #include <QDir>
@@ -7,9 +8,6 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QKeyEvent>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QLineF>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQmlContext>
@@ -34,6 +32,11 @@ void settle() {
 int fail(const char* message) {
   std::cerr << message << '\n';
   return 1;
+}
+bool valid_style(QObject* root) {
+  const auto issues = qml_popup_style_violations(root);
+  for (const auto& issue : issues) std::cerr << issue.toStdString() << '\n';
+  return issues.isEmpty();
 }
 QQuickItem* find_item(QQuickItem* parent, const QString& name) {
   if (parent->objectName() == name)
@@ -65,36 +68,44 @@ QQuickItem* find_visible_item(QQuickItem* parent, const QString& name) {
 bool inside_screen(QQuickItem* item, QQuickItem* screen) {
   return item && screen->boundingRect().contains(item->mapRectToItem(screen, item->boundingRect()));
 }
+bool accessible_name_and_bounds(QQuickItem* item, const QString& expected_name) {
+  if (!item) return false;
+  auto* accessible = QAccessible::queryAccessibleInterface(item);
+  if (!accessible) return false;
+  const auto name = accessible->text(QAccessible::Name);
+  const auto bounds = accessible->rect();
+  return name == expected_name && bounds.width() > 0 && bounds.height() > 0;
+}
 void click_item(QQuickWindow* window, QQuickItem* item) {
   const auto position = item->mapToScene(item->boundingRect().center());
   QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, position.toPoint());
   settle();
 }
-// Animator values live in the scene graph until an animation finishes. Read
-// the rendered local feet instead of a GUI property that no longer ticks.
-bool observe_rendered_legs(QQuickItem* character, QImage& previous) {
-  if (!character->property("motionEnabled").toBool() ||
-      (!character->property("walking").toBool() && !character->property("climbing").toBool()))
-    return false;
-  const auto grab = character->grabToImage();
-  if (!grab) return false;
-  bool ready = false;
-  const auto connection = QObject::connect(grab.data(), &QQuickItemGrabResult::ready,
-      character, [&ready] { ready = true; });
-  QElapsedTimer clock;
-  clock.start();
-  while (!ready && clock.elapsed() < 150) {
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-    QThread::msleep(2);
-  }
-  QObject::disconnect(connection);
-  if (!ready || grab->image().isNull()) return false;
-  const auto image = grab->image();
-  const auto feet = image.copy(0, static_cast<int>(image.height() * 0.75),
-      image.width(), static_cast<int>(image.height() * 0.23));
-  const bool moved = !previous.isNull() && previous.size() == feet.size() && previous != feet;
-  previous = feet;
-  return moved;
+// Shader animation values stay on the render thread. Inspect their rendered
+// result rather than a QML property that is only committed when the job ends.
+QImage rendered_item(QQuickItem* item) {
+  if (!item || !item->isVisible() || !item->window()) return {};
+  auto* window = item->window();
+  // Read the presented window. grabToImage creates an offscreen shader node
+  // which is not the node advanced by a render-thread UniformAnimator.
+  const auto frame = window->grabWindow();
+  const auto rect = item->mapRectToItem(window->contentItem(), item->boundingRect());
+  const auto ratio = frame.devicePixelRatio();
+  const QRect pixels(qFloor(rect.x() * ratio), qFloor(rect.y() * ratio),
+                     qCeil(rect.width() * ratio), qCeil(rect.height() * ratio));
+  return !frame.isNull() && frame.rect().contains(pixels) ? frame.copy(pixels) : QImage{};
+}
+bool activity_changes(QQuickItem* item) {
+  const auto before = rendered_item(item);
+  settle();
+  const auto after = rendered_item(item);
+  return !before.isNull() && !after.isNull() && before != after;
+}
+bool activity_is_static(QQuickItem* item) {
+  const auto before = rendered_item(item);
+  settle();
+  const auto after = rendered_item(item);
+  return !before.isNull() && !after.isNull() && before == after;
 }
 int verify_workspace_popup(QQuickWindow* window, QObject* fixture, QObject* controller,
                            QQmlPropertyMap& motion_settings, const QString& output) {
@@ -126,9 +137,9 @@ int verify_workspace_popup(QQuickWindow* window, QObject* fixture, QObject* cont
   auto* character = find_item(root, QStringLiteral("agentWorkspaceRoamingCharacter"));
   auto* workspace_close = find_item(root, QStringLiteral("agentWorkspaceStatusCloseButton"));
   auto* fast_model = find_item(root, QStringLiteral("agentWorkspaceUseFastModelButton"));
-  if (!workspace_robot || !workspace_robot->isVisible() || !character->property("articulated").toBool() ||
+  if (!workspace || !workspace_robot || workspace_robot->isVisible() || character ||
       find_item(workspace, QStringLiteral("agentWorkspaceHeldScreen")))
-    return fail("The workspace must use the free robot joint rig without a held screen");
+    return fail("Editor status must remain optical; the character belongs only in Agent view");
   const auto exact_error = QStringLiteral("photo.inspect_composition: Unknown composition argument: fontFamily");
   const auto long_detail = QStringLiteral("Font inspection requires a non-empty family.\n").repeated(30);
   const QVariantMap failure_report{
@@ -217,7 +228,7 @@ int verify_workspace_popup(QQuickWindow* window, QObject* fixture, QObject* cont
   settle();
   if (!workspace->property("dismissed").toBool() || workspace_robot->isVisible() ||
       !controller->property("lastRunReport").toMap().contains(QStringLiteral("failureReason")))
-    return fail("Close must hide the roaming robot and preserve the failed report");
+    return fail("Close must hide editor status and preserve the failed report");
   QMetaObject::invokeMethod(find_item(root, QStringLiteral("agentWorkspaceRestoreButton")), "click");
   settle();
   window->requestActivate();
@@ -227,7 +238,7 @@ int verify_workspace_popup(QQuickWindow* window, QObject* fixture, QObject* cont
   QCoreApplication::sendEvent(window, &workspace_escape);
   settle();
   if (!workspace->property("dismissed").toBool())
-    return fail("Escape must hide the roaming robot");
+    return fail("Escape must hide editor status");
 
   controller->setProperty("running", true);
   controller->setProperty("runEvents", QVariantList{QVariantMap{
@@ -238,139 +249,58 @@ int verify_workspace_popup(QQuickWindow* window, QObject* fixture, QObject* cont
   settle();
   settle();
   auto* sweep = find_item(root, QStringLiteral("agentWorkspaceActivitySweep"));
-  const auto old_robot_x = workspace_robot->x();
-  auto adjustment_event = rendering;
-  adjustment_event.insert(QStringLiteral("evidence"), QVariantMap{
-      {QStringLiteral("adjustmentKeys"), QStringList{QStringLiteral("exposure"), QStringLiteral("contrast")}}});
-  controller->setProperty("runEvents", QVariantList{model_output, adjustment_event});
-  bool legs_moved = false;
-  QImage previous_legs;
-  bool exposure_touched = false;
-  bool contrast_touched = false;
-  bool hand_aligned = false;
-  bool climbed = false;
-  bool jumped = false;
-  bool tool_extracted = false;
-  bool feet_grounded = false;
-  bool character_aside_shown = false;
-  for (int frame = 0; frame < 180; ++frame) {
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    QThread::msleep(60);
-    legs_moved = legs_moved || observe_rendered_legs(character, previous_legs);
-    climbed = climbed || workspace->property("locomotion").toString() == QStringLiteral("climb");
-    jumped = jumped || workspace->property("locomotion").toString() == QStringLiteral("jump");
-    const auto deployment = character->property("toolDeployProgress").toDouble();
-    tool_extracted = tool_extracted || (deployment > 0.1 && deployment < 0.9);
-    character_aside_shown = character_aside_shown || !workspace->property("characterAsideText").toString().isEmpty();
-    if (workspace->property("touchingControl").toBool()) {
-      const auto target = workspace->property("currentTouchTarget").toMap();
-      const auto label = target.value(QStringLiteral("label")).toString();
-      const auto local_hand = character->property("toolContactPoint").toPointF();
-      const auto hand = character->mapToItem(workspace, local_hand);
-      hand_aligned = hand_aligned || QLineF(hand, QPointF(target.value(QStringLiteral("x")).toDouble(),
-                                                         target.value(QStringLiteral("y")).toDouble())).length() < 2;
-      const auto feet = character->mapToItem(workspace, QPointF(character->width() / 2,
-                                            character->property("feetBaseline").toDouble()));
-      feet_grounded = feet_grounded || qAbs(feet.y() - target.value(QStringLiteral("surfaceRect")).toMap().value(QStringLiteral("y")).toDouble()) < 2;
-      const bool first_contact = (label == QStringLiteral("exposure") && !exposure_touched) ||
-                                 (label == QStringLiteral("contrast") && !contrast_touched);
-      exposure_touched = exposure_touched || label == QStringLiteral("exposure");
-      contrast_touched = contrast_touched || label == QStringLiteral("contrast");
-      if (!output.isEmpty() && first_contact)
-        window->grabWindow().save(QDir(output).filePath(QStringLiteral("robot-touch-%1.png").arg(label)));
-    }
+  workspace->setProperty("dismissed", false);
+  controller->setProperty("runEvents", QVariantList{model_output, rendering});
+  settle();
+  auto* model_text = find_item(root, QStringLiteral("agentWorkspaceModelOutput"));
+  if (!sweep || !sweep->isVisible() || !activity_changes(sweep) ||
+      workspace_robot->isVisible() || !model_text ||
+      !model_text->property("text").toString().contains(QStringLiteral("skin tones")))
+    return fail("Editor status must animate optically and distinguish actual model output without a character");
+  auto* active_task_detail = find_item(root, QStringLiteral("agentWorkspaceStatusDetail"));
+  auto* model_output_details = find_item(root, QStringLiteral("agentWorkspaceActivityDetailsButton"));
+  if (!active_task_detail || !active_task_detail->isVisible() ||
+      active_task_detail->property("text").toString() != QStringLiteral("Rendering the edited preview.") ||
+      !model_output_details || !model_output_details->isVisible() || !model_output_details->isEnabled() ||
+      model_text->isVisible())
+    return fail("The workspace should show one current task and keep model output behind its Details disclosure");
+  click_item(window, model_output_details);
+  if (!model_text->isVisible() ||
+      !model_text->property("text").toString().contains(QStringLiteral("MODEL > Warm the highlights")) ||
+      active_task_detail->property("text").toString() != QStringLiteral("Rendering the edited preview."))
+    return fail("Details should reveal actual model output while retaining the current task status");
+  if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath("workspace-model-output-details.png")))
+    return fail("Cannot capture the user-opened model output details");
+  click_item(window, model_output_details);
+  if (model_text->isVisible())
+    return fail("The model output Details disclosure should collapse on request");
+  const auto interface_scale = motion_settings.value(QStringLiteral("interfaceScale")).toDouble();
+  auto* stop_action = find_item(root, QStringLiteral("agentWorkspaceStatusStopButton"));
+  if (interface_scale >= 1.99 && interface_scale <= 2.01 &&
+      (!accessible_name_and_bounds(model_output_details, QStringLiteral("Show model output details")) ||
+       !accessible_name_and_bounds(stop_action, QStringLiteral("Stop")) ||
+       !inside_screen(model_output_details, root) || !inside_screen(stop_action, root)))
+    return fail("At 200% interface scale, Details and Stop must retain accessible names and visible bounds");
+  for (const auto size : {QSize(1024, 760), QSize(1280, 800)}) {
+    window->resize(size);
+    settle();
+    auto* stop = stop_action;
+    if (!inside_screen(workspace_close, root) || !inside_screen(stop, root) ||
+        !inside_screen(sweep, root) || !workspace_close->isEnabled() || !stop->isEnabled())
+      return fail("Optical status, Close, and Stop must fit the editor after resize");
+    if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath(
+        QStringLiteral("workspace-optical-%1x%2.png").arg(size.width()).arg(size.height()))))
+      return fail("Cannot capture the optical editor status");
   }
-  if (workspace->property("dismissed").toBool() || qAbs(workspace_robot->x() - old_robot_x) < 100 ||
-      !legs_moved || !climbed || !jumped || !tool_extracted || !feet_grounded || !character_aside_shown ||
-      !exposure_touched || !contrast_touched || !hand_aligned ||
-      !find_item(root, QStringLiteral("agentWorkspaceModelOutput"))->property("text").toString().contains(QStringLiteral("skin tones")))
-    return fail("The robot must climb panel edges, land with grounded feet, extract a tool and contact both actual slider knobs");
-  const auto old_target_x = workspace->property("currentTouchTarget").toMap().value(QStringLiteral("x")).toDouble();
-  window->resize(1100, 760);
-  bool resize_grounded = false;
-  for (int frame = 0; frame < 60; ++frame) {
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    QThread::msleep(60);
-    if (!workspace->property("touchingControl").toBool()) continue;
-    const auto target = workspace->property("currentTouchTarget").toMap();
-    const auto tip = character->mapToItem(workspace, character->property("toolContactPoint").toPointF());
-    const auto foot_y = character->mapToItem(workspace, QPointF(0, character->property("feetBaseline").toDouble())).y();
-    resize_grounded = resize_grounded || (qAbs(target.value(QStringLiteral("x")).toDouble() - old_target_x) > 100 &&
-        QLineF(tip, QPointF(target.value(QStringLiteral("x")).toDouble(), target.value(QStringLiteral("y")).toDouble())).length() < 2 &&
-        qAbs(foot_y - target.value(QStringLiteral("surfaceRect")).toMap().value(QStringLiteral("y")).toDouble()) < 2);
-  }
-  if (!resize_grounded) return fail("Resizing the window must move both the robot footing and its deployed tool to the actual control");
-  window->resize(1280, 800);
-  controller->setProperty("runEvents", QVariantList{QVariantMap{
-      {QStringLiteral("stage"), QStringLiteral("tool")}, {QStringLiteral("status"), QStringLiteral("running")},
-      {QStringLiteral("uiAnchor"), QStringLiteral("toolbar")},
-      {QStringLiteral("evidence"), QVariantMap{{QStringLiteral("operation"), QStringLiteral("add_text")}}}}});
-  bool text_tool_grounded = false;
-  for (int frame = 0; frame < 100; ++frame) {
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    QThread::msleep(60);
-    const auto target = workspace->property("currentTouchTarget").toMap();
-    if (!workspace->property("touchingControl").toBool() || target.value(QStringLiteral("label")).toString() != QStringLiteral("add_text")) continue;
-    const auto tip = character->mapToItem(workspace, character->property("toolContactPoint").toPointF());
-    const auto foot = character->mapToItem(workspace, QPointF(character->width() * 0.52, character->property("feetBaseline").toDouble()));
-    const auto surface = target.value(QStringLiteral("surfaceRect")).toMap();
-    text_tool_grounded = character->property("faceLeft").toBool() && character->property("tool").toString() == QStringLiteral("type") &&
-        QLineF(tip, QPointF(target.value(QStringLiteral("x")).toDouble(), target.value(QStringLiteral("y")).toDouble())).length() < 2 &&
-        qAbs(foot.y() - surface.value(QStringLiteral("y")).toDouble()) < 2 &&
-        foot.x() >= surface.value(QStringLiteral("x")).toDouble() && foot.x() <= surface.value(QStringLiteral("x")).toDouble() + surface.value(QStringLiteral("width")).toDouble();
-    if (text_tool_grounded && !output.isEmpty())
-      window->grabWindow().save(QDir(output).filePath(QStringLiteral("robot-type-tool.png")));
-    break;
-  }
-  if (!text_tool_grounded) return fail("The mirrored robot must perch on the narrow Text button and extract its type tool at the actual button");
-  const auto workspace_animation_output = qEnvironmentVariable("PHOTO_EDITOR_WORKSPACE_ANIMATION_DIR");
-  if (!workspace_animation_output.isEmpty()) {
-    QDir().mkpath(workspace_animation_output);
-    QFile trace(QDir(workspace_animation_output).filePath(QStringLiteral("frames.jsonl")));
-    if (!trace.open(QIODevice::WriteOnly | QIODevice::Truncate))
-      return fail("The native animation must be able to write its frame trace");
-    QElapsedTimer recording_clock;
-    recording_clock.start();
-    controller->setProperty("runEvents", QVariantList{model_output});
-    for (int frame = 0; frame < 520; ++frame) {
-      if (frame == 24)
-        controller->setProperty("runEvents", QVariantList{model_output, adjustment_event});
-      if (frame == 184)
-        controller->setProperty("runEvents", QVariantList{model_output, adjustment_event, QVariantMap{
-            {QStringLiteral("stage"), QStringLiteral("tool")}, {QStringLiteral("status"), QStringLiteral("running")},
-            {QStringLiteral("uiAnchor"), QStringLiteral("toolbar")},
-            {QStringLiteral("evidence"), QVariantMap{{QStringLiteral("operation"), QStringLiteral("add_text")}}},
-            {QStringLiteral("detail"), QStringLiteral("Adding the title text.")}}});
-      if (frame == 368)
-        controller->setProperty("runEvents", QVariantList{model_output, adjustment_event, QVariantMap{
-            {QStringLiteral("stage"), QStringLiteral("validate")}, {QStringLiteral("status"), QStringLiteral("running")},
-            {QStringLiteral("uiAnchor"), QStringLiteral("compare")}, {QStringLiteral("detail"), QStringLiteral("Checking the edited preview.")}}});
-      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-      QThread::msleep(30);
-      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-      window->grabWindow().save(QDir(workspace_animation_output).filePath(QStringLiteral("frame-%1.jpg").arg(frame, 3, 10, QLatin1Char('0'))), "JPG", 85);
-      trace.write(QJsonDocument(QJsonObject::fromVariantMap({
-          {QStringLiteral("frame"), frame}, {QStringLiteral("elapsedMs"), recording_clock.elapsed()},
-          {QStringLiteral("motion"), workspace->property("locomotion")},
-          {QStringLiteral("target"), workspace->property("currentTouchTarget").toMap()},
-          {QStringLiteral("tool"), character->property("tool")},
-          {QStringLiteral("deployment"), character->property("toolDeployProgress")},
-          {QStringLiteral("contact"), workspace->property("touchingControl")}})).toJson(QJsonDocument::Compact) + '\n');
-    }
-  }
-  if (!output.isEmpty())
-    window->grabWindow().save(QDir(output).filePath(QStringLiteral("workspace-working.png")));
   QMetaObject::invokeMethod(workspace_close, "click");
   settle();
-  if (!controller->property("running").toBool() || workspace_robot->isVisible())
-    return fail("Closing during work must hide the robot and cursor without cancelling the run");
+  if (!controller->property("running").toBool() || sweep->isVisible() || workspace_robot->isVisible())
+    return fail("Closing editor status must hide activity without cancelling the run");
   QMetaObject::invokeMethod(workspace, "restore");
   motion_settings.insert(QStringLiteral("reducedMotion"), true);
   settle();
-  const auto quiet_x = sweep->x();
-  settle();
-  if (character->property("motionEnabled").toBool() || character->property("legSwing").toDouble() != 0 || sweep->x() != quiet_x)
-    return fail("Reduced motion must freeze workspace robot motion and the loader");
+  if (sweep->property("animate").toBool() || !activity_is_static(sweep) || workspace_robot->isVisible())
+    return fail("Reduced motion must freeze optical activity and keep the character out of the editor");
   QMetaObject::invokeMethod(find_item(root, QStringLiteral("agentWorkspaceStatusStopButton")), "click");
   settle();
   if (controller->property("running").toBool() || controller->property("canceledReason").toString() != QStringLiteral("user_cancelled"))
@@ -380,6 +310,7 @@ int verify_workspace_popup(QQuickWindow* window, QObject* fixture, QObject* cont
   if (controller->property("selectedModelId").toString() != QStringLiteral("ollama-qwen36-35b") ||
       !controller->property("modelProbeRunning").toBool() || controller->property("modelDownloadCount").toInt() != 0)
     return fail("The failure popup must select and check the faster installed model without downloading another copy");
+  if (!valid_style(root)) return fail("Editor status must obey the shared application style");
   return 0;
 }
 
@@ -389,6 +320,7 @@ bool capture_session_state(QQuickWindow* window, QQuickItem* root, QQuickItem* s
   for (const auto size : {QSize(1366, 768), QSize(1440, 900), QSize(1920, 1080)}) {
     window->resize(size);
     settle();
+    if (!valid_style(root)) return false;
     for (const auto& name : item_names) {
       auto* item = find_item(root, name);
       if (!item || !item->isVisible() || !inside_screen(item, screen)) {
@@ -414,6 +346,9 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
   auto* terminal = find_item(root, QStringLiteral("agentSessionTerminal"));
   if (!dialog || !screen || !terminal)
     return fail("The injected session should open the conversational terminal");
+  auto* artwork = find_item(root, QStringLiteral("agentRobotScreenArtwork"));
+  if (!artwork || !artwork->property("popupSurfaceContract").isValid())
+    return fail("The Agent frame must use the shared popup surface");
   auto* session = qvariant_cast<QObject*>(dialog->property("sessionController"));
   auto* prompt = find_item(root, QStringLiteral("agentSessionPromptEditor"));
   auto* target = find_item(root, QStringLiteral("agentSessionTargetSummary"));
@@ -422,6 +357,20 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
   if (!dialog || !screen || !terminal || !session || !prompt || !target || !inspiration || !continue_button ||
       terminal->property("stage").toString() != QStringLiteral("idle"))
     return fail("The injected session should open directly on the conversational request page");
+
+  QVariant legacy_reads;
+  QMetaObject::invokeMethod(controller, "workflowReadCount", Qt::DirectConnection,
+      Q_RETURN_ARG(QVariant, legacy_reads));
+  if (legacy_reads.toInt() != 0)
+    return fail("Opening the session must not synchronously analyze legacy photo workflows");
+  controller->setProperty("modelProbeRunning", true);
+  controller->setProperty("selectedModelId", QStringLiteral("ollama-qwen36-35b"));
+  settle();
+  QMetaObject::invokeMethod(controller, "workflowReadCount", Qt::DirectConnection,
+      Q_RETURN_ARG(QVariant, legacy_reads));
+  if (legacy_reads.toInt() != 0 || !prompt->isVisible() || !prompt->isEnabled())
+    return fail("Model probe updates must keep the request page responsive without legacy project analysis");
+  controller->setProperty("modelProbeRunning", false);
 
   if (!capture_session_state(window, root, screen, QStringLiteral("prompt"),
           {QStringLiteral("agentSessionPromptEditor"), QStringLiteral("agentSessionTargetSummary"),
@@ -496,8 +445,8 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
   auto* second_plan_action = find_item(root, QStringLiteral("agentSessionPlanActionSummary-1"));
   auto* next_plan_actions = find_item(root, QStringLiteral("agentSessionPlanActionNextButton"));
   if (!exact_copy_review || !exact_copy ||
-      !exact_copy_review->property("text").toString().contains(QStringLiteral("SUGGESTED COPY")) ||
-      !exact_copy_review->property("text").toString().contains(QStringLiteral("BEFORE START")) ||
+      !exact_copy_review->property("text").toString().contains(QStringLiteral("Suggested copy")) ||
+      !exact_copy_review->property("text").toString().contains(QStringLiteral("review before starting")) ||
       !exact_copy->property("text").toString().contains(QStringLiteral("Suggested:")) ||
       !exact_copy->property("text").toString().contains(QStringLiteral("RIVER FEST: Join Us")))
     return fail("Model-proposed copy must remain visibly unapproved until Start");
@@ -537,7 +486,7 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
   settle();
   auto* canvas_summary = find_item(root, QStringLiteral("agentSessionPlanCanvasSummary"));
   if (!canvas_summary || !canvas_summary->isVisible() ||
-      canvas_summary->property("text").toString() != QStringLiteral("CANVAS · 1280 × 720"))
+      canvas_summary->property("text").toString() != QStringLiteral("Canvas · 1280 × 720"))
     return fail("A blank-canvas plan should show only its approved canvas dimensions");
   if (!capture_session_state(window, root, screen, QStringLiteral("blank-canvas-plan-summary"),
           {QStringLiteral("agentSessionPlanCanvasSummary"), QStringLiteral("agentSessionStartButton")}, output))
@@ -559,11 +508,86 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
       session->property("startCount").toInt() != 1 || !controller->property("running").toBool() ||
       fixture->property("draftRequestCount").toInt() != 0)
     return fail("Start should be the only action that approves and dispatches the session");
+  const QVariantMap model_output{
+      {QStringLiteral("stage"), QStringLiteral("plan-worker")},
+      {QStringLiteral("status"), QStringLiteral("complete")},
+      {QStringLiteral("elapsedMsSinceRunStart"), 12000},
+      {QStringLiteral("evidence"), QVariantMap{
+          {QStringLiteral("modelOutputAvailable"), true},
+          {QStringLiteral("modelOutput"), QStringLiteral("Warm the highlights and preserve natural skin tones.")}}}};
+  const QVariantMap rendering{
+      {QStringLiteral("stage"), QStringLiteral("render")},
+      {QStringLiteral("status"), QStringLiteral("running")},
+      {QStringLiteral("detail"), QStringLiteral("Rendering the edited preview.")},
+      {QStringLiteral("elapsedMsSinceRunStart"), 13000}};
+  controller->setProperty("runEvents", QVariantList{model_output, rendering});
+  settle();
   auto* activity = find_item(root, QStringLiteral("agentSessionWorkingActivity"));
   auto* stop = find_item(root, QStringLiteral("agentSessionStopButton"));
   auto* revert = find_item(root, QStringLiteral("agentSessionRevertButton"));
-  if (!activity || !stop || !revert || !activity->property("text").toString().contains(QStringLiteral("approved plan")))
-    return fail("Working should show factual status and accessible Stop and Revert controls");
+  auto* model_output_details = find_item(root, QStringLiteral("agentSessionActivityDetailsButton"));
+  auto* model_output_text = find_item(root, QStringLiteral("agentSessionModelOutputDetails"));
+  auto* activity_history = find_item(root, QStringLiteral("agentSessionActivityHistoryButton"));
+  auto* history_list = find_item(root, QStringLiteral("agentSessionActivityHistoryList"));
+  const bool current_task_ok = activity &&
+      activity->property("text").toString() == QStringLiteral("Rendering the edited preview.");
+  const bool details_action_ok = model_output_details && model_output_details->isVisible() &&
+                                 model_output_details->isEnabled();
+  const bool details_content_ok = model_output_text && !model_output_text->isVisible();
+  const bool history_action_ok = activity_history && activity_history->isVisible() &&
+                                 activity_history->isEnabled();
+  const bool history_content_ok = history_list && !history_list->isVisible() &&
+                                  history_list->property("count").toInt() == 2;
+  if (!activity || !stop || !revert || !stop->isEnabled() || !revert->isEnabled() ||
+      !current_task_ok || !details_action_ok || !details_content_ok ||
+      !history_action_ok || !history_content_ok) {
+    const auto run_events = controller->property("runEvents").toList();
+    auto* session_terminal = find_item(root, QStringLiteral("agentSessionTerminal"));
+    std::cerr << "Working disclosure diagnostics: stage=" << session->property("stage").toString().toStdString()
+              << " controllerEvents=" << run_events.size()
+              << " terminalEvents=" << (session_terminal ? session_terminal->property("activityEvents").toList().size() : -1)
+              << " terminalOutputLength=" << (session_terminal ? session_terminal->property("modelOutputText").toString().size() : -1)
+              << " task=" << (activity ? activity->property("text").toString().toStdString() : "<missing>")
+              << " taskVisible=" << (activity && activity->isVisible())
+              << " detailsAction=" << (model_output_details && model_output_details->isVisible())
+              << '/' << (model_output_details && model_output_details->isEnabled())
+              << " detailsContent=" << (model_output_text && model_output_text->isVisible())
+              << " historyAction=" << (activity_history && activity_history->isVisible())
+              << '/' << (activity_history && activity_history->isEnabled())
+              << " historyContent=" << (history_list && history_list->isVisible())
+              << " historyCount=" << (history_list ? history_list->property("count").toInt() : -1)
+              << " stop=" << (stop && stop->isEnabled()) << " revert=" << (revert && revert->isEnabled()) << '\n';
+    return fail("Working should show one current task while keeping model output and event history behind separate disclosures");
+  }
+  click_item(window, model_output_details);
+  if (!model_output_text->isVisible() ||
+      !model_output_text->property("text").toString().contains(QStringLiteral("skin tones")) ||
+      activity->property("text").toString() != QStringLiteral("Rendering the edited preview."))
+    return fail("Details should reveal the actual model response without replacing the current task");
+  if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath("session-working-model-output.png")))
+    return fail("Cannot capture the user-opened session model output");
+  click_item(window, model_output_details);
+  if (model_output_text->isVisible())
+    return fail("Model output details should collapse on request");
+  click_item(window, activity_history);
+  if (!history_list->isVisible() || history_list->property("count").toInt() != 2 ||
+      activity_history->property("text").toString() != QStringLiteral("Hide history") ||
+      activity->property("text").toString() != QStringLiteral("Rendering the edited preview."))
+    return fail("History should reveal recent events while keeping the current task and Stop/Revert actions available");
+  if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath("session-working-history.png")))
+    return fail("Cannot capture the user-opened session history");
+  const auto interface_scale = motion_settings.value(QStringLiteral("interfaceScale")).toDouble();
+  if (interface_scale >= 1.99 && interface_scale <= 2.01 &&
+      (!accessible_name_and_bounds(model_output_details, QStringLiteral("Show model output details")) ||
+       !accessible_name_and_bounds(activity_history, QStringLiteral("Hide recent activity history")) ||
+       !accessible_name_and_bounds(stop, QStringLiteral("Stop")) ||
+       !accessible_name_and_bounds(revert, QStringLiteral("Revert")) ||
+       !inside_screen(model_output_details, screen) || !inside_screen(activity_history, screen) ||
+       !inside_screen(stop, screen) || !inside_screen(revert, screen)))
+    return fail("At 200% interface scale, task details, history, Stop and Revert must retain accessible names and visible bounds");
+  click_item(window, activity_history);
+  if (history_list->isVisible() || activity_history->property("text").toString() != QStringLiteral("History"))
+    return fail("Recent task history should collapse back to the current task summary");
   if (!capture_session_state(window, root, screen, QStringLiteral("working"),
           {QStringLiteral("agentSessionWorkingActivity"), QStringLiteral("agentSessionStopButton"),
            QStringLiteral("agentSessionRevertButton")}, output))
@@ -575,467 +599,84 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
   if (dialog->isVisible() || !controller->property("running").toBool())
     return fail("Closing the terminal during work must hide it without cancelling the task");
 
-  // The fake task owner supplies an explicit, structured fixture receipt. The
-  // native rig resolves its exposure key to the visible InspectorSlider below;
-  // this proves the UI motion contract without presenting it as a production
-  // model event or as evidence of a real edit.
+  // Returning to the editor preserves execution without a roaming character.
   window->resize(1366, 768);
   motion_settings.insert(QStringLiteral("reducedMotion"), false);
   auto* workspace = find_item(root, QStringLiteral("workspacePopupFixture"));
   auto* workspace_robot = find_item(root, QStringLiteral("agentWorkspaceRoamingRobot"));
-  auto* workspace_character = find_item(root, QStringLiteral("agentWorkspaceRoamingCharacter"));
-  auto* exposure_slider = find_item(root, QStringLiteral("roamingExposureTarget"));
-  if (!workspace || !workspace_robot || !workspace_character || !exposure_slider)
-    return fail("The session fixture must expose the separate character and real inspector slider");
-  const auto motion_output = qEnvironmentVariable("PHOTO_EDITOR_WORKSPACE_ANIMATION_DIR");
-  QFile motion_trace;
-  QElapsedTimer motion_clock;
-  motion_clock.start();
-  if (!motion_output.isEmpty()) {
-    QDir().mkpath(motion_output);
-    motion_trace.setFileName(QDir(motion_output).filePath(QStringLiteral("session-frames.jsonl")));
-    if (!motion_trace.open(QIODevice::WriteOnly | QIODevice::Truncate))
-      return fail("The session fixture should write its native motion trace");
-  }
-  int motion_frame = 0;
-  bool capture_motion_frames = false;
-  bool climbed = false;
-  bool jumped = false;
-  bool legs_moved = false;
-  QImage previous_legs;
-  bool tool_extracted = false;
-  bool feet_grounded = false;
-  bool hand_aligned = false;
-  int contact_frames = 0;
-  qreal min_actor_x = 0;
-  qreal max_actor_x = 0;
-  const auto write_motion_row = [&](QVariantMap row) {
-    const QString phase = row.value(QStringLiteral("phase")).toString();
-    if (motion_trace.isOpen()) {
-      if (capture_motion_frames && motion_frame % 2 == 0 &&
-          !window->grabWindow().save(QDir(motion_output).filePath(
-              QStringLiteral("session-frame-%1.jpg").arg(motion_frame, 4, 10, QLatin1Char('0'))), "JPG", 85)) {
-        std::cerr << "Motion frame capture failed frame=" << motion_frame
-                  << " phase=" << phase.toStdString()
-                  << " elapsedMs=" << motion_clock.elapsed() << '\n';
-        return false;
-      }
-      row.insert(QStringLiteral("frame"), motion_frame);
-      row.insert(QStringLiteral("elapsedMs"), motion_clock.elapsed());
-      const QByteArray line = QJsonDocument(QJsonObject::fromVariantMap(row)).toJson(QJsonDocument::Compact) + '\n';
-      const qint64 written = motion_trace.write(line);
-      const bool flushed = motion_trace.flush();
-      if (written != static_cast<qint64>(line.size()) || !flushed) {
-        std::cerr << "Motion trace write failed frame=" << motion_frame
-                  << " phase=" << phase.toStdString()
-                  << " bytes=" << written << '/' << line.size()
-                  << " flushed=" << flushed
-                  << " error=" << motion_trace.errorString().toStdString() << '\n';
-        return false;
-      }
-    }
-    ++motion_frame;
-    return true;
-  };
-  workspace->setProperty("dismissed", true);
+  if (!workspace || !workspace_robot || workspace_robot->isVisible() ||
+      find_item(root, QStringLiteral("agentWorkspaceRoamingCharacter")))
+    return fail("The editor must not create or display the Agent character");
   fixture->setProperty("workspaceVisible", true);
-  const auto await_mapped_geometry = [&](int width, int height) {
-    QPointF previous_contact;
-    QPointF last_contact;
-    int stable_frames = 0;
-    for (int frame = 0; frame < 180; ++frame) {
-      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-      const bool size_matches = window->width() == width && window->height() == height &&
-                                qAbs(workspace->width() - width) < 0.5 &&
-                                qAbs(workspace->height() - height) < 0.5;
-      if (size_matches) {
-        const QPointF local_contact = qvariant_cast<QPointF>(exposure_slider->property("agentContactPoint"));
-        const QPointF contact = exposure_slider->mapToItem(workspace, local_contact.x(), local_contact.y());
-        last_contact = contact;
-        stable_frames = stable_frames > 0 && QLineF(contact, previous_contact).length() < 0.5
-                        ? stable_frames + 1 : 1;
-        previous_contact = contact;
-        if (!write_motion_row({{QStringLiteral("phase"), QStringLiteral("geometry-settling")},
-                               {QStringLiteral("windowWidth"), window->width()},
-                               {QStringLiteral("windowHeight"), window->height()},
-                               {QStringLiteral("workspaceWidth"), workspace->width()},
-                               {QStringLiteral("workspaceHeight"), workspace->height()},
-                               {QStringLiteral("stableFrames"), stable_frames},
-                               {QStringLiteral("sizeMatches"), size_matches},
-                               {QStringLiteral("controlVisible"), exposure_slider->isVisible()},
-                               {QStringLiteral("controlX"), contact.x()},
-                               {QStringLiteral("controlY"), contact.y()}}))
-          return false;
-        if (stable_frames >= 4)
-          return true;
-      } else {
-        stable_frames = 0;
-        if (!write_motion_row({{QStringLiteral("phase"), QStringLiteral("geometry-settling")},
-                               {QStringLiteral("windowWidth"), window->width()},
-                               {QStringLiteral("windowHeight"), window->height()},
-                               {QStringLiteral("workspaceWidth"), workspace->width()},
-                               {QStringLiteral("workspaceHeight"), workspace->height()},
-                               {QStringLiteral("stableFrames"), stable_frames},
-                               {QStringLiteral("sizeMatches"), size_matches},
-                               {QStringLiteral("controlVisible"), exposure_slider->isVisible()}}))
-          return false;
-      }
-      QThread::msleep(20);
-    }
-    std::cerr << "Geometry did not settle elapsedMs=" << motion_clock.elapsed()
-              << " requested=" << width << 'x' << height
-              << " window=" << window->width() << 'x' << window->height()
-              << " workspace=" << workspace->width() << 'x' << workspace->height()
-              << " slider=" << last_contact.x() << ',' << last_contact.y()
-              << " stableFrames=" << stable_frames
-              << " visible=" << exposure_slider->isVisible() << '\n';
-    return false;
-  };
-  if (!await_mapped_geometry(1366, 768))
-    return fail("The native window and inspector anchor must settle at 1366x768 before character motion starts");
-
-  // Render/proof receipts can carry adjustmentKeys as provenance about the
-  // pixels that were checked. Those keys must not send the character back to
-  // sliders as though the edit were being applied again.
-  const auto render_proof_does_not_replay_adjustments = [workspace](const QString& stage) {
-    const QVariantMap event{
-        {QStringLiteral("stage"), stage},
-        {QStringLiteral("uiAnchor"), QStringLiteral("inspector")},
-        {QStringLiteral("evidence"), QVariantMap{
-             {QStringLiteral("operation"), QStringLiteral("exposure")},
-             {QStringLiteral("adjustmentKeys"), QStringList{QStringLiteral("exposure")}}}}};
-    QVariant routed_keys;
-    return QMetaObject::invokeMethod(
-               workspace, "eventMotionKeys", Qt::DirectConnection,
-               Q_RETURN_ARG(QVariant, routed_keys),
-               Q_ARG(QVariant, QVariant(event))) && routed_keys.toList().isEmpty();
-  };
-  if (!render_proof_does_not_replay_adjustments(QStringLiteral("render")) ||
-      !render_proof_does_not_replay_adjustments(QStringLiteral("proof")))
-    return fail("Render and proof adjustment provenance must not retrigger slider traversal");
-
-  // Inject the explicit UI-fixture receipt only after the actual native
-  // inspector geometry is stable. It drives the same anchor resolver used by
-  // production activity, but it is not represented as a production receipt.
-  // `act` is the real adjustment/application stage; adjustmentKeys are an
-  // explicit fixture extension used only to verify mapped slider contact.
-  const QVariantMap fixture_receipt{
-      {QStringLiteral("stage"), QStringLiteral("act")},
-      {QStringLiteral("label"), QStringLiteral("Apply draft")},
-      {QStringLiteral("status"), QStringLiteral("running")},
-      {QStringLiteral("detail"), QStringLiteral("Applying the approved exposure adjustment to the selected target.")},
-      {QStringLiteral("uiAnchor"), QStringLiteral("inspector")},
-      {QStringLiteral("fixtureReceipt"), QStringLiteral("agent-session-ui-test")},
-      {QStringLiteral("evidence"), QVariantMap{
-          {QStringLiteral("assetId"), QStringLiteral("asset-1")},
-          {QStringLiteral("operation"), QStringLiteral("apply-draft")},
-          {QStringLiteral("adjustmentKeys"), QStringList{QStringLiteral("exposure")}}}}};
-  controller->setProperty("runEvents", QVariantList{fixture_receipt});
-  const QVariantMap fixture_evidence = fixture_receipt.value(QStringLiteral("evidence")).toMap();
-  const QVariantList fixture_adjustment_keys = fixture_evidence.value(QStringLiteral("adjustmentKeys")).toList();
-  if (fixture_receipt.value(QStringLiteral("fixtureReceipt")).toString() !=
-          QStringLiteral("agent-session-ui-test") ||
-      fixture_receipt.value(QStringLiteral("stage")).toString() != QStringLiteral("act") ||
-      fixture_receipt.value(QStringLiteral("status")).toString() != QStringLiteral("running") ||
-      fixture_adjustment_keys.size() != 1 || fixture_adjustment_keys.constFirst().toString() != QStringLiteral("exposure"))
-    return fail("Session character motion must be driven by the clearly identified running fixture receipt");
-  QMetaObject::invokeMethod(workspace, "refreshActiveEvent", Qt::DirectConnection);
   workspace->setProperty("dismissed", false);
-  min_actor_x = workspace_robot->x();
-  max_actor_x = workspace_robot->x();
-  QMetaObject::invokeMethod(workspace, "startEventMotion", Qt::DirectConnection);
-  capture_motion_frames = true;
-  QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-  const QVariantMap event_at_start = workspace->property("activeEvent").toMap();
-  if (!write_motion_row({{QStringLiteral("phase"), QStringLiteral("fixture-event-start")},
-                         {QStringLiteral("expectedFixtureReceipt"), QStringLiteral("agent-session-ui-test")},
-                         {QStringLiteral("fixtureReceipt"), event_at_start.value(QStringLiteral("fixtureReceipt"))},
-                         {QStringLiteral("eventStage"), event_at_start.value(QStringLiteral("stage"))},
-                         {QStringLiteral("eventStatus"), event_at_start.value(QStringLiteral("status"))},
-                         {QStringLiteral("uiAnchor"), event_at_start.value(QStringLiteral("uiAnchor"))},
-                         {QStringLiteral("adjustmentKeys"), event_at_start.value(QStringLiteral("evidence")).toMap()
-                              .value(QStringLiteral("adjustmentKeys"))},
-                         {QStringLiteral("visible"), workspace_robot->isVisible()},
-                         {QStringLiteral("traveling"), workspace->property("traveling")},
-                         {QStringLiteral("locomotion"), workspace->property("locomotion")}}))
-    return fail("The motion trace should flush the fixture event before recording movement");
-  if (!workspace_robot->isVisible() ||
-      event_at_start.value(QStringLiteral("fixtureReceipt")).toString() != QStringLiteral("agent-session-ui-test")) {
-    std::cerr << "Fixture event not active elapsedMs=" << motion_clock.elapsed()
-              << " expected=" << fixture_receipt.value(QStringLiteral("fixtureReceipt")).toString().toStdString()
-              << " actual=" << event_at_start.value(QStringLiteral("fixtureReceipt")).toString().toStdString()
-              << " stage=" << event_at_start.value(QStringLiteral("stage")).toString().toStdString()
-              << " status=" << event_at_start.value(QStringLiteral("status")).toString().toStdString()
-              << " anchor=" << event_at_start.value(QStringLiteral("uiAnchor")).toString().toStdString()
-              << " keys=" << event_at_start.value(QStringLiteral("evidence")).toMap()
-                                  .value(QStringLiteral("adjustmentKeys")).toStringList().join(',').toStdString()
-              << " visible=" << workspace_robot->isVisible()
-              << " dismissed=" << workspace->property("dismissed").toBool()
-              << " traveling=" << workspace->property("traveling").toBool()
-              << " locomotion=" << workspace->property("locomotion").toString().toStdString() << '\n';
-    return fail("The separate character should follow the session fixture receipt while the terminal is hidden");
+  controller->setProperty("runEvents", QVariantList{QVariantMap{
+      {QStringLiteral("stage"), QStringLiteral("render")},
+      {QStringLiteral("status"), QStringLiteral("running")},
+      {QStringLiteral("detail"), QStringLiteral("Rendering the approved draft.")}}});
+  settle();
+  auto* sweep = find_item(root, QStringLiteral("agentWorkspaceActivitySweep"));
+  auto* workspace_close = find_item(root, QStringLiteral("agentWorkspaceStatusCloseButton"));
+  auto* activity_caption = find_item(root, QStringLiteral("agentWorkspaceActivityCaption"));
+  auto* status_detail = find_item(root, QStringLiteral("agentWorkspaceStatusDetail"));
+  auto* workspace_stop = find_item(root, QStringLiteral("agentWorkspaceStatusStopButton"));
+  const bool sweep_present = sweep != nullptr;
+  const bool sweep_visible = sweep && sweep->isVisible();
+  const bool sweep_changes = sweep_visible && activity_changes(sweep);
+  const bool close_visible = workspace_close && workspace_close->isVisible();
+  const bool controller_running = controller->property("running").toBool();
+  if (!sweep_present || !sweep_visible || !sweep_changes ||
+      !workspace_close || !close_visible || !controller_running) {
+    const auto item_bounds = [&](QQuickItem* item) {
+      if (!item) return QStringLiteral("<missing>");
+      const auto bounds = item->mapRectToItem(root, item->boundingRect());
+      return QStringLiteral("[%1,%2 %3x%4]")
+          .arg(bounds.x(), 0, 'f', 1).arg(bounds.y(), 0, 'f', 1)
+          .arg(bounds.width(), 0, 'f', 1).arg(bounds.height(), 0, 'f', 1);
+    };
+    const auto screenshot_path = output.isEmpty()
+        ? QDir::temp().filePath(QStringLiteral("looksy-agent-workspace-optical-failure.png"))
+        : QDir(output).filePath(QStringLiteral("session-editor-optical-failure-1366x768.png"));
+    const bool screenshot_saved = window->grabWindow().save(screenshot_path);
+    std::cerr << "Session workspace optical diagnostics: scale="
+              << motion_settings.value(QStringLiteral("interfaceScale")).toDouble()
+              << " fixtureVisible=" << fixture->property("workspaceVisible").toBool()
+              << " workspaceVisible=" << (workspace && workspace->isVisible())
+              << " dismissed=" << (workspace && workspace->property("dismissed").toBool())
+              << " compactStatus=" << (workspace && workspace->property("compactStatus").toBool())
+              << " running=" << controller_running
+              << " sweepPresent=" << sweep_present
+              << " sweepVisible=" << sweep_visible
+              << " sweepActive=" << (sweep && sweep->property("active").toBool())
+              << " sweepAnimate=" << (sweep && sweep->property("animate").toBool())
+              << " sweepReducedMotion=" << (sweep && sweep->property("reducedMotion").toBool())
+              << " sweepChanges=" << sweep_changes << " sweepBounds=" << item_bounds(sweep).toStdString()
+              << " captionVisible=" << (activity_caption && activity_caption->isVisible())
+              << " captionBounds=" << item_bounds(activity_caption).toStdString()
+              << " closeVisible=" << close_visible
+              << " closeEnabled=" << (workspace_close && workspace_close->isEnabled())
+              << " closeBounds=" << item_bounds(workspace_close).toStdString()
+              << " stopVisible=" << (workspace_stop && workspace_stop->isVisible())
+              << " stopBounds=" << item_bounds(workspace_stop).toStdString()
+              << " detailVisible=" << (status_detail && status_detail->isVisible())
+              << " detailText=" << (status_detail ? status_detail->property("text").toString().toStdString() : "<missing>")
+              << " detailBounds=" << item_bounds(status_detail).toStdString()
+              << " screenshot=" << screenshot_path.toStdString()
+              << " screenshotSaved=" << screenshot_saved << '\n';
+    return fail("The active session must keep factual optical status and Close available in the editor");
   }
-
-  const auto record_motion_frame = [&](const QString& phase, const QVariantMap& additional_checks) {
-    const QVariantMap target_map = workspace->property("currentTouchTarget").toMap();
-    const QVariantMap event_map = workspace->property("activeEvent").toMap();
-    const QVariantMap event_evidence = event_map.value(QStringLiteral("evidence")).toMap();
-    const QPointF slider_local = qvariant_cast<QPointF>(exposure_slider->property("agentContactPoint"));
-    const QPointF slider_position = exposure_slider->mapToItem(workspace, slider_local.x(), slider_local.y());
-    const QPointF target_position(target_map.value(QStringLiteral("x")).toDouble(),
-                                  target_map.value(QStringLiteral("y")).toDouble());
-    const QPointF hand_local = workspace_character->property("toolContactPoint").toPointF();
-    const QPointF hand_position = workspace_character->mapToItem(workspace, hand_local);
-    const QPointF feet = workspace_character->mapToItem(workspace, QPointF(
-        workspace_character->width() / 2, workspace_character->property("feetBaseline").toDouble()));
-    const double surface_y = target_map.value(QStringLiteral("surfaceRect")).toMap()
-                                 .value(QStringLiteral("y")).toDouble();
-    QVariantMap checks{
-        {QStringLiteral("climbed"), climbed},
-        {QStringLiteral("jumped"), jumped},
-        {QStringLiteral("legsMoved"), legs_moved},
-        {QStringLiteral("toolExtracted"), tool_extracted},
-        {QStringLiteral("feetGrounded"), feet_grounded},
-        {QStringLiteral("handAligned"), hand_aligned},
-        {QStringLiteral("contactFrames"), contact_frames},
-        {QStringLiteral("displacement"), max_actor_x - min_actor_x},
-        {QStringLiteral("sliderMapped"), QLineF(slider_position, target_position).length() < 2},
-        {QStringLiteral("handTargetDistance"), QLineF(hand_position, target_position).length()},
-        {QStringLiteral("feetSurfaceDistance"), qAbs(feet.y() - surface_y)}};
-    for (auto it = additional_checks.cbegin(); it != additional_checks.cend(); ++it)
-      checks.insert(it.key(), it.value());
-    const QVariantMap trace_row{
-        {QStringLiteral("phase"), phase},
-        {QStringLiteral("expectedFixtureReceipt"), QStringLiteral("agent-session-ui-test")},
-        {QStringLiteral("fixtureReceipt"), event_map.value(QStringLiteral("fixtureReceipt"))},
-        {QStringLiteral("eventStage"), event_map.value(QStringLiteral("stage"))},
-        {QStringLiteral("eventStatus"), event_map.value(QStringLiteral("status"))},
-        {QStringLiteral("uiAnchor"), event_map.value(QStringLiteral("uiAnchor"))},
-        {QStringLiteral("activeRunEventCount"), controller->property("runEvents").toList().size()},
-        {QStringLiteral("adjustmentKeys"), event_evidence.value(QStringLiteral("adjustmentKeys"))},
-        {QStringLiteral("locomotion"), workspace->property("locomotion")},
-        {QStringLiteral("traveling"), workspace->property("traveling")},
-        {QStringLiteral("actorX"), workspace_robot->x()},
-        {QStringLiteral("actorY"), workspace_robot->y()},
-        {QStringLiteral("target"), target_map},
-        {QStringLiteral("tool"), workspace_character->property("tool")},
-        {QStringLiteral("toolDeployProgress"), workspace_character->property("toolDeployProgress")},
-        {QStringLiteral("touchingControl"), workspace->property("touchingControl")},
-        {QStringLiteral("reducedMotion"), workspace->property("reducedMotion")},
-        {QStringLiteral("checks"), checks}};
-    return write_motion_row(trace_row);
-  };
-
-  for (int frame = 0; frame < 240; ++frame) {
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    QThread::msleep(30);
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    const QString locomotion = workspace->property("locomotion").toString();
-    climbed = climbed || locomotion == QStringLiteral("climb");
-    jumped = jumped || locomotion == QStringLiteral("jump");
-    legs_moved = legs_moved || observe_rendered_legs(workspace_character, previous_legs);
-    const double deploy = workspace_character->property("toolDeployProgress").toDouble();
-    tool_extracted = tool_extracted || (deploy > 0.1 && deploy < 0.9);
-    min_actor_x = qMin(min_actor_x, workspace_robot->x());
-    max_actor_x = qMax(max_actor_x, workspace_robot->x());
-
-    if (workspace->property("touchingControl").toBool()) {
-      const QVariantMap mapped_target = workspace->property("currentTouchTarget").toMap();
-      const QPointF local_contact = workspace_character->property("toolContactPoint").toPointF();
-      const QPointF hand = workspace_character->mapToItem(workspace, local_contact);
-      const QPointF expected(mapped_target.value(QStringLiteral("x")).toDouble(),
-                             mapped_target.value(QStringLiteral("y")).toDouble());
-      hand_aligned = hand_aligned || QLineF(hand, expected).length() < 2;
-      const QPointF feet = workspace_character->mapToItem(workspace, QPointF(
-          workspace_character->width() / 2, workspace_character->property("feetBaseline").toDouble()));
-      const double surface_y = mapped_target.value(QStringLiteral("surfaceRect")).toMap()
-                                   .value(QStringLiteral("y")).toDouble();
-      feet_grounded = feet_grounded || qAbs(feet.y() - surface_y) < 2;
-      if (mapped_target.value(QStringLiteral("label")).toString() == QStringLiteral("exposure")) {
-        ++contact_frames;
-        if (!output.isEmpty() && contact_frames == 1 &&
-            !window->grabWindow().save(QDir(output).filePath(QStringLiteral("session-fixture-motion-contact-1366x768.png"))))
-          return fail("The session fixture should capture native contact at the real exposure slider");
-      }
-    } else {
-      contact_frames = 0;
-    }
-    const QString motion_phase = workspace->property("touchingControl").toBool()
-                                 ? QStringLiteral("exposure-contact")
-                                 : workspace->property("traveling").toBool()
-                                   ? QStringLiteral("approach")
-                                   : deploy > 0.01 ? QStringLiteral("tool-deploy") : QStringLiteral("idle");
-    if (!record_motion_frame(motion_phase, {}))
-      return fail("The native session motion clip should save every observed travel and contact frame");
-    if (contact_frames >= 2)
-      break;
-  }
-  const QPointF exposure_contact = qvariant_cast<QPointF>(exposure_slider->property("agentContactPoint"));
-  const QPointF exposure_position = exposure_slider->mapToItem(
-      workspace, exposure_contact.x(), exposure_contact.y());
-  const QVariantMap contact_target = workspace->property("currentTouchTarget").toMap();
-  const QPointF expected_contact(contact_target.value(QStringLiteral("x")).toDouble(),
-                                 contact_target.value(QStringLiteral("y")).toDouble());
-  const bool mapped_contact_aligned = QLineF(exposure_position, expected_contact).length() < 2;
-  const bool displacement_observed = max_actor_x - min_actor_x >= 80;
-  const bool initial_motion_valid = climbed && jumped && legs_moved && tool_extracted && feet_grounded &&
-                                    hand_aligned && contact_frames >= 2 && displacement_observed &&
-                                    contact_target.value(QStringLiteral("label")).toString() == QStringLiteral("exposure") &&
-                                    mapped_contact_aligned;
-  if (!initial_motion_valid) {
-    const QVariantMap active_event = workspace->property("activeEvent").toMap();
-    const QVariantMap target_surface = contact_target.value(QStringLiteral("surfaceRect")).toMap();
-    std::cerr << "Session motion elapsedMs=" << motion_clock.elapsed()
-              << " receipt=" << active_event.value(QStringLiteral("fixtureReceipt")).toString().toStdString()
-              << " event=" << active_event.value(QStringLiteral("stage")).toString().toStdString()
-              << '/' << active_event.value(QStringLiteral("status")).toString().toStdString()
-              << " anchor=" << active_event.value(QStringLiteral("uiAnchor")).toString().toStdString()
-              << " key=" << fixture_adjustment_keys.constFirst().toString().toStdString()
-              << " climbed=" << climbed << " jumped=" << jumped << " legs=" << legs_moved
-              << " toolExtracted=" << tool_extracted << " feetGrounded=" << feet_grounded
-              << " handAligned=" << hand_aligned << " contactFrames=" << contact_frames
-              << " displacement=" << (max_actor_x - min_actor_x)
-              << " target=" << contact_target.value(QStringLiteral("label")).toString().toStdString()
-              << '@' << contact_target.value(QStringLiteral("x")).toDouble() << ','
-              << contact_target.value(QStringLiteral("y")).toDouble()
-              << " surfaceY=" << target_surface.value(QStringLiteral("y")).toDouble()
-              << " actualSlider=" << exposure_position.x() << ',' << exposure_position.y()
-              << " aligned=" << mapped_contact_aligned
-              << " locomotion=" << workspace->property("locomotion").toString().toStdString()
-              << " traveling=" << workspace->property("traveling").toBool()
-              << " actor=" << workspace_robot->x() << ',' << workspace_robot->y()
-              << " deploy=" << workspace_character->property("toolDeployProgress").toDouble() << '\n';
-    return fail("The fixture character must travel, climb, deploy its tool, and touch the mapped exposure slider");
-  }
-
-  const double old_contact_x = contact_target.value(QStringLiteral("x")).toDouble();
-  window->resize(1100, 760);
-  if (!await_mapped_geometry(1100, 760))
-    return fail("The native window and inspector anchor must settle at 1100x760 before resize contact is checked");
-  bool resize_contact_aligned = false;
-  bool resize_anchor_moved = false;
-  for (int frame = 0; frame < 360; ++frame) {
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    QThread::msleep(30);
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    const QVariantMap mapped_target = workspace->property("currentTouchTarget").toMap();
-    resize_anchor_moved = resize_anchor_moved ||
-        qAbs(mapped_target.value(QStringLiteral("x")).toDouble() - old_contact_x) > 20;
-    const bool touching_exposure = workspace->property("touchingControl").toBool() &&
-                                   mapped_target.value(QStringLiteral("label")).toString() == QStringLiteral("exposure");
-    bool hand_at_resized_target = false;
-    bool slider_at_resized_target = false;
-    const QVariantMap active_resize_event = workspace->property("activeEvent").toMap();
-    const bool one_original_event_remains = controller->property("runEvents").toList().size() == 1 &&
-        active_resize_event.value(QStringLiteral("fixtureReceipt")).toString() ==
-            QStringLiteral("agent-session-ui-test");
-    if (touching_exposure) {
-      const QPointF hand = workspace_character->mapToItem(workspace,
-          workspace_character->property("toolContactPoint").toPointF());
-      const QPointF target(mapped_target.value(QStringLiteral("x")).toDouble(),
-                           mapped_target.value(QStringLiteral("y")).toDouble());
-      const QPointF resized_contact = qvariant_cast<QPointF>(exposure_slider->property("agentContactPoint"));
-      const QPointF resized_position = exposure_slider->mapToItem(
-          workspace, resized_contact.x(), resized_contact.y());
-      hand_at_resized_target = QLineF(hand, target).length() < 2;
-      slider_at_resized_target = QLineF(resized_position, target).length() < 2;
-      resize_contact_aligned = resize_anchor_moved && hand_at_resized_target && slider_at_resized_target &&
-                               one_original_event_remains;
-      if (resize_contact_aligned) {
-        if (!output.isEmpty() &&
-            !window->grabWindow().save(QDir(output).filePath(QStringLiteral("session-fixture-motion-contact-resized-1100x760.png"))))
-          return fail("The session fixture should capture contact after its inspector target moves on resize");
-        if (!record_motion_frame(QStringLiteral("resized-exposure-contact"),
-                                 {{QStringLiteral("resizeAnchorMoved"), resize_anchor_moved},
-                                  {QStringLiteral("handAtResizedTarget"), hand_at_resized_target},
-                                  {QStringLiteral("sliderAtResizedTarget"), slider_at_resized_target},
-                                  {QStringLiteral("touchingExposure"), touching_exposure},
-                                  {QStringLiteral("oneOriginalEventRemains"), one_original_event_remains},
-                                  {QStringLiteral("activeRunEventCount"), controller->property("runEvents").toList().size()}}))
-          return fail("The native session motion clip should save its resized contact frame");
-        break;
-      }
-    }
-    const QString motion_phase = touching_exposure ? QStringLiteral("resized-exposure-contact")
-                                 : workspace->property("traveling").toBool()
-                                   ? QStringLiteral("resize-approach") : QStringLiteral("resize-wait");
-    if (!record_motion_frame(motion_phase,
-                             {{QStringLiteral("resizeAnchorMoved"), resize_anchor_moved},
-                              {QStringLiteral("handAtResizedTarget"), hand_at_resized_target},
-                              {QStringLiteral("sliderAtResizedTarget"), slider_at_resized_target},
-                              {QStringLiteral("touchingExposure"), touching_exposure},
-                              {QStringLiteral("oneOriginalEventRemains"), one_original_event_remains},
-                              {QStringLiteral("activeRunEventCount"), controller->property("runEvents").toList().size()}}))
-      return fail("The native session motion clip should save every resize reanchor frame");
-  }
-  if (!resize_contact_aligned) {
-    const QVariantMap final_target = workspace->property("currentTouchTarget").toMap();
-    const QVariantMap active_event = workspace->property("activeEvent").toMap();
-    const QPointF hand = workspace_character->mapToItem(workspace,
-        workspace_character->property("toolContactPoint").toPointF());
-    const QPointF target_point(final_target.value(QStringLiteral("x")).toDouble(),
-                               final_target.value(QStringLiteral("y")).toDouble());
-    const QPointF final_contact = qvariant_cast<QPointF>(exposure_slider->property("agentContactPoint"));
-    const QPointF final_position = exposure_slider->mapToItem(workspace, final_contact.x(), final_contact.y());
-    const QVariantList active_keys = active_event.value(QStringLiteral("evidence")).toMap()
-                                         .value(QStringLiteral("adjustmentKeys")).toList();
-    std::cerr << "Resize elapsedMs=" << motion_clock.elapsed()
-              << " receipt=" << active_event.value(QStringLiteral("fixtureReceipt")).toString().toStdString()
-              << " event=" << active_event.value(QStringLiteral("stage")).toString().toStdString()
-              << '/' << active_event.value(QStringLiteral("status")).toString().toStdString()
-              << " anchor=" << active_event.value(QStringLiteral("uiAnchor")).toString().toStdString()
-              << " key=" << (active_keys.isEmpty() ? "<none>" : active_keys.constFirst().toString().toStdString())
-              << " width=" << window->width() << " workspace=" << workspace->width()
-              << " oldTargetX=" << old_contact_x
-              << " mappedTarget=" << final_target.value(QStringLiteral("x")).toDouble() << ','
-              << final_target.value(QStringLiteral("y")).toDouble()
-              << " actualSlider=" << final_position.x() << ',' << final_position.y()
-              << " targetDelta=" << QLineF(final_position, target_point).length()
-              << " handDelta=" << QLineF(hand, target_point).length()
-              << " anchorMoved=" << resize_anchor_moved
-              << " oneOriginalEventRemains=" << (active_keys.size() == 1 &&
-                     active_event.value(QStringLiteral("fixtureReceipt")).toString() ==
-                         QStringLiteral("agent-session-ui-test") &&
-                     controller->property("runEvents").toList().size() == 1)
-              << " runEventCount=" << controller->property("runEvents").toList().size()
-              << " moving=" << workspace->property("traveling").toBool()
-              << " touching=" << workspace->property("touchingControl").toBool() << '\n';
-    return fail("After window resize, the character must follow the inspector slider's new mapped contact point");
-  }
-
+  if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath(
+      QStringLiteral("session-editor-optical-1366x768.png"))))
+    return fail("Cannot capture the session's optical editor status");
   motion_settings.insert(QStringLiteral("reducedMotion"), true);
   settle();
-  const qreal quiet_x = workspace_robot->x();
-  const qreal quiet_y = workspace_robot->y();
+  if (sweep->property("animate").toBool() || !activity_is_static(sweep) || workspace_robot->isVisible())
+    return fail("Reduced motion must freeze the editor indicator without displaying a character");
+  QMetaObject::invokeMethod(workspace_close, "click");
   settle();
-  auto* workspace_close = find_item(root, QStringLiteral("agentWorkspaceStatusCloseButton"));
-  if (workspace_character->property("motionEnabled").toBool() || workspace->property("traveling").toBool() ||
-      workspace_robot->x() != quiet_x || workspace_robot->y() != quiet_y || !workspace_close ||
-      !workspace_close->isVisible() || !controller->property("running").toBool()) {
-    std::cerr << "Reduced-motion checks elapsedMs=" << motion_clock.elapsed()
-              << " motionEnabled=" << workspace_character->property("motionEnabled").toBool()
-              << " traveling=" << workspace->property("traveling").toBool()
-              << " stablePosition=" << (workspace_robot->x() == quiet_x && workspace_robot->y() == quiet_y)
-              << " closeVisible=" << (workspace_close && workspace_close->isVisible())
-              << " taskRunning=" << controller->property("running").toBool()
-              << " event=" << workspace->property("activeEvent").toMap()
-                                    .value(QStringLiteral("stage")).toString().toStdString()
-              << '/' << workspace->property("activeEvent").toMap()
-                             .value(QStringLiteral("status")).toString().toStdString()
-              << " key=" << fixture_adjustment_keys.constFirst().toString().toStdString() << '\n';
-    return fail("Reduced motion should hold the separate character still while the running task remains dismissible");
-  }
-  if (!output.isEmpty() &&
-      !window->grabWindow().save(QDir(output).filePath(QStringLiteral("session-fixture-reduced-motion-1100x760.png"))))
-    return fail("The session fixture should capture its readable reduced-motion state");
-  if (!record_motion_frame(QStringLiteral("reduced-motion"),
-                           {{QStringLiteral("motionDisabled"), !workspace_character->property("motionEnabled").toBool()},
-                            {QStringLiteral("dismissible"), workspace_close->isVisible()},
-                            {QStringLiteral("taskStillRunning"), controller->property("running").toBool()}}))
-    return fail("The native session motion clip should save its reduced-motion frame");
-  if (motion_trace.isOpen())
-    motion_trace.close();
+  if (!workspace->property("dismissed").toBool() || !controller->property("running").toBool())
+    return fail("Closing session status must preserve the running task");
   fixture->setProperty("workspaceVisible", false);
+  motion_settings.insert(QStringLiteral("reducedMotion"), false);
   settle();
 
   QMetaObject::invokeMethod(dialog, "open");
@@ -1086,9 +727,12 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
   click_item(window, start);
   controller->setProperty("running", false);
   controller->setProperty("draftActive", true);
-  controller->setProperty("lastRunReport", QVariantMap{{QStringLiteral("ok"), true},
-                                                          {QStringLiteral("draftActive"), true}});
-  const QVariantMap success_report{{QStringLiteral("ok"), true}};
+  const QVariantMap success_report{
+      {QStringLiteral("ok"), true},
+      {QStringLiteral("draftActive"), true},
+      {QStringLiteral("validationReport"), QVariantMap{{QStringLiteral("qualityScorePercent"), 92}}},
+      {QStringLiteral("batchSummary"), QVariantMap{{QStringLiteral("proofCount"), 1}}}};
+  controller->setProperty("lastRunReport", success_report);
   QMetaObject::invokeMethod(session, "acknowledgeExecution", Qt::DirectConnection,
                             Q_ARG(QVariant, QVariant(success_report)));
   settle();
@@ -1103,6 +747,25 @@ int verify_session_popup(QQuickWindow* window, QObject* fixture, QObject* contro
           {QStringLiteral("agentSessionReviewStatus"), QStringLiteral("agentSessionRevisionPrompt"),
            QStringLiteral("agentSessionReviseButton"), QStringLiteral("agentSessionOpenDraftButton")}, output))
     return fail("The editable result and revision controls must fit without scrolling");
+  auto* review_details = find_item(root, QStringLiteral("agentSessionReviewDetailsButton"));
+  auto* review_details_summary = find_item(root, QStringLiteral("agentSessionReviewDetailsSummary"));
+  if (!review_details || !review_details->isVisible() || !review_details->isEnabled() ||
+      !review_details_summary || review_details_summary->isVisible())
+    return fail("Review verification should stay separate from the result and revision prompt by default");
+  if (interface_scale >= 1.99 && interface_scale <= 2.01 &&
+      (!accessible_name_and_bounds(review_details, QStringLiteral("Show edit verification details")) ||
+       !inside_screen(review_details, screen)))
+    return fail("At 200% interface scale, review details must retain an accessible name and visible bounds");
+  click_item(window, review_details);
+  if (!review_details_summary->isVisible() ||
+      !review_details_summary->property("text").toString().contains(QStringLiteral("Goal check · 92%")) ||
+      !review_details_summary->property("text").toString().contains(QStringLiteral("1 preview checked")))
+    return fail("The Review details route should reveal the recorded verification summary");
+  if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath("session-review-details.png")))
+    return fail("Cannot capture the user-opened review verification details");
+  click_item(window, review_details);
+  if (review_details_summary->isVisible())
+    return fail("Review verification details should collapse on request");
   QMetaObject::invokeMethod(close, "click");
   settle();
   QMetaObject::invokeMethod(dialog, "open");
@@ -1224,6 +887,8 @@ int main(int argc, char** argv) {
   });
   QQmlPropertyMap motion_settings;
   motion_settings.insert(QStringLiteral("reducedMotion"), false);
+  const auto requested_scale = qEnvironmentVariable("PHOTO_EDITOR_AGENT_INTERFACE_SCALE").toDouble();
+  motion_settings.insert(QStringLiteral("interfaceScale"), requested_scale > 0 ? requested_scale : 1.0);
   engine.rootContext()->setContextProperty(QStringLiteral("appShell"), &motion_settings);
   engine.rootContext()->setContextProperty(QStringLiteral("workspacePhotoPath"),
       qEnvironmentVariable("PHOTO_EDITOR_WORKSPACE_PROOF_PHOTO"));
@@ -1357,7 +1022,10 @@ ApplicationWindow {
             taskTransaction = {owner: "agent-edit", status: "reverted", revertAvailable: false}
             return {ok: true}
         }
+        property var workflowReadAudit: ({count: 0})
+        function workflowReadCount() { return workflowReadAudit.count }
         function aiEditWorkflowState(scope) {
+            workflowReadAudit.count += 1
             if (gateModelReadiness) {
                 const model = availableModels.find(function(entry) { return entry.id === selectedModelId }) || ({})
                 if (modelProbeRunning || !model.available)
@@ -1586,6 +1254,8 @@ ApplicationWindow {
   auto* screen = find_item(root, QStringLiteral("agentHeldScreen"));
   auto* prompt = find_visible_enabled_item(root, QStringLiteral("agentPromptEditor"));
   auto* artwork = find_item(root, QStringLiteral("agentRobotScreenArtwork"));
+  if (!artwork || !artwork->property("popupSurfaceContract").isValid())
+    return fail("The Agent frame must use the shared popup surface");
   auto* primary = find_visible_item(root, QStringLiteral("agentPrimaryCreateDraftButton"));
   if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_SESSION_FLOW_ONLY") && !null_session_terminal_errors.isEmpty()) {
     std::cerr << "Hidden session terminal null binding errors:\n";
@@ -1657,7 +1327,9 @@ ApplicationWindow {
   }
   auto* terminal = find_item(root, QStringLiteral("agentTerminalScreen"));
   auto* checked = find_item(root, QStringLiteral("agentCheckedSelectionAlert"));
-  if (!terminal || !checked || !checked->property("text").toString().contains(QStringLiteral("5 FILES CHECKED")))
+  const auto checked_summary = checked ? checked->property("text").toString() : QString();
+  if (!terminal || !checked || !checked_summary.contains(QStringLiteral("5 files checked")) ||
+      !checked_summary.contains(QStringLiteral("Portrait-1.jpg")))
     return fail("The terminal should show a small accurate readout of checked files");
   if (find_item(root, QStringLiteral("agentHeldScreenScroll")))
     return fail("The held screen must not have a scroll surface");
@@ -1787,22 +1459,70 @@ ApplicationWindow {
   auto* stop = find_item(root, QStringLiteral("agentStopRunButton"));
   auto* view_editor = find_item(root, QStringLiteral("agentViewRunningEditorButton"));
   if (!dialog->isVisible() || dialog->property("currentPage").toInt() != 2 || !activity || !robot_head ||
-      terminal->property("activeStage").toInt() != 2 || !stop->isEnabled() || !view_editor->isVisible())
+      terminal->property("activeStage").toInt() != 2 || !stop->isEnabled() || !view_editor->isVisible() ||
+      !find_item(root, QStringLiteral("agentTerminalCurrentTaskSummary")))
     return fail("Running should keep the robot terminal open with the active edit stage and safe controls");
   const auto rows = terminal->property("outputRows").toList();
   if (rows.size() != 2 || rows.first().toMap().value(QStringLiteral("source")).toString() != QStringLiteral("MODEL") ||
       !rows.first().toMap().value(QStringLiteral("text")).toString().contains(QStringLiteral("skin tones")))
     return fail("The live feed should distinguish actual model output from system events");
-  const auto sweep_before = activity->property("sweep").toDouble();
-  const auto head_before = robot_stage->property("servoAngle").toDouble();
-  settle();
-  if (qAbs(activity->property("sweep").toDouble() - sweep_before) < 0.01 || head_before != 3.0)
-    return fail("The loading bar should animate and the robot head should react to the actual workspace stage");
+  auto* current_task = find_item(root, QStringLiteral("agentTerminalCurrentTaskSummary"));
+  auto* model_output_details = find_item(root, QStringLiteral("agentTerminalOutputDetailsButton"));
+  auto* model_output_text = find_item(root, QStringLiteral("agentTerminalModelOutputDetails"));
+  auto* activity_history = find_item(root, QStringLiteral("agentTerminalHistoryToggle"));
+  auto* history_list = find_item(root, QStringLiteral("agentTerminalActivityHistoryList"));
+  if (!current_task || !current_task->isVisible() ||
+      current_task->property("text").toString() != QStringLiteral("Rendering the edited preview.") ||
+      !model_output_details || !model_output_details->isVisible() || !model_output_details->isEnabled() ||
+      !model_output_text || model_output_text->isVisible() ||
+      !activity_history || !activity_history->isVisible() || !activity_history->isEnabled() ||
+      !history_list || history_list->isVisible() || history_list->property("count").toInt() != 2)
+    return fail("The live terminal should show one current task with model output and history behind separate disclosures");
+  click_item(window, model_output_details);
+  if (!model_output_text->isVisible() ||
+      !model_output_text->property("text").toString().contains(QStringLiteral("skin tones")) ||
+      current_task->property("text").toString() != QStringLiteral("Rendering the edited preview."))
+    return fail("Details should reveal the actual model output while retaining the current task");
+  if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath("robot-working-model-output.png")))
+    return fail("Cannot capture the user-opened terminal model output");
+  click_item(window, model_output_details);
+  if (model_output_text->isVisible())
+    return fail("Terminal model output details should collapse on request");
+  click_item(window, activity_history);
+  if (!history_list->isVisible() || history_list->property("count").toInt() != 2 ||
+      activity_history->property("text").toString() != QStringLiteral("Hide history") ||
+      current_task->property("text").toString() != QStringLiteral("Rendering the edited preview."))
+    return fail("History should show recent task events without replacing the current progress card");
+  if (!output.isEmpty() && !window->grabWindow().save(QDir(output).filePath("robot-working-history.png")))
+    return fail("Cannot capture the user-opened terminal history");
+  const auto requested_interface_scale = motion_settings.value(QStringLiteral("interfaceScale")).toDouble();
+  if (requested_interface_scale >= 1.99 && requested_interface_scale <= 2.01 &&
+      (!accessible_name_and_bounds(model_output_details, QStringLiteral("Show model output details")) ||
+       !accessible_name_and_bounds(activity_history, QStringLiteral("Hide recent activity history")) ||
+       !accessible_name_and_bounds(stop, QStringLiteral("Stop")) ||
+       !inside_screen(model_output_details, screen) || !inside_screen(activity_history, screen) ||
+       !inside_screen(stop, screen)))
+    return fail("At 200% interface scale, Details, History and Stop must retain accessible names and visible bounds");
+  click_item(window, activity_history);
+  if (history_list->isVisible() || activity_history->property("text").toString() != QStringLiteral("History"))
+    return fail("Terminal history should collapse to the current task summary");
+  const auto visible_activity = activity_changes(activity);
+  if (!visible_activity || robot_stage->property("servoAngle").toDouble() != 3.0 ||
+      robot_head->property("lookAngle").toDouble() != 3.0) {
+    std::cerr << "Agent activity motion=" << visible_activity
+              << " active=" << activity->property("active").toBool()
+              << " size=" << activity->width() << 'x' << activity->height()
+              << " servo=" << robot_stage->property("servoAngle").toDouble()
+              << " look=" << robot_head->property("lookAngle").toDouble()
+              << " motionActive=" << robot_stage->property("motionActive").toBool() << '\n';
+    return fail("Optical activity must render motion and the Agent character must react to the actual inspector stage");
+  }
+  if (!valid_style(root)) return fail("The working Agent view must obey the shared application style");
   for (const auto size : {QSize(1024, 760), QSize(1280, 800)}) {
     window->resize(size);
     settle();
     if (!inside_screen(activity, screen) || !inside_screen(stop, screen) || !inside_screen(view_editor, screen) ||
-        !inside_screen(find_item(root, QStringLiteral("agentLiveOutput-1")), screen))
+      !inside_screen(find_item(root, QStringLiteral("agentTerminalCurrentTaskSummary")), screen))
       return fail("Live output and running controls must fit without screen scrolling");
     if (!output.isEmpty())
       window->grabWindow().save(QDir(output).filePath(QStringLiteral("robot-working-%1x%2.png").arg(size.width()).arg(size.height())));
@@ -1830,10 +1550,8 @@ ApplicationWindow {
   controller->setProperty("awaitingUserInput", false);
   motion_settings.insert(QStringLiteral("reducedMotion"), true);
   settle();
-  const auto static_sweep = activity->property("sweep").toDouble();
-  settle();
   if (robot_stage->property("motionActive").toBool() || robot_stage->property("servoAngle").toDouble() != 0.0 ||
-      activity->property("sweep").toDouble() != static_sweep)
+      activity->property("animate").toBool() || !activity_is_static(activity))
     return fail("Reduced motion should stop the head and loader while preserving readable status");
   QMetaObject::invokeMethod(view_editor, "click");
   settle();

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 
 Item {
     id: root
@@ -8,7 +9,10 @@ Item {
     property real variant: 0
     property real progress: -1
     property bool failed: false
-    readonly property bool motionEnabled: active && visible && enabled && !failed && !reducedMotion && !theme.reducedMotion
+    // A detached Loader item can remain visible until deferred deletion. A
+    // UniformAnimator must stop before its ShaderEffect loses its window.
+    readonly property bool motionEnabled: root.Window.window !== null && root.Window.window.visible
+        && width > 0 && height > 0 && active && visible && enabled && !failed && !reducedMotion && !theme.reducedMotion
     readonly property bool softwareRendering: GraphicsInfo.api === GraphicsInfo.Software
     Theme { id: theme }
     Accessible.ignored: true
@@ -27,12 +31,14 @@ Item {
     }
     // Animation runs on the render thread, including while a workspace is opening.
     UniformAnimator {
+        id: phaseAnimation
         target: light; uniform: "lightPhase"
         running: root.motionEnabled && !root.softwareRendering
         from: 0; to: 1
         duration: root.kind === 1 ? 2100 : root.kind === 2 ? 1900 : 11000
         loops: Animation.Infinite
     }
+    Component.onDestruction: phaseAnimation.stop()
 
     // A cached vector fallback keeps remote sessions and software-rendered UI
     // tests readable. It never repaints on an animation timer.

@@ -1,0 +1,28 @@
+{
+  "title": "Cat Walk",
+  "artist": "Arulo",
+  "catalog": "https://mixkit.co/free-stock-music/house/",
+  "source": "https://assets.mixkit.co/music/371/371.mp3",
+  "license": "https://mixkit.co/license/modal/musicFree/",
+  "duration_seconds": 154,
+  "pitch_preserving_tempo_factor": 1.0,
+  "arrangement": {
+    "source": "Cat Walk / Arulo / Mixkit",
+    "bpm": 130,
+    "inserted_bars": 16,
+    "source_phrase_seconds": [
+      53.881541666666664,
+      83.42
+    ],
+    "crossfade_ms": 12,
+    "native_tempo": true,
+    "native_pitch": true,
+    "duration": 154,
+    "limits": "Beat periodicity and waveform continuity checked; subjective music approval remains a listening review."
+  },
+  "source_sha256": "e241cba000ce12e52cadd4c9956274e391ef1f66d1e48a5dd40bfc21645aa489",
+  "status": "Soundtrack candidate; full creative/aural review remains unproven.",
+  "arranged_sha256": "4738cd791e70205b9b0cfcfc5b697956d2e2ae1f841f6eb3ad34ef2449b24676",
+  "score_source": "src/campaign/Score.tsx",
+  "mastering": "out/campaign/audio-mastering.json"
+}

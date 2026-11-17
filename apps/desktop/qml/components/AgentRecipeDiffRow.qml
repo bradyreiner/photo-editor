@@ -46,7 +46,8 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.label
                 color: theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
@@ -78,7 +79,8 @@ Rectangle {
                 anchors.centerIn: parent
                 text: root.countText
                 color: root.countColor
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 horizontalAlignment: Text.AlignHCenter
                 fontSizeMode: Text.HorizontalFit

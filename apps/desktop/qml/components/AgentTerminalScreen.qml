@@ -10,15 +10,17 @@ Item {
     required property var dialog
     required property var themeObject
 
-    readonly property color phosphor: "#EEC58A"
-    readonly property color textColor: "#E8E1D3"
-    readonly property color muted: "#A49C90"
-    readonly property string mono: themeObject.fontMono
+    readonly property color phosphor: themeObject.textStrong
+    readonly property color textColor: themeObject.textStrong
+    readonly property color muted: themeObject.textMuted
+    readonly property string mono: themeObject.fontNumeric
     readonly property bool compact: height < 340
     readonly property int rowsPerPage: 3
     readonly property var checkedAssets: dialog.targetAssets()
     readonly property int checkedCount: dialog.scopeCount(dialog.scopeMode)
     property string panel: "edit"
+    property bool activityDetailsExpanded: false
+    property bool activityHistoryExpanded: false
     AgentFailureDetails { id: failureDetails }
     readonly property bool failureDetailsOpen: failureDetails.visible
     function showFailureDetails(opener) {
@@ -51,8 +53,7 @@ Item {
     }
 
     function showModelConnection() {
-        panel = "model"
-        Qt.callLater(function() { existingModelButton.forceActiveFocus(Qt.TabFocusReason) })
+        root.dialog.modelSetupRequested()
     }
 
     function useExistingOllama() {
@@ -77,7 +78,23 @@ Item {
     readonly property var latestEvent: events.length > 0 ? events[events.length - 1] : ({})
     readonly property int activeStage: stageIndex(String(latestEvent.stage || "connect"))
     readonly property var outputRows: terminalRows()
+    readonly property var activityHistoryRows: events.slice(-8).reverse()
     readonly property string latestOutput: outputRows.length > 0 ? String(outputRows[outputRows.length - 1].text) : dialog.statusLine()
+    readonly property string currentTaskSummary: {
+        const detail = String(latestEvent.detail || latestEvent.explanation || latestEvent.label || "").trim()
+        if (detail.length > 0)
+            return detail
+        return String(dialog.statusLine() || (root.running ? "Working on your edit." : "Ready for your next step."))
+    }
+    readonly property string modelOutputText: {
+        for (let index = events.length - 1; index >= 0; --index) {
+            const evidence = (events[index] || ({})).evidence || ({})
+            const output = String(evidence.modelOutput || "").trim()
+            if (evidence.modelOutputAvailable && output.length > 0)
+                return output
+        }
+        return ""
+    }
     property int revealedCharacters: 0
     property bool cursorLit: true
 
@@ -86,6 +103,27 @@ Item {
         if (stage === "plan" || stage.indexOf("plan-worker") === 0 || stage === "constrain" || stage === "fallback") return 1
         if (stage === "act" || stage === "apply" || stage === "render" || stage === "preview" || stage === "repair") return 2
         return 3
+    }
+
+    function activityEventTitle(event) {
+        const item = event || ({})
+        const label = String(item.label || "").trim()
+        if (label.length > 0)
+            return label
+        const stage = String(item.stage || "").toLowerCase()
+        if (stage.indexOf("plan") === 0 || stage === "constrain") return "Planning"
+        if (stage === "render" || stage === "apply" || stage === "edit") return "Editing"
+        if (stage === "validate" || stage === "check") return "Checking the result"
+        if (stage === "connect" || stage === "observe") return "Reviewing the photo"
+        return stage.length > 0 ? stage.charAt(0).toUpperCase() + stage.slice(1) : "Working"
+    }
+
+    function activityEventStatus(event) {
+        const status = String((event || ({})).status || "").toLowerCase()
+        if (status === "running") return "In progress"
+        if (status === "complete") return "Done"
+        if (status === "failed") return "Stopped"
+        return status.length > 0 ? status.charAt(0).toUpperCase() + status.slice(1) : "Recorded"
     }
 
     function terminalRows() {
@@ -145,51 +183,35 @@ Item {
     }
 
     onArchiveFilterChanged: archivePage = 0
+    onRunningChanged: {
+        if (!running) {
+            activityDetailsExpanded = false
+            activityHistoryExpanded = false
+        }
+    }
     onRowsPerPageChanged: {
         archivePage = Math.min(archivePage, archivePageCount - 1)
         targetsPage = Math.min(targetsPage, targetPageCount - 1)
     }
 
-    component TerminalLabel: Label {
+    component TerminalLabel: BodyLabel {
         color: root.textColor
         textFormat: Text.PlainText
-        font.family: root.mono
-        font.pixelSize: 12
+        font.family: root.themeObject.fontUi
+        font.pixelSize: root.themeObject.typeBody
         wrapMode: Text.WordWrap
     }
 
-    component TerminalButton: Button {
-        id: button
+    component TerminalButton: ActionButton {
         property bool primary: false
         property bool selected: false
+        property bool subtle: false
         property string accessibleLabel: text
-        implicitHeight: 34
-        implicitWidth: label.implicitWidth + 20
-        leftPadding: 10
-        rightPadding: 10
-        hoverEnabled: true
-        activeFocusOnTab: true
-        Accessible.name: accessibleLabel
-        Accessible.role: Accessible.Button
-        contentItem: Label {
-            id: label
-            text: button.text
-            color: button.primary ? "#23201B" : root.phosphor
-            font.family: root.mono
-            font.pixelSize: 11
-            font.weight: Font.DemiBold
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-        }
-        background: Rectangle {
-            radius: 1
-            color: button.primary ? root.phosphor : button.hovered || button.selected ? "#343027" : "transparent"
-            border.width: button.visualFocus ? 2 : 1
-            border.color: button.visualFocus ? root.textColor : root.phosphor
-            opacity: button.enabled ? 1 : 0.35
-        }
-        HoverHandler { cursorShape: button.enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor }
+        accessibleName: accessibleLabel
+        compact: true
+        embedded: subtle
+        active: selected
+        tone: primary ? "primary" : subtle ? "quiet" : "secondary"
     }
 
     ColumnLayout {
@@ -201,10 +223,10 @@ Item {
             Layout.fillWidth: true
             implicitHeight: 32
             accessibleLabel: root.checkedCount + " photos checked. " + root.dialog.targetSummary() + ". Show checked files."
-            text: root.checkedCount > 0 ? "[x] " + root.checkedCount + " FILE" + (root.checkedCount === 1 ? "" : "S") +
-                  (root.dialog.scopeMode === "project" ? " IN PROJECT" : root.dialog.scopeMode === "filtered-library" ? " IN FILTER" : " CHECKED") +
-                  " / " + (root.checkedAssets.length > 0 ? root.dialog.assetDisplayTitle(root.checkedAssets[0]) : "VIEW")
-                                        : "[ ] NO FILES CHECKED"
+            text: root.checkedCount > 0 ? root.checkedCount + " file" + (root.checkedCount === 1 ? "" : "s") +
+                  (root.dialog.scopeMode === "project" ? " in project" : root.dialog.scopeMode === "filtered-library" ? " in filter" : " checked") +
+                  " · " + (root.checkedAssets.length > 0 ? root.dialog.assetDisplayTitle(root.checkedAssets[0]) : "View")
+                                        : "No files checked"
             onClicked: { root.panel = root.panel === "targets" ? "edit" : "targets"; root.targetsPage = 0 }
         }
 
@@ -219,49 +241,36 @@ Item {
                     Layout.fillWidth: true
                     TerminalLabel {
                         Layout.fillWidth: true
-                        text: "EDIT REQUEST_"
+                        text: "Edit request"
                         color: root.phosphor
-                        font.pixelSize: root.compact ? 18 : 22
+                        font.pixelSize: root.compact ? root.themeObject.typeDialogTitle : root.themeObject.typeHero
                         font.weight: Font.DemiBold
                     }
                     TerminalButton {
                         objectName: "agentChooseModelButton"
-                        text: "Model..."
+                        text: "Model settings…"
                         onClicked: root.showModelConnection()
                     }
                 }
                 TerminalLabel {
                     Layout.fillWidth: true
-                    text: "Write a prompt. Or use inspiration from your archive."
+                    text: "Describe the edit, or start from a reference."
                     color: root.muted
-                    font.pixelSize: 11
+                    font.pixelSize: root.themeObject.typeBody
                 }
-                TerminalLabel { text: "PROMPT >"; color: root.phosphor; font.pixelSize: 10 }
-                TextField {
+                ToneTextField {
                     id: promptEditor
                     objectName: "agentPromptEditor"
                     Layout.fillWidth: true
                     implicitHeight: 52
                     text: root.dialog.terminalPrompt
                     placeholderText: "What should change?"
-                    placeholderTextColor: root.muted
-                    color: root.textColor
-                    selectionColor: root.phosphor
-                    selectedTextColor: "#23201B"
-                    font.family: root.mono
-                    font.pixelSize: 13
                     leftPadding: 12
                     rightPadding: 12
                     activeFocusOnTab: true
                     selectByMouse: true
                     Accessible.name: "AI edit instructions"
-                    Accessible.description: "Optional when using saved inspiration. Press Enter to prepare an edit."
-                    background: Rectangle {
-                        color: "#202124"
-                        radius: 1
-                        border.width: promptEditor.activeFocus ? 2 : 1
-                        border.color: promptEditor.activeFocus ? root.phosphor : "#61584A"
-                    }
+                    Accessible.description: "Optional when using a saved look or reference photo. Press Enter to prepare an edit."
                     onTextChanged: {
                         root.dialog.terminalPrompt = text
                         if (root.dialog.hasController())
@@ -275,9 +284,10 @@ Item {
                 TerminalLabel {
                     objectName: "agentAttachedInspirationLabel"
                     Layout.fillWidth: true
-                    text: root.attachedInspiration.length > 0 ? "INSPIRATION / " + root.attachedInspiration : "INSPIRATION / NONE"
+                    visible: root.attachedInspiration.length > 0
+                    text: "Using · " + root.attachedInspiration
                     color: root.attachedInspiration.length > 0 ? root.phosphor : root.muted
-                    font.pixelSize: 10
+                    font.pixelSize: root.themeObject.typeCaption
                     maximumLineCount: 2
                     elide: Text.ElideRight
                     Accessible.name: text
@@ -287,7 +297,7 @@ Item {
                     visible: root.dialog.directionError.length > 0
                     text: root.dialog.directionError
                     color: root.themeObject.error
-                    font.pixelSize: 10
+                    font.pixelSize: root.themeObject.typeCaption
                     maximumLineCount: 2
                     elide: Text.ElideRight
                 }
@@ -297,7 +307,8 @@ Item {
                     spacing: 8
                     TerminalButton {
                         objectName: "agentUseInspirationButton"
-                        text: "Use inspiration"
+                        text: "Add reference"
+                        tooltipText: "Choose a saved look or photo to guide the edit. Reference photos are never edited."
                         onClicked: { root.archivePage = 0; root.dialog.showSavedInspiration() }
                     }
                     Item { Layout.fillWidth: true }
@@ -318,7 +329,7 @@ Item {
 
             ColumnLayout {
                 spacing: 8
-                TerminalLabel { text: "PAST INSPIRATION_"; color: root.phosphor; font.pixelSize: 18 }
+                TerminalLabel { text: "Past inspiration"; color: root.phosphor; font.pixelSize: root.themeObject.typeDialogTitle }
                 RowLayout {
                     TerminalButton { text: "Saved looks"; selected: root.archiveFilter === "looks"; onClicked: root.archiveFilter = "looks" }
                     TerminalButton { text: "Past references"; selected: root.archiveFilter === "references"; onClicked: root.archiveFilter = "references" }
@@ -357,7 +368,7 @@ Item {
                                         Layout.fillWidth: true
                                         text: inspirationRow.modelData.title
                                         color: root.phosphor
-                                        font.pixelSize: 11
+                                        font.pixelSize: root.themeObject.typeBody
                                         maximumLineCount: 1
                                         elide: Text.ElideRight
                                     }
@@ -365,7 +376,7 @@ Item {
                                         Layout.fillWidth: true
                                         text: String(inspirationRow.modelData.detail || "Saved inspiration")
                                         color: root.muted
-                                        font.pixelSize: 9
+                                        font.pixelSize: root.themeObject.typeMicro
                                         maximumLineCount: 1
                                         elide: Text.ElideRight
                                     }
@@ -413,23 +424,25 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true
                     TerminalLabel {
-                        text: root.awaitingInput ? "INPUT REQUIRED_" : root.running ? "PROCESSING_" : "RUN STATUS_"
+                        text: root.awaitingInput ? "Input required" : root.running ? "Working" : "Run status"
                         color: root.phosphor
-                        font.pixelSize: root.compact ? 17 : 20
+                        font.pixelSize: root.compact ? root.themeObject.typeTitle : root.themeObject.typeHero
                     }
                     Item { Layout.fillWidth: true }
                     TerminalLabel {
                         objectName: "agentRunElapsed"
                         text: Math.floor(root.dialog.runElapsedSeconds / 60) + ":" + String(root.dialog.runElapsedSeconds % 60).padStart(2, "0")
                         color: root.muted
-                        font.pixelSize: 11
+                        font.pixelSize: root.themeObject.typeBody
+                        font.family: root.mono
+                        font.features: root.themeObject.numericFontFeatures
                     }
                 }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 5
                     Repeater {
-                        model: ["READ", "PLAN", "EDIT", "CHECK"]
+                        model: ["Review", "Plan", "Edit", "Check"]
                         delegate: Rectangle {
                             id: phase
                             required property int index
@@ -437,11 +450,11 @@ Item {
                             Layout.fillWidth: true
                             implicitHeight: 25
                             color: root.activeStage === index ? "#393329" : "#202124"
-                            border.color: root.activeStage === index ? root.phosphor : "#61584A"
+                            border.width: root.themeObject.highContrast ? 1 : 0
                             TerminalLabel {
                                 anchors.centerIn: parent
                                 text: (root.activeStage === phase.index && root.running ? "> " : root.stageComplete(phase.index) ? "+ " : "") + phase.modelData
-                                font.pixelSize: 10
+                                font.pixelSize: root.themeObject.typeCaption
                                 color: root.activeStage === phase.index ? root.phosphor : root.muted
                             }
                         }
@@ -457,12 +470,12 @@ Item {
                     opacity: root.awaitingInput ? 0.45 : 1
                     Accessible.name: root.awaitingInput ? "Waiting for your answer" : root.running ? "Agent is working" : "Agent run stopped"
                 }
-                Button {
+                ActionButton {
                     id: terminalStatusDetail
                     objectName: "agentTerminalFailureMessage"
                     Layout.fillWidth: true
                     implicitHeight: Math.max(24, contentItem.implicitHeight)
-                    background: Rectangle { color: "transparent" }
+                    embedded: true
                     visible: root.awaitingInput || !root.running
                     text: root.awaitingInput ? root.dialog.pendingApprovalQuestion()
                           : root.dialog.hasRunFailure() ? root.dialog.failureDetail() : root.dialog.statusLine()
@@ -475,58 +488,128 @@ Item {
                         text: terminalStatusDetail.text
                         maximumLineCount: 2
                         elide: Text.ElideRight
-                        font.pixelSize: 11
+                        font.pixelSize: root.themeObject.typeBody
                     }
                 }
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: "#1B1D20"
-                    border.color: "#484238"
+                    Layout.minimumHeight: root.themeObject.scaled(56)
+                    Layout.preferredHeight: Math.max(root.themeObject.scaled(56),
+                                                     currentActivityContent.implicitHeight + root.themeObject.scaled(18))
+                    color: "transparent"
+                    border.width: 0
                     ColumnLayout {
+                        id: currentActivityContent
                         anchors.fill: parent
-                        anchors.margins: 9
+                        anchors.margins: root.themeObject.scaled(9)
                         spacing: root.compact ? 4 : 8
-                        TerminalLabel { text: "LIVE OUTPUT /"; color: root.muted; font.pixelSize: 9 }
-                        Repeater {
-                            model: root.outputRows
+                        TerminalLabel {
+                            objectName: "agentTerminalCurrentTaskSummary"
+                            Layout.fillWidth: true
+                            text: root.currentTaskSummary
+                            font.family: root.themeObject.fontUi
+                            font.pixelSize: root.themeObject.typeBody
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                            Accessible.name: "Current task"
+                            Accessible.description: text
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            TerminalButton {
+                                objectName: "agentTerminalOutputDetailsButton"
+                                visible: root.modelOutputText.length > 0
+                                text: root.activityDetailsExpanded ? "Hide details" : "Details"
+                                accessibleLabel: root.activityDetailsExpanded
+                                                 ? "Hide model output details" : "Show model output details"
+                                subtle: true
+                                onClicked: root.activityDetailsExpanded = !root.activityDetailsExpanded
+                            }
+                            TerminalButton {
+                                objectName: "agentTerminalHistoryToggle"
+                                visible: root.events.length > 1
+                                text: root.activityHistoryExpanded ? "Hide history" : "History"
+                                accessibleLabel: root.activityHistoryExpanded
+                                                 ? "Hide recent activity history" : "Show recent activity history"
+                                subtle: true
+                                onClicked: root.activityHistoryExpanded = !root.activityHistoryExpanded
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        Flickable {
+                            id: modelOutputDetailsScroll
+                            objectName: "agentTerminalModelOutputDetailsScroll"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: root.activityDetailsExpanded
+                                                      ? Math.min(root.height * 0.20,
+                                                                 root.themeObject.scaled(112),
+                                                                 modelOutputDetailsLabel.implicitHeight) : 0
+                            visible: root.activityDetailsExpanded && root.modelOutputText.length > 0
+                            clip: true
+                            contentWidth: width
+                            contentHeight: modelOutputDetailsLabel.implicitHeight
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                            TerminalLabel {
+                                id: modelOutputDetailsLabel
+                                objectName: "agentTerminalModelOutputDetails"
+                                width: modelOutputDetailsScroll.width
+                                text: "Model output · " + root.modelOutputText
+                                color: root.phosphor
+                                font.family: root.themeObject.fontUi
+                                font.pixelSize: root.themeObject.typeCaption
+                                Accessible.name: "Model output details"
+                                Accessible.description: root.modelOutputText
+                            }
+                        }
+                        ListView {
+                            id: activityHistoryList
+                            objectName: "agentTerminalActivityHistoryList"
+                            Layout.fillWidth: true
+                            Layout.fillHeight: root.activityHistoryExpanded
+                            Layout.preferredHeight: root.activityHistoryExpanded
+                                                      ? Math.min(180, activityHistoryList.count * (root.compact ? 34 : 42)) : 0
+                            visible: root.activityHistoryExpanded
+                            clip: true
+                            spacing: 3
+                            model: root.activityHistoryRows
                             delegate: ColumnLayout {
-                                id: outputRow
-                                required property int index
+                                id: activityHistoryRow
                                 required property var modelData
-                                Layout.fillWidth: true
-                                spacing: 2
+                                required property int index
+                                objectName: "agentTerminalActivityHistoryRow-" + index
+                                width: ListView.view.width
+                                height: root.compact ? 32 : 40
+                                spacing: 1
                                 TerminalLabel {
                                     Layout.fillWidth: true
-                                    text: String(outputRow.modelData.time).padStart(2, "0") + "s / " + outputRow.modelData.source + " / " + ["READ", "PLAN", "EDIT", "CHECK"][root.stageIndex(outputRow.modelData.key)]
-                                    font.pixelSize: 9
-                                    color: outputRow.modelData.source === "MODEL" ? root.phosphor : root.muted
+                                    text: root.activityEventTitle(activityHistoryRow.modelData) +
+                                          " · " + root.activityEventStatus(activityHistoryRow.modelData)
+                                    color: root.muted
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
                                     maximumLineCount: 1
                                     elide: Text.ElideRight
                                 }
                                 TerminalLabel {
-                                    objectName: "agentLiveOutput-" + outputRow.index
                                     Layout.fillWidth: true
-                                    text: outputRow.index === root.outputRows.length - 1
-                                          ? String(outputRow.modelData.text).slice(0, root.themeObject.reducedMotion ? root.latestOutput.length : root.revealedCharacters) +
-                                            (root.running && !root.awaitingInput && root.cursorLit ? " ▋" : "")
-                                          : outputRow.modelData.text
-                                    Accessible.name: outputRow.modelData.text
-                                    font.pixelSize: 10
-                                    maximumLineCount: root.compact ? 2 : 3
+                                    text: String(activityHistoryRow.modelData.detail ||
+                                                 ((activityHistoryRow.modelData.evidence || ({})).modelOutputAvailable
+                                                  ? "Model response received" : ""))
+                                    visible: text.length > 0
+                                    color: root.textColor
+                                    font.family: root.themeObject.fontUi
+                                    font.pixelSize: root.themeObject.typeMicro
+                                    maximumLineCount: 1
                                     elide: Text.ElideRight
                                 }
                             }
                         }
-                        TerminalLabel {
-                            visible: root.outputRows.length === 0
-                            text: root.dialog.statusLine() + (root.cursorLit && root.running ? " ▋" : "")
-                            font.pixelSize: 11
-                            color: root.phosphor
-                        }
                         Item { Layout.fillHeight: true }
                     }
                 }
+                Item { Layout.fillHeight: true }
                 RowLayout {
                     Layout.fillWidth: true
                     TerminalButton {
@@ -570,14 +653,14 @@ Item {
 
             ColumnLayout {
                 spacing: 8
-                TerminalLabel { text: root.dialog.editCommitted ? "EDIT SAVED_" : "REVIEW EDIT_"; color: root.phosphor; font.pixelSize: 20 }
+                TerminalLabel { text: root.dialog.editCommitted ? "Edit saved" : "Review edit"; color: root.phosphor; font.pixelSize: root.themeObject.typeHero }
                 TerminalLabel { Layout.fillWidth: true; text: root.dialog.planSummary(); maximumLineCount: 3; elide: Text.ElideRight }
-                TerminalLabel { Layout.fillWidth: true; text: "CHECK / " + root.dialog.validationLabel(); color: root.muted; maximumLineCount: 2; elide: Text.ElideRight }
+                TerminalLabel { Layout.fillWidth: true; text: "Check · " + root.dialog.validationLabel(); color: root.muted; maximumLineCount: 2; elide: Text.ElideRight }
                 TerminalLabel {
                     Layout.fillWidth: true
                     text: root.dialog.applyError.length > 0 ? root.dialog.applyError : "Inspect the rendered result in the editor before applying."
                     color: root.dialog.applyError.length > 0 ? root.themeObject.error : root.muted
-                    font.pixelSize: 10
+                    font.pixelSize: root.themeObject.typeCaption
                     maximumLineCount: 2
                     elide: Text.ElideRight
                 }
@@ -602,7 +685,7 @@ Item {
 
             ColumnLayout {
                 spacing: 8
-                TerminalLabel { text: "CHECKED FILES_"; color: root.phosphor; font.pixelSize: 18 }
+                TerminalLabel { text: "Checked files"; color: root.phosphor; font.pixelSize: root.themeObject.typeDialogTitle }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -636,7 +719,7 @@ Item {
 
             ColumnLayout {
                 spacing: 10
-                TerminalLabel { text: "MODEL CONNECTION_"; color: root.phosphor; font.pixelSize: 18 }
+                TerminalLabel { text: "Model connection"; color: root.phosphor; font.pixelSize: root.themeObject.typeDialogTitle }
                 TerminalLabel { Layout.fillWidth: true; text: String(root.selectedModel.name || "Local vision model"); maximumLineCount: 2; elide: Text.ElideRight }
                 TerminalLabel {
                     Layout.fillWidth: true
@@ -645,7 +728,7 @@ Item {
                           : root.selectedModel.runtime === "managed" ? "This connection uses Looksy's own model store. You can use your existing Ollama model below."
                           : String(root.selectedModel.statusReason || "Connect your existing Ollama model, or set up a new copy.")
                     color: root.muted
-                    font.pixelSize: 11
+                    font.pixelSize: root.themeObject.typeBody
                     maximumLineCount: 4
                     elide: Text.ElideRight
                 }
@@ -653,7 +736,7 @@ Item {
                     Layout.fillWidth: true
                     text: "Already have this model? Use the copy in Ollama."
                     color: root.phosphor
-                    font.pixelSize: 11
+                    font.pixelSize: root.themeObject.typeBody
                     visible: Boolean(root.existingOllamaModel.id)
                 }
                 TerminalButton {

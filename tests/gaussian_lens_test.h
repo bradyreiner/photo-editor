@@ -87,6 +87,7 @@ inline bool gaussian_lens_regression(const std::shared_ptr<photo_editor::desktop
   auto progressive_scene = std::make_shared<GaussianSceneData>(*scene);
   auto progressive_camera = camera;
   progressive_camera.photo.film = {0.15F, 2, 0.3F, 4, 0.8F, 123};
+  progressive_camera.photo.tone = {1.15F,0.6F};
   const auto queue = std::make_shared<GaussianProgressiveFrames>();
   GaussianRenderOptions progressive_options; progressive_options.progressive_frames = queue;
   const auto final = renderer->renderWithOptions(progressive_scene, progressive_camera, false, {}, progressive_options);

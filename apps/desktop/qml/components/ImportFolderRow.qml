@@ -18,9 +18,11 @@ Rectangle {
     width: ListView.view ? ListView.view.width : implicitWidth
     implicitHeight: Math.max(theme.controlHeightDense, folderContent.implicitHeight + theme.space8)
     radius: theme.radiusControl
-    color: selected
-           ? theme.editorSelectionFill
-           : (folderHover.hovered ? theme.editorControlHover : "transparent")
+    color: !enabled
+           ? theme.alpha(theme.ink850, 0.4)
+           : selected
+             ? theme.editorSelectionFill
+             : (folderHover.hovered ? theme.editorControlHover : "transparent")
     border.width: activeFocus ? theme.focusBorderWidth : (selected ? theme.hairlineWidth : 0)
     border.color: activeFocus
                   ? theme.focusRing
@@ -30,15 +32,17 @@ Rectangle {
     clip: true
     activeFocusOnTab: true
     Accessible.name: fileName
-    Accessible.description: selected ? "Currently active folder" : "Open folder"
+    Accessible.description: (selected ? "Currently active folder. " : "Open folder. ") + fileUrl
     Accessible.role: Accessible.Button
-    Keys.onReturnPressed: root.activated(root.fileUrl)
-    Keys.onEnterPressed: root.activated(root.fileUrl)
-    Keys.onSpacePressed: root.activated(root.fileUrl)
+    Keys.onReturnPressed: if (root.enabled) root.activated(root.fileUrl)
+    Keys.onEnterPressed: if (root.enabled) root.activated(root.fileUrl)
+    Keys.onSpacePressed: if (root.enabled) root.activated(root.fileUrl)
+    opacity: enabled ? 1.0 : 0.62
 
     HoverHandler {
         id: folderHover
-        cursorShape: Qt.PointingHandCursor
+        enabled: root.enabled
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
 
     RowLayout {
@@ -54,10 +58,10 @@ Rectangle {
             id: folderLabel
             Layout.fillWidth: true
             text: root.fileName
-            color: root.selected ? theme.interaction300 : (folderHover.hovered ? theme.textMain : theme.textMuted)
+            color: root.enabled ? (folderHover.hovered || root.selected ? theme.textStrong : theme.textMuted) : theme.textFaint
             font.family: theme.fontUi
             font.pixelSize: theme.typeLabel
-            font.weight: theme.weightControl
+            font.weight: root.selected ? theme.weightSection : theme.weightControl
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 2
             elide: Text.ElideNone
@@ -82,6 +86,10 @@ Rectangle {
     }
 
     TapHandler {
-        onTapped: root.activated(root.fileUrl)
+        enabled: root.enabled
+        onTapped: {
+            root.forceActiveFocus()
+            root.activated(root.fileUrl)
+        }
     }
 }

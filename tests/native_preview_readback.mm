@@ -12,7 +12,7 @@ QImage read_native_preview_texture(photo_editor::desktop::EditorPreviewTexture* 
   if (texture.pixelFormat == MTLPixelFormatBGRA8Unorm) {
     format = QImage::Format_ARGB32_Premultiplied; bytes_per_pixel = 4;
   } else if (texture.pixelFormat == MTLPixelFormatRGBA16Float) {
-    format = QImage::Format_RGBA16FPx4; bytes_per_pixel = 8;
+    format = QImage::Format_RGBA16FPx4_Premultiplied; bytes_per_pixel = 8;
   } else return {};
   if (texture.width == 0 || texture.height == 0 || texture.width > 8192 || texture.height > 8192) return {};
   const NSUInteger stride = (texture.width * bytes_per_pixel + 255) / 256 * 256;

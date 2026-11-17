@@ -1,0 +1,58 @@
+{
+  "campaign_id": "01",
+  "title": "I wanted to make this.",
+  "preferred_video": {
+    "type": "finished builder letter with open text",
+    "duration": 32,
+    "founder_required": false,
+    "voiceover": null,
+    "optional_founder_master": "self-shoot-director.md"
+  },
+  "instagram_caption": "I wanted to make this.\n\nI’m Brady. I built LOOKSi, a photo and video editor, and I want a better place to carry an idea through the work. A frame you want to keep. A look you want to shape. A story that needs somewhere to go.\n\nFor professional work, and for the work you make just because.\n\nWhat would you want to test? Tell me what you make and the step that gets in the way.\n\nThe film includes genuine native app archive footage from 25 Oct 2026 and native image/board exports from 16 Nov 2026.",
+  "carousel": [
+    {
+      "slide": 1,
+      "headline": "I wanted to make this.",
+      "body": "A photo + video editor I’m building for the way people make their work.",
+      "png": "carousel/01-slide.png"
+    },
+    {
+      "slide": 2,
+      "headline": "A frame I want to keep.",
+      "body": "Start with the work. Then decide what you want it to hold onto.",
+      "png": "carousel/02-slide.png"
+    },
+    {
+      "slide": 3,
+      "headline": "Make a choice. Look again.",
+      "body": "The small decisions are the work. Genuine native app recording,25Oct2026; historical interface.",
+      "png": "carousel/03-slide.png"
+    },
+    {
+      "slide": 4,
+      "headline": "Try a look. Keep what helps.",
+      "body": "The same photo, exported from the native app. A real choice you can inspect.16Nov2026.",
+      "png": "carousel/04-slide.png"
+    },
+    {
+      "slide": 5,
+      "headline": "Give it somewhere to go.",
+      "body": "FIRST LIGHT / from NEPAL · NEAR & FAR. Actual native board export,16Nov2026.",
+      "png": "carousel/05-slide.png"
+    },
+    {
+      "slide": 6,
+      "headline": "So I’m building LOOKSi.",
+      "body": "Photo + video. For professional work. For the work you make just because. What would you want to test?",
+      "png": "carousel/06-slide.png"
+    }
+  ],
+  "primary_video": "video/01-builder-letter.mp4",
+  "notes": [
+    "Dates stay on-screen where native action/output is shown.",
+    "Actual UI action recording is historical25Oct2026, not current capture.",
+    "Actual photo/chosen and board stills exported16Nov2026.",
+    "No artificial founder, synthetic voice or simulated control response.",
+    "Optional face-to-camera version is a separate future project."
+  ]
+}

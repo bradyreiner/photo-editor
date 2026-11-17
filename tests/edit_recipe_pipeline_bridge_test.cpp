@@ -2,8 +2,10 @@
 #include "system_monitor_profile_asset_bridge.h"
 
 #include <QFile>
+#include <QRegularExpression>
 
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 #include <string>
 
@@ -20,6 +22,79 @@ QString read_source(const QString& path) {
     return {};
   }
   return QString::fromUtf8(file.readAll());
+}
+
+QString executable_source(QString source) {
+  // Ignore mentions in comments and literals when locating owners/call sites.
+  static const QRegularExpression non_code(QStringLiteral(
+      R"lex("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|//[^\n]*|/\*.*?\*/)lex"),
+      QRegularExpression::DotMatchesEverythingOption);
+  auto matches = non_code.globalMatch(source);
+  while (matches.hasNext()) {
+    const auto match = matches.next();
+    source.replace(match.capturedStart(), match.capturedLength(),
+                   QString(match.capturedLength(), QLatin1Char(' ')));
+  }
+  return source;
+}
+
+QString function_body(const QString& source, const QString& name) {
+  const auto code = executable_source(source);
+  const QRegularExpression signature(QStringLiteral("\\b%1\\s*\\(")
+      .arg(QRegularExpression::escape(name)));
+  auto signatures = signature.globalMatch(code);
+  while (signatures.hasNext()) {
+    const auto match = signatures.next();
+    auto cursor = match.capturedEnd() - 1;
+    auto depth = 0;
+    for (; cursor < code.size(); ++cursor) {
+      if (code[cursor] == QLatin1Char('(')) ++depth;
+      if (code[cursor] == QLatin1Char(')') && --depth == 0) {
+        ++cursor;
+        break;
+      }
+    }
+    while (cursor < code.size() && code[cursor].isSpace()) ++cursor;
+    // Calls and forward declarations do not own the implementation.
+    if (cursor == code.size() || code[cursor] != QLatin1Char('{')) continue;
+    const auto begin = ++cursor;
+    depth = 1;
+    for (; cursor < code.size(); ++cursor) {
+      if (code[cursor] == QLatin1Char('{')) ++depth;
+      if (code[cursor] == QLatin1Char('}') && --depth == 0) {
+        auto body = code.mid(begin, cursor - begin);
+        body.remove(QRegularExpression(QStringLiteral("\\s+")));
+        return body;
+      }
+    }
+  }
+  return {};
+}
+
+bool owns_shared_pipeline(const QString& preview, const QString& output,
+                         const QString& compiler, const QString& plan_store) {
+  const auto preview_compiler = function_body(preview, "compile_preview_pipeline_state");
+  const auto output_compiler = function_body(output, "compile_export_pipeline_state");
+  const auto shared_compiler = function_body(compiler, "compile_desktop_pipeline_state");
+  const auto preview_renderer = function_body(preview, "render_preview_request");
+  const auto export_renderer = function_body(output, "render_flattened_output_file");
+  const auto admission = function_body(plan_store, "RenderPlanStore::admit");
+  return preview_compiler.contains("returncompile_desktop_pipeline_state(") &&
+      preview_compiler.contains("DesktopRenderPurpose::Preview") &&
+      output_compiler.contains("returncompile_desktop_pipeline_state(") &&
+      output_compiler.contains("DesktopRenderPurpose::Output") &&
+      shared_compiler.count("compile_base_color_adjustment_state(") == 1 &&
+      !executable_source(preview).contains("compile_base_color_adjustment_state(") &&
+      !executable_source(output).contains("compile_base_color_adjustment_state(") &&
+      function_body(preview, "compile_desktop_pipeline_state").isEmpty() &&
+      function_body(output, "compile_desktop_pipeline_state").isEmpty() &&
+      preview_renderer.contains("RenderPlanStore::shared().admit(") &&
+      preview_renderer.contains("if(canonical_plan_required&&!admission.admitted)") &&
+      export_renderer.contains("RenderPlanStore::shared().admit(") &&
+      export_renderer.contains("if(canonical_required&&!admission.admitted)") &&
+      export_renderer.contains("admission.admitted?&*admission.plan:nullptr") &&
+      admission.contains("compile_desktop_render_plan_with_derived_assets(") &&
+      admission.contains("if(!compiled.ok())");
 }
 
 }  // namespace
@@ -98,6 +173,35 @@ int main() {
       adjustment.master_curve_points.back().y != 0.9 ||
       adjustment.color_pipeline.output_headroom != 2.0) {
     return fail("shared base adjustment compilation should preserve canonical desktop intent");
+  }
+
+  auto raw_state = state;
+  raw_state.raw_exposure = 1.9;
+  auto raw_metadata = photo_editor::pipeline::DecodedImageMetadata{};
+  raw_metadata.valid = true;
+  raw_metadata.is_raw = true;
+  raw_metadata.pixel_encoding =
+      photo_editor::pipeline::DecodedPixelEncoding::CameraLinearRgb;
+  raw_metadata.decoder_backend = "LibRaw camera-linear fixture";
+  raw_metadata.decoded_color_space_name = "camera RGB";
+  raw_metadata.demosaic_applied = true;
+  const auto raw_adjustment =
+      photo_editor::desktop::compile_base_color_adjustment_state(raw_state, &raw_metadata);
+  if (std::abs(raw_adjustment.input_transform.exposure - 3.15) > 1.0e-12 ||
+      photo_editor::desktop::compile_base_color_adjustment_state(raw_state)
+              .input_transform.exposure != state.exposure) {
+    return fail("deferred RAW exposure must add to Light exposure only for engine-owned RAW");
+  }
+  raw_state.raw_input_transform_enabled = false;
+  if (std::abs(photo_editor::desktop::compile_base_color_adjustment_state(raw_state, &raw_metadata)
+          .input_transform.exposure - 3.15) > 1.0e-12) {
+    return fail("RAW exposure must remain float-engine-owned with input characterization disabled");
+  }
+  auto raster_metadata = raw_metadata;
+  raster_metadata.is_raw = false;
+  if (photo_editor::desktop::compile_base_color_adjustment_state(raw_state, &raster_metadata)
+          .input_transform.exposure != state.exposure) {
+    return fail("RAW exposure must not affect a decoded non-RAW image");
   }
 
   const auto monitor_color_space =
@@ -179,12 +283,8 @@ int main() {
           QStringLiteral("#include \"desktop_pipeline_state_compiler.h\"")) ||
       !compiler_source.contains(
           QStringLiteral("#include \"edit_recipe_pipeline_bridge.h\"")) ||
-      compiler_source.count(
-          QStringLiteral("compile_base_color_adjustment_state(")) != 1 ||
-      preview_source.count(
-          QStringLiteral("compile_desktop_pipeline_state(")) != 1 ||
-      export_source.count(
-          QStringLiteral("compile_desktop_pipeline_state(")) != 1 ||
+      !owns_shared_pipeline(preview_source, export_source, compiler_source,
+                            render_plan_store_source) ||
       preview_source.contains(
           QStringLiteral("compile_base_color_adjustment_state(")) ||
       export_source.contains(
@@ -193,8 +293,8 @@ int main() {
           QStringLiteral("RenderPlanStore::shared().admit(")) ||
       !job_runner_source.contains(
           QStringLiteral("RenderPlanStore::shared().admit(")) ||
-      export_source.count(
-          QStringLiteral("RenderPlanStore::shared().admit(")) != 1 ||
+      !export_source.contains(
+          QStringLiteral("RenderPlanStore::shared().admit(")) ||
       render_plan_store_source.count(
           QStringLiteral("compile_desktop_render_plan_with_derived_assets(")) != 1 ||
       render_plan_store_source.contains(
@@ -240,6 +340,23 @@ int main() {
       carousel_source.contains(QStringLiteral("to_pipeline_state("))) {
     return fail(
         "preview, export, and carousel must use the sole shared desktop pipeline compiler");
+  }
+
+  // More consumers may reuse the sole compiler. Guard ownership and admission,
+  // rather than freezing the number of legitimate preview/export call sites.
+  const auto extra_consumer = preview_source + QStringLiteral(
+      "\nvoid another_preview_consumer() { compile_desktop_pipeline_state(); }\n");
+  auto private_preview = preview_source;
+  private_preview.replace("compile_desktop_pipeline_state(", "compile_private_pipeline_state(");
+  auto bypassed_admission = export_source;
+  bypassed_admission.replace("RenderPlanStore::shared().admit(", "compile_export_plan_directly(");
+  const auto duplicated_owner = preview_source + QStringLiteral(
+      "\nvoid duplicate_pipeline_owner() { compile_base_color_adjustment_state(); }\n");
+  if (!owns_shared_pipeline(extra_consumer, export_source, compiler_source, render_plan_store_source) ||
+      owns_shared_pipeline(private_preview, export_source, compiler_source, render_plan_store_source) ||
+      owns_shared_pipeline(preview_source, bypassed_admission, compiler_source, render_plan_store_source) ||
+      owns_shared_pipeline(duplicated_owner, export_source, compiler_source, render_plan_store_source)) {
+    return fail("pipeline ownership guard must accept shared reuse and reject private compilers/admission bypasses");
   }
 
   return EXIT_SUCCESS;

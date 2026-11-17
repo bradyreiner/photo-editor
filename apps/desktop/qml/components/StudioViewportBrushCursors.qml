@@ -6,6 +6,7 @@ Item {
     id: cursorStack
 
     required property string viewportObjectName
+    property var previewController: null
     required property var pixelBrushCell
     required property bool pixelBrushVisible
     required property color pixelBrushColor
@@ -59,13 +60,11 @@ Item {
     Rectangle {
         id: brushCursorRing
         objectName: cursorStack.objectNameFor("BrushCursorRing", "brushCursorRing")
-        readonly property real brushDiameter: Math.max(
-            8,
+        readonly property real brushDiameter:
             Math.min(cursorStack.paintedContentWidth, cursorStack.paintedContentHeight) *
-                cursorStack.activeBrushSize * 2)
-        readonly property real hardnessDiameter: Math.max(
-            2,
-            brushCursorRing.brushDiameter * cursorStack.activeBrushHardness)
+                Math.max(0.01, cursorStack.activeBrushSize) * 2
+        readonly property real hardnessDiameter:
+            brushCursorRing.brushDiameter * cursorStack.activeBrushHardness
         readonly property string brushCursorVisibilityContract: "persistent-last-position|dual-contrast-ring|hardness-inner-ring:v1"
         readonly property string brushModeLabel: cursorStack.activeMaskOperation === "subtract"
                                                 ? "Erase"
@@ -87,6 +86,7 @@ Item {
 
         Rectangle {
             objectName: cursorStack.objectNameFor("BrushCursorOuterHaloRing", "brushCursorOuterHaloRing")
+            visible: !projectedCursor.available
             anchors.fill: parent
             radius: width / 2
             color: "transparent"
@@ -96,8 +96,9 @@ Item {
 
         Rectangle {
             objectName: cursorStack.objectNameFor("BrushCursorFeatherRing", "brushCursorFeatherRing")
+            visible: !projectedCursor.available
             anchors.fill: parent
-            anchors.margins: 1
+            anchors.margins: Math.min(1, brushCursorRing.width / 4)
             radius: width / 2
             color: "transparent"
             border.width: 1.5
@@ -113,6 +114,7 @@ Item {
             color: "transparent"
             border.width: 1.5
             border.color: theme.alpha(theme.polar, 0.92)
+            visible: !projectedCursor.available && width >= 2
         }
 
         Item {
@@ -120,7 +122,9 @@ Item {
             anchors.centerIn: parent
             width: 10
             height: 10
-            visible: brushCursorRing.width >= 24
+            // Keep a readable position marker for a subpixel footprint without
+            // enlarging the ring that describes the affected photo pixels.
+            visible: brushCursorRing.width >= 24 || brushCursorRing.width < 8
             Rectangle {
                 anchors.centerIn: parent
                 width: 9; height: 3
@@ -147,6 +151,20 @@ Item {
 
     }
 
+    ProjectedBrushCursor {
+        id: projectedCursor
+        objectName: cursorStack.objectNameFor("BrushProjectedFootprint", "brushProjectedFootprint")
+        anchors.fill: parent
+        visible: cursorStack.brushVisible
+        controller: cursorStack.previewController
+        pointerX: cursorStack.pointerX; pointerY: cursorStack.pointerY
+        imageX: cursorStack.paintedContentX; imageY: cursorStack.paintedContentY
+        imageWidth: cursorStack.paintedContentWidth; imageHeight: cursorStack.paintedContentHeight
+        brushSize: cursorStack.activeBrushSize; hardness: cursorStack.activeBrushHardness
+        accent: cursorStack.brushOperationColor
+        z: 22
+    }
+
     Label {
         id: brushCursorReadout
         objectName: cursorStack.objectNameFor("BrushCursorModeLabel", "brushCursorModeLabel")
@@ -161,13 +179,16 @@ Item {
                brushCursorRing.y + brushCursorRing.height + theme.space4,
                viewportMargin,
                Math.max(viewportMargin, cursorStack.height - height - viewportMargin))
-        text: brushCursorRing.brushModeLabel + " Size " +
+        text: cursorStack.previewController && cursorStack.previewController.activeMaskToolRole === "selection"
+              ? (cursorStack.activeMaskOperation === "subtract" ? qsTr("− Remove") : qsTr("+ Add")) + " · " + cursorStack.brushSizeText
+              : brushCursorRing.brushModeLabel + " Size " +
               cursorStack.brushSizeText +
               " / Hard " + cursorStack.brushHardnessText +
               " / Flow " + cursorStack.brushFlowText +
               " / Density " + cursorStack.brushDensityText
         color: theme.textStrong
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: theme.typeCaption
         padding: 4
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere

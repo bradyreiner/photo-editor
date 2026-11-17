@@ -16,18 +16,21 @@ Button {
     property string disabledFallbackReason: "Unavailable in the current state."
     property string a11yName: ""
     property bool labelVisible: true
-    property bool fitTextToWidth: true
+    property int contentAlignment: Qt.AlignHCenter
+    property bool showLeadingIcon: false
+    property bool fitTextToWidth: false
     property bool allowLabelWrap: false
     property bool square: false
     property int minimumReadableWidth: 0
     property int maximumReadableWidth: theme.menuMaxWidth
-    property string role: square ? "icon" : "secondary"
+    property string role: square ? "icon" : "ghost"
     readonly property bool primary: role === "primary"
     readonly property bool destructive: role === "destructive"
     readonly property bool ghost: role === "ghost"
     readonly property bool segmented: role === "segmented"
     readonly property bool iconOnly: role === "icon" || square
     readonly property bool visualIconOnly: iconOnly || (!labelVisible && iconName.length > 0)
+    readonly property bool commandIconVisible: iconName.length > 0 && (visualIconOnly || text.length === 0 || showLeadingIcon)
     readonly property bool customIconColor: iconColor.a > 0
     readonly property bool commandShape: !iconOnly && !segmented && !ghost
     readonly property bool slashEdge: false
@@ -36,11 +39,11 @@ Button {
     readonly property bool accentBorderVisible: false
     readonly property int commandCut: slashEdge ? 10 : 0
     readonly property real availableContentWidth: Math.max(0, width - theme.space12)
-    readonly property real labelAvailableWidth: Math.max(0, availableContentWidth - (iconName.length > 0 && !visualIconOnly ? theme.scaled(20) : 0))
+    readonly property real labelAvailableWidth: Math.max(0, availableContentWidth - (commandIconVisible && !visualIconOnly ? theme.scaled(20) : 0))
     readonly property bool contentFitsControl: !visible || buttonContent.width <= availableContentWidth + 1
     readonly property bool labelFitsControl: !visible || visualIconOnly || label.width <= labelAvailableWidth + 1
     readonly property bool labelOverflowing: label.visible && label.contentWidth > label.width + 1
-    readonly property real readableImplicitWidth: label.implicitWidth + (iconName.length > 0 ? 42 : 24)
+    readonly property real readableImplicitWidth: label.implicitWidth + theme.scaled(commandIconVisible ? 42 : 24)
     readonly property string resolvedTooltipText: !root.enabled
                                                   ? (root.disabledReason.length > 0
                                                      ? root.disabledReason
@@ -101,7 +104,7 @@ Button {
                        : theme.controlHeight)
     implicitWidth: visualIconOnly
                    ? theme.iconButtonSizeCompact
-                   : Math.max(54, minimumReadableWidth,
+                   : Math.max(theme.scaled(44), minimumReadableWidth,
                               Math.min(maximumReadableWidth, readableImplicitWidth))
     clip: true
     hoverEnabled: true
@@ -136,6 +139,7 @@ Button {
     }
 
     background: CommandButtonSurface {
+        tone: root.destructive ? "danger" : root.primary ? "primary" : "secondary"
         cornerRadius: theme.radiusControl
         hovered: root.hovered
         pressed: root.down
@@ -144,20 +148,22 @@ Button {
         fillColor: theme.commandFill(root.destructive ? "danger" : root.primary ? "primary" : "secondary",
                                      root.active, root.hovered, root.down, root.enabled,
                                      root.ghost || root.segmented || root.visualIconOnly)
-        borderWidth: theme.commandBorderWidth(root.visualFocus)
-        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
+        focused: root.visualFocus
     }
 
     contentItem: Item {
         RowLayout {
             id: buttonContent
-            anchors.centerIn: parent
+            anchors.verticalCenter: parent.verticalCenter
+            x: root.contentAlignment === Qt.AlignLeft && !root.visualIconOnly
+               ? theme.space8 : Math.max(0, (parent.width - width) / 2)
             width: Math.min(implicitWidth, root.availableContentWidth)
             height: implicitHeight
-            spacing: root.visualIconOnly ? 0 : theme.gapDense
+            spacing: root.commandIconVisible && !root.visualIconOnly ? theme.gapDense : 0
 
             AppIcon {
-                visible: root.iconName.length > 0
+                objectName: "sharedCommandIcon"
+                visible: root.commandIconVisible
                 name: root.iconName
                 color: root.primary && !root.destructive && root.enabled ? theme.actionPrimaryText
                        : root.customIconColor ? root.iconColor
@@ -170,6 +176,7 @@ Button {
 
             Label {
                 id: label
+                objectName: "sharedCommandLabel"
                 visible: !root.visualIconOnly
                 text: root.text
                 color: root.primary && !root.destructive && root.enabled ? theme.actionPrimaryText
@@ -183,8 +190,7 @@ Button {
                 wrapMode: root.allowLabelWrap ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap
                 maximumLineCount: root.allowLabelWrap ? 2 : 1
                 elide: Text.ElideNone
-                fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
-                minimumPixelSize: 10
+                fontSizeMode: Text.FixedSize
                 clip: !root.allowLabelWrap
                 verticalAlignment: Text.AlignVCenter
             }

@@ -1,0 +1,816 @@
+{
+  "referenceDurationSeconds": 298,
+  "fps": 30,
+  "sources": [
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/audio/creative-polish-v4-master.wav",
+      "bytes": 57216044,
+      "sha256": "ff52ed7e472c99f2dac8ef1b5a553200bd968a2b29896c12f0042e507740945a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_4744.jpg",
+      "bytes": 858275,
+      "sha256": "6048258a1904b99609cd361421b57d7bf7c252d25329d57b72cc73479d7fa66c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_4856.jpg",
+      "bytes": 344623,
+      "sha256": "498e58d2151d0cc4b572a170c85105166afc5d4f244f1f97f669a1fd7141677e"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_4870.jpg",
+      "bytes": 322695,
+      "sha256": "7663700d19882d407aebf12ac86765942c106d3a8600b3dd56b7fe449525eca4"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_4969.jpg",
+      "bytes": 485098,
+      "sha256": "73f1dfaf468aa80e27a70b5e1616233032ab338c0b36408ecc05aedeac230271"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5053.jpg",
+      "bytes": 299906,
+      "sha256": "07085a0796f9359a1f8e669023158ca5e9f8b1d5e99d0cf6d8717d35cc121962"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5071.jpg",
+      "bytes": 247283,
+      "sha256": "646ff307414c0aab62c67c57425618fc865a562ee4deadc1a4aa42e6d33a8b67"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5077.jpg",
+      "bytes": 190369,
+      "sha256": "52a29d8d0bdc748f71b5e25bea35c59794db67dbf118b9b69ac5128ec5045c3b"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5103.jpg",
+      "bytes": 365872,
+      "sha256": "fe0fa6b458d315552d64ab26e5adfe4fe8f556ed508187d5e292873d48c51952"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5106-developed.jpg",
+      "bytes": 842523,
+      "sha256": "443c2a2fc0c3f64fcee7439de32e00294b30e1b19dcfb2ecf441ecbbf24bd1e6"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5111.jpg",
+      "bytes": 302472,
+      "sha256": "741c42e2dc9b3c208e0298e1c3b8a48410b9fea73662dd7a197e3de5d42aaca0"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5124.jpg",
+      "bytes": 367409,
+      "sha256": "6a7f55638be8449de24bc09d51269ad77949835c514d9dc0b1b5c550298208df"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/IMG_5125.jpg",
+      "bytes": 550894,
+      "sha256": "b3a3c418a4e142ba0a8d2456729ddcb959a75aff20969b4e125f34960b931e4c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/MVI_5051-2.3-5.9.mp4",
+      "bytes": 202306,
+      "sha256": "7d1e8a9285e725b877d26c7e380102347ff33ba05e0a8f2619feb31b185cc24f"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/campaign/wedding-couple-developed.jpg",
+      "bytes": 803320,
+      "sha256": "4956a010ece5db092e8d14f1fa403cfb70708ba0fdf70fabf4785bae2762dc81"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/campaign/wedding-dawn-developed.jpg",
+      "bytes": 958648,
+      "sha256": "7d7f28aaf88f28731d667636a20aaf7d81e1237a10f9b8245949c3a89526c8b2"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/campaign/wedding-lace-detail.jpg",
+      "bytes": 142319,
+      "sha256": "f51e28b2926c90f055606e4e967a721b4e87f79e23eb233378d3bee3c5057ebd"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-launch/city-mono-last.jpg",
+      "bytes": 230590,
+      "sha256": "27127ccce8f714d2d4ee353265039c18a67ef8a16cbfb54187fa6d996116545c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-launch/trail-shoe-cutout.png",
+      "bytes": 1822583,
+      "sha256": "235af66f2109f53476481354059ff9392371b23ca9e32b9b2418132dc125deaf"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-launch/trail-shoe-source.png",
+      "bytes": 2221110,
+      "sha256": "b44357f5f28642704ae18b98aae30557552f6fc41971848b607a385935b0f825"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_4653.jpg",
+      "bytes": 199769,
+      "sha256": "622092e5b3902616c73206dab643416e4cf818db5f3b01ef657e4fd41679f488"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_4748.jpg",
+      "bytes": 102340,
+      "sha256": "b834e89f254b04ce50778cfd670060028b5c0ce1b277705d164c4a43c344ffe5"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_4779.jpg",
+      "bytes": 73148,
+      "sha256": "07607974a9f8377ddfb3b8f3a886452b8ec6df10df8c069ad8a9bd6c84c40e1c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_4788.jpg",
+      "bytes": 159840,
+      "sha256": "6d576bfd6646b5abe577c4085f3d5b053de35b3ad597fb2f522013431e421fd0"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_4867.jpg",
+      "bytes": 148541,
+      "sha256": "814f286c3d6aa4c7e4038c55e640a0f8a05ff0218e0a319771799697dd4aa8f6"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_4969.jpg",
+      "bytes": 140485,
+      "sha256": "4e7f39de837800bbe6ed3657661497941b7e202c343df98895233a245595c373"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_5053.jpg",
+      "bytes": 68327,
+      "sha256": "d8653d9dd227de2a4669e390d79fab2e7f7cca36893a6bd7677943372b6c36ed"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_5071.jpg",
+      "bytes": 45500,
+      "sha256": "3892cc13005efa5c0a09d3530689123ba82ab2e4a81a5611efb5470f7770f3a7"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_5077.jpg",
+      "bytes": 49496,
+      "sha256": "3b2927135ea3069c51e04abdbe2c1a755bb4618dcfb5aad495a3c3e508bd2f5b"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_5106.jpg",
+      "bytes": 124110,
+      "sha256": "b0adab9e38db3b6e2d664a1c6dc26b8662697a747fc8633f80f1910a8b81fd1a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_5125.jpg",
+      "bytes": 142611,
+      "sha256": "d08f3fd4405926af7148b2c064471a755e24646a840b76e4c14158d8e2e63301"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/IMG_5203.jpg",
+      "bytes": 110503,
+      "sha256": "e1a8b3538ddce83bbf70d348969e7c9e031f674fe7279aa4d7ad5a88e9ac500c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/arrival-12.mp4",
+      "bytes": 35364494,
+      "sha256": "8c40397a24bdba05f8cdc8a87cd5e10bc030d0e7e575359bf4204acc3a09ac2e"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/city-10.mp4",
+      "bytes": 35971545,
+      "sha256": "2cd86e83c922dce29d30662e77de114454730abc73ef958a188774e4244e6b03"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/city-grade-10.mp4",
+      "bytes": 32534133,
+      "sha256": "f55ca65e9479d1d0fcc5f2117fb942886c7906018dbcc0109069fd81c53a9363"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/city-mono-10.mp4",
+      "bytes": 30373359,
+      "sha256": "c5104f55caeffe6f4a62db278c87640ccb5ff1bc45a78fe4e8d25e6a79c92dd8"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-0.png",
+      "bytes": 1803879,
+      "sha256": "040316c4671bbad8325e2fd3dd0360f369f7665806e57615dfb76b58f761b8b2"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-1.png",
+      "bytes": 1800709,
+      "sha256": "a2965ff1d2a5afb51f52aa3a3fbc5eb0f8c615eb58716dc803d2d6700bb5ec18"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-10.png",
+      "bytes": 1739150,
+      "sha256": "c2e08952d14715767d81f49f128fd63d37c3473e29bdea3df9325f36adea7879"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-11.png",
+      "bytes": 1740737,
+      "sha256": "e9746cd0cf72249c00cc058e60d61b839e1cece3cea993cf20ed4be36489a76c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-12.png",
+      "bytes": 1741688,
+      "sha256": "e360fe01396b44801325b4cf528a21e25b410cf1d384cc84583f8f3aee475a74"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-13.png",
+      "bytes": 1742953,
+      "sha256": "55564c8d7131363522ecef349a31775da073cb9287d4e634f0a429e43d88b656"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-14.png",
+      "bytes": 1743937,
+      "sha256": "c4743187048106292b7eb7ac6fac45902174aab72e77016327db0551bd09ef24"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-15.png",
+      "bytes": 1744825,
+      "sha256": "f19ea060d8d2181f576fffa823c28ba8e70ae54bbd16298c8ec02ada17761895"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-16.png",
+      "bytes": 1745606,
+      "sha256": "b23ed6d62aae81036e3dfc9c305c1498d545da9ff48a5958be930a8815efee30"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-2.png",
+      "bytes": 1796406,
+      "sha256": "826d792a9cdad41707c9bb3c8139a5cdc4bd4e4ca5727f262134845a82c30c47"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-3.png",
+      "bytes": 1790642,
+      "sha256": "7dfd9657fc69cda81042fbfed96c8103400d16868e38dc559556f018c0746b11"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-4.png",
+      "bytes": 1782819,
+      "sha256": "ee7c9f1393a5f549a902a94f9a34b02664724a1e238d71c4b9dcdf5523c28c3e"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-5.png",
+      "bytes": 1772814,
+      "sha256": "e4ec24d3ba4b57d292175b4fe18c5219f002801cce88b274e5c9378f30dadaf8"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-6.png",
+      "bytes": 1760522,
+      "sha256": "7389ce7d240c9ede5cd94837ac354180ad73d25352de2943ec5fbf8da06c689c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-7.png",
+      "bytes": 1747532,
+      "sha256": "89c15eefc540b00e03c1bd56c5e5bc422b0616b98618cffe877c64a5e4eebd8a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-8.png",
+      "bytes": 1736125,
+      "sha256": "a281def34970a93d9ad7206d93ed88ee2176738019a4d9f040de36ae83cce6d8"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve-9.png",
+      "bytes": 1737854,
+      "sha256": "3a4fc6f15939d09b99f0762f466f24b1ca2d8b5e4f901ca2f9354d175646ea66"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/curve/curve.json",
+      "bytes": 72042,
+      "sha256": "e4fd2e88850d07b7975d29235d238ca6d0ea89a3f56d2881e5753953abde8345"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-0.png",
+      "bytes": 1296872,
+      "sha256": "6109f298f60e5f938f8c5ac8bfd426a03bf84ede460a8c522cf2d6a9686ca47f"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-1.png",
+      "bytes": 1300269,
+      "sha256": "bc0548ad61ad37ccd76dea8d885eaa605b10620f7b54e10fb8d8f430738d58bc"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-2.png",
+      "bytes": 1303619,
+      "sha256": "57d7ed0df6ce63e043c672b9169858bd62edb69b758e221387faf7e0d695ed6a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-3.png",
+      "bytes": 1306955,
+      "sha256": "8bb0b28bd03c04681cdc7b23b43af89af45a21fd2920c652f63f19b5e578ba6c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-4.png",
+      "bytes": 1309776,
+      "sha256": "fb6f745b82842adea7b02ef14d767d65cac228433c445ea7929c8c674a96e047"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-5.png",
+      "bytes": 1312518,
+      "sha256": "07afe5b3a5c60db521bef4895e782db442a0bd1bfc85227d775063ad30ec0357"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-6.png",
+      "bytes": 1314633,
+      "sha256": "1472bf9a122e12b8809fe6baeef9bec3fccab7509260ea0b4a29d3ede40348c4"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-7.png",
+      "bytes": 1316681,
+      "sha256": "e4941712bacc2636dfdc82df404293caeeee43f90443b23b03db3f617829d525"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/detail/detail-8.png",
+      "bytes": 1318538,
+      "sha256": "d779814fedcbbab74f2b4ba3d25583538712372972e4f0a491a3dd06dd865dd1"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-0.png",
+      "bytes": 1613759,
+      "sha256": "3a5e066bdda2aad045eeb2d3160e16b18d8d2ce8a4f76bc8bb0e54484284f0fa"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-1.png",
+      "bytes": 1624317,
+      "sha256": "917c0f382fd0db7060331befcdfab371f5ff79dd66d6317684d9ff53112dfd03"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-2.png",
+      "bytes": 1638408,
+      "sha256": "a9a5108f679507cb47727bc2beae784c3e10371f40e0a5e9765144d8a4de12ef"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-3.png",
+      "bytes": 1653790,
+      "sha256": "f341922e4493ad1ab749c85eac8f1b0e3449c73bd9b6abf3c098a1ab59f451b3"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-4.png",
+      "bytes": 1670505,
+      "sha256": "f1c584c1aada6bd939466d435eba126f8b4816ad7b6a9e93ff065995b26c1196"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-5.png",
+      "bytes": 1688144,
+      "sha256": "eb1f6ad4856f1328a4229b823548fc96298d131b11c761e3ee2b6140eb041f32"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-6.png",
+      "bytes": 1706065,
+      "sha256": "7f9795df1c12a36107d8a7e6de39a5ed9bbf6b40912dc8bf9a952c22563bedfc"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-7.png",
+      "bytes": 1724679,
+      "sha256": "77348f8b854774f51cdc6cd2894b09f298cb4bdd1525aefc40290b57b4eafc6e"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/flower/mix-8.png",
+      "bytes": 1742801,
+      "sha256": "b341bf6fbf59342736940e0e44a160a836131a5201617ae17e7c0d411bcc46db"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/subject-lift-alpha.png",
+      "bytes": 2278558,
+      "sha256": "0d65243bc8e12cfd227e00781ede5bf8ff5544884708e1ced2f42bc3d877893f"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/timeline-native.png",
+      "bytes": 494454,
+      "sha256": "73cd285a518a25281df9023f1a35ffa9036648a2fa0ecc846d1ecf21c1fc54d1"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/wedding-embrace/batch-after.png",
+      "bytes": 1431173,
+      "sha256": "0c49b9883a28e8c8c9b231b2268715dbb3845a2288978739651f3d1d814d7a41"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/wedding-embrace/batch-before.png",
+      "bytes": 1419781,
+      "sha256": "166c43e06f786f08ff4fd48abd90a074574d80ae77fde5f24df77628b5c9e3b6"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/wedding-play/batch-after.png",
+      "bytes": 1149283,
+      "sha256": "90570c1227b6e7b4699dfd1e18cbfbc74a8287d31232d2410566c6f36075b029"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/wedding-play/batch-before.png",
+      "bytes": 1133323,
+      "sha256": "1513debb08f30f899aa5311faf91dfa1d37656c2ba49ae39d2b3de0747f1da60"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/wedding-walk/batch-after.png",
+      "bytes": 879892,
+      "sha256": "c4bf16521caca4e467b7b8db1e0dc3480b82a01884a29cd2df0fd05da883678c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/wedding-walk/batch-before.png",
+      "bytes": 869959,
+      "sha256": "dfd83cc6cfab2c92bfffb0335a7946040e3c4b333cf21b0374904056f82abc2f"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v4/raw-export/camera-finish.jpg",
+      "bytes": 9218674,
+      "sha256": "d8e3408b480ca886a40b7c2fb7d5a95471d4853c9218f1b0b825e81d27d15056"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v4/raw-export/camera-finish.tiff",
+      "bytes": 193756690,
+      "sha256": "5a27482c32b53738ff4c6515387af631997efda1bd6f639e361ac7cedc19dab7"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v4/raw-export/preview.jpg",
+      "bytes": 458955,
+      "sha256": "6ef0615b9e174aff90bd34c1fbb600a00fa6e28a0c0fe14da4c91b771f19d4f5"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-action/color-edit.mp4",
+      "bytes": 363650,
+      "sha256": "31d1f98560ff5ca8f1bd27b1822a19864222d6be4a40ba288097e57366f0fc8a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-action/mask-exposure.mp4",
+      "bytes": 1439936,
+      "sha256": "98d70da26ce695c065d0027880feab943c30681bb6a7d16505d1f3dd0f3ff8ab"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-action/poster-type.mp4",
+      "bytes": 1959493,
+      "sha256": "1c195437dc62c1e239221bbf683dc9f16bdfde3836d3fef8e203bc1373e44015"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-action/subject-mask.mp4",
+      "bytes": 2585148,
+      "sha256": "dfcf6ce5a5c7deba7b1a0f1fb5c93f5f7eef23008e95e62453d68e9060025e85"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-action/timeline-build.mp4",
+      "bytes": 1102745,
+      "sha256": "69241ec2c3d005530000ad4c7af3064cd3d427eb37526b8be4e16053432cbbcb"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-action/tone-curve.mp4",
+      "bytes": 2511677,
+      "sha256": "70f6f0ae68b30048fb1bc51c806f5f8c756bb62fe4d2b297336dfe9ea9edc756"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-launch/canvas.png",
+      "bytes": 368763,
+      "sha256": "81969bc79fb448fa744562e9924044d5a7cf624f557947cbf8f9ac5c9b77d3cc"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-launch/cull-native.mp4",
+      "bytes": 1032623,
+      "sha256": "d202f576649a8e098d962f244ac9802059ce639b8edd59ad4d4be4b53f0dde78"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-launch/raw-editor.png",
+      "bytes": 476865,
+      "sha256": "8ebb266571865d16535c0c0e2b9bb5ca5cb272293bd73206d3e1c8a09c3e3398"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-launch/raw-native.mp4",
+      "bytes": 1947029,
+      "sha256": "26e30602bfa55b7d6f2408b05cdf95a0a6548db5c4947df11af87d603f6e53b0"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/launch-1268.mp4",
+      "bytes": 56421282,
+      "sha256": "f7cb30fcb3aa93f989eca8ec3feb729207519da4505f9a9050d9e424e2613419"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/looksy-logo-dark.png",
+      "bytes": 414973,
+      "sha256": "17199f363f1168d68bd9ac1f1c9a7a8d3401ab04982175021be3c8dedda811b9"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/refine/arrival.mp4",
+      "bytes": 31128986,
+      "sha256": "ad57a519c882b40660fb60da627bcf7cec722e878cdbc2898b9e79164c3687d1"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/refine/finished-film.jpg",
+      "bytes": 320047,
+      "sha256": "5e5f5227e778f5e27b96521475a6ad9235eccfe8296397453360d6053e2fff2b"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/refine/hike.mp4",
+      "bytes": 89286067,
+      "sha256": "1025503678d4caa95e03fe12d5d561e5b80c06c1f588d05e5f8045166ff1e978"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/refine/night.mp4",
+      "bytes": 15064427,
+      "sha256": "e2014c95c8e4a191973768af37c53b2b268253774ca8b708bfd38bf950d112c7"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/refine/surf-final.png",
+      "bytes": 4542577,
+      "sha256": "a59be3841536fe5af54d2bb23542f191d437aa9ce0696a0ecc1e180da0087613"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/refine/surf.jpg",
+      "bytes": 377827,
+      "sha256": "fae0ce28fe54c5fca48af915477cf83f5a6c7407d5d31cce9a47c629ae9d6d9f"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/arrival-first.jpg",
+      "bytes": 238520,
+      "sha256": "67f3169893542b884c4ae8eec4281737e431e58806d9ec9aef67b11607fbc134"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/city-delivery.jpg",
+      "bytes": 249779,
+      "sha256": "6a1f657e4c5e49d9c5a8e5b09483e5dff28b3502e3aef868f154d83d7de12829"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/city-grade.mp4",
+      "bytes": 29424514,
+      "sha256": "faa8ce9cc231b814338ec7fc14060721fd7a66b5298c88a453c964367cafbae0"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/city-mono.mp4",
+      "bytes": 27760919,
+      "sha256": "7609ffad7bbf02853fde1fb6e9597864c302f3e2e36b6c9fed25268454bcff47"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/color/0-0.png",
+      "bytes": 1604938,
+      "sha256": "c0cbafc63d57bd2b7b8eec6b392ed9e8a1f54a444c2607807532b137860dfd43"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/color/4-8.png",
+      "bytes": 1882514,
+      "sha256": "8191770c3da1346422da5ceab2265807556b2eadab76fec45fbfdf00bb36942b"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/gaussian-camera.mp4",
+      "bytes": 1274965,
+      "sha256": "6eb12d18ed9b349f3d4656e912cd5ce73b1705840ddcd84ace7996028f4bac66"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/night-thumb.jpg",
+      "bytes": 36879,
+      "sha256": "821679d8746249c4c060ef4d66f1bb0cea0153430ed46aba38831801608cc265"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-0.png",
+      "bytes": 1479370,
+      "sha256": "3d7d6520dd29e35391a29bb5f38b1266d2527753c33d9d94367b6a28b4ad9c06"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-1.png",
+      "bytes": 1529515,
+      "sha256": "8b7866d15c546e880cd3b074920a4b89e0f533ee9d8ab083278fba0c2c0e5d22"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-2.png",
+      "bytes": 1580418,
+      "sha256": "7b27486d17f1db992a78793915f87e1320d1d719159a5a9d45e8165eb01857b8"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-3.png",
+      "bytes": 1623746,
+      "sha256": "87794e0ad04fd76db0fec740c864258fae4337bf7935ee4aefb4b8de94d21993"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-4.png",
+      "bytes": 1664042,
+      "sha256": "b0ce54a92003ef525924c752cc477b40a681c90d5d6b5026167ad918aabdb47a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-5.png",
+      "bytes": 1704071,
+      "sha256": "eace995ad5c3de7425fd71fc731920e3e05ba8d069eeb0a023b5ef5e1bce3a15"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-6.png",
+      "bytes": 1741395,
+      "sha256": "8011ffc270df9d4f6fa94626a405a0c283e63245ae187e8c3a80377b4e392ebe"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-7.png",
+      "bytes": 1773719,
+      "sha256": "198eeaf518760ff77c7ab4d495aeb8a3f89f8c3c47d7a3604d65e35c74434d67"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/0-8.png",
+      "bytes": 1802286,
+      "sha256": "6dbe7cf7873247aded92d5260441af4d7ee6872dbe7c0fa2de720158e3bbf6b4"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-0.png",
+      "bytes": 1802286,
+      "sha256": "6dbe7cf7873247aded92d5260441af4d7ee6872dbe7c0fa2de720158e3bbf6b4"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-1.png",
+      "bytes": 1802584,
+      "sha256": "e9dc44c86ad8ac184374d82a23050941ea5daf6b778afa2b79b43061d9aa2330"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-2.png",
+      "bytes": 1803111,
+      "sha256": "4da5681023b5e17f36ba5f884607157504c33d305121a04db161eafe49d932f8"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-3.png",
+      "bytes": 1803343,
+      "sha256": "8edbb2170170911a9cf7503c6d015e49b17fd401fc2176da86e339853f2ec348"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-4.png",
+      "bytes": 1803749,
+      "sha256": "726851d2360f06693b1818f6c15401ef9fc9c09541af6fb708a2589cce65e36c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-5.png",
+      "bytes": 1804563,
+      "sha256": "0d35d04e12e809413a24c1f0249ebe7d43a4a66e6be96d4b0fdea912e402fcda"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-6.png",
+      "bytes": 1804913,
+      "sha256": "f3e6d55b3daea8dc8c4784c58cc2e8141db14ae92dc3b0dbf9b6e654343134e0"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-7.png",
+      "bytes": 1805960,
+      "sha256": "427f532407561e48b1b1d0e340773f107b3a8cf4bdee23be19b2798b75ffec7a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/1-8.png",
+      "bytes": 1806471,
+      "sha256": "38dc54cc3affc95d4568e5d5d8a655de888076e56796f865c5db2ce054f09be8"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-0.png",
+      "bytes": 1806471,
+      "sha256": "38dc54cc3affc95d4568e5d5d8a655de888076e56796f865c5db2ce054f09be8"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-1.png",
+      "bytes": 1806058,
+      "sha256": "293e7e3f1c0b917e2033d6dddbac805b0b52d097c3a0e44abeed22f68af28181"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-2.png",
+      "bytes": 1806330,
+      "sha256": "5cad793e309a6d23954b159617d1f8e40aef99ba2a5f14c8f157beaae0a56dff"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-3.png",
+      "bytes": 1805783,
+      "sha256": "00888cc09a163ab01b9b3c58fd59f9a189a03820e77bf620e76de93226250c88"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-4.png",
+      "bytes": 1806000,
+      "sha256": "64a0b8e0259b444467bd978cf7d5acaef33c3535a23118de4a4213308a36f734"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-5.png",
+      "bytes": 1805504,
+      "sha256": "511f235eb0de662d5ae9a4de8689dbb19a3d4a7ee42814aa3e489a94db35841c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-6.png",
+      "bytes": 1804945,
+      "sha256": "ee9fbd1fa39f531f53186a0ef9ae10f0d221f741dbb0a54c10210907b8606a24"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-7.png",
+      "bytes": 1804642,
+      "sha256": "2364c61defb954064d0c0be8092a1344de5c0a8e30377d9bdfd302e44bf19362"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/2-8.png",
+      "bytes": 1803879,
+      "sha256": "040316c4671bbad8325e2fd3dd0360f369f7665806e57615dfb76b58f761b8b2"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-0.png",
+      "bytes": 1803879,
+      "sha256": "040316c4671bbad8325e2fd3dd0360f369f7665806e57615dfb76b58f761b8b2"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-1.png",
+      "bytes": 1803005,
+      "sha256": "da3db796787a40f16f8452da438b9b9aea6cad0e6c06b58fc14574aacbfae483"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-2.png",
+      "bytes": 1801097,
+      "sha256": "4944c1c36a18558b9ee3d37979e85fd5ce93ce9fba922986b0863cc772ee29ff"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-3.png",
+      "bytes": 1797100,
+      "sha256": "6a935bb68140175f118c0fed81f9f110563491bb4b9594adcd9342351af0ee6c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-4.png",
+      "bytes": 1789828,
+      "sha256": "392e31cd48347d04b85364b7301c3c0ac5879dd9ab9afec6f3204ebf516fb022"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-5.png",
+      "bytes": 1780229,
+      "sha256": "b525abd7bce8ae26aa37d9f650577c50a7d67fd5de9ba4f798473e21cc4955f2"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-6.png",
+      "bytes": 1768134,
+      "sha256": "9894fdd15379fce0b281b23728260d126cc08cb4da0034371f203677b874b85e"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-7.png",
+      "bytes": 1756745,
+      "sha256": "f155d4b5cb009726693df0d6376d24ba1b88d18bf917b6d58123c6e73ab9436d"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/3-8.png",
+      "bytes": 1745606,
+      "sha256": "b23ed6d62aae81036e3dfc9c305c1498d545da9ff48a5958be930a8815efee30"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-0.png",
+      "bytes": 1745606,
+      "sha256": "b23ed6d62aae81036e3dfc9c305c1498d545da9ff48a5958be930a8815efee30"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-1.png",
+      "bytes": 1745273,
+      "sha256": "4a04ace50ce56d337ed2165e9fe0654629f2fa1cc88558ff7fea65f890e14d6d"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-2.png",
+      "bytes": 1745578,
+      "sha256": "e26fb457944624494cb6a8f01c2f5030f80b164a0c54abc1a8e8323c2e7e91a4"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-3.png",
+      "bytes": 1746222,
+      "sha256": "d32dafe4c8a1133d7b6c03ba220028a0ac59f21d2878f8f1dd2a88dd5832434f"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-4.png",
+      "bytes": 1747155,
+      "sha256": "271755bc92cbe48dc2169f1217f059ace023d399a9d52fcef05b4cd631b3c100"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-5.png",
+      "bytes": 1748361,
+      "sha256": "2ba0ea553b21fe05049fc6a481aebc157a5a0e9e340ae41d1f9cb4e06fef418c"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-6.png",
+      "bytes": 1749579,
+      "sha256": "1a4f2d3555c4757d34e31736e70fe33ceb2c8a47cc7352ea635802bd27b7eaf5"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-7.png",
+      "bytes": 1750893,
+      "sha256": "a4412558bd3c9606f93a36a020f0bb7ab1d51bbf286b905dbabda3cf8f61030a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/4-8.png",
+      "bytes": 1752195,
+      "sha256": "46968b57870b23c0d97daae21e5c5bc86d1a3117cca078dbe06ffba21b00058d"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/lut-look.png",
+      "bytes": 28566,
+      "sha256": "50abc772da80403ac4b83f676e448d82acdb08034913b5b8f0a29da6f3e117ca"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/lut-mono.png",
+      "bytes": 9971,
+      "sha256": "d453957420e5375caab4210a888475f7c7c1773a1050110ae8a6f4f37d4821b6"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/native-detail-lift.png",
+      "bytes": 1238524,
+      "sha256": "57ac8ca07260c4b420acaef66d79a5356011ec8fdf880e3a6c0fed4cd992eca1"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/native-detail.png",
+      "bytes": 1205664,
+      "sha256": "c819109413c925ec5fdf39f8c95e7ff23eaa9c6a674c2e8fe20b9278f1578342"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/raw-colour/subject-global.png",
+      "bytes": 1876719,
+      "sha256": "66133c75f7bdfe020a3703b69076b42e6016dbf1c62fa6f37aeac4ad78ab41da"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/ridge-thumb.jpg",
+      "bytes": 9383,
+      "sha256": "764964d617fef3761b41b25a8f709813a76cebb98f1dc5c52c359e2c68cf8cf3"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/subject-lift.png",
+      "bytes": 1925448,
+      "sha256": "68a874bd27a69c42b63d3f92b6002c0d177248f46fa1d573021eb2c049fbc31a"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/subject.png",
+      "bytes": 2209389,
+      "sha256": "183d962ca543db8ffdf33903a2b052f0cb68c58e1caf59266fe345b179f88c1b"
+    }
+  ]
+}

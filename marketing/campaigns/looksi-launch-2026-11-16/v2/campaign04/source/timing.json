@@ -1,0 +1,66 @@
+{
+  "fps": 24,
+  "seconds": 24,
+  "size": [
+    1080,
+    1920
+  ],
+  "hooks": {
+    "hero": [
+      "The last",
+      "tweak."
+    ],
+    "hook-b": [
+      "Just one",
+      "more pixel."
+    ],
+    "hook-c": [
+      "You said",
+      "it was done."
+    ]
+  },
+  "scenes": [
+    {
+      "start": 0,
+      "end": 3,
+      "scene": "The declaration",
+      "action": "Type rises. Red strike and Again appear. Cursor approaches."
+    },
+    {
+      "start": 3,
+      "end": 7,
+      "scene": "The negotiation",
+      "action": "Original artwork shifts left, right, then by one pixel. Registration line remains still."
+    },
+    {
+      "start": 7,
+      "end": 11,
+      "scene": "The crop",
+      "action": "Same artwork zooms and changes crop. A second thought appears as annotation."
+    },
+    {
+      "start": 11,
+      "end": 14,
+      "scene": "The alternatives",
+      "action": "Six original layout variants cascade in. A red circle selects number 04."
+    },
+    {
+      "start": 14,
+      "end": 16,
+      "scene": "The pause",
+      "action": "Selected artwork holds. Music thins. Maybe that’s it."
+    },
+    {
+      "start": 16,
+      "end": 18,
+      "scene": "The relapse",
+      "action": "One more pixel. Cursor click nudges the artwork literally one output pixel."
+    },
+    {
+      "start": 18,
+      "end": 24,
+      "scene": "The invitation",
+      "action": "Maker disclosure, photo + video, care-for-the-work message and question. All on screen by 20.5s."
+    }
+  ]
+}

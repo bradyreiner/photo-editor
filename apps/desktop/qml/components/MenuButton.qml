@@ -5,17 +5,17 @@ Item {
     id: root
 
     property string text: ""
-    property string iconName: ""
-    property string tone: "secondary"
+    property string iconName: secondaryActionMenu ? "more" : ""
+    property string tone: "quiet"
     property color accent: theme.accentWarm400
-    property bool compact: false
-    property bool showText: true
+    property bool compact: secondaryActionMenu
+    property bool showText: !secondaryActionMenu || text !== "More"
     property bool active: false
     property bool enabled: true
     property bool allowLabelWrap: false
     property bool menuEnabled: (menuItems || []).length > 0
-    property bool primaryOpensMenu: false
-    property bool showMenuIndicator: true
+    property bool primaryOpensMenu: secondaryActionMenu
+    property bool showMenuIndicator: !secondaryActionMenu
     property bool secondaryActionMenu: false
     property var menuItems: []
     property string tooltipText: ""
@@ -29,6 +29,9 @@ Item {
         if (explicitName.length > 0)
             return explicitName
         const visibleText = String(root.text || "").trim()
+        if (root.secondaryActionMenu && visibleText === "More")
+            return root.menuTooltipText === "More options for More" && root.tooltipText.length > 0
+                   ? root.tooltipText : root.menuTooltipText
         if (visibleText.length > 0)
             return visibleText
         const helpText = String(root.tooltipText || "").trim()
@@ -43,7 +46,7 @@ Item {
     signal menuItemTriggered(string key)
 
     Theme { id: theme }
-    MenuItemMetrics { id: menuMetrics; items: root.menuItems }
+    MenuItemMetrics { id: menuMetrics; items: root.menuItems || [] }
 
     implicitHeight: tone === "primary"
                     ? theme.controlHeightPrimary
@@ -122,12 +125,28 @@ Item {
                                            String(menuWidth)
 
     function closeMenu() {
-        menuPopup.close()
+        menuPopup.closeTransient(true)
+    }
+
+    function focusedMenuOpener() {
+        if (chevronButton.activeFocus)
+            return chevronButton
+        return primaryButton
     }
 
     function openMenu() {
         if (root.enabled && root.menuEnabled)
-            menuPopup.open()
+            menuPopup.openTransient(focusedMenuOpener())
+    }
+
+    function openMenuFrom(opener) {
+        if (root.enabled && root.menuEnabled)
+            menuPopup.openTransient(opener || focusedMenuOpener())
+    }
+
+    function toggleMenu(opener) {
+        if (root.enabled && root.menuEnabled)
+            menuPopup.toggleFrom(opener || focusedMenuOpener())
     }
 
     onVisibleChanged: {
@@ -154,12 +173,12 @@ Item {
             allowLabelWrap: root.allowLabelWrap
             accessibleName: root.resolvedAccessibleName
             rightPadding: root.primaryOpensMenu && root.menuEnabled && root.showMenuIndicator ? theme.scaled(24) : (root.compact ? theme.space6 : theme.space8)
-            active: root.active
+            active: root.active || (root.primaryOpensMenu && menuPopup.visible)
             enabled: root.enabled
-            tooltipText: root.resolvedTooltipText
+            tooltipText: menuPopup.visible ? "" : root.resolvedTooltipText
             onClicked: {
                 if (root.primaryOpensMenu && root.menuEnabled)
-                    menuPopup.open()
+                    root.toggleMenu(primaryButton)
                 else
                     root.clicked()
             }
@@ -180,9 +199,9 @@ Item {
             accessibleName: root.menuTooltipText
             active: menuPopup.visible
             enabled: root.enabled && root.menuEnabled
-            tooltipText: !root.enabled && root.disabledReason.length > 0
+            tooltipText: menuPopup.visible ? "" : !root.enabled && root.disabledReason.length > 0
                          ? root.disabledReason : root.menuTooltipText
-            onClicked: menuPopup.open()
+            onClicked: root.toggleMenu(chevronButton)
 
             contentItem.rotation: 90
         }

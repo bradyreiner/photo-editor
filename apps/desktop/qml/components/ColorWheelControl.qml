@@ -378,7 +378,8 @@ Item {
                 Layout.minimumWidth: theme.scaled(28)
                 text: "H " + root.displayHue(root.hue) + "\u00B0"
                 color: root.ringMode ? theme.textStrong : theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 font.weight: root.ringMode ? Font.DemiBold : Font.Normal
                 font.letterSpacing: 0
@@ -388,7 +389,8 @@ Item {
                 Layout.minimumWidth: theme.scaled(28)
                 text: "S " + root.displaySignedNumber(root.saturation)
                 color: root.ringMode ? theme.textStrong : theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 font.weight: root.ringMode ? Font.DemiBold : Font.Normal
                 font.letterSpacing: 0
@@ -399,7 +401,8 @@ Item {
                 Layout.minimumWidth: theme.scaled(28)
                 text: "L " + root.displaySignedNumber(root.luminance)
                 color: theme.textStrong
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 font.weight: Font.DemiBold
                 font.letterSpacing: 0

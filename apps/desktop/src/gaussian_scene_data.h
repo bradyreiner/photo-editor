@@ -1,6 +1,8 @@
 #pragma once
+#include "gaussian_scene_limits.h"
 #include "gaussian_photo_settings.h"
 #include "gaussian_physical_camera_settings.h"
+#include "gaussian_scene_composition.h"
 #include <QMatrix4x4>
 #include <QSize>
 #include <QVariantMap>
@@ -42,12 +44,19 @@ struct GaussianCamera {
   QVector3D position, right{1, 0, 0}, down{0, 1, 0}, forward{0, 0, 1};
   GaussianPhotoSettings photo;
   std::optional<GaussianPhysicalCalibration> physical;
+  // Scene-wide immutable composition, supplied by the viewport/export owner.
+  // Kept separate from camera persistence: recalling a shot does not roll back geometry.
+  std::shared_ptr<const GaussianSceneComposition> composition;
   QMatrix4x4 worldToCamera() const;
   GaussianCamera resized(QSize size) const;
   QVariantMap description() const;
 };
 struct GaussianSceneData {
   std::vector<GaussianPoint> points;
+  // Original static square roots (column-major, padded columns). Keep thin
+  // axes which may disappear when the convenience covariance rounds to float.
+  // Empty for synthetic covariance-only scenes and temporal scenes.
+  std::vector<std::array<float,12>> spatial_factors;
   std::vector<GaussianTemporalPoint> temporal;  // Empty for static 3D.
   std::vector<GaussianTemporalAppearance> temporal_appearance;
   double time_origin_seconds = 0;
@@ -57,13 +66,24 @@ struct GaussianSceneData {
   QString artifact_sha256;
   int sh_degree = 0;
   float focus_distance = 1;
+  std::shared_ptr<const GaussianSceneData> cleanup_source;
+  QByteArray cleanup_mask;
+  QVariantMap cleanup_receipt;
 };
+inline GaussianAlphaModel gaussian_alpha_model(const GaussianCamera& camera) {
+  return camera.composition ? camera.composition->alpha_model : GaussianAlphaModel::Brush999;
+}
 struct GaussianSceneLoad {
   std::shared_ptr<const GaussianSceneData> scene;
   QString error;
+  GaussianCompositionLoad composition{};
 };
 GaussianSceneLoad load_gaussian_scene(const QString& artifact, const QString& camera_directory,
     const QString& expected_sha256, const std::shared_ptr<std::atomic_bool>& canceled = {});
 GaussianCamera navigate_gaussian_camera(const GaussianCamera& base, float focus, float yaw_degrees,
     float pitch_degrees, float dolly, float pan_x, float pan_y);
+GaussianCamera navigate_gaussian_camera_around(const GaussianCamera& base, QVector3D pivot,
+    float yaw_degrees, float pitch_degrees, float dolly, float pan_x, float pan_y);
+QVector3D gaussian_camera_pan_translation(const GaussianCamera& camera, float focus_depth,
+    double normalized_viewport_dx, double normalized_viewport_dy);
 }  // namespace photo_editor::desktop

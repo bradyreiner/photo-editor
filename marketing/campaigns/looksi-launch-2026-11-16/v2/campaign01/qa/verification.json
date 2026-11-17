@@ -1,0 +1,98 @@
+{
+  "native_before_chosen": {
+    "mean_absolute_8bit_difference": 5.559458796296297,
+    "pixel_fraction_different": 0.999363425925926,
+    "note": "This compares actual copied current native exports; source identity/hash is in provenance.json."
+  },
+  "svg_editability": [
+    {
+      "file": "images/01-i-wanted-to-make-this.svg",
+      "editable_text_elements": 10,
+      "embedded_image_elements": 1
+    },
+    {
+      "file": "carousel/01-slide.svg",
+      "editable_text_elements": 10,
+      "embedded_image_elements": 1
+    },
+    {
+      "file": "carousel/02-slide.svg",
+      "editable_text_elements": 9,
+      "embedded_image_elements": 1
+    },
+    {
+      "file": "carousel/03-slide.svg",
+      "editable_text_elements": 8,
+      "embedded_image_elements": 1
+    },
+    {
+      "file": "carousel/04-slide.svg",
+      "editable_text_elements": 11,
+      "embedded_image_elements": 2
+    },
+    {
+      "file": "carousel/05-slide.svg",
+      "editable_text_elements": 7,
+      "embedded_image_elements": 1
+    },
+    {
+      "file": "carousel/06-slide.svg",
+      "editable_text_elements": 12,
+      "embedded_image_elements": 1
+    },
+    {
+      "file": "boards/01-storyboard.svg",
+      "editable_text_elements": 65,
+      "embedded_image_elements": 8
+    }
+  ],
+  "static_pngs": "One hero plus six carousel1080x1350sRGB-tagged compositions",
+  "audio": {
+    "peak_dbfs": -17.34179847957573,
+    "rms_dbfs": -26.20128355117054,
+    "sample_rate": 48000,
+    "sample_free": true
+  },
+  "visual_review": "Full design contact and375px phone archive/closing frames visually inspected; primary text and historical dates readable.",
+  "video_decode": [
+    {
+      "path": "video/01-builder-letter.mp4",
+      "full_decode": "passed",
+      "duration_seconds": 32.0,
+      "frames": 960,
+      "fps": 30,
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "color_space": "bt709",
+      "sha256": "e781b8f1ee9a5a4131a61eb06fc0c75420097fa014183fcec2a78bf45543015c"
+    },
+    {
+      "path": "video/01-hook-bring-a-real-project.mp4",
+      "full_decode": "passed",
+      "duration_seconds": 32.021333,
+      "frames": 960,
+      "fps": 30,
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "color_space": "bt709",
+      "sha256": "6e012b5ff4ecc1a1b3dad2fd3809f5c9abe4dacdd0a4c08440eed8a0d707df4c"
+    },
+    {
+      "path": "video/01-hook-what-should-this-handle.mp4",
+      "full_decode": "passed",
+      "duration_seconds": 32.021333,
+      "frames": 960,
+      "fps": 30,
+      "dimensions": [
+        1080,
+        1920
+      ],
+      "color_space": "bt709",
+      "sha256": "3566fd211f6d7eca00e2d4c8c539b7c1f15c11e0f6085b40652e6d694438f315"
+    }
+  ]
+}

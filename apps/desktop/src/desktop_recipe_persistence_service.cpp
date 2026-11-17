@@ -18,6 +18,8 @@ prepare_desktop_recipe_persistence(
   // Canonical recipes still require the exact provenance and V13 validation below.
   if (state.photographic_rendering_model == QStringLiteral("legacy-oklch-v1")) {
     result.legacy_recipe_json = serialize_edit_recipe_json(state);
+    if (result.legacy_recipe_json.isEmpty())
+      result.error = QStringLiteral("Recipe contains conflicting component content or invalid layer styles; previous saved edit retained.");
     result.legacy_only = true;
     return result;
   }
@@ -55,6 +57,10 @@ prepare_desktop_recipe_persistence(
   }
   result.legacy_recipe_json =
       serialize_edit_recipe_json(state);
+  if (result.legacy_recipe_json.isEmpty()) {
+    result.error = QStringLiteral("Recipe serialization failed; previous saved edit retained.");
+    return result;
+  }
   result.canonical_document = canonical.document;
   return result;
 }

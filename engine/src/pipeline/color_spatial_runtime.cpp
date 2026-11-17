@@ -180,6 +180,8 @@ void apply_geometry_corrections(
   const auto liquify_radius =
       std::clamp(state.liquify_radius, 0.02, 1.0) *
       std::max(static_cast<double>(width), static_cast<double>(height));
+  const auto radial_geometry_enabled =
+      distortion_strength != 0.0 || ca_strength > 1e-6;
   if (geometry_corrections_are_identity(state)) {
     return;
   }
@@ -189,6 +191,8 @@ void apply_geometry_corrections(
   const auto center_x = static_cast<double>(width - 1) * 0.5;
   const auto center_y = static_cast<double>(height - 1) * 0.5;
   const auto max_radius = std::max(1.0, std::hypot(center_x, center_y));
+  const auto transform_cosine = std::cos(-transform_rotation);
+  const auto transform_sine = std::sin(-transform_rotation);
 
   run_color_adjustment_parallel_for(
       height,
@@ -206,12 +210,12 @@ void apply_geometry_corrections(
             dy /= transform_scale;
             const auto skewed_dx = dx + dy * transform_skew_x;
             const auto skewed_dy = dy + dx * transform_skew_y;
-            const auto cosine = std::cos(-transform_rotation);
-            const auto sine = std::sin(-transform_rotation);
-            dx = skewed_dx * cosine - skewed_dy * sine;
-            dy = skewed_dx * sine + skewed_dy * cosine;
+            dx = skewed_dx * transform_cosine - skewed_dy * transform_sine;
+            dy = skewed_dx * transform_sine + skewed_dy * transform_cosine;
           }
-          const auto radius = std::hypot(dx, dy) / max_radius;
+          const auto radius = radial_geometry_enabled
+              ? std::hypot(dx, dy) / max_radius
+              : 0.0;
           const auto radius_sq = radius * radius;
           const auto distortion_scale = 1.0 / std::max(
               0.40,

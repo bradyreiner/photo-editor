@@ -77,7 +77,8 @@ Item {
             visible: root.armed
             text: root.helperText
             color: theme.error
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 9
             wrapMode: Text.WordWrap
         }

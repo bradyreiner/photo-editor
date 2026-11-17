@@ -1,8 +1,14 @@
 #include "native_window_test_input.h"
 #include <QtTest/qtestmouse.h>
 #include <QtTest/qtestkeyboard.h>
+#include <QWindow>
 #ifndef Q_OS_MACOS
 void activate_native_test_application() {}
+void activate_native_test_window(QWindow* window) {
+  if (!window) return;
+  window->raise();
+  window->requestActivate();
+}
 #endif
 void click_native_test_window(QWindow* window, QPoint position) {
   QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, position);

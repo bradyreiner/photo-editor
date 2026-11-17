@@ -30,12 +30,14 @@ static bool gaussian_tiled_photo_regression() {
     if (maximum > 1) std::cerr << "Maximum tile/full difference: " << maximum << '\n';
     return maximum <= 1;
   };
-  for (int mode = 0; mode < 5; ++mode) {
+  for (int mode = 0; mode < 7; ++mode) {
     camera.photo = {};
     if (mode == 1 || mode == 4) camera.photo.film = {0.7F, 6, 0, 16, 0.1F, 987};
     if (mode == 2 || mode == 4) { camera.photo.film.halation_amount = 1; camera.photo.film.halation_radius = 16; camera.photo.film.halation_threshold = 0.1F; }
     if (mode >= 3) camera.photo.lens = {3, 0.2F, 7, 27, 0.4F, 16};
     if (mode == 4) { camera.photo.exposure_ev = 0.3F; camera.photo.look = 1; camera.photo.focal_scale = 1.1F; }
+    if (mode == 5) { camera.photo.post = {4,32,4,64,8,27,1,0.1F,8,1.3F}; camera.photo.film = {0.2F,6,1,16,0.1F,99}; camera.photo.exposure_ev = 1; camera.photo.lens.aperture_edge = 3; camera.photo.lens.vignetting_distance = 0.5F; camera.photo.lens.vignetting_scale = 0.8F; camera.photo.tone = {1.1F,0.65F}; }
+    if (mode == 6) { camera.photo.lens.spherical_distortion = 0.4F; camera.photo.lens.astigmatism = -0.5F; camera.photo.lens.field_curvature = 0.3F; camera.photo.post.bloom_amount = 0.5F; }
     const auto full = renderer->render(scene, camera, true);
     for (const int edge : {64, 97}) {
       const auto tiled = renderer->renderWithOptions(scene, camera, true, {}, {{}, {}, false, edge});

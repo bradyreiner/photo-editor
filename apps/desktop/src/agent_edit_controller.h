@@ -303,6 +303,8 @@ class AgentEditController final : public QObject {
       const QString& scope = QString()) const;
   Q_INVOKABLE QVariantMap editingFreedomPolicy() const;
   QVariantMap authorizeNativeEditingCommand(const QString& name, bool property) const;
+  QVariantMap authorizeNativeEditingCommandForTask(
+      const QString& name, bool property, const QVariantMap& approved_snapshot) const;
   Q_INVOKABLE QVariantMap validateRecipePatch(const QVariantMap& patch) const;
   Q_INVOKABLE QVariantMap analyzeSelected();
   Q_INVOKABLE QVariantMap renderProofForSelected();

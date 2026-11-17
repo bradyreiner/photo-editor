@@ -40,7 +40,7 @@ AppPopup {
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
 
-    background: Item {}
+    background: PopupSurface {}
     // Release the modal as soon as the catalog is ready, even if the render
     // loop is busy preparing the first library frame.
     exit: Transition {}

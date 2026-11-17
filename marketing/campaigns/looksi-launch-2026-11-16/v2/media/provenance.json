@@ -1,0 +1,249 @@
+{
+  "scope": "Local review material; no public posting. Existing source photographs and native project exports, plus archived recordings.",
+  "records": [
+    {
+      "path": "media/sources/IMG_4870.jpg",
+      "source": "marketing/animated-trailer/public/media/IMG_4870.jpg",
+      "sha256": "7663700d19882d407aebf12ac86765942c106d3a8600b3dd56b7fe449525eca4",
+      "kind": "camera JPEG preview",
+      "scope": "Original camera preview from the existing Nepal source project; not a Looksy edit.",
+      "date": "historical source photo",
+      "dimensions": [
+        1200,
+        1800
+      ],
+      "embedded_icc": false,
+      "layout_preview": "media/previews/IMG_4870.jpg"
+    },
+    {
+      "path": "media/sources/IMG_4969.jpg",
+      "source": "marketing/animated-trailer/public/media/IMG_4969.jpg",
+      "sha256": "73f1dfaf468aa80e27a70b5e1616233032ab338c0b36408ecc05aedeac230271",
+      "kind": "camera JPEG preview",
+      "scope": "Original camera preview from the existing Nepal source project; not a Looksy edit.",
+      "date": "historical source photo",
+      "dimensions": [
+        1800,
+        1200
+      ],
+      "embedded_icc": false,
+      "layout_preview": "media/previews/IMG_4969.jpg"
+    },
+    {
+      "path": "media/sources/IMG_5071.jpg",
+      "source": "marketing/animated-trailer/public/media/IMG_5071.jpg",
+      "sha256": "646ff307414c0aab62c67c57425618fc865a562ee4deadc1a4aa42e6d33a8b67",
+      "kind": "camera JPEG preview",
+      "scope": "Original camera preview from the existing Nepal source project; not a Looksy edit.",
+      "date": "historical source photo",
+      "dimensions": [
+        1800,
+        1200
+      ],
+      "embedded_icc": false,
+      "layout_preview": "media/previews/IMG_5071.jpg"
+    },
+    {
+      "path": "media/sources/IMG_5077.jpg",
+      "source": "marketing/animated-trailer/public/media/IMG_5077.jpg",
+      "sha256": "52a29d8d0bdc748f71b5e25bea35c59794db67dbf118b9b69ac5128ec5045c3b",
+      "kind": "camera JPEG preview",
+      "scope": "Original camera preview from the existing Nepal source project; not a Looksy edit.",
+      "date": "historical source photo",
+      "dimensions": [
+        1800,
+        1200
+      ],
+      "embedded_icc": false,
+      "layout_preview": "media/previews/IMG_5077.jpg"
+    },
+    {
+      "path": "media/exports/baseline/nepal-mountain-working-copy-full-resolution.png",
+      "source": "marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/baseline/nepal-mountain-working-copy-full-resolution.png",
+      "sha256": "01672a9a65bc0f84241b85095d506cb20b8bbdcbb8e3eae493d55a1e2ce7608f",
+      "kind": "native photo export",
+      "scope": "Unadjusted same-pipeline baseline; source is a 1800x1200 camera JPEG preview, not RAW.",
+      "date": "2026-11-16",
+      "dimensions": [
+        1800,
+        1200
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/native-photo-baseline.jpg"
+    },
+    {
+      "path": "media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+      "source": "marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+      "sha256": "ed9c980585ae74e18ab2f9dbd383e988f5b79c7329da69b9878ccc9099054830",
+      "kind": "native photo export",
+      "scope": "Verified treatment:5900K,+12%contrast,+0.15EV; combined endpoint only, no isolated-control or current recording claim.",
+      "date": "2026-11-16",
+      "dimensions": [
+        1800,
+        1200
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/native-photo-finish.jpg"
+    },
+    {
+      "path": "media/boards/nepal-near-far-01.png",
+      "source": ".photo-editor/nepal-near-far/foreground-export/nepal-near-far-01.png",
+      "sha256": "138173ad1357ea060f9cf0d179869477d4b5ee8efb38e02340fcbc11cbfbd91a",
+      "kind": "native board export",
+      "scope": "One of six 1920x1536 PNG exports from saved NEPAL / NEAR & FAR; export does not alone prove editable text authoring.",
+      "date": "2026-11-16",
+      "receipt": "media/boards/delivery-manifest.json",
+      "dimensions": [
+        1920,
+        1536
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/nepal-near-far-01.jpg"
+    },
+    {
+      "path": "media/boards/nepal-near-far-02.png",
+      "source": ".photo-editor/nepal-near-far/foreground-export/nepal-near-far-02.png",
+      "sha256": "f9f79d4d6aec047d8e886991c41cf1b63cca049300c1c9c0daf7256e899405da",
+      "kind": "native board export",
+      "scope": "One of six 1920x1536 PNG exports from saved NEPAL / NEAR & FAR; export does not alone prove editable text authoring.",
+      "date": "2026-11-16",
+      "receipt": "media/boards/delivery-manifest.json",
+      "dimensions": [
+        1920,
+        1536
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/nepal-near-far-02.jpg"
+    },
+    {
+      "path": "media/boards/nepal-near-far-03.png",
+      "source": ".photo-editor/nepal-near-far/foreground-export/nepal-near-far-03.png",
+      "sha256": "762c860533aad32c59ebc197fdbfda054f24edeb9d809a32125c55273d3396d9",
+      "kind": "native board export",
+      "scope": "One of six 1920x1536 PNG exports from saved NEPAL / NEAR & FAR; export does not alone prove editable text authoring.",
+      "date": "2026-11-16",
+      "receipt": "media/boards/delivery-manifest.json",
+      "dimensions": [
+        1920,
+        1536
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/nepal-near-far-03.jpg"
+    },
+    {
+      "path": "media/boards/nepal-near-far-04.png",
+      "source": ".photo-editor/nepal-near-far/foreground-export/nepal-near-far-04.png",
+      "sha256": "1ef8d652a910a8a86ec2effe7c466bdd3e409c1d601069fde6ad2a9a6ed5138c",
+      "kind": "native board export",
+      "scope": "One of six 1920x1536 PNG exports from saved NEPAL / NEAR & FAR; export does not alone prove editable text authoring.",
+      "date": "2026-11-16",
+      "receipt": "media/boards/delivery-manifest.json",
+      "dimensions": [
+        1920,
+        1536
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/nepal-near-far-04.jpg"
+    },
+    {
+      "path": "media/boards/nepal-near-far-05.png",
+      "source": ".photo-editor/nepal-near-far/foreground-export/nepal-near-far-05.png",
+      "sha256": "8c8f5684e8d013bc47dbc83659ac5fc042e82c52d47bed965286dffc79d87151",
+      "kind": "native board export",
+      "scope": "One of six 1920x1536 PNG exports from saved NEPAL / NEAR & FAR; export does not alone prove editable text authoring.",
+      "date": "2026-11-16",
+      "receipt": "media/boards/delivery-manifest.json",
+      "dimensions": [
+        1920,
+        1536
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/nepal-near-far-05.jpg"
+    },
+    {
+      "path": "media/boards/nepal-near-far-06.png",
+      "source": ".photo-editor/nepal-near-far/foreground-export/nepal-near-far-06.png",
+      "sha256": "f3c2178abc5c96021d8a4768151a66bc6ed55bb38a7335008c16397d8977ebca",
+      "kind": "native board export",
+      "scope": "One of six 1920x1536 PNG exports from saved NEPAL / NEAR & FAR; export does not alone prove editable text authoring.",
+      "date": "2026-11-16",
+      "receipt": "media/boards/delivery-manifest.json",
+      "dimensions": [
+        1920,
+        1536
+      ],
+      "embedded_icc": true,
+      "layout_preview": "media/previews/nepal-near-far-06.jpg"
+    },
+    {
+      "path": "media/boards/delivery-manifest.json",
+      "source": ".photo-editor/nepal-near-far/foreground-export/NEPAL - NEAR & FAR-delivery-manifest-v1.json",
+      "sha256": "df173ea4f463fca7968e0f707569cded00730aedd57ead5125a07aa465db4b8e",
+      "kind": "receipt",
+      "scope": "Native six-board export manifest.",
+      "date": "2026-11-16"
+    },
+    {
+      "path": "media/archive/native-timeline-review-2026-11-02.mp4",
+      "source": "marketing/native-recreation-v4/polish-pass-2026-10-30/native-p26-opening-final/p26-opening-final.mp4",
+      "sha256": "6cedcbd366c42d2d4b116557016bf2fbd0905f48d5fc1e8d6f92f7ed9f3bb596",
+      "kind": "native timeline export",
+      "scope": "Completed12s review excerpt,360frames1920x1080/30fps; motion design output, not live UI execution/full298s/current-build qualification. Its original audio is not used in revised creative.",
+      "date": "2026-11-02",
+      "receipt": "media/archive/native-timeline-render-receipt.json"
+    },
+    {
+      "path": "media/archive/native-timeline-render-receipt.json",
+      "source": "marketing/native-recreation-v4/polish-pass-2026-10-30/native-p26-opening-final/native-render-receipt.json",
+      "sha256": "0c6753473965fd76015ca29906394981417614e874b74a3c2e4478a2bfe42244",
+      "kind": "receipt",
+      "scope": "Historical native timeline output receipt; source hash independently checked.",
+      "date": "2026-11-02"
+    },
+    {
+      "path": "media/archive/tone-curve-2026-10-25.mp4",
+      "source": "marketing/animated-trailer/public/media/desktop-action/tone-curve.mp4",
+      "sha256": "70f6f0ae68b30048fb1bc51c806f5f8c756bb62fe4d2b297336dfe9ea9edc756",
+      "kind": "native screen recording",
+      "scope": "Archived development recording, cropped/resized in original source pipeline; no current build or task-time claim. Timeline capture provenance is weaker than tone-curve and must not substitute for export proof.",
+      "date": "2026-10-25"
+    },
+    {
+      "path": "media/archive/mask-exposure-2026-10-25.mp4",
+      "source": "marketing/animated-trailer/public/media/desktop-action/mask-exposure.mp4",
+      "sha256": "98d70da26ce695c065d0027880feab943c30681bb6a7d16505d1f3dd0f3ff8ab",
+      "kind": "native screen recording",
+      "scope": "Archived development recording, cropped/resized in original source pipeline; no current build or task-time claim. Timeline capture provenance is weaker than tone-curve and must not substitute for export proof.",
+      "date": "2026-10-25"
+    },
+    {
+      "path": "media/archive/poster-type-2026-10-25.mp4",
+      "source": "marketing/animated-trailer/public/media/desktop-action/poster-type.mp4",
+      "sha256": "1c195437dc62c1e239221bbf683dc9f16bdfde3836d3fef8e203bc1373e44015",
+      "kind": "native screen recording",
+      "scope": "Archived development recording, cropped/resized in original source pipeline; no current build or task-time claim. Timeline capture provenance is weaker than tone-curve and must not substitute for export proof.",
+      "date": "2026-10-25"
+    },
+    {
+      "path": "media/archive/timeline-build-2026-10-25.mp4",
+      "source": "marketing/animated-trailer/public/media/desktop-action/timeline-build.mp4",
+      "sha256": "69241ec2c3d005530000ad4c7af3064cd3d427eb37526b8be4e16053432cbbcb",
+      "kind": "native screen recording",
+      "scope": "Archived development recording, cropped/resized in original source pipeline; no current build or task-time claim. Timeline capture provenance is weaker than tone-curve and must not substitute for export proof.",
+      "date": "2026-10-25"
+    },
+    {
+      "path": "media/archive/desktop-action-provenance.json",
+      "source": "marketing/animated-trailer/public/media/desktop-action/capture-provenance.json",
+      "sha256": "10909300556d22b99c38bfe77f176d254206fd2d6aa2e765bf4e735d947b32e8",
+      "kind": "provenance",
+      "scope": "Original transformation notes for archived native recordings.",
+      "date": "2026-10-25"
+    }
+  ],
+  "excluded": [
+    "media/exports/finish/nepal-mountain-working-copy-full-resolution.png is identical to baseline and is not an after."
+  ],
+  "rights": "User project photography used for local campaign review. Confirm publication permissions for any recognizable people/property before external use. No competitor reference creative is included.",
+  "rendering_note": "Layout previews only resize/crop sources; no photographic treatment is simulated in Python. Native before/after pixels come from actual Looksy exports."
+}

@@ -1,19 +1,31 @@
 #include "app_bootstrap.h"
+#include "observability.h"
 #include "blank_canvas_document.h"
 #include "photo_layer_clipboard.h"
+#include "color_profile_asset_bridge.h"
 #include "desktop_pipeline_state_compiler.h"
+#include "edit_recipe_pipeline_bridge.h"
 #include "editor_preview_controller.h"
 #include "editor_preview_image_provider.h"
+#include "preview_device_icc_options.h"
 #include "photo_layer_compiler.h"
 #include "photo_render_utils.h"
 #include "photo_pixel_stroke.h"
+#include "photo_text_style.h"
+#include "render_plan_store.h"
+#include "brush_rasterizer.h"
+#include "brush_preview_compositor.h"
 #include "photo_fragment_brush_preset_store.h"
 #include "working_image.h"
 #include "tablet_input_area.h"
+#include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
+#include "photo_editor/pipeline/color_space.h"
+#include "photo_editor/pipeline/color_transform.h"
 #include <QGuiApplication>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QJSValue>
 #include <QQuickWindow>
 #include <QMouseEvent>
 #include <QEnterEvent>
@@ -26,9 +38,17 @@
 #include <QThread>
 #include <QDir>
 #include <QFile>
+#include <QCryptographicHash>
+#include <QImageReader>
+#include <QJsonDocument>
 #include <QProcess>
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstring>
 #include <limits>
 #include <iostream>
+#include <utility>
 
 namespace photo_editor::desktop {
 RenderResult render_preview_request_for_test(const RenderRequest& request);
@@ -38,10 +58,19 @@ struct EditorPreviewControllerTestAccess {
     for(int i=0;i<state.layers.size();++i) state.layers[i]=photo_paint_target_identity(state.layers[i].toMap());
     return state;
   }
+  static QVariantList layers(const EditorPreviewController& c) { return c.layer_session_.layers(); }
+  static bool replace_layers_raw(EditorPreviewController& c, const QVariantList& layers) {
+    return c.layer_session_.replaceLayers(layers);
+  }
+  static bool try_layer_stack_change(EditorPreviewController& c, const QVariantList& layers) {
+    return c.applyPhotoLayerStackChange(layers, QStringLiteral("test_drop_base_source"), false,
+        QStringLiteral("Remove Base Image"));
+  }
   static bool paintRasterIdle(const EditorPreviewController& c) {
     return !c.photo_paint_worker_running_ && (c.photo_paint_jobs_.empty() || c.photo_paint_jobs_.front()->pending_points.empty());
   }
   static RenderRequest request(const EditorPreviewController& c) { return c.currentRenderRequest(false); }
+  static void clear_working_caches() { EditorPreviewController::clearPreviewWorkingCachesForTesting(); }
   static void apply(EditorPreviewController& c, const EditState& s) { c.applyState(s); }
 };
 }
@@ -58,16 +87,62 @@ static bool wait_until(const std::function<bool()>& predicate) {
   return false;
 }
 
-static bool regional_matches_full(const RenderRequest& request, const QVariantList& base_layers) {
+static bool regional_matches_full(const RenderRequest& request, const QVariantList& base_layers,
+                                  bool require_device_profile = false,
+                                  const QString& partial_alpha_layer_id = {}) {
   auto region_request = request;
   region_request.use_in_memory_preview=true;
+  if (require_device_profile) {
+    if (!region_request.state.preview_icc_profile_asset.configured()) {
+      std::cerr << "Device profile paint parity needs the loaded display ICC asset\n";
+      return false;
+    }
+    region_request.allow_native_device_surface = true;
+    region_request.allow_native_srgb_surface = false;
+    region_request.require_cpu_preview_image = false;
+    region_request.scopes_visible = false;
+    region_request.canonical_render_plan.reset();
+    region_request.canonical_scope_plan.reset();
+  }
   auto base_request=region_request;
   base_request.state.layers=base_layers;
   base_request.recipe_cache_identity.clear();
   base_request.adjusted_recipe_cache_identity.clear();
   const auto base_render=render_preview_request_for_test(base_request);
+  if (!base_render.success) {
+    std::cerr << "Full paint base render failed: " << base_render.status.toStdString()
+              << " backend=" << base_render.backend.toStdString()
+              << " output_lut=" << base_render.output_lut.status.toStdString()
+              << " fallback_reason=" << base_render.fallback_reason.toStdString()
+              << " fallback=" << base_render.failure_detail.toStdString() << '\n';
+    return false;
+  }
   region_request.paint_preview_base=base_render.preview_image;
   if (region_request.paint_preview_base.isNull()) return false;
+  if (require_device_profile &&
+      region_request.paint_preview_base.text("looksy-preview-output-backend") !=
+          QStringLiteral("canonical-metal-device8")) {
+    std::cerr << "Device profile paint parity did not receive canonical device output: "
+              << region_request.paint_preview_base.text("looksy-preview-output-backend").toStdString()
+              << " result_backend=" << base_render.backend.toStdString()
+              << " output_lut=" << base_render.output_lut.status.toStdString()
+              << " fallback_reason=" << base_render.fallback_reason.toStdString()
+              << " fallback=" << base_render.failure_detail.toStdString()
+              << " native_composite=" << base_render.native_quality_composite
+              << " rendered_hit=" << base_render.rendered_cache_hit
+              << " adjusted_hit=" << base_render.adjusted_cache_hit
+              << " full=" << base_request.full_resolution
+              << " draft=" << base_request.draft_interactive
+              << " edge=" << base_request.max_edge
+              << " cpu_preview=" << base_request.require_cpu_preview_image
+              << " cpu_display=" << base_request.require_cpu_display_image
+              << " native_device=" << base_request.allow_native_device_surface
+              << " renderer=" << base_request.state.photographic_rendering_model.toStdString()
+              << " profile_asset="
+              << region_request.state.preview_icc_profile_asset.asset_id.toStdString()
+              << '\n';
+    return false;
+  }
   const auto regional=render_preview_request_for_test(region_request);
   if (!regional.success || regional.backend!="paint-region") return false;
   region_request.paint_preview_base={};
@@ -75,15 +150,58 @@ static bool regional_matches_full(const RenderRequest& request, const QVariantLi
   region_request.adjusted_recipe_cache_identity.clear();
   const auto full_draft=render_preview_request_for_test(region_request);
   if (!full_draft.success || full_draft.preview_image.size()!=regional.preview_image.size()) return false;
+  if (require_device_profile && full_draft.preview_image.text("looksy-preview-output-backend") !=
+          QStringLiteral("canonical-metal-device8")) {
+    std::cerr << "Full ICC reference must retain canonical device output\n";
+    return false;
+  }
+  if (!partial_alpha_layer_id.isEmpty()) {
+    bool found_target = false;
+    bool found_partial_alpha = false;
+    for (const auto& value : region_request.state.layers) {
+      const auto layer = value.toMap();
+      if (layer.value(QStringLiteral("id")).toString() != partial_alpha_layer_id) continue;
+      found_target = true;
+      const auto pixels = rasterize_photo_paint_layer(layer, {}, nullptr);
+      if (pixels.isNull()) return false;
+      for (int y = 0; y < pixels.height() && !found_partial_alpha; ++y) {
+        for (int x = 0; x < pixels.width(); ++x) {
+          const auto alpha = pixels.pixelColor(x, y).alpha();
+          if (alpha > 0 && alpha < 255) {
+            found_partial_alpha = true;
+            break;
+          }
+        }
+      }
+      break;
+    }
+    if (!found_target || !found_partial_alpha) {
+      std::cerr << "Paint parity fixture lacks partial draft alpha for layer "
+                << partial_alpha_layer_id.toStdString() << '\n';
+      return false;
+    }
+  }
   int worst_channel_error=0, outside_error=0;
   for(int y=0;y<regional.preview_image.height();++y) for(int x=0;x<regional.preview_image.width();++x) {
     const auto a=regional.preview_image.pixelColor(x,y),b=full_draft.preview_image.pixelColor(x,y);
-    const int delta=std::max({std::abs(a.red()-b.red()),std::abs(a.green()-b.green()),std::abs(a.blue()-b.blue())});
+    const int delta=std::max({std::abs(a.red()-b.red()),std::abs(a.green()-b.green()),
+        std::abs(a.blue()-b.blue()),std::abs(a.alpha()-b.alpha())});
     if (delta>worst_channel_error) worst_channel_error=delta;
     if (!regional.texture_upload_rect.contains(x,y)) outside_error=std::max(outside_error,delta);
   }
   std::cout << "regional_max_channel_error=" << worst_channel_error
             << " outside_error=" << outside_error << '\n';
+  if (require_device_profile) {
+    std::cout << "native_device_icc_profile_sha256="
+              << region_request.state.preview_icc_profile_asset.payload_sha256.toStdString()
+              << " profile_source="
+              << region_request.state.preview_icc_profile_asset.source_kind.toStdString()
+              << " base_backend="
+              << base_render.preview_image.text("looksy-preview-output-backend").toStdString()
+              << " regional_backend=" << regional.backend.toStdString()
+              << " full_backend="
+              << full_draft.preview_image.text("looksy-preview-output-backend").toStdString() << '\n';
+  }
   return worst_channel_error <= 1;
 }
 
@@ -255,7 +373,194 @@ static int verify_blank_canvas(QTemporaryDir& temp) {
   return 0;
 }
 
-static int verify_base_erase_and_clipboard(QTemporaryDir& temp) {
+static int verify_linked_cutout_clipboard_adjustments(QTemporaryDir& temp) {
+  using Access = EditorPreviewControllerTestAccess;
+  QImage source(257, 129, QImage::Format_ARGB32);
+  source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  for (int y = 0; y < source.height(); ++y) {
+    for (int x = 0; x < source.width(); ++x) {
+      source.setPixelColor(x, y, QColor(30 + x % 150, 40 + y % 120, 60 + (x + y) % 130));
+    }
+  }
+  const auto source_path = temp.filePath("linked-cutout-clipboard-source.png");
+  CHECK(source.save(source_path), "Save the linked cutout clipboard source");
+
+  EditorPreviewController source_controller;
+  source_controller.loadAsset("linked-cutout-clipboard", source_path, {}, {}, {}, {}, {});
+  CHECK(source_controller.addAdjustmentLayer(QStringLiteral("Below cutout")) &&
+      source_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("exposure"), 0.9) &&
+      source_controller.addAdjustmentLayer(QStringLiteral("Above cutout")) &&
+      source_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("exposure"), -0.45) &&
+      wait_until([&] { return !source_controller.processing() && !source_controller.fullRenderRunning(); }),
+      "Create distinct adjustment grades below and above the linked cutout");
+  auto linked_state = Access::state(source_controller);
+  const auto below_layer = linked_state.layers.at(1).toMap();
+  QVariantMap linked_cutout{
+      {QStringLiteral("id"), QStringLiteral("linked-cutout-clipboard-layer")},
+      {QStringLiteral("kind"), QStringLiteral("pixel")},
+      {QStringLiteral("name"), QStringLiteral("Linked Cutout")},
+      {QStringLiteral("copyBaseImage"), true},
+      {QStringLiteral("copyBaseImageThroughAdjustments"), true},
+      {QStringLiteral("sourcePath"), source_path},
+      {QStringLiteral("pixelWidth"), source.width()},
+      {QStringLiteral("pixelHeight"), source.height()},
+      {QStringLiteral("canvasWidth"), source.width()},
+      {QStringLiteral("canvasHeight"), source.height()},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("opacity"), 1.0},
+      {QStringLiteral("scale"), 1.0},
+      {QStringLiteral("blendMode"), QStringLiteral("normal")},
+  };
+  linked_state.layers.insert(1, linked_cutout);
+  Access::apply(source_controller, linked_state);
+  CHECK(wait_until([&] { return !source_controller.processing() && !source_controller.fullRenderRunning(); }),
+      "Settle the source recipe with one adjustment on each side of the linked cutout");
+
+  auto lower_only_state = linked_state;
+  lower_only_state.layers = QVariantList{below_layer};
+  QString render_error;
+  const auto lower_only_pixels = render_editable_base_pixels(
+      source_path, lower_only_state, &render_error, true);
+  const auto lower_only_composite = render_output_image_with_backend(source, lower_only_state,
+      QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32, RenderBackendPreference::CpuOnly);
+  const auto source_composite = render_output_image_with_backend(source, linked_state,
+      QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32, RenderBackendPreference::CpuOnly);
+  CHECK(!lower_only_pixels.isNull() && !lower_only_composite.isNull() && !source_composite.isNull() &&
+      render_error.isEmpty(), "Render lower-only and complete linked-cutout references");
+  const auto display_pixels = [](const QImage& image) {
+    return image.convertedToColorSpace(QColorSpace(QColorSpace::SRgb))
+        .convertToFormat(QImage::Format_ARGB32);
+  };
+  const auto pixels_match = [](const QImage& left, const QImage& right) {
+    if (left.size() != right.size()) return false;
+    for (int y = 0; y < left.height(); ++y) {
+      for (int x = 0; x < left.width(); ++x) {
+        const auto a = left.pixelColor(x, y);
+        const auto b = right.pixelColor(x, y);
+        if (std::abs(a.red() - b.red()) > 1 || std::abs(a.green() - b.green()) > 1 ||
+            std::abs(a.blue() - b.blue()) > 1 || std::abs(a.alpha() - b.alpha()) > 1) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  const auto pixel_difference_summary = [](const QImage& actual, const QImage& expected) {
+    if (actual.size() != expected.size()) {
+      return QStringLiteral("size=%1x%2 expected_size=%3x%4")
+          .arg(actual.width()).arg(actual.height()).arg(expected.width()).arg(expected.height());
+    }
+    auto max_error = 0;
+    auto differing_pixels = 0;
+    QPoint max_error_position;
+    QColor actual_at_max;
+    QColor expected_at_max;
+    for (int y = 0; y < actual.height(); ++y) {
+      for (int x = 0; x < actual.width(); ++x) {
+        const auto actual_color = actual.pixelColor(x, y);
+        const auto expected_color = expected.pixelColor(x, y);
+        const auto error = std::max({
+            std::abs(actual_color.red() - expected_color.red()),
+            std::abs(actual_color.green() - expected_color.green()),
+            std::abs(actual_color.blue() - expected_color.blue()),
+            std::abs(actual_color.alpha() - expected_color.alpha())});
+        if (error > 1) ++differing_pixels;
+        if (error > max_error) {
+          max_error = error;
+          max_error_position = QPoint(x, y);
+          actual_at_max = actual_color;
+          expected_at_max = expected_color;
+        }
+      }
+    }
+    return QStringLiteral("size=%1x%2 differing_pixels_over_1_code=%3 max_error=%4 at=%5,%6 actual_rgba=%7,%8,%9,%10 expected_rgba=%11,%12,%13,%14")
+        .arg(actual.width()).arg(actual.height()).arg(differing_pixels).arg(max_error)
+        .arg(max_error_position.x()).arg(max_error_position.y())
+        .arg(actual_at_max.red()).arg(actual_at_max.green()).arg(actual_at_max.blue()).arg(actual_at_max.alpha())
+        .arg(expected_at_max.red()).arg(expected_at_max.green()).arg(expected_at_max.blue()).arg(expected_at_max.alpha());
+  };
+  const auto expected_copied_pixels = display_pixels(lower_only_pixels);
+  CHECK(!pixels_match(lower_only_composite, source_composite),
+      "The below-only final composite must differ from the source composite containing the above grade");
+
+  CHECK(source_controller.copyPhotoLayers({1}) && wait_until([&] {
+        return !source_controller.photoLayerClipboardBusy();
+      }), "Copy a linked cutout whose source has grades both below and above it");
+  const auto linked_payload = decode_photo_layer_clipboard(current_photo_layer_clipboard());
+  CHECK(linked_payload && linked_payload->state.layers.size() == 1,
+      "The clipboard contains just the selected linked cutout");
+  const auto copied_layer = linked_payload->state.layers.front().toMap();
+  CHECK(!copied_layer.value(QStringLiteral("copyBaseImage")).toBool() &&
+      !copied_layer.contains(QStringLiteral("copyBaseImageThroughAdjustments")) &&
+      !copied_layer.value(QStringLiteral("paintTiles")).toMap().isEmpty(),
+      "Clipboard materialization turns the linked source into independent pixels");
+  const auto copied_pixels = display_pixels(rasterize_photo_paint_layer(copied_layer));
+  CHECK(pixels_match(copied_pixels, expected_copied_pixels),
+      "Clipboard tiles contain the lower-layer grade in working color without baking the upper grade");
+
+  QImage neutral_destination(source.size(), QImage::Format_ARGB32);
+  neutral_destination.fill(QColor("#47515b"));
+  neutral_destination.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  const auto destination_path = temp.filePath("linked-cutout-clipboard-destination.png");
+  CHECK(neutral_destination.save(destination_path), "Save the neutral clipboard destination");
+  EditorPreviewController destination;
+  destination.loadAsset("linked-cutout-clipboard-destination", destination_path, {}, {}, {}, {}, {});
+  CHECK(destination.pastePhotoLayers(0, true).size() == 1,
+      "Paste the materialized cutout into a neutral destination");
+  const auto pasted_composite = render_output_image_with_backend(
+      neutral_destination, Access::state(destination), QColorSpace(QColorSpace::SRgb),
+      QImage::Format_ARGB32, RenderBackendPreference::CpuOnly);
+  if (!pixels_match(pasted_composite, lower_only_composite) ||
+      pixels_match(pasted_composite, source_composite)) {
+    const auto pasted_layers = Access::state(destination).layers;
+    const auto pasted_layer = pasted_layers.isEmpty() ? QVariantMap{} : pasted_layers.front().toMap();
+    std::cerr << "linked cutout paste pixel mismatch: "
+              << pixel_difference_summary(pasted_composite, lower_only_composite).toStdString()
+              << " differs_from_full_composite=" << !pixels_match(pasted_composite, source_composite)
+              << " destination_layer_count=" << pasted_layers.size()
+              << " top_kind=" << pasted_layer.value(QStringLiteral("kind")).toString().toStdString()
+              << " top_enabled=" << pasted_layer.value(QStringLiteral("enabled"), true).toBool()
+              << " top_opacity=" << pasted_layer.value(QStringLiteral("opacity"), 1.0).toDouble()
+              << " top_position=" << pasted_layer.value(QStringLiteral("x")).toDouble() << ','
+              << pasted_layer.value(QStringLiteral("y")).toDouble()
+              << " tiles_empty=" << pasted_layer.value(QStringLiteral("paintTiles")).toMap().isEmpty()
+              << '\n';
+    return 1;
+  }
+
+  linked_state = Access::state(source_controller);
+  QVariantMap legacy_cutout{
+      {QStringLiteral("id"), QStringLiteral("markerless-legacy-cutout")},
+      {QStringLiteral("kind"), QStringLiteral("pixel")},
+      {QStringLiteral("name"), QStringLiteral("Legacy Cutout")},
+      {QStringLiteral("copyBaseImage"), true},
+      {QStringLiteral("sourcePath"), source_path},
+      {QStringLiteral("pixelWidth"), source.width()},
+      {QStringLiteral("pixelHeight"), source.height()},
+      {QStringLiteral("canvasWidth"), source.width()},
+      {QStringLiteral("canvasHeight"), source.height()},
+  };
+  linked_state.layers.prepend(legacy_cutout);
+  Access::apply(source_controller, linked_state);
+  CHECK(wait_until([&] { return !source_controller.processing() && !source_controller.fullRenderRunning(); }) &&
+      source_controller.copyPhotoLayers({0}) && wait_until([&] {
+        return !source_controller.photoLayerClipboardBusy();
+      }), "Copy a markerless legacy cutout with surrounding adjustment layers");
+  const auto legacy_payload = decode_photo_layer_clipboard(current_photo_layer_clipboard());
+  CHECK(legacy_payload && legacy_payload->state.layers.size() == 1,
+      "The markerless legacy copy has one clipboard layer");
+  const auto legacy_pixels = display_pixels(
+      rasterize_photo_paint_layer(legacy_payload->state.layers.front().toMap()));
+  const auto base_only_pixels = display_pixels(render_editable_base_pixels(
+      source_path, EditRecipeState{}, &render_error, false));
+  CHECK(!base_only_pixels.isNull() && pixels_match(legacy_pixels, base_only_pixels) &&
+      !pixels_match(legacy_pixels, expected_copied_pixels),
+      "Markerless clipboard layers keep their original base-only materialization behavior");
+  std::cout << "Linked cutout clipboard: lower grade baked once, upper grade excluded, legacy copy unchanged\n";
+  return 0;
+}
+
+static int verify_base_erase_and_clipboard(QTemporaryDir& temp, bool require_device_profile = false) {
   using Access = EditorPreviewControllerTestAccess;
   QImage source(640, 400, QImage::Format_ARGB32);
   source.fill(QColor("#ac7954"));
@@ -266,8 +571,10 @@ static int verify_base_erase_and_clipboard(QTemporaryDir& temp) {
   controller.loadAsset("base-edit", path, {}, {}, {}, {}, {});
   const QVariantMap eraser{{"erase", true}, {"size", 40}, {"hardness", 1}, {"opacity", 1}, {"flow", 1}, {"pressureSize", false}};
   CHECK(controller.baseImageLocked() && !controller.beginPhotoPaintStroke(-1, eraser), "The original base starts locked");
-  CHECK(controller.setBaseImageLocked(false) && controller.photoLayerCount() == 0 && controller.photoLayers().isEmpty(),
-      "Unlocking the base does not create a second visible photo layer");
+  CHECK(controller.setBaseImageLocked(false) && controller.photoLayerCount() == 1 &&
+      controller.photoLayers().size() == 1 && controller.photoLayers().front().toMap().value("baseImageEdit").toBool() &&
+      controller.photoLayers().front().toMap().value("copyBaseImage").toBool(),
+      "Unlocking exposes the original as one movable source row carrying its base eraser");
   CHECK(controller.addPhotoShape("rectangle", 280, 120, 360, 220, 640, 400, "#4879ff", "#ffffff", 0), "Add graphics above the base");
   const auto before_erasing = Access::state(controller);
   CHECK(controller.beginPhotoPaintStroke(-1, eraser), "The dedicated Eraser can target the unlocked base");
@@ -362,12 +669,228 @@ static int verify_base_erase_and_clipboard(QTemporaryDir& temp) {
   CHECK(moved_raster.value("segmentationWidth").toInt() == 6 && moved_raster.value("segmentationHeight").toInt() == 4 &&
       moved_alpha.size() == 24 && static_cast<uchar>(moved_alpha[8]) == 255 && moved_alpha[0] == 0,
       "Copied raster selections move with the source-canvas footprint instead of stretching to the destination");
+
+  EditorPreviewController base_order_controller;
+  base_order_controller.loadAsset("base-order", path, {}, {}, {}, {}, {});
+  CHECK(base_order_controller.setBaseImageLocked(false) &&
+      base_order_controller.addPhotoShape("rectangle", 280, 120, 360, 220, 640, 400, "#4879ff", "#ffffff", 0),
+      "Create an unlocked source row with a visible layer above it");
+  const auto base_index = [&] {
+    const auto layers = Access::state(base_order_controller).layers;
+    for (int index = 0; index < static_cast<int>(layers.size()); ++index)
+      if (layers.at(index).toMap().value("baseImageEdit").toBool()) return index;
+    return -1;
+  };
+  const QString base_removal_status = QStringLiteral("Hide the Base Image to remove it from the composition.");
+  EditorPreviewController ancestor_delete_controller;
+  ancestor_delete_controller.loadAsset("base-ancestor-delete", path, {}, {}, {}, {}, {});
+  CHECK(ancestor_delete_controller.setBaseImageLocked(false), "Create the source node for ancestor deletion proof");
+  auto nested_base_layers = Access::layers(ancestor_delete_controller);
+  auto nested_base = nested_base_layers.front().toMap();
+  nested_base.insert(QStringLiteral("parentId"), QStringLiteral("ancestor-group"));
+  nested_base.insert(QStringLiteral("groupId"), QStringLiteral("ancestor-group"));
+  nested_base_layers[0] = nested_base;
+  nested_base_layers.prepend(QVariantMap{{QStringLiteral("id"), QStringLiteral("ancestor-group")},
+      {QStringLiteral("kind"), QStringLiteral("group")}, {QStringLiteral("name"), QStringLiteral("Ancestor")},
+      {QStringLiteral("locked"), false}});
+  CHECK(Access::replace_layers_raw(ancestor_delete_controller, nested_base_layers) &&
+      !ancestor_delete_controller.deletePhotoLayer(0) && ancestor_delete_controller.photoLayerCount() == 2 &&
+      ancestor_delete_controller.status() == base_removal_status &&
+      Access::layers(ancestor_delete_controller).at(1).toMap().value("baseImageEdit").toBool(),
+      "Deleting an ancestor row cannot discard a nested Base Image source");
+  CHECK(!base_order_controller.groupPhotoLayers({0,1}, QStringLiteral("Grouped source")) &&
+      base_order_controller.photoLayerCount() == 2 && base_index() == 1 &&
+      base_order_controller.status() == QStringLiteral(
+          "The Base Image source stays outside groups so its stack position remains explicit."),
+      "Grouping cannot absorb the Base Image source into an ancestor row");
+  const auto base_under_shape = render(Access::state(base_order_controller));
+  auto base_only_state = Access::state(base_order_controller);
+  base_only_state.layers.clear();
+  const auto base_only_image = render(base_only_state);
+  CHECK(base_order_controller.photoLayerCount() == 2 && base_index() == 1 &&
+      base_under_shape.pixelColor(320, 170).blue() > base_under_shape.pixelColor(320, 170).red(),
+      "The source starts below the shape at the bottom of the layer stack");
+  const auto order_before_ids = [&] {
+    QStringList ids;
+    for (const auto& layer : Access::state(base_order_controller).layers)
+      ids.push_back(layer.toMap().value("id").toString());
+    return ids;
+  }();
+  CHECK(base_order_controller.movePhotoLayer(base_index(), -1), "Move the unlocked Base Image above the shape");
+  const auto base_over_shape = render(Access::state(base_order_controller));
+  const auto order_after_state = Access::state(base_order_controller);
+  QStringList order_after_ids;
+  for (const auto& layer : order_after_state.layers) order_after_ids.push_back(layer.toMap().value("id").toString());
+  CHECK(order_after_ids != order_before_ids && order_after_state.layers.front().toMap().value("baseImageEdit").toBool() &&
+      base_over_shape.pixelColor(320, 170) == base_only_image.pixelColor(320, 170),
+      "Moving the source row places the original above lower layers without a duplicate underlay");
+  CHECK(!base_order_controller.deletePhotoLayer(base_index()) && base_index() == 0 &&
+      base_order_controller.status() == base_removal_status &&
+      render(Access::state(base_order_controller)) == base_over_shape,
+      "Deleting an unlocked Base Image reports that it must be hidden and leaves its moved source intact");
+  auto ancestor_removal_candidate = Access::layers(base_order_controller);
+  ancestor_removal_candidate.removeAt(base_index());
+  CHECK(!Access::try_layer_stack_change(base_order_controller, ancestor_removal_candidate) && base_index() == 0 &&
+      base_order_controller.status() == base_removal_status &&
+      render(Access::state(base_order_controller)) == base_over_shape,
+      "A stack or ancestor removal cannot silently restore the implicit bottom source");
+  base_order_controller.undo();
+  CHECK(render(Access::state(base_order_controller)) == base_under_shape,
+      "Undo restores the original source and shape order");
+  base_order_controller.redo();
+  const auto moved_json = serialize_edit_recipe_json(Access::state(base_order_controller));
+  CHECK(render(Access::state(base_order_controller)) == base_over_shape &&
+      validate_edit_recipe_json(moved_json).valid,
+      "Redo restores the reordered source layer and its valid recipe");
+  EditorPreviewController reopened_base_order;
+  reopened_base_order.loadAsset("base-order-reopened", path, {}, {}, {}, {}, moved_json);
+  CHECK(wait_until([&] { return !reopened_base_order.processing(); }) &&
+      render(Access::state(reopened_base_order)) == base_over_shape,
+      "Reopening preserves the Base Image row's stack position and composite");
+  const auto base_order_export_path = temp.filePath("base-order-export.png");
+  CHECK(reopened_base_order.exportFlattenedPhoto(base_order_export_path) &&
+      wait_until([&] { return !reopened_base_order.photoExportBusy(); }),
+      "Export the composition with the reordered Base Image source");
+  const QImage reordered_export(base_order_export_path);
+  const auto base_only_export_state = [&] {
+    auto state = Access::state(reopened_base_order);
+    state.layers.clear();
+    return state;
+  }();
+  EditorPreviewController base_only_export_reference;
+  base_only_export_reference.loadAsset("base-order-export-reference", path, {}, {}, {}, {}, {});
+  Access::apply(base_only_export_reference, base_only_export_state);
+  CHECK(wait_until([&] { return !base_only_export_reference.processing(); }),
+      "Settle a source-only export reference with the same output settings");
+  const auto base_only_export_path = temp.filePath("base-order-source-only-export.png");
+  CHECK(base_only_export_reference.exportFlattenedPhoto(base_only_export_path) &&
+      wait_until([&] { return !base_only_export_reference.photoExportBusy(); }),
+      "Export the same source and output settings without layers");
+  const QImage base_only_export(base_only_export_path);
+  if (reordered_export.size() == base_only_export.size() && !reordered_export.isNull()) {
+    int export_vs_inline_error = 0;
+    int export_vs_base_only_error = 0;
+    for (int y = 0; y < reordered_export.height(); ++y) {
+      for (int x = 0; x < reordered_export.width(); ++x) {
+        const auto actual = reordered_export.pixelColor(x, y);
+        const auto inline_reference = base_only_image.pixelColor(x, y);
+        const auto source_export_reference = base_only_export.pixelColor(x, y);
+        export_vs_inline_error = std::max(export_vs_inline_error, std::max({
+            std::abs(actual.red() - inline_reference.red()),
+            std::abs(actual.green() - inline_reference.green()),
+            std::abs(actual.blue() - inline_reference.blue()),
+            std::abs(actual.alpha() - inline_reference.alpha())}));
+        export_vs_base_only_error = std::max(export_vs_base_only_error, std::max({
+            std::abs(actual.red() - source_export_reference.red()),
+            std::abs(actual.green() - source_export_reference.green()),
+            std::abs(actual.blue() - source_export_reference.blue()),
+            std::abs(actual.alpha() - source_export_reference.alpha())}));
+      }
+    }
+    std::cout << "base_order_export_inline_max_error=" << export_vs_inline_error
+              << " base_order_export_source_only_max_error=" << export_vs_base_only_error
+              << " export_center=" << reordered_export.pixelColor(320, 170).name(QColor::HexArgb).toStdString()
+              << " inline_center=" << base_only_image.pixelColor(320, 170).name(QColor::HexArgb).toStdString()
+              << '\n';
+    CHECK(export_vs_base_only_error == 0,
+        "Flattened export matches an independent source-only export with identical output settings");
+  } else {
+    CHECK(false, "Reordered and source-only exports have matching non-null dimensions");
+  }
+  const auto reopened_base_index = [&] {
+    const auto layers = Access::state(reopened_base_order).layers;
+    for (int index = 0; index < static_cast<int>(layers.size()); ++index)
+      if (layers.at(index).toMap().value("baseImageEdit").toBool()) return index;
+    return -1;
+  };
+  CHECK(reopened_base_index() >= 0 && reopened_base_order.setPhotoLayerEnabled(reopened_base_index(), false) &&
+      render(Access::state(reopened_base_order)).pixelColor(20, 20).alpha() == 0 &&
+      render(Access::state(reopened_base_order)).pixelColor(320, 170).alpha() == 255,
+      "Hiding the Base Image removes its source while retaining lower composition layers");
+  CHECK(reopened_base_order.setPhotoLayerEnabled(reopened_base_index(), true) &&
+      render(Access::state(reopened_base_order)) == base_over_shape,
+      "Showing the Base Image restores its source at the same stack position");
+  CHECK((!reopened_base_order.baseImageLocked() || reopened_base_order.setBaseImageLocked(false)) &&
+      reopened_base_order.beginPhotoPaintStroke(-1, eraser),
+      "A reloaded, reordered Base Image can start a sparse erase stroke");
+  reopened_base_order.addPhotoPaintPoint(60, 60);
+  CHECK(reopened_base_order.finishPhotoPaintStroke() &&
+      wait_until([&] { return !reopened_base_order.photoPaintBusy(); }) &&
+      reopened_base_order.photoPaintError().isEmpty(),
+      "Finish the sparse erase stroke on the reordered source row");
+  const auto sparse_erased_state = Access::state(reopened_base_order);
+  const auto sparse_erased_output = render(sparse_erased_state);
+  QVariantMap sparse_base_row;
+  for (const auto& value : sparse_erased_state.layers) {
+    const auto layer = value.toMap();
+    if (layer.value("baseImageEdit").toBool()) sparse_base_row = layer;
+  }
+  const auto sparse_tiles = sparse_base_row.value("paintTiles").toMap().value("tiles").toMap();
+  CHECK(sparse_base_row.value("copyBaseImage").toBool() && sparse_tiles.size() == 1 && sparse_tiles.contains("0,0") &&
+      sparse_erased_output.pixelColor(60, 60).alpha() == 0 &&
+      sparse_erased_output.pixelColor(20, 20) == base_over_shape.pixelColor(20, 20),
+      "Reordered base erasure changes only local alpha and keeps its full-image source represented by sparse coverage");
+  const auto sparse_erased_json = serialize_edit_recipe_json(sparse_erased_state);
+  CHECK(validate_edit_recipe_json(sparse_erased_json).valid &&
+      render(parse_edit_recipe_json(sparse_erased_json)) == sparse_erased_output,
+      "Sparse eraser coverage survives recipe validation and reopening");
+
+  // Keep this color-managed regional parity fixture to the same supported
+  // source-plus-pixel-layer stack used by the paint benchmark. Shape layers
+  // deliberately take the full-render fallback and cannot qualify device8.
+  EditorPreviewController base_parity_controller;
+  base_parity_controller.loadAsset("base-erase-device-parity", path, {}, {}, {}, {}, {});
+  CHECK(wait_until([&] { return !base_parity_controller.processing() &&
+      !base_parity_controller.fullRenderRunning(); }) &&
+      base_parity_controller.addPaintLayer(),
+      "Create a source plus transparent paint-layer parity document");
+  CHECK(wait_until([&] { return !base_parity_controller.processing() &&
+      !base_parity_controller.fullRenderRunning(); }) &&
+      base_parity_controller.setBaseImageLocked(false),
+      "Unlock the base source for the device-profile erase fixture");
+  const auto parity_base_index = [&] {
+    const auto layers = Access::state(base_parity_controller).layers;
+    for (int index = 0; index < static_cast<int>(layers.size()); ++index)
+      if (layers.at(index).toMap().value(QStringLiteral("baseImageEdit")).toBool()) return index;
+    return -1;
+  };
+  CHECK(parity_base_index() >= 0 &&
+      (parity_base_index() == 0 || base_parity_controller.movePhotoLayer(
+          parity_base_index(), -parity_base_index())) &&
+      wait_until([&] { return !base_parity_controller.processing() &&
+          !base_parity_controller.fullRenderRunning(); }),
+      "Place the Base Image source at its explicit stack position");
+  const auto base_parity_before = Access::state(base_parity_controller);
+  const QString parity_base_id = base_parity_before.layers.at(parity_base_index())
+      .toMap().value(QStringLiteral("id")).toString();
+  auto partial_eraser = eraser;
+  partial_eraser.insert(QStringLiteral("opacity"), 0.45);
+  CHECK(base_parity_controller.beginPhotoPaintStroke(-1, partial_eraser),
+      "Start a partial-opacity Base Image erase stroke");
+  base_parity_controller.addPhotoPaintPoint(220, 300);
+  CHECK(wait_until([&] {
+    if (!Access::paintRasterIdle(base_parity_controller)) return false;
+    const auto draft = Access::request(base_parity_controller).state.layers;
+    for (const auto& value : draft)
+      if (value.toMap().value(QStringLiteral("id")).toString() == parity_base_id)
+        return value.toMap().contains(QStringLiteral("paintDraftTiles"));
+    return false;
+  }), "Partial base-erasure draft settles on its source row");
+  CHECK(regional_matches_full(Access::request(base_parity_controller), base_parity_before.layers,
+          require_device_profile, parity_base_id),
+      "Partial-alpha base erasing preserves regional/full preview parity");
+  base_parity_controller.finishPhotoPaintStroke(false);
+  CHECK(wait_until([&] { return !base_parity_controller.photoPaintBusy(); }) &&
+      Access::state(base_parity_controller) == base_parity_before &&
+      base_parity_controller.photoPaintError().isEmpty(),
+      "Cancel the temporary Base Image parity stroke and settle without changing the saved recipe");
   auto* malformed = new QMimeData;
   malformed->setData(photo_layer_clipboard_mime, "{invalid}");
   QGuiApplication::clipboard()->setMimeData(malformed);
   const auto before_invalid = Access::state(destination);
   CHECK(destination.pastePhotoLayers().isEmpty() && Access::state(destination) == before_invalid,
       "Malformed clipboard data cannot mutate the document");
+  if (verify_linked_cutout_clipboard_adjustments(temp) != 0) return 1;
   std::cout << "Base eraser and layer clipboard, groups, selections, immutable pixels and atomic undo passed\n";
   return 0;
 }
@@ -398,10 +921,340 @@ static int verify_board_owned_persistence(QTemporaryDir& temp) {
   return 0;
 }
 
+static int verify_text_transform_icc_parity(QTemporaryDir& temp) {
+  (void)temp;
+  if (!photo_editor::pipeline::metal::shared_metal_pipeline_backend().available()) {
+    std::cout << "SKIP: system Metal backend is unavailable for the canonical suffix fallback proof\n";
+    return 77;
+  }
+  const auto source_path = QDir(QStringLiteral(PHOTO_PAINT_TEST_ROOT)).filePath(
+      QStringLiteral("marketing/media/stock/landscape-mountain.jpg"));
+  const QImageReader source_reader(source_path);
+  const auto source_size = source_reader.size();
+  if (!source_size.isValid() || source_size.isEmpty()) {
+    std::cerr << "Could not load the fixed photo-text ICC source fixture\n";
+    return 1;
+  }
+
+  EditorPreviewController controller;
+  controller.loadAsset(
+      QStringLiteral("text-transform-icc-parity"), source_path,
+      {}, {}, {}, {}, {});
+  if (!wait_until([&] {
+        return controller.sourceImageWidth() == source_size.width() &&
+               controller.sourceImageHeight() == source_size.height() &&
+               !controller.processing();
+      })) {
+    std::cerr << "The photo source did not settle before the ICC parity proof\n";
+    return 1;
+  }
+
+  auto request = EditorPreviewControllerTestAccess::request(controller);
+  auto state = request.state;
+  if (!state.preview_icc_profile_asset.configured() ||
+      state.preview_icc_profile_asset.asset_id.trimmed().isEmpty()) {
+    std::cout << "SKIP: no active display ICC profile is configured\n";
+    return 77;
+  }
+
+  auto style = photo_editor::desktop::PhotoTextStyle{};
+  style.family = QStringLiteral("Georgia");
+  style.size = 48.0;
+  style.weight = 700;
+  style.italic = true;
+  style.underline = true;
+  style.color = QColor(QStringLiteral("#ffffffff"));
+  style.shadow_color = QColor(QStringLiteral("#a0000000"));
+  style.runs = QVector<QVariantMap>{
+      QVariantMap{
+          {QStringLiteral("start"), 0},
+          {QStringLiteral("length"), 4},
+          {QStringLiteral("family"), QStringLiteral("Georgia")},
+          {QStringLiteral("color"), QStringLiteral("#ffff347a")},
+          {QStringLiteral("strokeColor"), QStringLiteral("#ff102030")},
+          {QStringLiteral("strokeWidth"), 2.5},
+      },
+  };
+  const auto typography = photo_editor::desktop::encode_photo_text_style(style);
+  if (typography.value(QStringLiteral("version")).toInt() != 10) {
+    std::cerr << "The ICC parity fixture must use persisted typography version 10\n";
+    return 1;
+  }
+  const auto layer_id = QStringLiteral("text-transform-icc-v10");
+  auto text_layer = QVariantMap{
+      {QStringLiteral("id"), layer_id},
+      {QStringLiteral("kind"), QStringLiteral("text")},
+      {QStringLiteral("name"), QStringLiteral("CITY LIGHT")},
+      {QStringLiteral("text"), QStringLiteral("CITY LIGHT\nAn evening edition")},
+      {QStringLiteral("pixelWidth"), 460},
+      {QStringLiteral("pixelHeight"), 180},
+      {QStringLiteral("canvasWidth"), source_size.width()},
+      {QStringLiteral("canvasHeight"), source_size.height()},
+      {QStringLiteral("x"), 60},
+      {QStringLiteral("y"), 60},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("opacity"), 1.0},
+      {QStringLiteral("scale"), 1.0},
+      {QStringLiteral("rotation"), 0.0},
+      {QStringLiteral("textTypography"), typography.toVariantMap()},
+  };
+  state.layers = QVariantList{text_layer};
+  state.preview_output_mode = QStringLiteral("Monitor");
+  state.preview_color_space = QStringLiteral("sRGB");
+  const auto device_profile = photo_editor::pipeline::AssetIdentifier{
+      state.preview_icc_profile_asset.asset_id.toStdString()};
+  const auto admission = RenderPlanStore::shared().admit(
+      request.source_asset_id,
+      source_path,
+      state,
+      source_size,
+      photo_editor::pipeline::RenderPurpose::InteractivePreview,
+      photo_editor::pipeline::DisplayRenderingTarget::ActiveDisplay,
+      device_profile);
+  if (!admission.admitted || !admission.plan.has_value()) {
+    std::cerr << "The actual v10 styled ICC fixture was not admitted: "
+              << admission.error.toStdString() << '\n';
+    return 1;
+  }
+  auto base_state = state;
+  auto disabled_text_layer = text_layer;
+  disabled_text_layer.insert(QStringLiteral("enabled"), false);
+  base_state.layers = QVariantList{disabled_text_layer};
+  const auto base_admission = RenderPlanStore::shared().admit(
+      request.source_asset_id,
+      source_path,
+      base_state,
+      source_size,
+      photo_editor::pipeline::RenderPurpose::InteractivePreview,
+      photo_editor::pipeline::DisplayRenderingTarget::ActiveDisplay,
+      device_profile);
+  if (!base_admission.admitted || !base_admission.plan.has_value()) {
+    std::cerr << "The unstyled reference fixture was not admitted: "
+              << base_admission.error.toStdString() << '\n';
+    return 1;
+  }
+
+  request.state = state;
+  request.render_reason = QStringLiteral("photo_layer_transform");
+  request.interaction_mode = QStringLiteral("draft_interactive");
+  request.render_mode = QStringLiteral("live_preview");
+  request.dirty_domain = QStringLiteral("layers_composite");
+  request.dirty_stages = QStringList{
+      QStringLiteral("layers"), QStringLiteral("detail"),
+      QStringLiteral("geometry"), QStringLiteral("photographic_output"),
+      QStringLiteral("device_transform"), QStringLiteral("publish")};
+  request.full_invalidation = false;
+  request.draft_interactive = true;
+  request.reuse_layer_transform_prefix = true;
+  request.allow_native_device_surface = true;
+  request.allow_native_srgb_surface = false;
+  request.require_cpu_preview_image = false;
+  request.require_canonical_render_plan = true;
+  request.use_in_memory_preview = true;
+  request.max_edge = 1024;
+  request.active_layer_id = layer_id;
+  request.edit_transaction_generation = 1;
+  request.layer_source_content_revision = 1;
+  request.generation = 1;
+  request.latest_generation = std::make_shared<std::atomic<int>>(1);
+  request.canonical_render_plan = admission.plan;
+  request.canonical_scope_plan.reset();
+
+  auto unstyled_request = request;
+  unstyled_request.state = base_state;
+  unstyled_request.active_layer_id.clear();
+  unstyled_request.edit_transaction_generation = 0;
+  unstyled_request.layer_source_content_revision = 0;
+  unstyled_request.allow_parallel_cpu_device_transform = false;
+  unstyled_request.canonical_render_plan = base_admission.plan;
+  unstyled_request.recipe_cache_identity = QStringLiteral("text-transform-icc-base");
+  unstyled_request.adjusted_recipe_cache_identity =
+      QStringLiteral("text-transform-icc-base:adjusted");
+  unstyled_request.latest_generation = std::make_shared<std::atomic<int>>(1);
+
+  EditorPreviewControllerTestAccess::clear_working_caches();
+  auto unstyled_result = render_preview_request_for_test(unstyled_request);
+  if (!unstyled_result.success || unstyled_result.preview_image.isNull()) {
+    std::cerr << "The unstyled ICC comparison render failed: status="
+              << unstyled_result.status.toStdString() << " failure="
+              << unstyled_result.failure_stage.toStdString() << '/'
+              << unstyled_result.failure_detail.toStdString() << '\n';
+    return 1;
+  }
+  const auto unstyled_pixels = unstyled_result.preview_image.convertToFormat(
+      QImage::Format_RGBA8888);
+
+  struct Sample final {
+    RenderResult result;
+    qint64 wall_ms = 0;
+  };
+  const auto run = [&](bool allow_parallel, int sample_index) {
+    EditorPreviewControllerTestAccess::clear_working_caches();
+    auto sample_request = request;
+    sample_request.allow_parallel_cpu_device_transform = allow_parallel;
+    sample_request.recipe_cache_identity =
+        QStringLiteral("text-transform-icc-parity:%1:%2")
+            .arg(sample_index)
+            .arg(allow_parallel ? QStringLiteral("parallel")
+                                : QStringLiteral("serial"));
+    sample_request.adjusted_recipe_cache_identity =
+        sample_request.recipe_cache_identity + QStringLiteral(":adjusted");
+    sample_request.canonical_render_plan->plan_cache_key +=
+        QStringLiteral(":text-icc-%1-%2")
+            .arg(sample_index)
+            .arg(allow_parallel ? QStringLiteral("parallel")
+                                : QStringLiteral("serial"))
+            .toStdString();
+    sample_request.latest_generation = std::make_shared<std::atomic<int>>(1);
+    QElapsedTimer timer;
+    timer.start();
+    auto result = render_preview_request_for_test(sample_request);
+    return Sample{std::move(result), timer.elapsed()};
+  };
+
+  auto serial_wall = QVector<qint64>{};
+  auto parallel_wall = QVector<qint64>{};
+  auto serial_output = QVector<qint64>{};
+  auto parallel_output = QVector<qint64>{};
+  auto serial_photo = QVector<qint64>{};
+  auto parallel_photo = QVector<qint64>{};
+  auto serial_device = QVector<qint64>{};
+  auto parallel_device = QVector<qint64>{};
+  auto compared_pixels = qint64{0};
+  auto styled_text_pixels = qint64{0};
+  for (auto pair_index = 0; pair_index < 5; ++pair_index) {
+    const auto parallel_first = pair_index % 2 != 0;
+    const auto first = run(parallel_first, pair_index * 2);
+    const auto second = run(!parallel_first, pair_index * 2 + 1);
+    const auto& serial_sample = parallel_first ? second : first;
+    const auto& parallel_sample = parallel_first ? first : second;
+    const auto& serial_result = serial_sample.result;
+    const auto& parallel_result = parallel_sample.result;
+    if (!serial_result.success || !parallel_result.success ||
+        serial_result.preview_image.isNull() || parallel_result.preview_image.isNull()) {
+      std::cerr << "Text ICC serial/parallel CPU render failed: serial(status="
+                << serial_result.status.toStdString() << ", failure="
+                << serial_result.failure_stage.toStdString() << '/'
+                << serial_result.failure_detail.toStdString() << "), parallel(status="
+                << parallel_result.status.toStdString() << ", failure="
+                << parallel_result.failure_stage.toStdString() << '/'
+                << parallel_result.failure_detail.toStdString() << ")\n";
+      return 1;
+    }
+    if (serial_result.output_width != 1024 || serial_result.output_height != 670 ||
+        parallel_result.output_width != 1024 || parallel_result.output_height != 670 ||
+        serial_result.preview_image.size() != parallel_result.preview_image.size() ||
+        serial_result.preview_image.format() != parallel_result.preview_image.format() ||
+        serial_result.preview_image.convertToFormat(QImage::Format_RGBA8888) !=
+            parallel_result.preview_image.convertToFormat(QImage::Format_RGBA8888)) {
+      std::cerr << "Text ICC parallel output must match serial RGBA exactly at 1024x670\n";
+      return 1;
+    }
+    const auto styled_pixels = serial_result.preview_image.convertToFormat(
+        QImage::Format_RGBA8888);
+    if (styled_pixels.size() != unstyled_pixels.size()) {
+      std::cerr << "Styled and unstyled fixture outputs have different dimensions\n";
+      return 1;
+    }
+    auto sample_changed_pixels = qint64{0};
+    for (auto y = 0; y < styled_pixels.height(); ++y) {
+      const auto* styled_row = styled_pixels.constScanLine(y);
+      const auto* unstyled_row = unstyled_pixels.constScanLine(y);
+      for (auto x = 0; x < styled_pixels.width(); ++x) {
+        if (std::memcmp(styled_row + x * 4, unstyled_row + x * 4, 4) != 0)
+          ++sample_changed_pixels;
+      }
+    }
+    if (sample_changed_pixels <= 500 ||
+        sample_changed_pixels >=
+            static_cast<qint64>(styled_pixels.width()) *
+                styled_pixels.height() / 2) {
+      std::cerr << "The styled v10 text must visibly change a bounded set of output pixels, changed="
+                << sample_changed_pixels << '\n';
+      return 1;
+    }
+    const auto serial_device_backend =
+        serial_result.render_stage_backends.value(QStringLiteral("device_transform")).toString();
+    const auto parallel_device_backend =
+        parallel_result.render_stage_backends.value(QStringLiteral("device_transform")).toString();
+    if (!serial_device_backend.contains(QStringLiteral("cpu-reference-fused-fallback")) ||
+        serial_device_backend.contains(QStringLiteral("parallel-icc")) ||
+        !parallel_device_backend.contains(QStringLiteral("parallel-icc"))) {
+      std::cerr << "Text ICC proof did not qualify the CPU fused serial/parallel DeviceTransform routes: serial="
+                << serial_device_backend.toStdString() << " parallel="
+                << parallel_device_backend.toStdString() << '\n';
+      return 1;
+    }
+    if (serial_result.output_lut.kernel_dispatch_count != 0 ||
+        parallel_result.output_lut.kernel_dispatch_count != 0 ||
+        serial_result.texture_upload_surface != nullptr ||
+        parallel_result.texture_upload_surface != nullptr) {
+      std::cerr << "The ICC parity proof must use CPU fallback output with no native surface or Metal dispatch\n";
+      return 1;
+    }
+
+    serial_wall.push_back(serial_sample.wall_ms);
+    parallel_wall.push_back(parallel_sample.wall_ms);
+    serial_output.push_back(serial_result.output_stage_elapsed_ms);
+    parallel_output.push_back(parallel_result.output_stage_elapsed_ms);
+    serial_photo.push_back(serial_result.photographic_output_stage_elapsed_ms);
+    parallel_photo.push_back(parallel_result.photographic_output_stage_elapsed_ms);
+    serial_device.push_back(serial_result.render_stage_elapsed_ms
+                                .value(QStringLiteral("device_transform")).toLongLong());
+    parallel_device.push_back(parallel_result.render_stage_elapsed_ms
+                                  .value(QStringLiteral("device_transform")).toLongLong());
+    styled_text_pixels = sample_changed_pixels;
+    compared_pixels += static_cast<qint64>(
+        serial_result.preview_image.width()) * serial_result.preview_image.height();
+  }
+  std::sort(serial_wall.begin(), serial_wall.end());
+  std::sort(parallel_wall.begin(), parallel_wall.end());
+  std::sort(serial_output.begin(), serial_output.end());
+  std::sort(parallel_output.begin(), parallel_output.end());
+  std::sort(serial_photo.begin(), serial_photo.end());
+  std::sort(parallel_photo.begin(), parallel_photo.end());
+  std::sort(serial_device.begin(), serial_device.end());
+  std::sort(parallel_device.begin(), parallel_device.end());
+  const auto serial_median = serial_wall.at(serial_wall.size() / 2);
+  const auto parallel_median = parallel_wall.at(parallel_wall.size() / 2);
+  const auto wall_improvement = serial_median > 0
+      ? 100.0 * static_cast<double>(serial_median - parallel_median) /
+            static_cast<double>(serial_median)
+      : 0.0;
+  QFile source_file(source_path);
+  if (!source_file.open(QIODevice::ReadOnly)) return 1;
+  const auto source_sha = QCryptographicHash::hash(
+      source_file.readAll(), QCryptographicHash::Sha256).toHex();
+  const auto style_sha = QCryptographicHash::hash(
+      QJsonDocument(typography).toJson(QJsonDocument::Compact),
+      QCryptographicHash::Sha256).toHex();
+  std::cout << "Text transform ICC parity: source=" << source_path.toStdString()
+            << " source_sha256=" << source_sha.constData()
+            << " style_v10_sha256=" << style_sha.constData()
+            << " output=1024x670 model=" << state.photographic_rendering_model.toStdString()
+            << " exposure=" << state.exposure
+            << " working_profile=" << state.working_color_profile.toStdString()
+            << " device_profile=" << state.preview_icc_profile_asset.asset_id.toStdString()
+            << " pairs=5 compared_pixels=" << compared_pixels
+            << " styled_text_changed_pixels=" << styled_text_pixels
+            << " serial_wall_median_ms=" << serial_median
+            << " parallel_wall_median_ms=" << parallel_median
+            << " wall_improvement_percent=" << wall_improvement
+            << " serial_output_median_ms=" << serial_output.at(serial_output.size() / 2)
+            << " parallel_output_median_ms=" << parallel_output.at(parallel_output.size() / 2)
+            << " serial_photo_output_median_ms=" << serial_photo.at(serial_photo.size() / 2)
+            << " parallel_photo_output_median_ms=" << parallel_photo.at(parallel_photo.size() / 2)
+            << " serial_device_transform_median_ms=" << serial_device.at(serial_device.size() / 2)
+            << " parallel_device_transform_median_ms=" << parallel_device.at(parallel_device.size() / 2)
+            << '\n';
+  return 0;
+}
+
 int main(int argc, char** argv) {
   qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
   qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
   QGuiApplication app(argc, argv);
+  const bool require_device_profile = app.arguments().contains("--require-native-device-icc");
   if (argc == 5 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--verify-photo-fragment-preset")) {
     const auto image = PhotoFragmentBrushPresetStore::imageFromPreset(
         PhotoFragmentBrushPresetStore::load(QString::fromLocal8Bit(argv[2])));
@@ -416,13 +1269,306 @@ int main(int argc, char** argv) {
   QTemporaryDir temp;
   qputenv("PHOTO_EDITOR_APP_DATA_DIR", temp.path().toUtf8());
   CHECK(AppBootstrap::ensureRuntimeDirectories(), "Runtime directories");
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_OBSERVABILITY_RUN_DIR"))
+    observability::initialize();
   if (app.arguments().contains("--shape-fills")) return verify_shape_fills(temp);
   if (app.arguments().contains("--blank-canvas")) return verify_blank_canvas(temp);
   if (app.arguments().contains("--board-owned-persistence")) return verify_board_owned_persistence(temp);
-  if (app.arguments().contains("--document-workflow")) return verify_base_erase_and_clipboard(temp);
+  if (app.arguments().contains("--text-transform-icc-parity"))
+    return verify_text_transform_icc_parity(temp);
+  if (app.arguments().contains("--linked-cutout-clipboard-only"))
+    return verify_linked_cutout_clipboard_adjustments(temp);
+  if (app.arguments().contains("--document-workflow"))
+    return verify_base_erase_and_clipboard(temp, require_device_profile);
   const QVariantMap empty{{"pixelWidth",640},{"pixelHeight",400},
       {"paintTiles",empty_photo_paint_tiles(QColorSpace(QColorSpace::SRgbLinear))}};
   const auto raster = [](const PhotoPixelStroke& value) { return value.surface.raster({},nullptr,value.draft_tiles()); };
+  const auto verify_paint_edge_parity = [&]() -> QString {
+    const QColor color(230, 110, 50, 177);
+    constexpr double flow = 0.63;
+    constexpr double opacity = 0.72;
+    for (const auto canvas : {QSize(640, 400), QSize(97, 71)}) {
+      const auto min_extent = static_cast<double>(std::min(canvas.width() - 1, canvas.height() - 1));
+      const QPointF center(canvas.width() * 0.5 + 0.25, canvas.height() * 0.5 - 0.25);
+      const auto large_diameter = std::min(220.0, static_cast<double>(canvas.height()) * 0.7);
+      for (const auto diameter : {3.0, 24.0, large_diameter}) {
+        const auto requested_radius_pixels = diameter * 0.5;
+        const auto selection_requested_radius = requested_radius_pixels / min_extent;
+        // The selection rasterizer clamps normalized brush size to 0.01.
+        // Keep that existing API behavior in the oracle for tiny brushes.
+        const auto selection_radius_pixels = std::max(0.01, selection_requested_radius) * min_extent;
+        const bool selection_radius_matches_paint =
+            std::abs(selection_radius_pixels - requested_radius_pixels) <= 1.0e-9;
+        for (const auto hardness : {0.0, 0.45, 0.8, 1.0}) {
+          QVariantMap layer{{"id", QStringLiteral("edge-parity")}, {"kind", "pixel"},
+              {"name", QStringLiteral("Edge parity")}, {"pixelWidth", canvas.width()},
+              {"pixelHeight", canvas.height()}, {"canvasWidth", canvas.width()},
+              {"canvasHeight", canvas.height()}, {"enabled", true}, {"opacity", 1.0}, {"scale", 1.0},
+              {"paintTiles", empty_photo_paint_tiles(QColorSpace(QColorSpace::SRgbLinear))}};
+          PhotoPixelStroke stroke;
+          stroke.color = color;
+          stroke.diameter = diameter;
+          stroke.hardness = hardness;
+          stroke.flow = flow;
+          stroke.opacity = opacity;
+          stroke.pressure_size = false;
+          if (!stroke.begin(layer)) return QStringLiteral("PhotoPixelStroke initialization failed.");
+          stroke.point(center, 1.0);
+          stroke.finish();
+          const auto draft = stroke.surface.raster({}, nullptr, stroke.draft_tiles());
+          if (draft.isNull()) return QStringLiteral("PhotoPixelStroke draft raster was null.");
+
+          QVariantMap selection{{"kind", "brush"}, {"segmentationWidth", canvas.width()},
+              {"segmentationHeight", canvas.height()},
+              {"segmentationData", QByteArray(canvas.width() * canvas.height(), '\0')}};
+          const auto selection_center_x = (center.x() - 0.5) / (canvas.width() - 1);
+          const auto selection_center_y = (center.y() - 0.5) / (canvas.height() - 1);
+          (void)rasterize_brush_point_into_mask(&selection, nullptr, selection_center_x,
+              selection_center_y, selection_requested_radius, flow,
+              opacity * color.alphaF(), 0.0, false, false, 0.18, -1.0, -1.0, false,
+              {}, nullptr, nullptr, nullptr, {.circular = true, .hardness = hardness});
+          const auto selection_alpha = selection.value(QStringLiteral("segmentationData")).toByteArray();
+          bool observed_selection_size_clamp = false;
+
+          layer.insert(QStringLiteral("paintTiles"), stroke.commit());
+          EditRecipeState state;
+          state.layers = {layer};
+          const auto serialized = serialize_edit_recipe_json(state);
+          const auto decoded = parse_edit_recipe_json(serialized);
+          if (!validate_edit_recipe_json(serialized).valid || decoded.layers.size() != 1)
+            return QStringLiteral("Committed edge fixture did not survive recipe round-trip.");
+          const auto restored = rasterize_photo_paint_layer(decoded.layers.front().toMap());
+          if (restored.isNull() || restored != draft)
+            return QStringLiteral("Draft and committed/export raster pixels differ.");
+
+          for (int y = 0; y < canvas.height(); ++y) {
+            const auto* actual_row = reinterpret_cast<const QRgbaFloat32*>(draft.constScanLine(y));
+            for (int x = 0; x < canvas.width(); ++x) {
+              const auto distance = std::hypot(x + 0.5 - center.x(), y + 0.5 - center.y());
+              const auto paint_edge = photo_editor::pipeline::circular_brush_coverage_pixels(
+                  distance, requested_radius_pixels, hardness);
+              const auto expected_paint_weight = static_cast<float>(flow * paint_edge);
+              const auto expected_paint_alpha = static_cast<float>(static_cast<double>(expected_paint_weight) *
+                  opacity * color.alphaF());
+              const auto selection_edge = photo_editor::pipeline::circular_brush_coverage_pixels(
+                  distance, selection_radius_pixels, hardness);
+              const auto expected_selection_alpha = flow * opacity * color.alphaF() * selection_edge;
+              const auto actual_alpha = actual_row[x].alpha();
+              const auto mask_alpha = static_cast<unsigned char>(selection_alpha.at(y * canvas.width() + x));
+              const auto expected_selection_mask = qRound(expected_selection_alpha * 255.0);
+              const auto paint_selection_difference = std::abs(
+                  qRound(expected_paint_alpha * 255.0F) - expected_selection_mask);
+              if (!selection_radius_matches_paint && paint_selection_difference > 1)
+                observed_selection_size_clamp = true;
+              const bool paint_matches_requested_geometry =
+                  std::abs(actual_alpha - expected_paint_alpha) <= 1.0e-6F;
+              const bool selection_matches_clamped_geometry =
+                  std::abs(static_cast<int>(mask_alpha) - expected_selection_mask) <= 1;
+              const bool tools_match_when_radius_matches = !selection_radius_matches_paint ||
+                  std::abs(qRound(actual_alpha * 255.0F) - static_cast<int>(mask_alpha)) <= 1;
+              if (!paint_matches_requested_geometry || !selection_matches_clamped_geometry ||
+                  !tools_match_when_radius_matches) {
+                return QStringLiteral(
+                    "Edge parity failed canvas=%1x%2 diameter=%3 hardness=%4 pixel=(%5,%6) "
+                    "paint=%7 expectedRequested=%8 selection8=%9 expectedClamped=%10 "
+                    "paintRadius=%11 selectionRadius=%12")
+                    .arg(canvas.width()).arg(canvas.height()).arg(diameter).arg(hardness)
+                    .arg(x).arg(y).arg(actual_alpha, 0, 'g', 9).arg(expected_paint_alpha, 0, 'g', 9)
+                    .arg(mask_alpha).arg(expected_selection_mask).arg(requested_radius_pixels)
+                    .arg(selection_radius_pixels);
+              }
+            }
+          }
+          if (!selection_radius_matches_paint && !observed_selection_size_clamp)
+            return QStringLiteral("Tiny selection-brush fixture did not exercise its existing size clamp.");
+        }
+      }
+    }
+    const QSize canvas(256, 256);
+    QVariantMap seeded_layer{{"id", QStringLiteral("saturated-coverage-parity")}, {"kind", "pixel"},
+        {"name", QStringLiteral("Saturated coverage parity")}, {"pixelWidth", canvas.width()},
+        {"pixelHeight", canvas.height()}, {"canvasWidth", canvas.width()}, {"canvasHeight", canvas.height()},
+        {"enabled", true}, {"opacity", 1.0}, {"scale", 1.0},
+        {"paintTiles", empty_photo_paint_tiles(QColorSpace(QColorSpace::SRgbLinear))}};
+    PhotoPaintSurface seeded_surface;
+    QString seed_error;
+    if (!seeded_surface.load(seeded_layer, &seed_error))
+      return QStringLiteral("Saturated coverage baseline setup failed: ") + seed_error;
+    for (int ty = 0; ty * kPhotoPaintTileEdge < canvas.height(); ++ty) {
+      for (int tx = 0; tx * kPhotoPaintTileEdge < canvas.width(); ++tx) {
+        auto tile = seeded_surface.tile(tx, ty, &seed_error);
+        if (tile.isNull()) return QStringLiteral("Saturated coverage tile setup failed: ") + seed_error;
+        const auto rect = seeded_surface.tile_rect(tx, ty);
+        for (int y = 0; y < tile.height(); ++y) {
+          auto* row = reinterpret_cast<QRgbaFloat32*>(tile.scanLine(y));
+          for (int x = 0; x < tile.width(); ++x) {
+            const int gx = rect.x() + x, gy = rect.y() + y;
+            const float alpha = 0.15F + 0.85F * static_cast<float>((gx * 13 + gy * 17) % 97) / 96.0F;
+            row[x] = QRgbaFloat32{0.68F * alpha, 0.24F * alpha, 0.91F * alpha, alpha};
+          }
+        }
+        seeded_surface.store(tx, ty, tile);
+      }
+    }
+    seeded_layer.insert(QStringLiteral("paintTiles"), seeded_surface.snapshot());
+    QImage white_selection(canvas, QImage::Format_Grayscale8);
+    white_selection.fill(255);
+    QImage changed_selection(canvas, QImage::Format_Grayscale8);
+    for (int y = 0; y < canvas.height(); ++y) {
+      auto* row = changed_selection.scanLine(y);
+      for (int x = 0; x < canvas.width(); ++x)
+        row[x] = static_cast<uchar>(((x / 24 + y / 32) % 3) == 0 ? 0 : ((x / 24) % 2 == 0 ? 128 : 255));
+    }
+    const auto run_saturated = [&](bool erase, double hardness, bool white_mask,
+                                   const QString& mutation, bool change_size_flow) {
+      PhotoPixelStroke stroke;
+      stroke.color = erase ? QColor(255, 255, 255, 255) : QColor(225, 92, 37, 207);
+      stroke.diameter = 80;
+      stroke.hardness = hardness;
+      stroke.opacity = 0.67;
+      stroke.flow = 1.0;
+      stroke.spacing = 0.16;
+      stroke.erase = erase;
+      stroke.pressure_size = false;
+      if (white_mask) stroke.selection = white_selection;
+      if (!stroke.begin(seeded_layer)) return QPair<QImage, QVariantMap>{};
+      stroke.point({88, 128}, 1.0);
+      if (change_size_flow) {
+        stroke.diameter = 112;
+        stroke.hardness = 0.42;
+        stroke.flow = 0.83;
+        stroke.pressure_size = true;
+        stroke.pressure_flow = true;
+      }
+      if (mutation == QStringLiteral("opacity")) stroke.opacity = 0.31;
+      else if (mutation == QStringLiteral("color_alpha")) stroke.color.setAlpha(89);
+      else if (mutation == QStringLiteral("erase")) stroke.erase = !stroke.erase;
+      else if (mutation == QStringLiteral("material")) {
+        stroke.texture_material = QStringLiteral("graphite");
+        stroke.texture_strength = 0.64;
+      } else if (mutation == QStringLiteral("selection")) stroke.selection = changed_selection;
+      stroke.point({143, 128}, 0.72);
+      stroke.point({168, 144}, 1.0);
+      stroke.finish();
+      auto draft = stroke.surface.raster({}, nullptr, stroke.draft_tiles());
+      auto committed = stroke.commit();
+      return qMakePair(std::move(draft), std::move(committed));
+    };
+    for (const bool erase : {false, true}) {
+      for (const double hardness : {0.55, 1.0}) {
+        const auto optimized = run_saturated(erase, hardness, false, {}, false);
+        const auto white_control = run_saturated(erase, hardness, true, {}, false);
+        if (optimized.first.isNull() || white_control.first.isNull() ||
+            optimized.first != white_control.first || optimized.second != white_control.second)
+          return QStringLiteral("Absorbing-coverage paint/eraser output differs from all-white selection control.");
+      }
+    }
+    for (const auto& mutation : {QStringLiteral("opacity"), QStringLiteral("color_alpha"),
+             QStringLiteral("erase"), QStringLiteral("material"), QStringLiteral("selection")}) {
+      const auto optimized = run_saturated(false, 1.0, false, mutation, false);
+      const auto white_control = run_saturated(false, 1.0, true, mutation, false);
+      if (optimized.first.isNull() || white_control.first.isNull() ||
+          optimized.first != white_control.first || optimized.second != white_control.second)
+        return QStringLiteral("Midstroke %1 change did not fall back to all-white-selection parity.").arg(mutation);
+    }
+    const auto changing_pressure = run_saturated(false, 1.0, false, {}, true);
+    const auto changing_pressure_control = run_saturated(false, 1.0, true, {}, true);
+    if (changing_pressure.first.isNull() || changing_pressure_control.first.isNull() ||
+        changing_pressure.first != changing_pressure_control.first ||
+        changing_pressure.second != changing_pressure_control.second)
+      return QStringLiteral("Diameter/hardness/flow/pressure changes altered saturated output.");
+    return {};
+  };
+  if (app.arguments().contains(QStringLiteral("--paint-edge-parity"))) {
+    const auto diagnostic = verify_paint_edge_parity();
+    CHECK(diagnostic.isEmpty(), diagnostic.toStdString());
+    return 0;
+  }
+  auto cpu_brush_compositor = BrushPreviewCompositor::createCpu();
+  QImage brush_overlay;
+  CHECK(cpu_brush_compositor && cpu_brush_compositor->ensureTarget(&brush_overlay, QSize(201, 101)),
+      "Allocate a premultiplied CPU brush overlay");
+  const auto verify_preview_edge = [&](const QColor& color, QString* diagnostic) {
+    cpu_brush_compositor->clear(&brush_overlay);
+    const BrushPreviewStyle style{.color = color, .feather = 0.0, .hardness = 1.0,
+        .opacity = 0.4, .circular = true};
+    const QVector<BrushPreviewPoint> hard_dab{
+        BrushPreviewPoint{.x = 0.5, .y = 0.5, .size = 0.2, .flow = 1.0, .opacity = 1.0}};
+    for (int dab = 0; dab < 4; ++dab)
+      cpu_brush_compositor->compositePoints(&brush_overlay, hard_dab, style);
+    const auto pixel = [&](int x, int y) {
+      return reinterpret_cast<const QRgb*>(brush_overlay.constScanLine(y))[x];
+    };
+    const auto center = pixel(100, 50);
+    const auto horizontal_edge = pixel(120, 50);
+    const auto vertical_edge = pixel(100, 70);
+    const auto outside = pixel(121, 50);
+    const auto expected_center_alpha = qRound((1.0 - std::pow(1.0 - 0.4, 4)) * 255.0);
+    const auto expected_edge_alpha = qRound((1.0 - std::pow(1.0 - 0.2, 4)) * 255.0);
+    const auto premultiplied_matches = [&](QRgb sample) {
+      const auto alpha = qAlpha(sample);
+      if (alpha <= 0 || qRed(sample) > alpha || qGreen(sample) > alpha || qBlue(sample) > alpha)
+        return false;
+      const auto channel_error = [alpha](int premultiplied, int straight) {
+        return std::abs(premultiplied - straight * alpha / 255.0);
+      };
+      // A one-code-value tolerance is the quantization limit for this
+      // 8-bit premultiplied target. At alpha 151, unassociating a one-code
+      // channel difference can appear as a two-code RGB difference.
+      return channel_error(qRed(sample), color.red()) <= 1.0 &&
+          channel_error(qGreen(sample), color.green()) <= 1.0 &&
+          channel_error(qBlue(sample), color.blue()) <= 1.0;
+    };
+    const auto pixel_text = [](QRgb value) {
+      const auto alpha = qAlpha(value);
+      const auto straight = [alpha](int channel) {
+        return alpha > 0 ? qRound(channel * 255.0 / alpha) : 0;
+      };
+      return QStringLiteral("premult=(%1,%2,%3,%4), straight=(%5,%6,%7)")
+          .arg(qRed(value)).arg(qGreen(value)).arg(qBlue(value)).arg(alpha)
+          .arg(straight(qRed(value))).arg(straight(qGreen(value))).arg(straight(qBlue(value)));
+    };
+    const bool center_alpha_matches = std::abs(qAlpha(center) - expected_center_alpha) <= 1;
+    const bool edge_alpha_matches = std::abs(qAlpha(horizontal_edge) - expected_edge_alpha) <= 1;
+    const bool shape_matches = horizontal_edge == vertical_edge;
+    const bool outside_is_clear = qAlpha(outside) == 0;
+    const bool center_color_matches = premultiplied_matches(center);
+    const bool edge_color_matches = premultiplied_matches(horizontal_edge);
+    if (diagnostic != nullptr && !(center_alpha_matches && edge_alpha_matches && shape_matches &&
+            outside_is_clear && center_color_matches && edge_color_matches)) {
+      *diagnostic = QStringLiteral(
+          "color=%1 center{%2} expectedAlpha=%3 edge{%4} expectedAlpha=%5 vertical{%6} outside{%7}; "
+          "checks alpha=%8/%9 shape=%10 clear=%11 premultColor=%12/%13")
+          .arg(color.name(QColor::HexRgb)).arg(pixel_text(center)).arg(expected_center_alpha)
+          .arg(pixel_text(horizontal_edge)).arg(expected_edge_alpha).arg(pixel_text(vertical_edge))
+          .arg(pixel_text(outside)).arg(center_alpha_matches).arg(edge_alpha_matches)
+          .arg(shape_matches).arg(outside_is_clear).arg(center_color_matches).arg(edge_color_matches);
+    }
+    return center_alpha_matches &&
+        edge_alpha_matches && shape_matches && outside_is_clear &&
+        center_color_matches && edge_color_matches;
+  };
+  QString pale_preview_diagnostic;
+  QString dark_preview_diagnostic;
+  const auto pale_preview_ok = verify_preview_edge(QColor("#f4f7fa"), &pale_preview_diagnostic);
+  const auto dark_preview_ok = verify_preview_edge(QColor("#202830"), &dark_preview_diagnostic);
+  CHECK(pale_preview_ok && dark_preview_ok,
+      "Repeated circular preview dabs preserve premultiplied alpha, color, pixel-space shape and a one-pixel hard edge: pale[" <<
+          pale_preview_diagnostic.toStdString() << "] dark[" << dark_preview_diagnostic.toStdString() << "]");
+  PhotoPixelStroke hard_pixel_brush;
+  hard_pixel_brush.color = QColor("#f4f7fa");
+  hard_pixel_brush.diameter = 40;
+  hard_pixel_brush.hardness = 1.0;
+  hard_pixel_brush.pressure_size = false;
+  CHECK(hard_pixel_brush.begin(empty), "Hard pixel-brush initialization");
+  hard_pixel_brush.point({50.5, 50.5}, 1.0);
+  hard_pixel_brush.finish();
+  const auto hard_pixel_image = raster(hard_pixel_brush);
+  // Pixel centers at radii 19, 20, and 21 pin the band around the tip edge.
+  CHECK(qAlpha(hard_pixel_image.pixel(69, 50)) == 255 &&
+      qAlpha(hard_pixel_image.pixel(70, 50)) >= 126 && qAlpha(hard_pixel_image.pixel(70, 50)) <= 129 &&
+      qAlpha(hard_pixel_image.pixel(71, 50)) == 0,
+      "Hard paint and eraser brush edges use one raster pixel of antialiasing at hardness 1");
   PhotoPixelStroke stroke;
   stroke.color = QColor("#ff4000"); stroke.diameter = 40; stroke.opacity = 0.5;
   stroke.pressure_size = false;
@@ -735,6 +1881,31 @@ int main(int argc, char** argv) {
   CHECK(!draft_request.state.layers[0].toMap().value("paintDraftTiles").toMap().isEmpty(), "Draft renderer must see live pixels");
   CHECK(regional_matches_full(draft_request, blank.layers),
         "Regional paint must agree with the complete color-managed preview");
+  {
+    // Reduced previews must consider live regions before native escalation.
+    auto reduced = draft_request;
+    reduced.max_edge = 320;
+    reduced.use_in_memory_preview = true;
+    reduced.recipe_cache_identity.clear();
+    reduced.adjusted_recipe_cache_identity.clear();
+    reduced.canonical_render_plan.reset();
+    reduced.canonical_scope_plan.reset();
+    auto base_request = reduced;
+    base_request.state.layers = blank.layers;
+    base_request.paint_preview_base = {};
+    const auto base = render_preview_request_for_test(base_request);
+    CHECK(base.success && base.preview_image.size() == QSize(320, 200), "Reduced paint display base");
+    reduced.paint_preview_base = base.preview_image;
+    const auto live = render_preview_request_for_test(reduced);
+    CHECK(live.success && live.backend == QStringLiteral("paint-region") &&
+        live.partial_texture_upload_candidate && live.texture_upload_pixels < 320 * 200 &&
+        live.preview_image.pixelColor(0, 0) == base.preview_image.pixelColor(0, 0),
+        "Live paint on a reduced preview must update its region before native escalation");
+    reduced.paint_preview_base = {};
+    const auto settled = render_preview_request_for_test(reduced);
+    CHECK(settled.success && settled.backend != QStringLiteral("paint-region") && settled.native_quality_composite,
+        "Paint without a transient base must retain full native-quality compositing");
+  }
   CHECK(controller.finishPhotoPaintStroke(), "Stroke commit");
   CHECK(wait_until([&] { return !controller.photoPaintBusy(); }) && controller.photoPaintError().isEmpty(), "Async paint commit completes");
   const auto painted = Access::state(controller);
@@ -876,8 +2047,10 @@ int main(int argc, char** argv) {
   CHECK(controller.beginPhotoPaintStroke(0,erased_settings), "Controller erase"); controller.addPhotoPaintPoint(200,100);
   CHECK(wait_until([&] { return Access::paintRasterIdle(controller) &&
         Access::request(controller).state.layers[0].toMap().contains("paintDraftTiles"); }), "Eraser draft settles");
-  CHECK(regional_matches_full(Access::request(controller), before_erase.layers),
-        "Regional erasing must agree with the complete color-managed preview");
+  const auto erase_draft_request = Access::request(controller);
+  CHECK(regional_matches_full(erase_draft_request, before_erase.layers, require_device_profile,
+          erase_draft_request.state.layers[0].toMap().value(QStringLiteral("id")).toString()),
+        "Partial-alpha paint-layer erasing preserves regional/full preview parity");
   CHECK(controller.finishPhotoPaintStroke(), "Erase commit");
   CHECK(wait_until([&] { return !controller.photoPaintBusy(); }) && controller.photoPaintError().isEmpty(), "Async paint commit completes");
   const auto erased = Access::state(controller);
@@ -945,8 +2118,10 @@ Item {
     property int paintLayerRequests: 0
     Rectangle { anchors.fill: parent; color: "#181c21" }
     Image { x: 40; y: 30; width: 720; height: 450; source: paintController.displayPreviewSource; cache: false }
+    Item { id: paintOptions; x: 800; y: 0; width: 480; height: 720 }
     PhotoPaintOverlay {
         objectName: "paintOverlay"; anchors.fill: parent
+        controlsParent: paintOptions
         active: true; controller: paintController; documentId: "paint-proof"
         layerIndex: 0; layerData: ({kind: "pixel", name: "Paint Layer"})
         imageX: 40; imageY: 30; imageWidth: 720; imageHeight: 450
@@ -1100,15 +2275,31 @@ Item {
       QDir().mkpath(hover_proof_dir);
       window.grabWindow().save(QDir(hover_proof_dir).filePath("brush-hover.png"));
     }
-    CHECK(wait_until([&] {
+    const auto hover_ready = wait_until([&] {
       return hover_cursor->isVisible() &&
           QLineF(paintOverlay->property("cursorPoint").toPointF(), QPointF(600, 420)).length() < 1;
-    }), "A mouse move with no buttons must show and position the brush outline before any stroke");
+    });
+    if (!hover_ready) std::cerr << "paint hover diagnostic cursorVisible=" << hover_cursor->isVisible()
+        << " overlayVisible=" << paintOverlay->property("cursorVisible").toBool()
+        << " inside=" << paintOverlay->property("cursorInsideImage").toBool()
+        << " point=" << paintOverlay->property("cursorPoint").toPointF().x() << ","
+        << paintOverlay->property("cursorPoint").toPointF().y()
+        << " cursorSize=" << hover_cursor->width() << "x" << hover_cursor->height() << '\n';
+    CHECK(hover_ready, "A mouse move with no buttons must show and position the brush outline before any stroke");
     const auto hover_frame = window.grabWindow();
     CHECK(!before_hover_frame.isNull() && !hover_frame.isNull(), "Hover readback captures the real canvas");
     const double hover_dpr = static_cast<double>(hover_frame.width()) / window.width();
-    const int outline_x = qRound((600 + hover_cursor->width() / 2 - 1) * hover_dpr);
-    const int outline_y = qRound(420 * hover_dpr);
+    auto contour_value = hover_cursor->property("contours");
+    auto contour_map = contour_value.toMap();
+    if (contour_map.isEmpty()) contour_map = contour_value.value<QJSValue>().toVariant().toMap();
+    const auto contour = contour_map.value(QStringLiteral("outer")).toList();
+    CHECK(contour.size() == 65, "Hover uses the production projected physical brush contour");
+    const auto outline_point = contour.first().toMap();
+    CHECK(outline_point.value(QStringLiteral("valid")).toBool(), "Hover contour sample is visible");
+    const int outline_x = qRound((paintOverlay->property("imageX").toDouble() +
+        outline_point.value(QStringLiteral("x")).toDouble() * paintOverlay->property("imageWidth").toDouble()) * hover_dpr);
+    const int outline_y = qRound((paintOverlay->property("imageY").toDouble() +
+        outline_point.value(QStringLiteral("y")).toDouble() * paintOverlay->property("imageHeight").toDouble()) * hover_dpr);
     int outline_delta = 0;
     for (int y = outline_y - 2; y <= outline_y + 2; ++y) {
       for (int x = outline_x - 2; x <= outline_x + 2; ++x) {
@@ -1181,7 +2372,9 @@ Item {
   CHECK(!controller.photoPaintBusy() && Access::state(controller).layers==before_cancel.layers,
       "Explicit cancellation must discard queued work without altering saved pixels");
   controller.addMask("rectangle");
-  controller.setActiveMaskFeather(0);
+  // The preset round-trip below requires partially covered edge pixels.
+  // A pixel-aligned rectangle with zero feather has only binary coverage.
+  controller.setActiveMaskFeather(0.02);
   controller.setActiveMaskCenterX(0.25); controller.setActiveMaskCenterY(0.5);
   controller.setActiveMaskRadiusX(0.25); controller.setActiveMaskRadiusY(0.5);
   const auto before_independent_copy = Access::state(controller);

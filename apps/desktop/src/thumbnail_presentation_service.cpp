@@ -752,7 +752,9 @@ QVariantList ThumbnailPresentationService::presentPhotoLayers(
   if (session == nullptr || current_layers.isEmpty() || !facts.has_asset) {
     return current_layers;
   }
-  const auto asset_key = QStringLiteral("%1|%2").arg(facts.asset_id, facts.file_path);
+  auto asset_key = QStringLiteral("%1|%2").arg(facts.asset_id, facts.file_path);
+  if (!facts.content_output_policy_identity.isEmpty())
+    asset_key += QLatin1Char('|') + facts.content_output_policy_identity;
   if (!session->photoLayerDirty() &&
       session->photoLayerAssetKey() == asset_key) {
     auto cached = reusePhotoLayerThumbnails(
@@ -780,7 +782,7 @@ QVariantList ThumbnailPresentationService::presentPhotoLayers(
         kLayerThumbnailEdge,
         kLayerThumbnailEdge,
         kLayerThumbnailDevicePixelRatio,
-        QString::fromLatin1(kThumbnailColorPipelineVersion),
+        photo_layer_thumbnail_output_version(layer, facts.content_output_policy_identity),
         facts.mask_revision);
     QVariantMap cached;
     if (session->entryLookup(key, &cached)) {
@@ -801,6 +803,9 @@ QVariantList ThumbnailPresentationService::presentPhotoLayers(
     return result;
   }
 
+  // A changed output policy can invalidate a formerly clean session. Mark
+  // the miss before scheduling: the controller refuses work for clean caches.
+  session->photoLayerDirty() = true;
   const auto reason = QStringLiteral("photo_layer_thumbnail_refresh_deferred");
   auto progressive_facts = facts;
   const auto completed_failure =

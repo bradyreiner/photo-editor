@@ -1,0 +1,2 @@
+VISUAL REVIEW COMPLETE
+Six-panel phone contact inspected, then individual panel03 and panel06 phone previews rechecked after the crop annotation was moved clear of the heading. Main story copy, photo/video category and CTA remain readable at360px. All six PNGs1080x1350. LiveSVG text inventory exactly matches carousel.json. Portable SVGs contain paths, no text-font dependency and no embedded raster image. PNGs rasterized from those same portable vector glyphs. No product UI or app-output assertion.

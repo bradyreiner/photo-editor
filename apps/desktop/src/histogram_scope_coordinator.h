@@ -22,6 +22,8 @@ struct HistogramScopeRequest final {
   bool full_resolution = false;
   QString render_reason;
   QString interaction_mode;
+  HistogramScopeOptions options;
+  int configuration = 0;
 };
 
 enum class HistogramScopeSubmitDisposition {
@@ -38,7 +40,7 @@ class HistogramScopeCoordinator final {
   HistogramScopeCoordinator(
       QObject* context,
       CompletionCallback completion,
-      ComputeCallback compute = compute_histogram_scope_data)
+      ComputeCallback compute = {})
       : compute_(std::move(compute)) {
     QObject::connect(
         &watcher_,
@@ -88,7 +90,8 @@ class HistogramScopeCoordinator final {
         [request = std::move(request), compute = compute_]() mutable {
           QElapsedTimer timer;
           timer.start();
-          auto result = compute(request.image);
+          auto result = compute ? compute(request.image)
+              : compute_histogram_scope_data_with_options(request.image, request.options);
           result.generation = request.generation;
           result.full_resolution = request.full_resolution;
           result.raw_clip_sample_count = request.raw_clip_sample_count;
@@ -96,6 +99,7 @@ class HistogramScopeCoordinator final {
           result.raw_highlight_clip_count = request.raw_highlight_clip_count;
           result.render_reason = std::move(request.render_reason);
           result.interaction_mode = std::move(request.interaction_mode);
+          result.configuration = request.configuration;
           result.elapsed_ms = timer.elapsed();
           return result;
         }));

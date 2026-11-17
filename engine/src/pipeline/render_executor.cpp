@@ -1,17 +1,21 @@
 #include "photo_editor/pipeline/render_executor.h"
 
 #include "photo_editor/pipeline/color_transform.h"
+#include "color_adjustment_scheduler.h"
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 #endif
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <span>
 #include <sstream>
+#include <thread>
 
 namespace photo_editor::pipeline {
 
@@ -226,15 +230,84 @@ namespace {
          *request.stop_after_stage_index >= final_index;
 }
 
-[[nodiscard]] bool apply_compiled_icc_transform(
+[[nodiscard]] bool apply_compiled_icc_transform_impl(
     std::vector<ColorPixel>* pixels,
     const CompiledIccTransform& transform,
-    CancellationToken cancellation) {
+    CancellationToken cancellation,
+    bool allow_parallel,
+    bool* parallel_used) {
+  if (parallel_used != nullptr) *parallel_used = false;
   if (pixels == nullptr || !transform.ready() ||
       cancellation.cancelled()) {
     return false;
   }
   constexpr auto kChunkPixels = std::size_t{16'384};
+  constexpr auto kMinimumParallelChunks = std::size_t{16};
+  const auto parallel_chunk_count = pixels->empty()
+      ? std::size_t{0}
+      : (pixels->size() - 1U) / kChunkPixels + 1U;
+  if (allow_parallel &&
+      std::thread::hardware_concurrency() > 2U &&
+      parallel_chunk_count >= kMinimumParallelChunks &&
+      parallel_chunk_count <=
+          static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    // Little CMS documents cmsDoTransform on this immutable NOCACHE handle as
+    // reentrant. Pack each disjoint range into the same RGBA float format used
+    // by the serial route, then let the shared bounded scheduler transform
+    // those ranges independently. Small images retain the serial
+    // route and do not allocate this full-frame scratch surface.
+    try {
+      auto transformed_pixels = std::vector<IccRgbaFloat>(pixels->size());
+      auto all_ranges_succeeded = std::atomic<bool>{true};
+      run_color_adjustment_parallel_for(
+          static_cast<int>(parallel_chunk_count),
+          [&](int chunk_index) {
+            if (cancellation.cancelled()) {
+              all_ranges_succeeded.store(false, std::memory_order_relaxed);
+              return;
+            }
+            const auto begin =
+                static_cast<std::size_t>(chunk_index) * kChunkPixels;
+            const auto end = std::min(begin + kChunkPixels, pixels->size());
+            for (auto index = begin; index < end; ++index) {
+              const auto& pixel = (*pixels)[index];
+              transformed_pixels[index] = IccRgbaFloat{
+                  .red = pixel.red,
+                  .green = pixel.green,
+                  .blue = pixel.blue,
+                  .alpha = pixel.alpha,
+              };
+            }
+            const auto range = std::span<IccRgbaFloat>{transformed_pixels}
+                                   .subspan(begin, end - begin);
+            if (cancellation.cancelled() || !transform.apply(range)) {
+              all_ranges_succeeded.store(false, std::memory_order_relaxed);
+              return;
+            }
+          });
+      if (!all_ranges_succeeded.load(std::memory_order_relaxed) ||
+          cancellation.cancelled()) {
+        return false;
+      }
+      // Keep the source unchanged if any worker fails or the request becomes
+      // stale before commit. This final conversion is the operation's commit
+      // point; once it starts, the completed result is returned to the caller.
+      for (auto index = std::size_t{0}; index < pixels->size(); ++index) {
+        const auto& transformed = transformed_pixels[index];
+        (*pixels)[index] = ColorPixel{
+            .red = transformed.red,
+            .green = transformed.green,
+            .blue = transformed.blue,
+            .alpha = transformed.alpha,
+        };
+      }
+      if (parallel_used != nullptr) *parallel_used = true;
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
   std::vector<IccRgbaFloat> chunk;
   chunk.reserve(
       std::min(kChunkPixels, pixels->size()));
@@ -272,6 +345,16 @@ namespace {
 }
 
 }  // namespace
+
+bool apply_cpu_icc_transform(
+    std::vector<ColorPixel>* pixels,
+    const CompiledIccTransform& transform,
+    CancellationToken cancellation,
+    bool allow_parallel,
+    bool* parallel_used) {
+  return apply_compiled_icc_transform_impl(
+      pixels, transform, cancellation, allow_parallel, parallel_used);
+}
 
 bool RenderSurface::valid() const noexcept {
   const auto pixel_count =
@@ -475,7 +558,7 @@ std::string render_stage_cache_key(
     const std::optional<RenderSurface>& input) {
   std::ostringstream identity;
   identity.precision(17);
-  identity << "render-stage:v2-dependency-scoped"
+  identity << "render-stage:v4-source-brush-alpha-fidelity"
            << "|source:" << request.plan.source.value
            << "|stage:" << render_stage_kind_name(stage.kind)
            << "|stage-version:" << stage.cache_identity
@@ -490,6 +573,25 @@ std::string render_stage_cache_key(
            << (input.has_value() ? input->identity : "none");
   if (stage.kind == RenderStageKind::Decode) {
     identity << "|source-revision:" << request.source_revision_identity;
+    if (request.plan.decoder == RawDecoder::LibRaw) {
+      // With input characterization disabled, a LibRaw Decode callback yields
+      // decoder-characterized RGB already converted into the selected working
+      // space. The decoder enum/source profile alone cannot describe those
+      // pixels. Keep that output distinct across working-space changes; the
+      // decoder's own unexposed sample cache remains independently reusable.
+      identity << "|decoded-working-space:" << request.working_color_space_identity;
+      const auto normalization = std::ranges::find_if(
+          request.plan.stages,
+          [](const RenderStagePlan& candidate) {
+            return candidate.kind == RenderStageKind::NormalizeRaw;
+          });
+      if (normalization != request.plan.stages.end()) {
+        // RAW Decode surfaces also retain full-source highlight evidence for
+        // later cropped execution. That metadata depends on RAW levels and
+        // recovery settings even when the unexposed sensor pixels do not.
+        identity << "|source-analysis:" << normalization->cache_identity;
+      }
+    }
   }
   const auto descriptor =
       render_stage_output_descriptor(
@@ -1247,10 +1349,12 @@ RenderExecutionResult execute_color_plan(
                 break;
               }
             }
-            executed = apply_compiled_icc_transform(
+            executed = apply_compiled_icc_transform_impl(
                 &pixels,
                 *options.proof_transform,
-                cancellation);
+                cancellation,
+                false,
+                nullptr);
             backend = "littlecms";
             stage_telemetry->proof_ms +=
                 std::chrono::duration_cast<
@@ -1269,11 +1373,16 @@ RenderExecutionResult execute_color_plan(
             }
             const auto timer =
                 std::chrono::steady_clock::now();
-            executed = apply_compiled_icc_transform(
+            auto parallel_used = false;
+            executed = apply_cpu_icc_transform(
                 &pixels,
                 *options.device_transform,
-                cancellation);
-            backend = "littlecms";
+                cancellation,
+                options.allow_parallel_cpu_device_transform,
+                &parallel_used);
+            backend = parallel_used
+                ? "littlecms-parallel-cpu"
+                : "littlecms";
             stage_telemetry->device_transform_ms +=
                 std::chrono::duration_cast<
                     std::chrono::milliseconds>(

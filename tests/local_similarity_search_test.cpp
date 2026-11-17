@@ -1,11 +1,15 @@
 #include "local_similarity_search.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
+#include <QSet>
 #include <QThread>
 #include <QTimer>
 #include <iostream>
@@ -91,10 +95,107 @@ int live(const QStringList& args) {
       {"ownedProcessStopped", true}, {"qmlFindPhotosExercised", false}}).toJson().constData();
   return 0;
 }
+
+int live_snapshot(const QStringList& args) {
+  if (args.size() != 7)
+    return fail("usage: --live-snapshot-executable worker model-root snapshot.json query cpu|mps");
+  const QFileInfo snapshot_info(args.at(4));
+  QFile file(snapshot_info.absoluteFilePath());
+  if (!snapshot_info.isAbsolute() || snapshot_info.isSymLink() || !file.open(QIODevice::ReadOnly) ||
+      file.size() <= 0 || file.size() > 16 * 1024 * 1024)
+    return fail("invalid or oversized compact search snapshot");
+  const auto snapshot_bytes = file.readAll();
+  QJsonParseError parse_error;
+  const auto document = QJsonDocument::fromJson(snapshot_bytes, &parse_error);
+  if (parse_error.error != QJsonParseError::NoError || !document.isObject())
+    return fail("compact search snapshot is not valid JSON");
+  const auto root = document.object();
+  const auto values = root.value("assets").toArray();
+  if (values.isEmpty() || values.size() > 100000 || args.at(5).trimmed().isEmpty() || args.at(5).size() > 2000 ||
+      (args.at(6) != "cpu" && args.at(6) != "mps"))
+    return fail("compact search snapshot, query or device is outside its bounds");
+  static const QSet<QString> expected_keys{
+      "assetId", "filePath", "thumbnailSource", "mediaType", "searchPreviewCurrent"};
+  QVariantList assets;
+  assets.reserve(values.size());
+  int photo_count = 0;
+  int current_preview_photo_count = 0;
+  for (const auto& value : values) {
+    if (!value.isObject()) return fail("compact search snapshot contains a non-object asset");
+    const auto object = value.toObject();
+    QSet<QString> keys;
+    for (auto it = object.begin(); it != object.end(); ++it) keys.insert(it.key());
+    if (keys != expected_keys || !object.value("assetId").isString() ||
+        !object.value("filePath").isString() || !object.value("thumbnailSource").isString() ||
+        !object.value("mediaType").isString() || !object.value("searchPreviewCurrent").isBool())
+      return fail("snapshot assets must contain only the five catalog preview fields");
+    if (object.value("mediaType").toString() == "photo") {
+      ++photo_count;
+      if (object.value("searchPreviewCurrent").toBool()) ++current_preview_photo_count;
+    }
+    assets.append(object.toVariantMap());
+  }
+
+  QTemporaryDir root_dir;
+  if (!root_dir.isValid()) return fail("private search index directory unavailable");
+  LocalSimilaritySearch controller;
+  if (!controller.configureExecutable(args.at(2), args.at(3), args.at(6), root_dir.filePath("index.sqlite3")))
+    return fail("live snapshot search runtime rejected");
+  QElapsedTimer elapsed;
+  elapsed.start();
+  controller.search(args.at(5), assets, QStringLiteral("isolated-full-catalog-proof"), 32);
+  if (!wait_until([&] { return !controller.running(); }, 1800000)) {
+    controller.stop();
+    wait_until([&] { return !controller.running(); }, 10000);
+    return fail("live snapshot search timed out");
+  }
+  if (!controller.status().contains("Not verified matches")) {
+    const auto message = controller.status().toStdString();
+    std::cerr << message << '\n';
+    return 1;
+  }
+
+  QJsonArray rankings;
+  for (const auto& result_value : controller.results()) {
+    const auto result = result_value.toMap();
+    rankings.append(QJsonObject{{"assetId", result.value("assetId").toString()},
+        {"similarity", result.value("similarity").toDouble()},
+        {"evidenceSource", result.value("evidenceSource").toString()},
+        {"reason", result.value("reason").toString()}});
+  }
+  const auto indexed = controller.inspected();
+  const auto skipped_current_photo_previews = current_preview_photo_count - indexed;
+  const auto output = QJsonDocument(QJsonObject{
+      {"actualInference", true},
+      {"imageInference", controller.encoded() > 0},
+      {"query", args.at(5).trimmed()},
+      {"snapshotSha256", QString::fromLatin1(QCryptographicHash::hash(snapshot_bytes, QCryptographicHash::Sha256).toHex())},
+      {"snapshotAssetCount", static_cast<int>(values.size())},
+      {"photoCount", photo_count},
+      {"currentPreviewPhotoCount", current_preview_photo_count},
+      {"indexedPreviewCount", indexed},
+      {"skippedAssetCount", static_cast<int>(values.size()) - indexed},
+      {"photosWithoutCurrentPreviewCount", photo_count - current_preview_photo_count},
+      {"skippedCurrentPhotoPreviewCount", skipped_current_photo_previews},
+      {"allDeclaredCurrentPhotoPreviewsIndexed", current_preview_photo_count > 0 && skipped_current_photo_previews == 0},
+      {"allCatalogPhotoPreviewsIndexed", photo_count > 0 && current_preview_photo_count == photo_count && indexed == photo_count},
+      {"reused", controller.reused()},
+      {"encoded", controller.encoded()},
+      {"elapsedMilliseconds", elapsed.elapsed()},
+      {"status", controller.status()},
+      {"coverageWarning", controller.indexWarning()},
+      {"rankings", rankings},
+      {"qmlFindPhotosExercised", false}}).toJson(QJsonDocument::Compact);
+  controller.stop();
+  if (!wait_until([&] { return !controller.running(); }, 10000)) return fail("live snapshot worker did not stop");
+  std::cout << output.constData() << '\n';
+  return 0;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
+  if (app.arguments().contains("--live-snapshot-executable")) return live_snapshot(app.arguments());
   if (app.arguments().contains("--live") || app.arguments().contains("--live-executable")) return live(app.arguments());
   QTemporaryDir root;
   const auto script = root.filePath("worker.py");
@@ -136,11 +237,25 @@ for line in sys.stdin:
   if (!search(controller, "A", {aa, bb}) || controller.reused() != 2) return fail("filter absence erased unrelated vectors");
   if (!search(controller, "A", {aa}, "catalog-two") || controller.encoded() != 1) return fail("catalog namespaces leaked");
   auto changed = aa; changed.insert("adjustmentPatchJson", "{changed:true}");
-  if (!search(controller, "A", {changed}) || controller.encoded() != 1) return fail("recipe change reused old vector");
+  if (!search(controller, "A", {changed}) || controller.reused() != 1 || controller.encoded() != 0)
+    return fail("identical current preview was re-encoded for unrelated recipe metadata");
+  {
+    // A single editable recipe can exceed the old aggregate snapshot budget.
+    // It is not an encoder input and must neither reject nor enlarge the scope.
+    auto large_recipe = aa;
+    large_recipe.insert("adjustmentPatchJson", QString(65 * 1024 * 1024, QLatin1Char('x')));
+    if (!search(controller, "A", {large_recipe, bb}) || controller.reused() != 2 || controller.encoded() != 0)
+      return fail("large edit recipe rejected a valid preview search");
+    auto large_reference = aa;
+    large_reference.insert("filePath", large_recipe.value("adjustmentPatchJson"));
+    controller.search("A", {large_reference}, "catalog-one");
+    if (controller.running() || !controller.results().isEmpty() || !controller.status().contains("128 MiB"))
+      return fail("oversized retained preview references were admitted");
+  }
   if (!write(a, "B") || !search(controller, "A", {changed}) || controller.encoded() != 1)
     return fail("same-path changed bytes reused old vector");
   auto stale = aa; stale.insert("thumbnailStaleMismatch", true); stale.insert("searchPreviewCurrent", false);
-  if (!search(controller, "A", {stale}) || !controller.results().isEmpty() || !controller.indexWarning().startsWith("1 photos"))
+  if (!search(controller, "A", {stale}) || !controller.results().isEmpty() || !controller.indexWarning().startsWith("1 catalog item"))
     return fail("stale thumbnail was searched or missing coverage concealed");
   auto transient = aa; transient.insert("searchPreviewCurrent", false);
   if (!search(controller, "A", {transient}) || !controller.results().isEmpty()) return fail("transient preview accepted");

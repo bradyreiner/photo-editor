@@ -17,18 +17,15 @@ Rectangle {
                                              "|overlay-fade:true|interruptible:true|no-layout-shift:true"
 
     objectName: "editToolTransitionOverlay"
+    // Tool activation has already completed before this visual fade starts.
+    // Keep navigation and the next gesture available during the animation.
+    enabled: false
     visible: transitionActive
     color: studioTheme.alpha(studioTheme.ink950, 0.26)
     opacity: visible ? 1 : 0
 
     Behavior on opacity {
         OpacityAnimator { duration: overlay.motionDuration; easing.type: Easing.OutCubic }
-    }
-
-    MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.AllButtons
-        hoverEnabled: true
     }
 
     Rectangle {

@@ -1,0 +1,870 @@
+{
+  "title": "Looksi V2 launch research dossier",
+  "retrieved_on": "2026-11-16",
+  "version": 2,
+  "scope": "20 case records: 17 launch, feature-release or launch-campaign records, one established-product founder AMA, one learning promotion and one failure contrast; not 20 independently watched videos.",
+  "method": [
+    "Observations use original maker/company sources or original audience comments. Community-shared news is labeled as such.",
+    "The sample is purposive and small, not representative. It contains positive, negative and missing reactions; no conversion winner is inferred.",
+    "No votes, reach, views or revenue figures are used as success measures. Visible reactions are qualitative examples, not sentiment percentages.",
+    "Exact source dates are supplied where shown. Relative labels, event dates and indexed timestamps are labeled and are not silently converted to calendar dates.",
+    "Native Instagram launch-post access was not established. Instagram adaptations are creative recommendations, not claims about inspected Instagram performance.",
+    "Text, caption, poster, still and sampled-video evidence have different strengths. No audio quality, full-film pacing or technical product correctness is claimed from text or sampled frames.",
+    "Comment permalinks were resolved from thread links. Some standalone fetches missed the cache; their text was inspected in the parent thread."
+  ],
+  "evidence_key": {
+    "T": "Text/caption read; motion unverified",
+    "P": "Media attachment or poster description exists, actual pixels not inspected",
+    "S": "Actual still image directly inspected",
+    "V": "Downloaded original video and selected frames inspected; not full audio/continuous playback"
+  },
+  "cases": [
+    {
+      "id": "R01",
+      "title": "Snapblend founder introduction",
+      "url": "https://www.reddit.com/r/SideProject/comments/1lrmzzr/i_built_a_photo_editor_with_text_behind_images/",
+      "source_date": "2025-07-04",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Reddit / r/SideProject",
+      "kind": "Founder product introduction",
+      "maker_disclosure": "Author explicitly says they made the app.",
+      "hook_observed": "A specific unmet wish: putting type behind a photo subject.",
+      "body_observed": "Three capabilities, personal learning experience, then platform availability.",
+      "cta_observed": "Try the named app and give thoughts.",
+      "media_evidence": "T: post text and video attachment inspected; player failed. Opening frames and pacing unverified.",
+      "reactions_observed": "No substantive audience comment visible in the retrieved portion. This is missing evidence, not evidence of satisfaction.",
+      "apply_to_looksi": "Name the small creative job before describing the broad editor.",
+      "do_not_borrow": "The other maker\u2019s personal history, platform availability or effects list.",
+      "style_ids": [
+        "01",
+        "03"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R02",
+      "title": "Tenzen video-editor update",
+      "url": "https://www.reddit.com/r/SideProject/comments/1we6sw3/building_my_dream_video_editor_ai_captions_just/",
+      "source_date": "2026-09-12",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Reddit / r/SideProject",
+      "kind": "Founder feature update",
+      "maker_disclosure": "First-person builder; answers technical questions in comments.",
+      "hook_observed": "Personal replacement of several demo-editing tools.",
+      "body_observed": "Origin story and incremental problems solved lead into the app link.",
+      "cta_observed": "Check it out; feedback welcomed.",
+      "media_evidence": "P: page describes an editor poster; actual poster fetch returned 403. No motion inspection.",
+      "reactions_observed": "Visible replies praise the UI, ask what differentiates it, question resemblance to Screen Studio, ask about accents and report an unavailable signed build; author says the build issue was fixed.",
+      "apply_to_looksi": "Show a specific benefit and test the actual access path before attention arrives.",
+      "do_not_borrow": "Customer counts, comparative quality claims or a product shaped visually like a competitor.",
+      "style_ids": [
+        "01",
+        "02"
+      ],
+      "reaction_links": [
+        "https://www.reddit.com/r/SideProject/comments/1we6sw3/comment/p9c0xu5/"
+      ]
+    },
+    {
+      "id": "R03",
+      "title": "Photopea founder AMA update",
+      "url": "https://www.reddit.com/r/IAmA/comments/s2elpv/i_made_a_free_alternative_to_photoshop_that_is/",
+      "source_date": "2022-01-12",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Reddit / r/IAmA",
+      "kind": "Established-product founder update; not a first launch",
+      "maker_disclosure": "Named sole creator gives identity proof through the product website.",
+      "hook_observed": "Founder identity and scale establish context before the story.",
+      "body_observed": "Origins, linked feature work, offline behavior and ownership update.",
+      "cta_observed": "Ask the creator anything; optional social follows.",
+      "media_evidence": "T: full post and a visible comment sample read; no video opening inspected.",
+      "reactions_observed": "An early commenter asks about maintainability and development experience. The first answer emphasizes finances; the commenter clarifies the practical development question.",
+      "apply_to_looksi": "Disclose the maker and answer the question actually asked.",
+      "do_not_borrow": "Borrowed usage figures, AMA credibility without proof or mature-company scale as a launch tactic.",
+      "style_ids": [
+        "01"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R04",
+      "title": "Sequence Studio first alpha",
+      "url": "https://www.reddit.com/r/SideProject/comments/1xjs5k1/i_built_a_free_open_source_video_editor_for_mac/",
+      "source_date": "2026; page displayed 17 days ago at retrieval",
+      "date_basis": "Relative page label only; exact calendar date not established",
+      "channel": "Reddit / r/SideProject",
+      "kind": "Founder alpha release",
+      "maker_disclosure": "Named filmmaker-builder; alpha status stated repeatedly.",
+      "hook_observed": "Own editor after using Premiere; asks for testers.",
+      "body_observed": "Motivation, familiar layout, unfinished grading, platform requirements and release links.",
+      "cta_observed": "Cut a short video and report the step that annoyed you.",
+      "media_evidence": "T: text post. No media opening visible.",
+      "reactions_observed": "Visible author reply clarifies that advanced nodes do not yet work properly and recommends simple grading; the initiating comment was removed.",
+      "apply_to_looksi": "Give testers a bounded task and distinguish shipping behavior from future work.",
+      "do_not_borrow": "Free/open-source positioning, competitor business-model claims or instructions to bypass installer warnings.",
+      "style_ids": [
+        "01",
+        "02"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R05",
+      "title": "Photopies browser-editor introduction",
+      "url": "https://www.reddit.com/r/SideProject/comments/1xffjl8/i_built_a_free_photoshopstyle_editor_that_runs/",
+      "source_date": "2026-10-25 indexed timestamp",
+      "date_basis": "Indexed original timestamp; relative page label conflicted, so no precise age asserted",
+      "channel": "Reddit / r/SideProject",
+      "kind": "Founder product introduction",
+      "maker_disclosure": "Explicit first-person builder.",
+      "hook_observed": "A broad editor list combined with local-processing reassurance.",
+      "body_observed": "Frustration with online tools, current features and one link.",
+      "cta_observed": "Ask what task a reader would try and whether it works.",
+      "media_evidence": "T: text inspected; no attached media seen.",
+      "reactions_observed": "The visible audience reply focuses on the name resembling Photopea rather than on editing.",
+      "apply_to_looksi": "Ask about a real attempted task; make Looksi\u2019s own identity recognizable.",
+      "do_not_borrow": "An undifferentiated feature inventory or blanket local/privacy claims without current evidence.",
+      "style_ids": [
+        "01",
+        "04"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R06",
+      "title": "PilotCut founder launch",
+      "url": "https://www.reddit.com/r/macapps/comments/1vct27z/pilotcut_i_got_massfrustrated_with_capcut_and/",
+      "source_date": "2026; page displayed 3 months ago",
+      "date_basis": "Relative page label only; exact calendar date not established",
+      "channel": "Reddit / r/macapps",
+      "kind": "Founder beta introduction",
+      "maker_disclosure": "Named developer and company; signature offered as verification.",
+      "hook_observed": "Frustration with manual video work and model lock-in.",
+      "body_observed": "Problem/comparison/pricing blocks, capabilities and download link.",
+      "cta_observed": "Try the beta and report broken behavior.",
+      "media_evidence": "P: attachment/poster description retrieved; poster download blocked. Video and audio uninspected.",
+      "reactions_observed": "Professionals dispute describing mechanical edits as requiring no creativity. A family-movie hobbyist wants help. Others question sign-in/local claims and ask about multicam. These are comments, not verified product defects.",
+      "apply_to_looksi": "Distinguish personal friction from a judgment about the craft; state the user and task.",
+      "do_not_borrow": "Its speed, competitor-price or privacy assertions; argumentative founder replies.",
+      "style_ids": [
+        "04",
+        "02"
+      ],
+      "reaction_links": [
+        "https://www.reddit.com/r/macapps/comments/1vct27z/comment/p1472ee/",
+        "https://www.reddit.com/r/macapps/comments/1vct27z/comment/p1aicko/"
+      ]
+    },
+    {
+      "id": "R07",
+      "title": "Dummo promo-editor introduction",
+      "url": "https://www.reddit.com/r/macapps/comments/1v1letz/mac_dummo_turn_a_screen_recording_into_a_polished/",
+      "source_date": "2026-07-20",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Reddit / r/macapps",
+      "kind": "Founder product launch",
+      "maker_disclosure": "Named creator references earlier apps.",
+      "hook_observed": "An output promise: turn a recording into a device-framed promo.",
+      "body_observed": "Problem, ordered workflow, comparisons, price and launch offer.",
+      "cta_observed": "App Store link plus join the product community.",
+      "media_evidence": "P: attachment exists; poster fetch blocked. No video pacing or visual opening established.",
+      "reactions_observed": "Replies praise the UI but confuse it with a recorder, report slow export, request a draft preset and ask for usage help. Author explains rendering tradeoffs.",
+      "apply_to_looksi": "Name input and final output; plan a useful tutorial and intermediate-preview story.",
+      "do_not_borrow": "Scarcity offers, speed comparisons, or redirecting every question to another community.",
+      "style_ids": [
+        "02",
+        "03"
+      ],
+      "reaction_links": [
+        "https://www.reddit.com/r/macapps/comments/1v1letz/comment/oyrmn8e/",
+        "https://www.reddit.com/r/macapps/comments/1v1letz/comment/oyt5iqs/",
+        "https://www.reddit.com/r/macapps/comments/1v1letz/comment/oytrtwa/"
+      ]
+    },
+    {
+      "id": "R08",
+      "title": "darktable 5.4 community release thread",
+      "url": "https://www.reddit.com/r/photography/comments/1psow7n/darktable_54_released/",
+      "source_date": "2025-12-22",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Reddit / r/photography",
+      "kind": "Community-shared release; not verified maker marketing",
+      "maker_disclosure": "Poster not established as a developer; no maker relationship inferred.",
+      "hook_observed": "A plain version-release headline.",
+      "body_observed": "Link to official release plus a comment summarizing major changes and cameras.",
+      "cta_observed": "Open the release; no explicit sales invitation.",
+      "media_evidence": "T: linked-release card and thread text read. No motion media inspected.",
+      "reactions_observed": "Replies include anticipation, installation questions and objections to complexity from overlapping tools. One user describes preferring simpler software without feeling they lost much power.",
+      "apply_to_looksi": "Show a short route to an actual result; provide details where professionals can inspect them.",
+      "do_not_borrow": "Treating a community news post as permission for founder promotion, or copying its performance claims.",
+      "style_ids": [
+        "02",
+        "03"
+      ],
+      "reaction_links": [
+        "https://www.reddit.com/r/photography/comments/1psow7n/comment/nvcrwd4/"
+      ]
+    },
+    {
+      "id": "R09",
+      "title": "Procreate Dreams native LinkedIn reveal",
+      "url": "https://www.linkedin.com/posts/procreate-art_introducing-procreate-dreams-the-all-new-activity-7105938344571781122-VpqE",
+      "source_date": "2023 reveal period; caption names 2023-11-22 availability",
+      "date_basis": "Exact post date not exposed; event context and date inside caption verified",
+      "channel": "LinkedIn / official Procreate",
+      "kind": "Official native product reveal",
+      "maker_disclosure": "Official company account.",
+      "hook_observed": "Product category and platform immediately identified.",
+      "body_observed": "One short caption; the attached creative carries the rest.",
+      "cta_observed": "A single short product link.",
+      "media_evidence": "T: caption and visible comments inspected; video not played and opening not established.",
+      "reactions_observed": "Visible comments express anticipation and admiration for the reveal; one asks about output and vector-format limitations.",
+      "apply_to_looksi": "Keep a native-film caption brief while giving category, status and useful next step.",
+      "do_not_borrow": "Assume launch excitement validates reliability, or import an established fan base\u2019s expectations.",
+      "style_ids": [
+        "05"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R10",
+      "title": "Procreate Dreams official reveal article",
+      "url": "https://procreate.com/insight/2023/procreate-dreams-reveal",
+      "source_date": "2023-09-08 reveal described",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Procreate website",
+      "kind": "First-party product reveal",
+      "maker_disclosure": "CEO/cofounder named as presenter.",
+      "hook_observed": "Animation access linked to creative ambition.",
+      "body_observed": "Founder story, specific interaction ideas, creator work and technical details.",
+      "cta_observed": "Sign up for product news and updates; a release date and historical price are stated.",
+      "media_evidence": "S: downloaded and inspected article image: founder on stage before enormous expressive artwork. This is a still, not a watched keynote.",
+      "reactions_observed": "No public comment section inspected. Company praise is a claim by the publisher.",
+      "apply_to_looksi": "Connect a creative point of view to actual work and visible product interactions.",
+      "do_not_borrow": "The reveal budget, claims of universal intuitiveness, artwork, famous-user endorsements or extreme limits.",
+      "style_ids": [
+        "05"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R11",
+      "title": "Procreate Dreams official availability article",
+      "url": "https://procreate.com/insight/2023/procreate-dreams",
+      "source_date": "2023-11-22 launch described",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Procreate website",
+      "kind": "First-party product launch",
+      "maker_disclosure": "Official company publication; founder and early artist testimonial identified.",
+      "hook_observed": "Approachable animation for beginners and professionals.",
+      "body_observed": "Small output examples, familiar interactions and learning resources accompany the release.",
+      "cta_observed": "Buy the app or use the Help Center, handbook and tutorial channels.",
+      "media_evidence": "T: text and image captions read. No live interaction or tutorial watched.",
+      "reactions_observed": "No independent audience reactions on this page. A separate official help thread later contains learning-friction reports; see S01.",
+      "apply_to_looksi": "Pair the invitation with a real first lesson and support path.",
+      "do_not_borrow": "Promise that everyone can use it immediately or treat a sponsored testimonial as independent evidence.",
+      "style_ids": [
+        "03"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R12",
+      "title": "Procreate Dreams launch-adjacent learning campaign",
+      "url": "https://procreate.com/insight/2024/skillshare",
+      "source_date": "2024; article exact day not shown",
+      "date_basis": "Year from canonical path and article context",
+      "channel": "Procreate website / Skillshare partnership",
+      "kind": "Launch-adjacent tutorial promotion, not a product release",
+      "maker_disclosure": "Official company publication; teachers and commercial partner named.",
+      "hook_observed": "Learning options matched to different creative goals.",
+      "body_observed": "Names instructors, finished projects and audience levels rather than only listing tools.",
+      "cta_observed": "Historical trial-code offer and class links.",
+      "media_evidence": "T: descriptions inspected; lessons and embedded livestreams not watched.",
+      "reactions_observed": "No audience comment sample available on the article; its enthusiasm is promotional language.",
+      "apply_to_looksi": "Give the learner a visible project outcome and a narrow next lesson.",
+      "do_not_borrow": "Expired promotions, instructor testimonials, or claiming the described lesson was watched.",
+      "style_ids": [
+        "03"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R13",
+      "title": "Shotcut 25.01 release",
+      "url": "https://www.shotcut.org/blog/new-release-250125/",
+      "source_date": "2025-01-25",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Shotcut website",
+      "kind": "First-party feature release",
+      "maker_disclosure": "Official project release page.",
+      "hook_observed": "A concrete workflow improvement: playlist bins.",
+      "body_observed": "Exact controls, related additions, fixes and technical constraints separated into sections.",
+      "cta_observed": "Download the named version.",
+      "media_evidence": "T: full release text inspected; no motion media present in the retrieved content.",
+      "reactions_observed": "No on-page audience discussion inspected.",
+      "apply_to_looksi": "Use one visible workflow as the headline, with exact steps in the caption or linked walkthrough.",
+      "do_not_borrow": "Transforming release-note specificity into an unsupported performance or compatibility promise.",
+      "style_ids": [
+        "02"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R14",
+      "title": "Shotcut 25.07 playful release",
+      "url": "https://www.shotcut.org/blog/new-release-250726/",
+      "source_date": "2025-07-26",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Shotcut website",
+      "kind": "First-party feature release",
+      "maker_disclosure": "Official project release page.",
+      "hook_observed": "A three-beat heat joke tied to actual new features.",
+      "body_observed": "Brief humor leads directly into practical instructions and constraints.",
+      "cta_observed": "Download the version.",
+      "media_evidence": "T: text and meme link inspected; meme not downloaded or licensed. No video viewed.",
+      "reactions_observed": "No on-page audience response sampled.",
+      "apply_to_looksi": "Acknowledge a familiar situation, then make the product relevance explicit.",
+      "do_not_borrow": "Copying the meme or letting a joke replace evidence of the advertised task.",
+      "style_ids": [
+        "04"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R15",
+      "title": "Lux Kino original launch and official film",
+      "url": "https://www.lux.camera/introducing-kino-pro-video-camera/",
+      "source_date": "2024-05-29",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Lux website / official embedded film",
+      "kind": "First-party app launch",
+      "maker_disclosure": "Small studio speaks as makers; Sandwich film credit is explicit.",
+      "hook_observed": "Cinematic results with accessible controls.",
+      "body_observed": "Color and motion explanations lead to interface decisions, advanced choices, lessons and v1 limits.",
+      "cta_observed": "Get the app, send feedback, or share tagged work.",
+      "media_evidence": "V: original 85.210s film retrieved; opening frames and spaced samples inspected. Presenter opens the film; cinematic and ordinary footage contrasts follow; later phone interactions connect output to product. No full audio/video playback.",
+      "reactions_observed": "Page has no independent comments; related founder Reddit thread R18 supplies reactions.",
+      "apply_to_looksi": "Use an expressive result, a person and real product behavior as connected evidence.",
+      "do_not_borrow": "A long polished film\u2019s pacing as a short-form rule; its app claims, prices or design assets.",
+      "style_ids": [
+        "05",
+        "03"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R16",
+      "title": "Halide Process Zero feature launch",
+      "url": "https://www.lux.camera/introducing-process-zero-for-iphone/",
+      "source_date": "2024-08-14",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Lux website",
+      "kind": "First-party feature launch",
+      "maker_disclosure": "Named developer explains studio preferences.",
+      "hook_observed": "A deliberate imaging choice distinct from automated processing.",
+      "body_observed": "Same-scene comparisons, creative rationale and explicit low-light/dynamic-range limits.",
+      "cta_observed": "Try the feature, choose the process and provide feedback.",
+      "media_evidence": "T: article and comparison captions inspected. Comparison images not directly analyzed.",
+      "reactions_observed": "No independent comment sample on the page.",
+      "apply_to_looksi": "Explain why a visible creative choice matters, including a relevant tradeoff.",
+      "do_not_borrow": "Anti-AI positioning, imaging-quality claims or presenting article descriptions as measured image analysis.",
+      "style_ids": [
+        "02",
+        "05"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R17",
+      "title": "All-new Affinity official launch",
+      "url": "https://www.canva.com/newsroom/news/all-new-affinity/",
+      "source_date": "2025-10-29 indexed date",
+      "date_basis": "Indexed first-party publication date; live page text did not expose date",
+      "channel": "Canva Newsroom",
+      "kind": "First-party major product relaunch",
+      "maker_disclosure": "Named Affinity CEO; ownership context clear.",
+      "hook_observed": "A concrete offer and combined design categories.",
+      "body_observed": "Common workflow frustrations, capabilities, customization and access details.",
+      "cta_observed": "Try/download through the product destination.",
+      "media_evidence": "T: release text and media placements inspected; embedded launch video not watched.",
+      "reactions_observed": "No native comment section read; no causal performance inference.",
+      "apply_to_looksi": "Connect a recognizable pain to a demonstrable product choice and clear offer.",
+      "do_not_borrow": "Free-forever commitments, competitor-price criticisms, category leadership or performance absolutes.",
+      "style_ids": [
+        "04"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R18",
+      "title": "Kino founder Self-Promo Sunday introduction",
+      "url": "https://www.reddit.com/r/apple/comments/1d6fltd/selfpromo_sunday_hi_reddit_im_half_of_the_team/",
+      "source_date": "2024-06-02",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Reddit / r/apple",
+      "kind": "Founder launch thread in a designated promotion context",
+      "maker_disclosure": "Founder says they are half of Lux; existing product relationship explicit.",
+      "hook_observed": "Personal introduction and new camera app.",
+      "body_observed": "Human launch story, easy/pro use cases, v1 limits and availability.",
+      "cta_observed": "Questions, feedback and historical promo codes.",
+      "media_evidence": "T: body and extensive visible comments inspected; linked videos not watched here.",
+      "reactions_observed": "Replies praise simplicity and LUTs, report UI issues, name missing controls blocking switching and debate future pricing. Founder explains limits and plans; some pricing replies become defensive.",
+      "apply_to_looksi": "Answer concrete objections, mark current vs planned controls and state reply availability.",
+      "do_not_borrow": "Existing-brand trust, promo-code tactics, defensive reply style or assuming historical subreddit eligibility remains current.",
+      "style_ids": [
+        "01",
+        "05"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R19",
+      "title": "Jacky Winter commissioned Dreams creator showcase",
+      "url": "https://www.behance.net/gallery/185713373/Procreate-Dreams",
+      "source_date": "2023-12-11",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Behance / The Jacky Winter Group",
+      "kind": "Commissioned launch-work showcase",
+      "maker_disclosure": "Creative agency names artists and describes a brief from the product team.",
+      "hook_observed": "Original animations made by artists using the new app.",
+      "body_observed": "Named teams and distinct styles; contributors describe their experience and workflow.",
+      "cta_observed": "View the work and creator portfolios.",
+      "media_evidence": "T: portfolio text, credit structure and image/video placements inspected; animations not played.",
+      "reactions_observed": "No independent comments sampled. Contributor statements are commissioned testimonials.",
+      "apply_to_looksi": "Give each creator work a named author and document the actual tool role.",
+      "do_not_borrow": "Reusing the art or framing commissioned creator testimony as unsolicited endorsement.",
+      "style_ids": [
+        "05"
+      ],
+      "reaction_links": []
+    },
+    {
+      "id": "R20",
+      "title": "No-signups beta announcement: failure contrast",
+      "url": "https://www.reddit.com/r/SideProject/comments/1lw5cx0/built_an_ai_photo_editorgenerator_but_no_one/",
+      "source_date": "2025-07-10",
+      "date_basis": "Published date shown on source or indexed original post",
+      "channel": "Reddit / r/SideProject",
+      "kind": "Maker beta-presentation question; contrast case",
+      "maker_disclosure": "First-person maker.",
+      "hook_observed": "Concern that a new editor has attracted no testers.",
+      "body_observed": "General capability description and request for marketing feedback.",
+      "cta_observed": "Feedback requested; visible main body lacks a product name or access link.",
+      "media_evidence": "T: text only in retrieved page.",
+      "reactions_observed": "A later commenter offers to test but asks what the product is; maker replies that work stopped. This small anecdote cannot prove why the beta failed.",
+      "apply_to_looksi": "Make the object, artifact and next step obvious even in a conversation post.",
+      "do_not_borrow": "A causal conclusion that one weak post explains product demand.",
+      "style_ids": [
+        "01",
+        "03"
+      ],
+      "reaction_links": []
+    }
+  ],
+  "styles": [
+    {
+      "id": "01",
+      "name": "Candid founder / build in public",
+      "examples": [
+        "R01",
+        "R04",
+        "R18"
+      ],
+      "support": [
+        "R02",
+        "R03",
+        "R05",
+        "R20"
+      ],
+      "message_job": "Make the maker and the specific reason for building legible.",
+      "working_hook": "I\u2019m building Looksi. Here is the photo-and-video job I wanted it to handle.",
+      "reasoning": "The useful founder model combines disclosure with a real task. Existing audiences can respond to personality; new audiences still need a reason to inspect the product. Tenzen\u2019s differentiation question is the central warning.",
+      "recommended_structure": [
+        "Name the tool and maker in the first sentence.",
+        "Attach one finished result and the genuine operation that produced it.",
+        "Name one current limit in ordinary language when it affects the demonstration.",
+        "Ask what part of that exact task a reader would test."
+      ],
+      "visual_opening": "Founder beside the actual output, or a plain same-source result. Avoid beginning with a slide that only promises a future demo.",
+      "reddit_adaptation": "First-person text with one task, artifact and useful question; respond in the thread. Builder communities are candidates pending their current rules.",
+      "instagram_adaptation": "Face or result in the opening; one personal reason and immediate task footage. The face footage remains a shoot dependency.",
+      "linkedin_adaptation": "Explain the product decision behind the shown workflow and its implication for people doing that job.",
+      "do_not": "Invent a founder hardship story, give a generic feature dump or borrow another maker\u2019s traction.",
+      "test": "Compare task-first vs maker-first openings with identical body and destination. Count attempted-task reports and meaningful workflow questions."
+    },
+    {
+      "id": "02",
+      "name": "Precise professional proof",
+      "examples": [
+        "R07",
+        "R13",
+        "R16"
+      ],
+      "support": [
+        "R02",
+        "R04",
+        "R06",
+        "R08"
+      ],
+      "message_job": "Let a demanding editor inspect a specific operation and output.",
+      "working_hook": "One source. One revision. Here is the delivered result.",
+      "reasoning": "Professionals ask about capabilities that affect real work. Dummo\u2019s export questions and Kino\u2019s missing-control questions show why attractive output and a feature list leave practical gaps.",
+      "recommended_structure": [
+        "Name source media and the job.",
+        "Show the relevant control clearly enough to inspect the choice.",
+        "Keep the same source through revision, export and independently opened output.",
+        "Disclose time compression and the demonstrated build; put extended details in the companion caption."
+      ],
+      "visual_opening": "A same-source result paired with a crop of the actual operation; let the result hold.",
+      "reddit_adaptation": "An evidence-led text walkthrough only in a community that permits the maker\u2019s participation. A community news post such as R08 does not authorize marketing.",
+      "instagram_adaptation": "One task per short clip. A photo adjustment and a video edit should be separate cuts, each with its own result.",
+      "linkedin_adaptation": "Present a small workflow case with task inputs, decisions and output; invite a specific repeatable test.",
+      "do_not": "Compress two complete workflows into 24 seconds, stage a decorative UI as live software or claim absolute reliability from one example.",
+      "test": "Compare output-first vs operation-first; track requests to repeat the same workflow and actual attempts, not only visual praise."
+    },
+    {
+      "id": "03",
+      "name": "Welcoming hobbyist teaching",
+      "examples": [
+        "R01",
+        "R11",
+        "R12"
+      ],
+      "support": [
+        "R07",
+        "R08",
+        "R20",
+        "S01"
+      ],
+      "message_job": "Give a person one satisfying first result and a repeatable next action.",
+      "working_hook": "Like the photo, but the light feels wrong? Let\u2019s change one thing.",
+      "reasoning": "An approachable claim requires a lesson that actually works. Procreate\u2019s learning ecosystem is a useful mechanism; later learning-friction feedback is a reminder that enthusiasm and simplified language do not establish usability.",
+      "recommended_structure": [
+        "Show a clear finished photo or clip first.",
+        "Name the visual problem before the technical control.",
+        "Teach three concrete actions on the same source, with pointer and readable crop.",
+        "Compare, make a choice and retain the exported result."
+      ],
+      "visual_opening": "Same photograph before and after a single visible choice; no unrelated stock imagery.",
+      "reddit_adaptation": "A complete self-contained lesson in the correct permitted context. Disclose authorship; do not hide a product pitch inside an alleged independent tutorial.",
+      "instagram_adaptation": "Saveable carousel: result, reason, actual steps, comparison, next lesson. Short reel should teach a named operation, not a generic philosophy.",
+      "linkedin_adaptation": "Optional educational product-design note; beginner content is primarily a creator learning asset.",
+      "do_not": "Promise instant mastery, call beginners nonprofessionals as a deficit, or render a tutorial without an actual instructional action.",
+      "test": "Ask a tester to repeat the steps with their own image. Saves are supporting interest; successful repetition is stronger evidence."
+    },
+    {
+      "id": "04",
+      "name": "Playful editing pain / challenger",
+      "examples": [
+        "R06",
+        "R14",
+        "R17"
+      ],
+      "support": [
+        "R05",
+        "R20"
+      ],
+      "message_job": "Create recognition around a small editing habit, then make Looksi relevant.",
+      "working_hook": "Me: one tiny adjustment. Also me: six tiny adjustments later.",
+      "reasoning": "A joke needs a job. Shotcut ties humor to actual features. PilotCut shows the risk of framing people\u2019s craft as pointless work; even a plausible efficiency story can alienate the audience it calls professional.",
+      "recommended_structure": [
+        "Use an original situation the founder recognizes.",
+        "Escalate once, with clear timing and visual action.",
+        "Resolve with a verified choice in the tool or explicitly end as brand humor.",
+        "Invite a reply about the creative decision, not only the joke prop."
+      ],
+      "visual_opening": "Founder reaction or original animated control/decision motif; invented UI props must look illustrative.",
+      "reddit_adaptation": "Use sparingly in a genuine development story; remove sales-language comparisons and keep the product artifact.",
+      "instagram_adaptation": "Original short sketch with a visible payoff; a separate product demo can carry the proof.",
+      "linkedin_adaptation": "A dry observation about revision habits followed by the actual product decision is more natural than a meme repost.",
+      "do_not": "Imply filename/version automation from a filename joke, use competitor pricing attacks, or state editing has zero creativity.",
+      "test": "Track shares among creators and qualified demo interest separately. A popular joke does not establish product consideration."
+    },
+    {
+      "id": "05",
+      "name": "Cinematic editorial manifesto",
+      "examples": [
+        "R09",
+        "R15",
+        "R19"
+      ],
+      "support": [
+        "R10",
+        "R16",
+        "R18"
+      ],
+      "message_job": "Make the tool\u2019s creative point of view memorable through authored work.",
+      "working_hook": "A frame is a choice. So is what you do with it.",
+      "reasoning": "The inspected Kino film connects a human presenter, expressive footage, ordinary life and phone interactions. The credible mechanism is the connection between work and tool; abstract light alone cannot show that relationship.",
+      "recommended_structure": [
+        "Open on original photographic work or a deliberate human observation.",
+        "Use distinct visual sequences with purposeful transitions.",
+        "Show one genuine tool moment related to the work.",
+        "Resolve to the maker\u2019s purpose and an accurate current-status invitation."
+      ],
+      "visual_opening": "Owned photograph or original filmed scene; RGB is the light/material connecting the sequence.",
+      "reddit_adaptation": "Provide context and process alongside the film where allowed. A cinematic advertisement alone is weak discussion material.",
+      "instagram_adaptation": "A concise editorial cut with readable silent meaning and an actual product moment. Credit the work.",
+      "linkedin_adaptation": "Short company/founder caption identifying category, audience and status; avoid hiding the basics in a long manifesto.",
+      "do_not": "Borrow a mature brand\u2019s trust, commissioned endorsements, design assets or cinematic rhetoric that implies product proof.",
+      "test": "Track completion and qualified profile/demonstration visits. Keep assisted discovery separate from direct response."
+    }
+  ],
+  "supporting_sources": [
+    {
+      "id": "S01",
+      "title": "Official Procreate Help Center feedback thread",
+      "url": "https://www.reddit.com/r/ProCreate/comments/1kt52kk/official_procreate_help_center_feedback_thread/",
+      "date": "2025; exact day not exposed in retrieved page",
+      "observation": "Named product-help coordinator asks bounded resource questions and distinguishes documentation feedback from product requests. A visible user describes difficulty juggling canvas and timeline despite tutorials. Author responds appreciatively.",
+      "application": "Create an actual learning path and route different feedback types clearly. Do not interpret a single user report as representative sentiment.",
+      "reaction_link": "https://www.reddit.com/r/ProCreate/comments/1kt52kk/comment/mtrgr16/"
+    }
+  ],
+  "film_inspection": {
+    "publisher": "Lux / Sandwich",
+    "source_article": "https://www.lux.camera/introducing-kino-pro-video-camera/",
+    "launch_film_url": "https://storage.ghost.io/c/59/cf/59cfc607-b1ff-45a1-b644-37fe5a6bf7b1/content/media/2024/05/Kino-Sandwich.mp4",
+    "launch_film_metadata": {
+      "duration_seconds": 85.210125,
+      "width": 1920,
+      "height": 1080,
+      "frame_rate": "24000/1001",
+      "video_codec": "hevc",
+      "audio_codec": "aac"
+    },
+    "inspection": "Opening source frames around 0 through 11 seconds and spaced samples across the film were visually inspected. Audio and full continuous playback were not inspected. Sampled frame notes do not establish exact cut boundaries.",
+    "opening_sample_observations": [
+      "0s: full-body male presenter in a bright loft with large windows; no opening logo-only card.",
+      "About 1s: white sentence fragment appears over the wide presenter shot.",
+      "About 2s: close presenter shot; about 3s: sunset silhouette under palms.",
+      "About 5\u20137s: ordinary barbecue and moving-dog footage contrasts with the polished scene.",
+      "About 9\u201311s: camera operator with cinema rig and another man holding a lens create a visible filmmaking context."
+    ],
+    "whole_film_samples": "Spaced frames show a man filming on a phone, close product interactions, black-and-white city imagery, an outdoor presenter, onboarding on a phone and a tennis/selfie sequence, ending in the Kino mark.",
+    "preset_demo_url": "https://storage.ghost.io/c/59/cf/59cfc607-b1ff-45a1-b644-37fe5a6bf7b1/content/media/2024/05/Preset-Preview-2.mp4",
+    "preset_demo_metadata": {
+      "duration_seconds": 29.291667,
+      "width": 1920,
+      "height": 1080,
+      "frame_rate": "24/1",
+      "video_codec": "h264"
+    },
+    "preset_demo_inspection": "Representative frames about three seconds apart were inspected. They show diagonal boundaries comparing two treatments of the same photographic scene across desert, forest, ocean, city and interior imagery. Ends in a filmed-with-Kino lockup. Exact settings, grading fidelity and complete playback unverified.",
+    "practical_implication": "A manifesto and a visual-proof asset can be separate pieces with different jobs. Keep the treatment comparison on the same source; do not use two different images as a before/after.",
+    "rights": "All reference media stayed in temporary local inspection files. No reference art or film is included as a Looksi campaign asset.",
+    "launch_film_sha256": "999d61e2a2e181e551542ee516e46222f8fca4f08bbb258f9b9756d9a1f9ac5b",
+    "preset_demo_sha256": "d9af9df0f72c5bfd20a6b6868b45558f552d006eb77b7533e1c049a2b0b4e8dc"
+  },
+  "failure_modes": [
+    {
+      "id": "F01",
+      "name": "Generic better-editor positioning",
+      "evidence_ids": [
+        "R02",
+        "R20"
+      ],
+      "response": "If a stranger cannot name the demonstrated task after the first two lines, rewrite the hook. Show a concrete source and final artifact."
+    },
+    {
+      "id": "F02",
+      "name": "Category confusion",
+      "evidence_ids": [
+        "R07"
+      ],
+      "response": "State input and output. Showing an editor-shaped screenshot does not explain what job the product serves."
+    },
+    {
+      "id": "F03",
+      "name": "Dismissing creative craft",
+      "evidence_ids": [
+        "R06"
+      ],
+      "response": "Describe the founder\u2019s own friction. Preserve deliberate choices and acknowledge that other editors may value the same process."
+    },
+    {
+      "id": "F04",
+      "name": "Future capability sold as current",
+      "evidence_ids": [
+        "R04",
+        "R18"
+      ],
+      "response": "Use present tense only for the actual recorded operation. Put planned features in a separate clearly dated note."
+    },
+    {
+      "id": "F05",
+      "name": "Access friction after a successful post",
+      "evidence_ids": [
+        "R02",
+        "R20"
+      ],
+      "response": "Verify the actual CTA destination. For development previews without access, link a real demonstration or ask for a specific project challenge."
+    },
+    {
+      "id": "F06",
+      "name": "Learning promise without instruction",
+      "evidence_ids": [
+        "R11",
+        "R12",
+        "S01"
+      ],
+      "response": "Capture one named action sequence. Have someone repeat it; do not call a philosophy card a tutorial."
+    },
+    {
+      "id": "F07",
+      "name": "Performance expectation set by polish",
+      "evidence_ids": [
+        "R07",
+        "R18"
+      ],
+      "response": "Keep a readable export/output moment and a companion explanation of scope. Never infer speed from smooth promo animation."
+    },
+    {
+      "id": "F08",
+      "name": "Unanswered operational objections",
+      "evidence_ids": [
+        "R07",
+        "R18"
+      ],
+      "response": "Prepare short factual replies about formats, platform, status, current limits and export. Mark answers pending if unknown."
+    },
+    {
+      "id": "F09",
+      "name": "Reference art mistaken for product work",
+      "evidence_ids": [
+        "R19"
+      ],
+      "response": "Record who authored each image, what tool did what and which claims the artifact supports."
+    },
+    {
+      "id": "F10",
+      "name": "Borrowed community eligibility",
+      "evidence_ids": [
+        "R08",
+        "R18"
+      ],
+      "response": "A surviving news post or historical promotion slot does not prove today\u2019s founder post is allowed."
+    },
+    {
+      "id": "F11",
+      "name": "Attention mistaken for demand",
+      "evidence_ids": [
+        "R09",
+        "R20"
+      ],
+      "response": "Separate comments about the reveal from reports of actual task use. Do not claim causality from isolated reactions."
+    },
+    {
+      "id": "F12",
+      "name": "Founder defensiveness",
+      "evidence_ids": [
+        "R18"
+      ],
+      "response": "Acknowledge the question, state current facts, name the limit and invite a reproducible example. Do not argue about the commenter\u2019s motive."
+    }
+  ],
+  "platform_sources": [
+    {
+      "id": "P01",
+      "title": "Reddit Spam policy",
+      "url": "https://support.reddithelp.com/hc/en-us/articles/360043504051-Spam",
+      "date": "Updated 2026-10-30",
+      "finding": "Repeated or unsolicited mass engagement is prohibited. Tailor participation to the community; no cross-post blast or unsolicited launch messages."
+    },
+    {
+      "id": "P02",
+      "title": "r/apple actual Rule 9 enforcement",
+      "url": "https://www.reddit.com/r/apple/comments/1xfckpa/removed_by_moderator/",
+      "date": "Indexed moderator response 2026-10-26",
+      "finding": "Primary ModTeam text limits self-promotion to app developers and Sunday EST self-posts, asks for no more than 10% promotional activity and at least five naturally occurring unrelated community contributions in the prior month. Recheck live rules and account eligibility; do not manufacture participation to pass the gate."
+    },
+    {
+      "id": "P03",
+      "title": "r/VideoEditing actual moderation response",
+      "url": "https://www.reddit.com/r/VideoEditing/comments/1tuy4lq/removed_by_moderator/",
+      "date": "2026; retrieved page gives relative age only",
+      "finding": "ModTeam explicitly rejects self-promotion and mentions r/editors. Promotional launches excluded. A tutorial flair does not prove a product-promotion exception."
+    },
+    {
+      "id": "P04",
+      "title": "r/SideProject rules page",
+      "url": "https://www.reddit.com/r/SideProject/about/rules/",
+      "date": "Retrieved 2026-11-16",
+      "finding": "Public retrieval showed a rules heading without rule text. Candidate channel only; live sidebar, pinned context and submission form need review. Third-party rule databases conflict and were not used as authority."
+    },
+    {
+      "id": "P05",
+      "title": "Meta original creator announcement",
+      "url": "https://about.fb.com/br/news/2024/04/ajudando-o-criador-de-conteudo-a-encontrar-novos-publicos/",
+      "date": "2024-04-30",
+      "finding": "Official announcement describes original-content preference and replacement of identical reposts in recommendations. Use original Looksi art and native files. Historical principle only; no 2026 reach prediction."
+    },
+    {
+      "id": "P06",
+      "title": "Newer Instagram originality endpoint",
+      "url": "https://creators.instagram.com/blog/rewarding-original-creators-on-instagram",
+      "date": "Attempted 2026-11-16",
+      "finding": "Direct fetch returned HTTP 429. The newer rule text was not independently inspected and is not presented as verified."
+    },
+    {
+      "id": "P07",
+      "title": "r/macapps rules",
+      "url": "https://www.reddit.com/r/macapps/about/rules/",
+      "date": "Review still required at publication",
+      "finding": "Sample maker posts use explicit developer disclosure, problem/comparison/pricing structures and product links. That observed format is not a current permission statement. Confirm rules before adding it to the publishing calendar."
+    }
+  ],
+  "v1_improvements": [
+    {
+      "id": "V1-01",
+      "campaign": "01",
+      "observed": "Reddit body promises to show an edit later instead of providing a specific current artifact.",
+      "change": "Replace future-tense demo promise with a named attached task, one choice and actual export. Keep building as product status.",
+      "proof": "Opening text names the task; linked or attached artifact matches it."
+    },
+    {
+      "id": "V1-02",
+      "campaign": "02",
+      "observed": "The 24-second script packs photo, video, revision and delivered files together.",
+      "change": "Produce one photo proof cut and one video proof cut. Each receives a readable operation and output hold.",
+      "proof": "Same-source chain can be followed without pausing or guessing."
+    },
+    {
+      "id": "V1-03",
+      "campaign": "03",
+      "observed": "Choose, change and compare is a learning philosophy rather than a concrete lesson.",
+      "change": "Choose one actual operation with a visible rationale and three repeatable actions. Retain the original source and output.",
+      "proof": "A learner can repeat the task from the post."
+    },
+    {
+      "id": "V1-04",
+      "campaign": "04",
+      "observed": "Filename humor points to no demonstrated product resolution and asks for unrelated filename lore.",
+      "change": "Use a tiny-adjustment sketch with a genuine tool payoff, or keep the filename piece as brand humor and connect to a separate real demonstration.",
+      "proof": "Viewer can explain the product relevance without assuming versioning capability."
+    },
+    {
+      "id": "V1-05",
+      "campaign": "05",
+      "observed": "Abstract RGB and manifesto typography do not show photographic work or editing.",
+      "change": "Build a short editorial sequence from original work and a related genuine product moment. Use RGB as the connecting light system.",
+      "proof": "Film clearly introduces a photo/video tool and an authorial point of view."
+    },
+    {
+      "id": "V1-06",
+      "campaign": "all",
+      "observed": "All five existing renders use four equal 4.5-second typography cards.",
+      "change": "Let pacing follow each route: human beat and cutaway, readable demonstration, teaching holds, comic reversal, cinematic scene change.",
+      "proof": "Muted side-by-side review identifies each route without reading its filename."
+    },
+    {
+      "id": "V1-07",
+      "campaign": "all",
+      "observed": "All routes ask broad conversation questions, with little distinction in the requested response.",
+      "change": "Founder asks for a task challenge; proof asks about a specific step; teaching asks for a repeated attempt; humor asks about a revision decision; editorial invites the next work-in-progress.",
+      "proof": "Track responses by the job each creative is designed to do."
+    }
+  ],
+  "publication_state": "Read-only research only. No messages, comments or posts sent."
+}

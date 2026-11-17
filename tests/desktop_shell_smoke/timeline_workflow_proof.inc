@@ -21,6 +21,17 @@
       };
       ulong workflow_pointer_timestamp = 1000;
       const auto send_pointer = [&](QEvent::Type type, const QPointF& point) {
+        if (type == QEvent::MouseButtonPress &&
+            qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER") &&
+            (!studio_window->isActive() || !studio_window->isExposed())) {
+          activate_native_test_window(studio_window);
+          if (!wait_for_condition([&] {
+                return studio_window->isActive() && studio_window->isExposed();
+              }, 5000)) {
+            std::cerr << "Native workflow input requires an active, exposed window\n";
+            return;
+          }
+        }
         const auto global = QPointF(studio_window->mapToGlobal(point.toPoint()));
         QMouseEvent event(type, point, global,
                           type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
@@ -49,6 +60,25 @@
       };
       const auto click_named = [&](const QString& name) {
         return click_item(live_item(name));
+      };
+      const auto click_item_without_layout_gap = [&](QQuickItem* item) {
+        if (!item_visible(item) || item->window() != studio_window ||
+            !item->property("enabled").toBool())
+          return false;
+        workflow_pointer_timestamp += static_cast<ulong>(QApplication::doubleClickInterval() + 1);
+        const auto point = scene_rect(item).center();
+        const auto send_immediate_pointer = [&](QEvent::Type type) {
+          const auto global = QPointF(studio_window->mapToGlobal(point.toPoint()));
+          QMouseEvent event(type, point, global, Qt::LeftButton,
+                            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                            Qt::NoModifier);
+          event.setTimestamp(workflow_pointer_timestamp++);
+          QCoreApplication::sendEvent(studio_window, &event);
+        };
+        send_immediate_pointer(QEvent::MouseButtonPress);
+        send_immediate_pointer(QEvent::MouseButtonRelease);
+        process_layout_events(2);
+        return true;
       };
       const auto drag_item = [&](QQuickItem* item, double delta_x) {
         if (!item_visible(item)) return false;
@@ -1369,56 +1399,50 @@
         return EXIT_SUCCESS;
       }
 
-      if (workflow_timeline->property("timelineAdvancedControlsVisible").toBool() ||
-          !click_named(QStringLiteral("timelineEditModeMenuButton")) ||
-          !wait_for_condition([&] {
-            auto* popup = find_named_object(studio_root, QStringLiteral("timelineEditModeMenuButtonPopup"));
-            return popup && popup->property("opened").toBool() &&
-                   live_item(QStringLiteral("timelineEditModeMenuButtonPopupItem1"));
-          }, 3000) ||
-          // Render the open menu before synthesizing its next pointer click;
-          // opened can precede the first Qt Quick Layout polish on a cold route.
-          !capture_workflow(QStringLiteral("00a-edit-mode-options"), {QStringLiteral("timelineEditModeMenuButtonPopupItem1")}) ||
-          !click_named(QStringLiteral("timelineEditModeMenuButtonPopupItem1")) ||
-          !wait_for_condition([&] {
-            auto* mode = live_item(QStringLiteral("timelineEditModeMenuButton"));
-            auto* popup = find_named_object(studio_root, QStringLiteral("timelineEditModeMenuButtonPopup"));
-            return timeline_document.editMode() == QStringLiteral("overwrite") &&
-                   mode && mode->property("text").toString() == QStringLiteral("Overwrite") &&
-                   popup && !popup->property("visible").toBool();
-          }, 3000) ||
-          !capture_workflow(QStringLiteral("00-visible-edit-mode"), {QStringLiteral("timelineEditModeMenuButton")})) {
-        capture_workflow(QStringLiteral("mode-menu-failure"), {});
-        std::cerr << "Mode: advanced=" << workflow_timeline->property("timelineAdvancedControlsVisible").toBool()
-                  << " document=" << timeline_document.editMode().toStdString() << '\n';
-        for (const auto& name : {QStringLiteral("timelineEditModeMenuButton"),
-                                 QStringLiteral("timelineEditModeMenuButtonPopup"),
-                                 QStringLiteral("timelineEditModeMenuButtonPopupItem0"),
-                                 QStringLiteral("timelineEditModeMenuButtonPopupItem1")}) {
-          auto* object = find_named_object(studio_root, name);
-          std::cerr << name.toStdString() << " exists=" << (object != nullptr)
-                    << " visible=" << (object ? object->property("visible").toBool() : false)
-                    << " opened=" << (object ? object->property("opened").toBool() : false) << '\n';
+      const auto choose_edit_mode = [&](const QString& mode, const QString& capture_name) {
+        // Native popup transactions need a genuinely active, exposed owner.
+        // Another application may have taken focus between workflow stages.
+        if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
+          activate_native_test_window(studio_window);
+          if (!wait_for_condition([&] {
+                return studio_window->isActive() && studio_window->isExposed();
+              }, 5000))
+            return false;
         }
-        return fail("Normal Timeline toolbar should expose and select Overwrite mode through its visible menu");
-      }
-      if (!click_named(QStringLiteral("timelineEditModeMenuButton")) ||
-          !wait_for_condition([&] {
-            auto* popup = find_named_object(studio_root, QStringLiteral("timelineEditModeMenuButtonPopup"));
-            return popup && popup->property("opened").toBool() &&
-                   live_item(QStringLiteral("timelineEditModeMenuButtonPopupItem0"));
-          }, 3000) ||
-          !capture_workflow(QStringLiteral("00b-return-to-insert"), {QStringLiteral("timelineEditModeMenuButtonPopupItem0")}) ||
-          !click_named(QStringLiteral("timelineEditModeMenuButtonPopupItem0")) ||
-          !wait_for_condition([&] {
-            auto* mode = live_item(QStringLiteral("timelineEditModeMenuButton"));
-            auto* popup = find_named_object(studio_root, QStringLiteral("timelineEditModeMenuButtonPopup"));
-            return timeline_document.editMode() == QStringLiteral("insert") &&
-                   mode && mode->property("text").toString() == QStringLiteral("Insert") &&
-                   popup && !popup->property("visible").toBool();
-          }, 3000)) {
+        if (!click_named(QStringLiteral("timelineActionsMenuButton"))) return false;
+        auto* popup = find_named_object(studio_root, QStringLiteral("timelineActionsMenuButtonPopup"));
+        if (!popup || !wait_for_condition([&] { return popup->property("opened").toBool(); }, 3000))
+          return false;
+        auto menu_value = popup->property("menuItems");
+        if (menu_value.canConvert<QJSValue>()) menu_value = menu_value.value<QJSValue>().toVariant();
+        const auto items = menu_value.toList();
+        auto item_index = -1;
+        for (int index = 0; index < items.size(); ++index) {
+          if (items.at(index).toMap().value("key").toString() == "mode:mode-" + mode) {
+            item_index = index;
+            break;
+          }
+        }
+        if (item_index < 0 || !QMetaObject::invokeMethod(popup, "focusMenuItem", Q_ARG(QVariant, item_index)))
+          return false;
+        const auto item_name = QStringLiteral("timelineActionsMenuButtonPopupItem%1").arg(item_index);
+        if (!wait_for_condition([&] { return live_item(item_name); }, 3000) ||
+            !capture_workflow(capture_name, {item_name}) || !click_named(item_name))
+          return false;
+        return wait_for_condition([&] {
+          auto* control = live_item(QStringLiteral("timelineActionsMenuButton"));
+          return timeline_document.editMode() == mode && control &&
+              control->property("text").toString().contains(mode, Qt::CaseInsensitive) &&
+              !popup->property("visible").toBool();
+        }, 3000);
+      };
+      if (workflow_timeline->property("timelineAdvancedControlsVisible").toBool() ||
+          !choose_edit_mode(QStringLiteral("overwrite"), QStringLiteral("00a-edit-mode-options")) ||
+          !capture_workflow(QStringLiteral("00-visible-edit-mode"), {QStringLiteral("timelineActionsMenuButton")}))
+        return fail("Normal Timeline Actions must select Overwrite and keep that mode visibly labeled");
+      if (!choose_edit_mode(QStringLiteral("insert"), QStringLiteral("00b-return-to-insert")))
         return fail("Visible edit mode should return to Insert before moving clips");
-      }
+
       if (timeline_playback.processedFrameSource().isEmpty()) {
         QVariant poster_visible;
         QMetaObject::invokeMethod(workflow_timeline, "shouldShowTimelinePoster",
@@ -1453,6 +1477,10 @@
       const auto decoded = program_provider->requestImage(QString(), nullptr, QSize());
       if (decoded.width() < 32 || decoded.height() < 32 ||
           decoded.pixelColor(decoded.width() / 2, decoded.height() / 2).alpha() < 200) {
+        report_playback();
+        std::cerr << "Paused Program resources: "
+                  << QJsonDocument::fromVariant(timeline_playback.playbackResourceDiagnostics())
+                         .toJson(QJsonDocument::Compact).toStdString() << '\n';
         return fail("Program proof requires real decoded pixels rather than an empty image-provider URL");
       }
       if (!capture_workflow(QStringLiteral("02-decoded-program"), {QStringLiteral("timelineProgramMonitor")})) {
@@ -1784,6 +1812,12 @@
       }
       if (auto* popup = find_named_object(workflow_timeline, QStringLiteral("timelineMotionTrackingPopup")))
         QMetaObject::invokeMethod(popup, "close");
+      if (!wait_for_condition([&] {
+            auto* popup = find_named_object(workflow_timeline, QStringLiteral("timelineMotionTrackingPopup"));
+            return popup && !popup->property("visible").toBool() &&
+                   !popup->property("opened").toBool();
+          }, 3000))
+        return fail("Tracking controls must finish closing before the ordinary edit workspace is captured");
       if (!capture_workflow(QStringLiteral("06-media-added-at-playhead"), {QStringLiteral("timelineClip-Added shot")})) {
         return fail("Added media should appear in the sequence");
       }
@@ -1835,18 +1869,311 @@
             {QStringLiteral("timelineProgramMonitor"), QStringLiteral("timelineSourceEditorScroll")})) {
         return fail("Source preview layout should remain usable");
       }
-      if (!click_named(QStringLiteral("timelineSourcePlayButton")) ||
-          !wait_for_condition([&] {
-            auto* video = live_item(QStringLiteral("timelineSourceVideoOutput"));
-            auto* sink = video ? video->property("videoSink").value<QVideoSink*>() : nullptr;
-            const auto image = sink ? sink->videoFrame().toImage() : QImage{};
-            return image.width() >= 32 && image.height() >= 32 &&
-                   image.pixelColor(image.width() / 2, image.height() / 2).alpha() >= 200 &&
-                   !live_item(QStringLiteral("timelineSourcePosterImage"));
-          }, 5000) || !click_named(QStringLiteral("timelineSourcePlayButton")) ||
-          timeline_document.clipCount() != count_before_preview || timeline_document.sequencePlaying()) {
-        return fail("Source Play/Pause should replace the poster with video without editing or playing Program");
+      const auto source_resume_fixture_path = QDir(proof_dir).filePath(
+          QStringLiteral("source-resume-red-blue.mp4"));
+      QProcess source_resume_fixture;
+      source_resume_fixture.setProcessChannelMode(QProcess::MergedChannels);
+      source_resume_fixture.start(QStringLiteral("ffmpeg"), {
+          QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"),
+          QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+          QStringLiteral("color=c=red:s=320x180:r=30:d=0.5"),
+          QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+          QStringLiteral("color=c=blue:s=320x180:r=30:d=1.5"),
+          QStringLiteral("-f"), QStringLiteral("lavfi"), QStringLiteral("-i"),
+          QStringLiteral("sine=frequency=440:sample_rate=48000:duration=2"),
+          QStringLiteral("-filter_complex"),
+          QStringLiteral("[0:v][1:v]concat=n=2:v=1:a=0,format=yuv420p[v]"),
+          QStringLiteral("-map"), QStringLiteral("[v]"),
+          QStringLiteral("-map"), QStringLiteral("2:a:0"),
+          QStringLiteral("-t"), QStringLiteral("2"), QStringLiteral("-r"), QStringLiteral("30"),
+          QStringLiteral("-af"), QStringLiteral("volume=0.02"),
+          QStringLiteral("-c:v"), QStringLiteral("libx264"),
+          QStringLiteral("-preset"), QStringLiteral("ultrafast"),
+          QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+          QStringLiteral("-c:a"), QStringLiteral("aac"),
+          QStringLiteral("-b:a"), QStringLiteral("96k"),
+          QStringLiteral("-movflags"), QStringLiteral("+faststart"),
+          QStringLiteral("-y"), source_resume_fixture_path,
+      });
+      if (!source_resume_fixture.waitForStarted(3000) ||
+          !source_resume_fixture.waitForFinished(15000) ||
+          source_resume_fixture.exitStatus() != QProcess::NormalExit ||
+          source_resume_fixture.exitCode() != 0 ||
+          QFileInfo(source_resume_fixture_path).size() <= 1024) {
+        std::cerr << "Source fixture generation: "
+                  << source_resume_fixture.readAllStandardOutput().toStdString() << '\n';
+        return fail("The Source resume proof needs its two-color decoded-video fixture");
       }
+      timeline_document.loadSourceClipFromGallery(
+          QStringLiteral("source-resume-red-blue"), source_resume_fixture_path,
+          QStringLiteral("Source resume proof"), 2.0);
+      if (timeline_document.sourceClip().value(QStringLiteral("assetId")).toString() !=
+          QStringLiteral("source-resume-red-blue"))
+        return fail("The Source resume fixture should load without changing the sequence");
+      auto* source_panel = find_named_object(
+          studio_root, QStringLiteral("timelineSourcePreviewRail"));
+      auto* source_video_output = find_named_object(
+          source_panel, QStringLiteral("timelineSourceVideoOutput"));
+      auto* source_preview_player = find_named_object(
+          source_panel, QStringLiteral("timelineSourcePreviewPlayer"));
+      auto* source_sink = source_video_output
+          ? source_video_output->property("videoSink").value<QVideoSink*>()
+          : nullptr;
+      constexpr qint64 kSourceResumeProofTargetUs = 750'000;
+      qint64 source_initial_frame_pts_us = -1;
+      QColor source_initial_frame_pixel;
+      int source_playback_start_frame_generation = -1;
+      int source_first_user_play_frame_generation = -1;
+      double source_playback_start_seconds = -1.0;
+      qint64 source_first_user_play_frame_position_us = -1;
+      qint64 source_first_user_play_frame_pts_us = -1;
+      QColor source_first_user_play_frame_pixel;
+      bool source_preroll_audio_detached = false;
+      bool source_first_user_play_frame_audio_restored = false;
+      QMetaObject::Connection source_first_user_play_frame_connection;
+      if (!source_panel || !source_preview_player || !source_sink ||
+          !wait_for_condition([&] {
+            const auto frame = source_sink->videoFrame();
+            source_preroll_audio_detached =
+                source_preview_player->property("audioOutput").isNull();
+            return source_preview_player->property("source").toUrl().toLocalFile() ==
+                       source_resume_fixture_path &&
+                   source_panel->property("sourcePrerollActive").toBool() &&
+                   source_panel->property("sourcePrerollFirstFrameSeen").toBool() &&
+                   source_preview_player->property("playbackState").toInt() == 1 &&
+                   source_preroll_audio_detached &&
+                   frame.isValid();
+          }, 5000)) {
+        return fail("Source should enter silent preroll with its first decoded frame before Play");
+      }
+      auto* source_play_button = live_item(QStringLiteral("timelineSourcePlayButton"));
+      if (!source_play_button ||
+          source_play_button->property("iconName").toString() != QStringLiteral("play") ||
+          !QMetaObject::invokeMethod(
+              source_panel, "seekSource", Q_ARG(QVariant, QVariant(0.75)),
+              Q_ARG(QVariant, QVariant(false)))) {
+        return fail("Source should accept the requested target before explicit Play");
+      }
+      source_first_user_play_frame_connection = QObject::connect(
+          source_sink, &QVideoSink::videoFrameChanged, source_panel,
+          [&](const QVideoFrame& frame) {
+            if (source_first_user_play_frame_generation >= 0 ||
+                source_preview_player->property("playbackState").toInt() != 1)
+              return;
+            const auto start_generation =
+                source_panel->property("sourcePrerollPlaybackStartFrameGeneration").toInt();
+            const auto current_frame_generation =
+                source_panel->property("sourceFrameGeneration").toInt();
+            if (start_generation < 0 || current_frame_generation <= start_generation ||
+                !frame.isValid())
+              return;
+            const auto image = frame.toImage();
+            if (image.isNull())
+              return;
+            source_playback_start_frame_generation = start_generation;
+            source_playback_start_seconds =
+                source_panel->property("sourcePrerollPlaybackStartSeconds").toDouble();
+            source_first_user_play_frame_generation =
+                source_panel->property("sourceFrameGeneration").toInt();
+            source_first_user_play_frame_position_us =
+                source_preview_player->property("position").toLongLong() * 1000;
+            source_first_user_play_frame_pts_us = frame.startTime();
+            source_first_user_play_frame_pixel =
+                image.pixelColor(image.width() / 2, image.height() / 2);
+            source_first_user_play_frame_audio_restored =
+                !source_preview_player->property("audioOutput").isNull();
+          });
+      if (!click_named(QStringLiteral("timelineSourcePlayButton")) ||
+          !(source_panel->property("sourcePrerollPlayAfterSeek").toBool() ||
+            source_panel->property("sourcePrerollPlaybackHandoffPending").toBool() ||
+            (!source_panel->property("sourcePrerollActive").toBool() &&
+             source_panel->property("sourcePrerollCompletedTargetSeconds").toDouble() >= 0.65 &&
+             source_preview_player->property("playbackState").toInt() == 1)) ||
+          !source_panel->property("sourceUserPlaybackRequested").toBool()) {
+        QObject::disconnect(source_first_user_play_frame_connection);
+        return fail("Play during silent preroll should retain the requested Source target");
+      }
+      const auto source_play_handoff_ready = wait_for_condition([&] {
+            const auto frame = source_sink->videoFrame();
+            if (!frame.isValid() || source_panel->property("sourcePrerollActive").toBool() ||
+                source_panel->property("sourcePrerollPlaybackHandoffPending").toBool() ||
+                !source_panel->property("sourceDecoderPrimed").toBool() ||
+                !source_panel->property("sourcePrerollCompletedFrameValid").toBool() ||
+                source_preview_player->property("playbackState").toInt() != 1 ||
+                !source_panel->property("sourceUserPlaybackRequested").toBool())
+              return false;
+            const auto image = frame.toImage();
+            if (image.isNull())
+              return false;
+            const auto pixel = image.pixelColor(image.width() / 2, image.height() / 2);
+            const auto player_position_us =
+                source_preview_player->property("position").toLongLong() * 1000;
+            const auto frame_pts_match = frame.startTime() < 0 ||
+                qAbs(frame.startTime() - kSourceResumeProofTargetUs) <= 100'000;
+            const auto completed_generation =
+                source_panel->property("sourcePrerollCompletedFrameGeneration").toInt();
+            const auto seek_generation =
+                source_panel->property("sourcePrerollCompletedSeekFrameGeneration").toInt();
+            const auto acknowledged_generation =
+                source_panel->property("sourcePrerollCompletedAcknowledgedFrameGeneration").toInt();
+            const auto acknowledged_position_ms =
+                source_panel->property("sourcePrerollCompletedAcknowledgedPositionMs").toDouble();
+            const auto start_frame_generation =
+                source_panel->property("sourcePrerollPlaybackStartFrameGeneration").toInt();
+            const auto start_seconds =
+                source_panel->property("sourcePrerollPlaybackStartSeconds").toDouble();
+            const auto requested_frame_match =
+                qAbs(player_position_us - kSourceResumeProofTargetUs) <= 100'000 &&
+                frame_pts_match && source_preview_player->property("playbackState").toInt() == 1 &&
+                source_panel->property("sourceDecoderPrimed").toBool() &&
+                completed_generation > seek_generation &&
+                acknowledged_generation > seek_generation &&
+                completed_generation > acknowledged_generation &&
+                acknowledged_position_ms > 750.0 &&
+                acknowledged_position_ms - 750.0 <= 100.0 &&
+                source_panel->property("sourceFrameGeneration").toInt() > start_frame_generation &&
+                start_frame_generation >= completed_generation &&
+                qAbs(start_seconds - 0.75) <= 0.1 &&
+                source_first_user_play_frame_generation > source_playback_start_frame_generation &&
+                qAbs(source_first_user_play_frame_position_us - kSourceResumeProofTargetUs) <= 100'000 &&
+                (source_first_user_play_frame_pts_us < 0 ||
+                 qAbs(source_first_user_play_frame_pts_us - kSourceResumeProofTargetUs) <= 100'000) &&
+                source_first_user_play_frame_pixel.blue() >
+                    source_first_user_play_frame_pixel.red() + 65 &&
+                source_first_user_play_frame_pixel.blue() >
+                    source_first_user_play_frame_pixel.green() + 35 &&
+                source_first_user_play_frame_audio_restored &&
+                pixel.blue() > pixel.red() + 65 &&
+                pixel.blue() > pixel.green() + 35;
+            if (!requested_frame_match ||
+                std::abs(source_panel->property("previewSeconds").toDouble() - 0.75) >= 0.1)
+              return false;
+            source_initial_frame_pts_us = frame.startTime();
+            source_initial_frame_pixel = pixel;
+            return true;
+          }, 5000);
+      QObject::disconnect(source_first_user_play_frame_connection);
+      if (!source_play_handoff_ready) {
+        const auto failed_frame = source_sink->videoFrame();
+        const auto failed_image = failed_frame.isValid() ? failed_frame.toImage() : QImage{};
+        const auto failed_pixel = failed_image.isNull()
+            ? QColor{} : failed_image.pixelColor(failed_image.width() / 2,
+                                                  failed_image.height() / 2);
+        std::cerr << "Source Play handoff: state="
+                  << source_preview_player->property("playbackState").toInt()
+                  << " positionMs="
+                  << source_preview_player->property("position").toLongLong()
+                  << " audioDetached="
+                  << source_preview_player->property("audioOutput").isNull()
+                  << " preroll=" << source_panel->property("sourcePrerollActive").toBool()
+                  << " firstFrame="
+                  << source_panel->property("sourcePrerollFirstFrameSeen").toBool()
+                  << " seekIssued="
+                  << source_panel->property("sourcePrerollSeekIssued").toBool()
+                  << " seekAck="
+                  << source_panel->property("sourcePrerollSeekAcknowledged").toBool()
+                  << " requestedMs="
+                  << source_panel->property("sourcePrerollSeekRequestedPositionMs").toDouble()
+                  << " ackMs="
+                  << source_panel->property("sourcePrerollSeekAcknowledgedPositionMs").toDouble()
+                  << " ackFrameGen="
+                  << source_panel->property("sourcePrerollSeekAcknowledgedFrameGeneration").toInt()
+                  << " completedTarget="
+                  << source_panel->property("sourcePrerollCompletedTargetSeconds").toDouble()
+                  << " completedPosition="
+                  << source_panel->property("sourcePrerollCompletedPositionSeconds").toDouble()
+                  << " completedSeekGen="
+                  << source_panel->property("sourcePrerollCompletedSeekFrameGeneration").toInt()
+                  << " completedAckGen="
+                  << source_panel->property("sourcePrerollCompletedAcknowledgedFrameGeneration").toInt()
+                  << " completedAckMs="
+                  << source_panel->property("sourcePrerollCompletedAcknowledgedPositionMs").toDouble()
+                  << " completedFrameGen="
+                  << source_panel->property("sourcePrerollCompletedFrameGeneration").toInt()
+                  << " decoderPrimed="
+                  << source_panel->property("sourceDecoderPrimed").toBool()
+                  << " handoffPending="
+                  << source_panel->property("sourcePrerollPlaybackHandoffPending").toBool()
+                  << " userRequested="
+                  << source_panel->property("sourceUserPlaybackRequested").toBool()
+                  << " sourceFrameGen="
+                  << source_panel->property("sourceFrameGeneration").toInt()
+                  << " startFrameGen="
+                  << source_panel->property("sourcePrerollPlaybackStartFrameGeneration").toInt()
+                  << " startSeconds="
+                  << source_panel->property("sourcePrerollPlaybackStartSeconds").toDouble()
+                  << " failedFirstGen=" << source_first_user_play_frame_generation
+                  << " failedFirstPositionUs=" << source_first_user_play_frame_position_us
+                  << " failedFirstPtsUs=" << source_first_user_play_frame_pts_us
+                  << " failedFirstAudioRestored="
+                  << source_first_user_play_frame_audio_restored
+                  << " failedFirstPixel=" << source_first_user_play_frame_pixel.red() << ','
+                  << source_first_user_play_frame_pixel.green() << ','
+                  << source_first_user_play_frame_pixel.blue()
+                  << " sinkValid=" << failed_frame.isValid()
+                  << " sinkPtsUs=" << failed_frame.startTime()
+                  << " sinkPixel=" << failed_pixel.red() << ',' << failed_pixel.green() << ','
+                  << failed_pixel.blue() << '\n';
+        return fail("Play during Source preroll should start from the requested decoded blue frame");
+      }
+      auto* source_pause_button = live_item(QStringLiteral("timelineSourcePlayButton"));
+      // Explicit Play advances the clock. Pause must retain the position at the
+      // user's stop request, rather than the earlier seek target.
+      const auto source_pause_request_position_us =
+          source_preview_player->property("position").toLongLong() * 1000;
+      if (!click_item_without_layout_gap(source_pause_button) ||
+          !wait_for_condition([&] {
+            const auto frame = source_sink->videoFrame();
+            if (!frame.isValid() || source_preview_player->property("playbackState").toInt() == 1 ||
+                qAbs(source_preview_player->property("position").toLongLong() * 1000 -
+                     source_pause_request_position_us) > 100'000 ||
+                std::abs(source_panel->property("previewSeconds").toDouble() -
+                         source_preview_player->property("position").toLongLong() / 1000.0) >= 0.1 ||
+                (frame.startTime() >= 0 &&
+                 qAbs(frame.startTime() - source_pause_request_position_us) > 100'000))
+              return false;
+            const auto image = frame.toImage();
+            if (image.isNull())
+              return false;
+            const auto pixel = image.pixelColor(image.width() / 2, image.height() / 2);
+            return pixel.blue() > pixel.red() + 65 && pixel.blue() > pixel.green() + 35 &&
+                   qAbs(pixel.red() - source_initial_frame_pixel.red()) <= 24 &&
+                   qAbs(pixel.green() - source_initial_frame_pixel.green()) <= 24 &&
+                   qAbs(pixel.blue() - source_initial_frame_pixel.blue()) <= 24;
+          }, 2000) || timeline_document.clipCount() != count_before_preview ||
+          timeline_document.sequencePlaying()) {
+        const auto paused_source_frame = source_sink->videoFrame();
+        const auto paused_source_image = paused_source_frame.isValid()
+            ? paused_source_frame.toImage() : QImage{};
+        const auto paused_source_pixel = paused_source_image.isNull()
+            ? QColor{} : paused_source_image.pixelColor(paused_source_image.width() / 2,
+                                                         paused_source_image.height() / 2);
+        std::cerr << "Source Pause frame: state="
+                  << source_preview_player->property("playbackState").toInt()
+                  << " positionMs="
+                  << source_preview_player->property("position").toLongLong()
+                  << " previewSeconds=" << source_panel->property("previewSeconds").toDouble()
+                  << " ptsUs=" << paused_source_frame.startTime()
+                  << " pixel=" << paused_source_pixel.red() << ',' << paused_source_pixel.green()
+                  << ',' << paused_source_pixel.blue()
+                  << " initialPixel=" << source_initial_frame_pixel.red() << ','
+                  << source_initial_frame_pixel.green() << ',' << source_initial_frame_pixel.blue()
+                  << " firstPlayPositionUs=" << source_first_user_play_frame_position_us
+                  << " firstPlayPtsUs=" << source_first_user_play_frame_pts_us
+                  << " firstPlayPixel=" << source_first_user_play_frame_pixel.red() << ','
+                  << source_first_user_play_frame_pixel.green() << ','
+                  << source_first_user_play_frame_pixel.blue()
+                  << " firstPlayGen=" << source_first_user_play_frame_generation
+                  << " playbackStartSec=" << source_playback_start_seconds
+                  << " prerollTarget="
+                  << source_panel->property("sourcePrerollCompletedTargetSeconds").toDouble()
+                  << " sequencePlaying=" << timeline_document.sequencePlaying()
+                  << " clipCount=" << timeline_document.clipCount()
+                  << " expectedClipCount=" << count_before_preview << '\n';
+        return fail("Source Play/Pause should show the sought blue frame without editing or playing Program");
+      }
+      const auto source_paused_position_us =
+          source_preview_player->property("position").toLongLong() * 1000;
       if (!capture_workflow(QStringLiteral("09-source-decoded"), {QStringLiteral("timelineSourceVideoOutput")})) {
         return fail("Decoded Source preview should remain visible after Pause");
       }
@@ -1857,6 +2184,7 @@
           !wait_for_condition([&] { return !timeline_document.timelineSaveInProgress() &&
                                           !timeline_document.savedDocumentPath().isEmpty() && !timeline_document.dirty(); }, 10000))
         return fail("The visible Save action should save edits without publishing");
+      const auto source_session_path = timeline_document.savedDocumentPath();
       const auto saved_opening_start = clip_by_id(opening_id).value(QStringLiteral("startSeconds")).toDouble();
       // Exercise the real shell with loaded media, rather than an empty route.
       timeline_playback.seekSequenceSeconds(0.3);
@@ -1869,6 +2197,14 @@
       if (!show_studio_workspace("editWorkspaceIndex", QStringLiteral("editStudioWorkspace")))
         return fail("A loaded Timeline should return to Edit");
       const auto edit_switch_ms = edit_switch_timer.elapsed();
+      const auto hidden_document_hash = timeline_document.deterministicDocumentHash();
+      const auto hidden_selected_clip_ids = timeline_document.selectedClipIds();
+      const auto hidden_can_undo = timeline_document.canUndo();
+      QElapsedTimer source_hidden_total_timer;
+      source_hidden_total_timer.start();
+      QPointer<QObject> source_panel_lifetime(source_panel);
+      QPointer<QObject> source_player_lifetime(source_preview_player);
+      const auto source_resume_target_seconds = source_panel->property("previewSeconds").toDouble();
       const auto hidden_playhead = timeline_document.sequencePlayheadSeconds();
       const auto hidden_frames = timeline_playback.frameProcessingMetrics().value(QStringLiteral("sampleCount")).toInt();
       QEventLoop hidden_timeline_loop;
@@ -1877,18 +2213,176 @@
       const auto hidden_playhead_delta = timeline_document.sequencePlayheadSeconds() - hidden_playhead;
       const auto hidden_frame_delta = timeline_playback.frameProcessingMetrics().value(QStringLiteral("sampleCount")).toInt() - hidden_frames;
       const auto hidden_timeline_playing = timeline_document.sequencePlaying();
-      auto* hidden_source_player = find_named_object(studio_root, QStringLiteral("timelineSourcePreviewPlayer"));
+      auto* hidden_source_player = find_named_object(source_panel, QStringLiteral("timelineSourcePreviewPlayer"));
       if (hidden_timeline_playing || std::abs(hidden_playhead_delta) > 0.0001 || hidden_frame_delta != 0 ||
           !hidden_source_player || hidden_source_player->property("playbackState").toInt() == 1)
         return fail("Hidden Timeline must pause Program and Source and stop frame processing");
+      QEventLoop source_release_loop;
+      QTimer::singleShot(2250, &source_release_loop, &QEventLoop::quit);
+      source_release_loop.exec();
+      if (source_panel_lifetime.isNull() || source_player_lifetime.isNull() ||
+          !source_preview_player->property("source").toUrl().isEmpty() ||
+          source_preview_player->property("playbackState").toInt() == 1 ||
+          source_sink->videoFrame().isValid() ||
+          source_panel->property("suspendedSourceSeconds").toDouble() < 0.65 ||
+          std::abs(source_panel->property("suspendedSourceSeconds").toDouble() -
+                   source_resume_target_seconds) > 0.1) {
+        return fail("Source should release its decoder after hibernation while retaining the paused source position");
+      }
+      const auto source_eviction_wait_ms = static_cast<int>(
+          std::max<qint64>(0, 10'250 - source_hidden_total_timer.elapsed()));
+      QEventLoop source_eviction_loop;
+      QTimer::singleShot(source_eviction_wait_ms, &source_eviction_loop, &QEventLoop::quit);
+      source_eviction_loop.exec();
+      if (!wait_for_condition([&] {
+            return source_panel_lifetime.isNull() && source_player_lifetime.isNull();
+          }, 1500))
+        return fail("After ten hidden seconds, Timeline must evict the Source panel and its decoder object");
+      const auto source_eviction_elapsed_ms = source_hidden_total_timer.elapsed();
       timeline_playback.pause();
       if (!show_studio_workspace("timelineWorkspaceIndex", QStringLiteral("timelineWorkspace")))
         return fail("A suspended Timeline should reopen");
       if (!capture_workflow(QStringLiteral("10-return-from-edit"), {QStringLiteral("timelineProgramMonitor")}))
         return fail("Returning from Edit should restore the Timeline monitor");
+      QObject* resumed_source_panel = nullptr;
+      QObject* resumed_source_player = nullptr;
+      QObject* resumed_source_output = nullptr;
+      QVideoSink* resumed_source_sink = nullptr;
+      if (!wait_for_condition([&] {
+            resumed_source_panel = find_named_object(
+                studio_root, QStringLiteral("timelineSourcePreviewRail"));
+            resumed_source_player = find_named_object(
+                resumed_source_panel, QStringLiteral("timelineSourcePreviewPlayer"));
+            resumed_source_output = find_named_object(
+                resumed_source_panel, QStringLiteral("timelineSourceVideoOutput"));
+            resumed_source_sink = resumed_source_output
+                ? resumed_source_output->property("videoSink").value<QVideoSink*>() : nullptr;
+            return resumed_source_panel && resumed_source_player && resumed_source_sink;
+          }, 5000))
+        return fail("Timeline should recreate its evicted Source panel when the session resumes");
+      if (!timeline_document.hasActiveTimeline() ||
+          timeline_document.savedDocumentPath() != source_session_path ||
+          timeline_document.sourceClip().value(QStringLiteral("assetId")).toString() !=
+              QStringLiteral("source-resume-red-blue") ||
+          std::abs(timeline_document.sequencePlayheadSeconds() - hidden_playhead) > 0.0001 ||
+          timeline_document.deterministicDocumentHash() != hidden_document_hash ||
+          timeline_document.selectedClipIds() != hidden_selected_clip_ids ||
+          timeline_document.canUndo() != hidden_can_undo)
+        return fail("Evicting the Source panel should preserve the active document, source clip, and Program playhead");
+      const auto source_resume_target_us =
+          qRound64(source_resume_target_seconds * 1'000'000.0);
+      qint64 source_resume_frame_pts_us = -1;
+      QColor source_resume_frame_pixel;
+      int source_resume_frame_generation = -1;
+      int source_resume_seek_frame_generation = -1;
+      int source_resume_acknowledged_frame_generation = -1;
+      double source_resume_acknowledged_position_ms = -1.0;
+      double source_resume_completed_position_seconds = -1.0;
+      const auto source_resume_ready = wait_for_condition([&] {
+        if (!resumed_source_panel || !resumed_source_player || !resumed_source_sink)
+          return false;
+        const auto frame = resumed_source_sink->videoFrame();
+        const auto image = frame.isValid() ? frame.toImage() : QImage{};
+        if (!frame.isValid() || image.isNull() ||
+            !resumed_source_panel->property("sourceViewerActive").toBool() ||
+            !resumed_source_panel->property("sourceDecoderPrimed").toBool() ||
+            resumed_source_panel->property("sourcePrerollActive").toBool() ||
+            resumed_source_panel->property("sourcePrerollFailed").toBool() ||
+            !resumed_source_panel->property("sourcePrerollCompletedFrameValid").toBool() ||
+            !resumed_source_panel->property("sourceFrameAvailable").toBool() ||
+            resumed_source_player->property("playbackState").toInt() == 1 ||
+            qAbs(resumed_source_player->property("position").toLongLong() * 1000 -
+                 source_resume_target_us) > 100'000 ||
+            std::abs(resumed_source_panel->property("previewSeconds").toDouble() -
+                     source_resume_target_seconds) > 0.1 ||
+            std::abs(resumed_source_panel->property("sourcePrerollCompletedTargetSeconds").toDouble() -
+                     source_resume_target_seconds) > 0.1 ||
+            std::abs(resumed_source_panel->property("sourcePrerollCompletedPositionSeconds").toDouble() -
+                     source_resume_target_seconds) > 0.1 ||
+            timeline_document.sequencePlaying())
+          return false;
+
+        const auto completed_frame_generation =
+            resumed_source_panel->property("sourcePrerollCompletedFrameGeneration").toInt();
+        const auto completed_seek_frame_generation =
+            resumed_source_panel->property("sourcePrerollCompletedSeekFrameGeneration").toInt();
+        const auto completed_acknowledged_frame_generation = resumed_source_panel
+            ->property("sourcePrerollCompletedAcknowledgedFrameGeneration").toInt();
+        const auto completed_acknowledged_position_ms = resumed_source_panel
+            ->property("sourcePrerollCompletedAcknowledgedPositionMs").toDouble();
+        if (completed_seek_frame_generation < 0 ||
+            completed_acknowledged_frame_generation <= completed_seek_frame_generation ||
+            completed_frame_generation <= completed_acknowledged_frame_generation ||
+            completed_acknowledged_position_ms <= source_resume_target_us / 1000.0 ||
+            completed_acknowledged_position_ms - source_resume_target_us / 1000.0 > 100.0 ||
+            completed_frame_generation <= completed_seek_frame_generation ||
+            resumed_source_panel->property("sourceFrameGeneration").toInt() < completed_frame_generation)
+          return false;
+
+        const auto pixel = image.pixelColor(image.width() / 2, image.height() / 2);
+        const auto blue_reference = pixel.blue() > pixel.red() + 65 &&
+            pixel.blue() > pixel.green() + 35;
+        const auto matches_initial_reference =
+            qAbs(pixel.red() - source_initial_frame_pixel.red()) <= 24 &&
+            qAbs(pixel.green() - source_initial_frame_pixel.green()) <= 24 &&
+            qAbs(pixel.blue() - source_initial_frame_pixel.blue()) <= 24;
+        if (!blue_reference || !matches_initial_reference)
+          return false;
+
+        if (frame.startTime() >= 0 &&
+            qAbs(frame.startTime() - source_resume_target_us) > 100'000)
+          return false;
+
+        source_resume_frame_pts_us = frame.startTime();
+        source_resume_frame_pixel = pixel;
+        source_resume_frame_generation = completed_frame_generation;
+        source_resume_seek_frame_generation = completed_seek_frame_generation;
+        source_resume_acknowledged_frame_generation = completed_acknowledged_frame_generation;
+        source_resume_acknowledged_position_ms = completed_acknowledged_position_ms;
+        source_resume_completed_position_seconds = resumed_source_panel
+            ->property("sourcePrerollCompletedPositionSeconds").toDouble();
+        return true;
+      }, 5000);
+      if (!source_resume_ready) {
+        const auto frame = resumed_source_sink ? resumed_source_sink->videoFrame() : QVideoFrame{};
+        std::cerr << "Source resume: target=" << source_resume_target_seconds
+                  << " panel=" << (resumed_source_panel
+                        ? resumed_source_panel->property("previewSeconds").toDouble() : -1.0)
+                  << " player=" << (resumed_source_player
+                        ? resumed_source_player->property("position").toLongLong() : -1)
+                  << " pts=" << frame.startTime()
+                  << " primed=" << (resumed_source_panel &&
+                        resumed_source_panel->property("sourceDecoderPrimed").toBool())
+                  << " preroll=" << (resumed_source_panel &&
+                        resumed_source_panel->property("sourcePrerollActive").toBool())
+                  << " failed=" << (resumed_source_panel &&
+                        resumed_source_panel->property("sourcePrerollFailed").toBool()) << '\n';
+        return fail("Returning from Edit should restore a paused Source decoded frame at its saved position after decoder release");
+      }
       if (!wait_for_condition([&] { return timeline_playback.mediaReady() &&
               !timeline_playback.processedFrameSource().isEmpty(); }, 5000) || timeline_document.sequencePlaying())
         return fail("Returning to Timeline should show a decoded picture and remain paused");
+      if (!capture_workflow(QStringLiteral("10a-restored-source"),
+                            {QStringLiteral("timelineSourceVideoOutput"), QStringLiteral("timelineProgramMonitor")}))
+        return fail("The verified restored Source and Program frames should be visible");
+      // Snapshot restoration evidence before save/reopen and the Scene proof
+      // intentionally replace the document and can evict these QML objects.
+      const auto restored_source_player_position_ms =
+          resumed_source_player->property("position").toLongLong();
+      const auto restored_source_preview_seconds =
+          resumed_source_panel->property("previewSeconds").toDouble();
+      const QJsonObject source_eviction_state_snapshot{
+          {QStringLiteral("hiddenElapsedMs"), source_eviction_elapsed_ms},
+          {QStringLiteral("panelDestroyed"), source_panel_lifetime.isNull()},
+          {QStringLiteral("decoderDestroyed"), source_player_lifetime.isNull()},
+          {QStringLiteral("sessionPathPreserved"), timeline_document.savedDocumentPath() == source_session_path},
+          {QStringLiteral("playheadPreserved"), std::abs(timeline_document.sequencePlayheadSeconds() - hidden_playhead) <= 0.0001},
+          {QStringLiteral("sourceClipPreserved"), timeline_document.sourceClip().value(QStringLiteral("assetId")).toString() == QStringLiteral("source-resume-red-blue")},
+          {QStringLiteral("documentHashPreserved"), timeline_document.deterministicDocumentHash() == hidden_document_hash},
+          {QStringLiteral("selectedClipIdsPreserved"), timeline_document.selectedClipIds() == hidden_selected_clip_ids},
+          {QStringLiteral("undoStatePreserved"), timeline_document.canUndo() == hidden_can_undo},
+          {QStringLiteral("blueFrameRestored"), source_resume_ready},
+      };
       if (!timeline_document.saveTimeline() || !wait_for_condition([&] { return !timeline_document.timelineSaveInProgress(); }, 10000)) {
         return fail("Edited sequence should save");
       }
@@ -1940,6 +2434,45 @@
           {QStringLiteral("hiddenPlayheadDelta"), hidden_playhead_delta},
           {QStringLiteral("hiddenFrameDelta"), hidden_frame_delta},
           {QStringLiteral("sourcePausedOnLeave"), true},
+          {QStringLiteral("sourcePlayDuringSilentPreroll"), QJsonObject{
+              {QStringLiteral("passed"), true},
+              {QStringLiteral("requestedSeconds"), 0.75},
+              {QStringLiteral("playbackStartSeconds"), source_playback_start_seconds},
+              {QStringLiteral("playbackStartFrameGeneration"), source_playback_start_frame_generation},
+              {QStringLiteral("firstPlayingFrameGeneration"), source_first_user_play_frame_generation},
+              {QStringLiteral("firstPlayingFramePositionUs"), source_first_user_play_frame_position_us},
+              {QStringLiteral("pauseRequestPositionUs"), source_pause_request_position_us},
+              {QStringLiteral("pausedPositionUs"), source_paused_position_us},
+              {QStringLiteral("firstPlayingFramePtsUs"), source_first_user_play_frame_pts_us},
+              {QStringLiteral("audioDetachedDuringPreroll"), source_preroll_audio_detached},
+              {QStringLiteral("audioRestoredAtFirstPlayingFrame"),
+               source_first_user_play_frame_audio_restored},
+              {QStringLiteral("firstPlayingFramePositionEstimated"),
+               source_first_user_play_frame_pts_us < 0},
+              {QStringLiteral("firstPlayingFramePixelRgb"), QJsonObject{
+                  {QStringLiteral("red"), source_first_user_play_frame_pixel.red()},
+                  {QStringLiteral("green"), source_first_user_play_frame_pixel.green()},
+                  {QStringLiteral("blue"), source_first_user_play_frame_pixel.blue()}}},
+              {QStringLiteral("bluePixelReferenceMatched"), true}}},
+          {QStringLiteral("sourceDockEviction"), source_eviction_state_snapshot},
+          {QStringLiteral("sourcePausedPositionRestore"), QJsonObject{
+              {QStringLiteral("passed"), true},
+              {QStringLiteral("requestedSeconds"), source_resume_target_seconds},
+              {QStringLiteral("playerPositionMs"), restored_source_player_position_ms},
+              {QStringLiteral("panelPreviewSeconds"), restored_source_preview_seconds},
+              {QStringLiteral("completedPositionSeconds"), source_resume_completed_position_seconds},
+              {QStringLiteral("sinkFrameValid"), true},
+              {QStringLiteral("postSeekFrameGeneration"), source_resume_frame_generation},
+              {QStringLiteral("seekBaseFrameGeneration"), source_resume_seek_frame_generation},
+              {QStringLiteral("framePtsUs"), source_resume_frame_pts_us},
+              {QStringLiteral("positionMatchEstimated"), source_resume_frame_pts_us < 0},
+              {QStringLiteral("bluePixelReferenceMatched"), true},
+              {QStringLiteral("initialFramePtsUs"), source_initial_frame_pts_us},
+              {QStringLiteral("initialFramePositionEstimated"), source_initial_frame_pts_us < 0},
+              {QStringLiteral("pixelRgb"), QJsonObject{
+                  {QStringLiteral("red"), source_resume_frame_pixel.red()},
+                  {QStringLiteral("green"), source_resume_frame_pixel.green()},
+                  {QStringLiteral("blue"), source_resume_frame_pixel.blue()}}}}},
           {QStringLiteral("recoveryInRecents"), true},
           {QStringLiteral("recoveryOpenedFromRecents"), true},
           {QStringLiteral("sceneCameraNativeWorkflow"), scene_camera_proof},

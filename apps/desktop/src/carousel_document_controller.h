@@ -52,6 +52,10 @@ class CarouselDocumentController final : public QObject {
   Q_PROPERTY(int documentPixelWidth READ documentPixelWidth NOTIFY slidesChanged)
   Q_PROPERTY(int documentPixelHeight READ documentPixelHeight NOTIFY documentFormatChanged)
   Q_PROPERTY(QString documentFormat READ documentFormat WRITE setDocumentFormat NOTIFY documentFormatChanged)
+  Q_PROPERTY(QString projectName READ projectName NOTIFY documentStateChanged)
+  Q_PROPERTY(QVariantList recentBoardDocuments READ recentBoardDocuments NOTIFY recentBoardDocumentsChanged)
+  Q_PROPERTY(bool recentBoardDocumentsLoading READ recentBoardDocumentsLoading NOTIFY recentBoardDocumentsChanged)
+  Q_PROPERTY(QString recentBoardDocumentsError READ recentBoardDocumentsError NOTIFY recentBoardDocumentsChanged)
   Q_PROPERTY(bool canAddSlide READ canAddSlide NOTIFY slidesChanged)
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
   Q_PROPERTY(QVariantList statusNotices READ statusNotices NOTIFY statusNoticesChanged)
@@ -59,6 +63,8 @@ class CarouselDocumentController final : public QObject {
   Q_PROPERTY(QString selectedItemId READ selectedItemId NOTIFY selectionChanged)
   Q_PROPERTY(QString documentName READ documentName WRITE setDocumentName NOTIFY documentStateChanged)
   Q_PROPERTY(QString savedDocumentId READ savedDocumentId NOTIFY documentStateChanged)
+  Q_PROPERTY(QVariantMap photoOrigin READ photoOrigin NOTIFY documentStateChanged)
+  Q_PROPERTY(bool documentArchived READ documentArchived NOTIFY documentStateChanged)
   Q_PROPERTY(bool hasActiveCarousel READ hasActiveCarousel NOTIFY documentStateChanged)
   Q_PROPERTY(bool documentDirty READ documentDirty NOTIFY documentStateChanged)
   Q_PROPERTY(QString saveState READ saveState NOTIFY documentStateChanged)
@@ -98,6 +104,9 @@ class CarouselDocumentController final : public QObject {
   Q_PROPERTY(QStringList exportBoardScopeOptions READ exportBoardScopeOptions CONSTANT)
   Q_PROPERTY(QVariantMap exportSizeSettings READ exportSizeSettings NOTIFY exportSettingsChanged)
   Q_PROPERTY(QStringList exportSizeModeOptions READ exportSizeModeOptions CONSTANT)
+  Q_PROPERTY(QVariantList exportDeliveryFormats READ exportDeliveryFormats NOTIFY exportSettingsChanged)
+  Q_PROPERTY(QStringList exportDeliveryFormatIds READ exportDeliveryFormatIds NOTIFY exportSettingsChanged)
+  Q_PROPERTY(QString exportDeliveryFitMode READ exportDeliveryFitMode NOTIFY exportSettingsChanged)
   Q_PROPERTY(QVariantList exportOutputPreview READ exportOutputPreview NOTIFY exportSettingsChanged)
   Q_PROPERTY(QVariantList exportPreflightIssues READ exportPreflightIssues NOTIFY exportSettingsChanged)
   Q_PROPERTY(bool exportManifestEnabled READ exportManifestEnabled NOTIFY exportSettingsChanged)
@@ -340,6 +349,7 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] int documentPixelWidth() const;
   [[nodiscard]] int documentPixelHeight() const;
   [[nodiscard]] QString documentFormat() const;
+  [[nodiscard]] QString projectName() const;
   [[nodiscard]] bool canAddSlide() const;
   [[nodiscard]] QString status() const;
   [[nodiscard]] QVariantList statusNotices() const;
@@ -386,6 +396,9 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QStringList exportBoardScopeOptions() const;
   [[nodiscard]] QVariantMap exportSizeSettings() const;
   [[nodiscard]] QStringList exportSizeModeOptions() const;
+  [[nodiscard]] QVariantList exportDeliveryFormats() const;
+  [[nodiscard]] QStringList exportDeliveryFormatIds() const { return export_delivery_format_ids_; }
+  [[nodiscard]] QString exportDeliveryFitMode() const { return export_delivery_fit_mode_; }
   [[nodiscard]] QVariantList exportOutputPreview() const;
   [[nodiscard]] QVariantList exportPreflightIssues() const;
   [[nodiscard]] bool exportManifestEnabled() const;
@@ -767,6 +780,8 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void setExportCollisionPolicy(const QString& policy);
   Q_INVOKABLE void setExportBoardScope(const QString& scope);
   Q_INVOKABLE void setExportSizeMode(const QString& mode);
+  Q_INVOKABLE bool setExportDeliveryFormats(const QStringList& ids);
+  Q_INVOKABLE bool setExportDeliveryFitMode(const QString& mode);
   Q_INVOKABLE void setExportCustomPixelSize(int width, int height);
   Q_INVOKABLE void setExportAspectLocked(bool locked);
   Q_INVOKABLE void setExportManifestEnabled(bool enabled);
@@ -787,8 +802,15 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void revealExportOutput();
   Q_INVOKABLE void cleanupPartialExport();
   Q_INVOKABLE QVariantList recentDocuments() const;
+  QVariantList recentBoardDocuments() const { return recent_board_documents_; }
+  bool recentBoardDocumentsLoading() const { return recent_board_documents_loading_; }
+  QString recentBoardDocumentsError() const { return recent_board_documents_error_; }
+  Q_INVOKABLE void refreshRecentBoardDocuments(bool force = false);
+  Q_INVOKABLE void requestBoardThumbnail(const QString& document_id);
   Q_INVOKABLE bool saveDocument(const QString& document_name = QString());
   Q_INVOKABLE bool loadDocument(const QString& document_id);
+  Q_INVOKABLE quint64 loadDocumentAsync(const QString& document_id);
+  Q_INVOKABLE bool cancelDocumentLoad(quint64 request_id);
   Q_INVOKABLE bool restoreRecovery();
   Q_INVOKABLE bool openRecoveryCopy();
   Q_INVOKABLE void discardRecovery();
@@ -796,8 +818,17 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void closeCarousel();
   Q_INVOKABLE void createCarouselWithSettings(const QVariantMap& settings);
   Q_INVOKABLE bool createBoardsFromEdit(const QString& file_path, const QString& display_name,
-      const QString& adjustment_patch_json, int pixel_width, int pixel_height, int initial_board_count = 2);
+      const QString& adjustment_patch_json, int pixel_width, int pixel_height, int initial_board_count = 2,
+      const QVariantMap& source_context = QVariantMap());
+  [[nodiscard]] QVariantMap photoOrigin() const;
+  [[nodiscard]] bool documentArchived() const { return document_archived_; }
   Q_INVOKABLE bool createEditCanvas(const QVariantMap& settings);
+  Q_INVOKABLE QVariantMap editCanvasSettings() const;
+  Q_INVOKABLE bool resizeEditCanvas(const QVariantMap& settings);
+  Q_INVOKABLE QVariantMap boardSequence(int index) const;
+  Q_INVOKABLE QVariantMap prepareBoardSequence(int index);
+  Q_INVOKABLE bool attachBoardSequence(const QString& document_id, const QString& board_id,
+                                      const QVariantMap& sequence);
   Q_INVOKABLE bool removeEditBoard();
   Q_INVOKABLE bool addEditPhotoBoard(const QString& file_path = QString());
   Q_INVOKABLE bool replaceEditBoardImage(const QString& file_path);
@@ -910,6 +941,7 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void clearLayoutGuides();
 
  signals:
+  void recentBoardDocumentsChanged();
   void slidesChanged();
   void itemsChanged();
   void selectionChanged();
@@ -924,10 +956,16 @@ class CarouselDocumentController final : public QObject {
   void fontLibraryChanged();
   void copyProofChanged();
   void documentStateChanged();
+  void documentLoadFinished(
+      quint64 request_id,
+      const QString& document_id,
+      bool success,
+      bool applied);
   void preflightChanged();
   void exportSettingsChanged();
   void cutoutPreviewChanged();
   void historyChanged();
+  void historyEntryRecorded(const QString& document_id, const QString& label);
   void editBoardImageBusyChanged();
   void editBoardImageReplaced(bool success, const QString& error);
   void clipboardChanged();
@@ -1178,7 +1216,13 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QJsonObject documentObject() const;
   [[nodiscard]] QJsonObject persistentDocumentObject() const;
   bool loadDocumentObject(QJsonObject object);
+  void startPendingDocumentLoad();
+  bool applyLoadedDocument(
+      const QString& document_id,
+      const QString& helper_output,
+      const QString& helper_error);
   [[nodiscard]] QImage renderSlideBaseImage(int index, const QSize& size, bool preview) const;
+  [[nodiscard]] QImage renderOriginalSlideImage(int index, const QSize& size, bool preview) const;
   [[nodiscard]] QImage renderSlideOverlayImage(int index, const QSize& size) const;
   [[nodiscard]] QImage renderSlideImage(int index, const QSize& size, bool preview) const;
   [[nodiscard]] QString outputColorSpaceForSlide(int index) const;
@@ -1353,6 +1397,8 @@ class CarouselDocumentController final : public QObject {
   QStringList pending_repeated_element_sync_source_ids_;
   QString document_name_ = QStringLiteral("Untitled Carousel");
   QString saved_document_id_;
+  QJsonObject photo_origin_;
+  bool document_archived_ = false;
   bool has_active_carousel_ = false;
   bool document_dirty_ = false;
   QString save_state_ = QStringLiteral("Ready");
@@ -1365,6 +1411,8 @@ class CarouselDocumentController final : public QObject {
   QString export_collision_policy_ = QStringLiteral("rename");
   QString export_board_scope_ = QStringLiteral("all");
   QString export_size_mode_ = QStringLiteral("1x");
+  QStringList export_delivery_format_ids_{QStringLiteral("original")};
+  QString export_delivery_fit_mode_ = QStringLiteral("fit");
   int export_custom_pixel_width_ = 1080;
   int export_custom_pixel_height_ = 1350;
   bool export_aspect_locked_ = true;
@@ -1399,8 +1447,23 @@ class CarouselDocumentController final : public QObject {
   QStringList export_job_created_files_;
   bool export_cancel_requested_ = false;
   QJsonObject document_passthrough_;
+  QVariantList recent_board_documents_;
+  QString recent_board_documents_error_;
+  bool recent_board_documents_loading_ = false;
+  bool recent_board_documents_refresh_pending_ = false;
+  qint64 recent_board_documents_loaded_at_ = 0;
+  quint64 recent_board_documents_revision_ = 0;
+  QFutureWatcher<QVariantMap>* recent_board_documents_watcher_ = nullptr;
+  QSet<QString> pending_board_thumbnails_;
   QJsonObject design_library_passthrough_;
   QString document_load_error_;
+  quint64 document_load_generation_ = 0;
+  quint64 active_document_load_generation_ = 0;
+  quint64 pending_document_load_generation_ = 0;
+  quint64 cancelled_document_load_generation_ = 0;
+  QString active_document_load_id_;
+  QString pending_document_load_id_;
+  QFutureWatcher<QVariantMap>* document_load_watcher_ = nullptr;
   QTimer* autosave_timer_ = nullptr;
   QFutureWatcher<bool>* autosave_watcher_ = nullptr;
   std::unique_ptr<AutosaveRequest> active_autosave_;

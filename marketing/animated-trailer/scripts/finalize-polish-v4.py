@@ -1,0 +1,8 @@
+"""Color-convert the full picture render and copy the verified AAC score."""
+from pathlib import Path
+import subprocess,json,hashlib,sys
+r=Path(__file__).resolve().parents[1];name=sys.argv[1];assert name in ['landscape','portrait'];o=r/'out/creative-polish-v4';source=o/f'{name}-picture.mp4';audio=o/'audio-delivery.m4a';dest=o/f'{name}.mp4';tmp=o/f'{name}-finishing.mp4'
+v=next(s for s in json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-of','json',str(source)],text=True))['streams'] if s['codec_type']=='video');assert int(v['nb_frames'])==8940 and v['avg_frame_rate']=='30/1',v;assert v.get('color_space') in [None,'unknown','smpte170m','bt470bg']
+subprocess.run(['ffmpeg','-hide_banner','-y','-i',str(source),'-i',str(audio),'-map','0:v:0','-map','1:a:0','-vf','zscale=matrixin=170m:matrix=709:rangein=limited:range=limited','-c:v','libx264','-preset','fast','-crf','17','-threads','4','-pix_fmt','yuv420p','-color_primaries','bt709','-color_trc','iec61966-2-1','-colorspace','bt709','-color_range','tv','-c:a','copy','-movflags','+faststart','-t','298',str(tmp)],check=True)
+tmp.replace(dest)
+(o/f'{name}-finish.json').write_text(json.dumps({'source':str(source.relative_to(r)),'output':str(dest.relative_to(r)),'bytes':dest.stat().st_size,'sha256':hashlib.sha256(dest.read_bytes()).hexdigest(),'frames':8940,'seconds':298,'audio_file_sha256':hashlib.sha256(audio.read_bytes()).hexdigest(),'color':'Default BT601 picture matrix converted to BT709 with limited-range zscale. Original sRGB transfer retained. Verified AAC fast 320kbps copied without re-encoding.'},indent=2)+'\n')

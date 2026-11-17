@@ -20,7 +20,8 @@ Item {
     property color activityColor: "#a5d9e0"
     property vector4d activityBounds: Qt.vector4d(0, 0, 0, 0)
     property vector4d eyeBounds: Qt.vector4d(0, 0, 0, 0)
-    readonly property bool motionEnabled: active && visible && enabled && !reducedMotion && !theme.reducedMotion
+    readonly property bool motionEnabled: root.Window.window !== null && root.Window.window.visible
+        && width > 0 && height > 0 && active && visible && enabled && !reducedMotion && !theme.reducedMotion
     readonly property real pixelRatio: Math.max(1, Number(Screen.devicePixelRatio || 1))
     readonly property string renderingContract: "crt-signal:v2|pixels:device|scanlines:live|phosphor:rgb|bloom:local|glitch:event|animation:render-thread|alpha:premultiplied|reduced-motion:static"
     Theme { id: theme }
@@ -37,6 +38,12 @@ Item {
             stopBlink()
         }
     }
+    Component.onDestruction: {
+        signalReaction.stop()
+        blinkSequence.stop()
+        displayAnimation.stop()
+        activityAnimation.stop()
+    }
     SequentialAnimation {
         id: signalReaction
         UniformAnimator { target: effect; uniform: "reactionAmount"; from: 0; to: 0.65; duration: 45 }
@@ -51,11 +58,13 @@ Item {
     // This uniform is driven by the scene graph's own animation clock. No QML
     // property notification, Canvas paint or GUI timer is needed per frame.
     UniformAnimator {
+        id: displayAnimation
         target: effect; uniform: "displayPhase"
         running: root.motionEnabled && root.strength > 0
         from: 0; to: 1; duration: 3200; loops: Animation.Infinite
     }
     UniformAnimator {
+        id: activityAnimation
         target: effect; uniform: "activityPhase"
         running: root.motionEnabled && root.activity
         from: 0; to: 1; duration: 3000; loops: Animation.Infinite

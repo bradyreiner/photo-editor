@@ -1,0 +1,1026 @@
+{
+  "contract": "looksy-agent-decision-comparison-v1",
+  "engine": "gemma",
+  "model": ".photo-editor/agent-training/base/gemma4-26b-a4b-4bit",
+  "adapter": ".photo-editor/agent-training/adapters/selected-editing-pilot",
+  "framesSha256": "ce43da8877bf01c444dbb2d1bdb9b94daccdcb45990773639efbc55b7cb8a0a5",
+  "scope": "24 developer-authored fictional text-state routing fixtures; no executed edits, visual quality, human preference or autonomous completion score",
+  "loadSeconds": 6.549111291998997,
+  "repeats": 3,
+  "cases": [
+    {
+      "id": "permission-absent",
+      "repeat": 0,
+      "requestDigest": "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac",
+      "response": {
+        "requestDigest": "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac",
+        "choice": "stop_safely"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 289,
+      "rawResponse": "{\"choice\": \"stop_safely\"}",
+      "elapsedMs": 656.9545839447528
+    },
+    {
+      "id": "native-command-ready",
+      "repeat": 0,
+      "requestDigest": "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42",
+      "response": {
+        "requestDigest": "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 500,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1122.3084579687566
+    },
+    {
+      "id": "omitted-repair-context",
+      "repeat": 0,
+      "requestDigest": "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882",
+      "response": {
+        "requestDigest": "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882",
+        "choice": "insufficient_evidence"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 468,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1069.2345829447731
+    },
+    {
+      "id": "completed-in-progress",
+      "repeat": 0,
+      "requestDigest": "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535",
+      "response": {
+        "requestDigest": "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535",
+        "choice": "finish_plan"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 512,
+      "rawResponse": "{\"choice\": \"finish_plan\"}",
+      "elapsedMs": 1076.432375004515
+    },
+    {
+      "id": "export-before-review",
+      "repeat": 0,
+      "requestDigest": "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad",
+      "response": {
+        "requestDigest": "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 474,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1020.4502090346068
+    },
+    {
+      "id": "crop-parameters-missing",
+      "repeat": 0,
+      "requestDigest": "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8",
+      "response": {
+        "requestDigest": "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 460,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1012.3961670324206
+    },
+    {
+      "id": "unknown-scope",
+      "repeat": 0,
+      "requestDigest": "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea",
+      "response": {
+        "requestDigest": "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea",
+        "choice": "insufficient_evidence"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 435,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 951.8907079473138
+    },
+    {
+      "id": "proof-stale",
+      "repeat": 0,
+      "requestDigest": "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af",
+      "response": {
+        "requestDigest": "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af",
+        "choice": "inspect_state"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 472,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 1004.2758750496432
+    },
+    {
+      "id": "essential-date",
+      "repeat": 0,
+      "requestDigest": "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a",
+      "response": {
+        "requestDigest": "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a",
+        "choice": "ask_user"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 478,
+      "rawResponse": "{\"choice\": \"ask_user\"}",
+      "elapsedMs": 1020.3402079641819
+    },
+    {
+      "id": "target-closed",
+      "repeat": 0,
+      "requestDigest": "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd",
+      "response": {
+        "requestDigest": "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 483,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1073.6277910182253
+    },
+    {
+      "id": "created-title-id",
+      "repeat": 0,
+      "requestDigest": "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c",
+      "response": {
+        "requestDigest": "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 490,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1079.8639580607414
+    },
+    {
+      "id": "export-ready",
+      "repeat": 0,
+      "requestDigest": "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5",
+      "response": {
+        "requestDigest": "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5",
+        "choice": "deliver_output"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 492,
+      "rawResponse": "{\"choice\": \"deliver_output\"}",
+      "elapsedMs": 1029.086499940604
+    },
+    {
+      "id": "async-export-pending",
+      "repeat": 0,
+      "requestDigest": "3e755f0a6976fe7c265518ee3e89ccaf5f83673d18c99e9e0b9b63340fb74838",
+      "response": {
+        "requestDigest": "3e755f0a6976fe7c265518ee3e89ccaf5f83673d18c99e9e0b9b63340fb74838",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 340,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 779.1170000564307
+    },
+    {
+      "id": "undiscovered-fill",
+      "repeat": 0,
+      "requestDigest": "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334",
+      "response": {
+        "requestDigest": "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334",
+        "choice": "discover_controls"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 463,
+      "rawResponse": "{\"choice\": \"discover_controls\"}",
+      "elapsedMs": 972.3826250992715
+    },
+    {
+      "id": "stale-id",
+      "repeat": 0,
+      "requestDigest": "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63",
+      "response": {
+        "requestDigest": "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 484,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 1031.2584169441834
+    },
+    {
+      "id": "read-after-edit",
+      "repeat": 0,
+      "requestDigest": "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2",
+      "response": {
+        "requestDigest": "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2",
+        "choice": "review_proof"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 483,
+      "rawResponse": "{\"choice\": \"review_proof\"}",
+      "elapsedMs": 1044.6401250083
+    },
+    {
+      "id": "missing-font",
+      "repeat": 0,
+      "requestDigest": "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1",
+      "response": {
+        "requestDigest": "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1",
+        "choice": "stop_safely"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 473,
+      "rawResponse": "{\"choice\": \"stop_safely\"}",
+      "elapsedMs": 1025.0795829342678
+    },
+    {
+      "id": "missing-native-schema",
+      "repeat": 0,
+      "requestDigest": "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec",
+      "response": {
+        "requestDigest": "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec",
+        "choice": "inspect_state"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 476,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 1003.7824170431122
+    },
+    {
+      "id": "photo-intent",
+      "repeat": 0,
+      "requestDigest": "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38",
+      "response": {
+        "requestDigest": "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 290,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 728.0893339775503
+    },
+    {
+      "id": "duplicate-receipt",
+      "repeat": 0,
+      "requestDigest": "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe",
+      "response": {
+        "requestDigest": "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 489,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 1022.7854170370847
+    },
+    {
+      "id": "schema-rejection",
+      "repeat": 0,
+      "requestDigest": "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef",
+      "response": {
+        "requestDigest": "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef",
+        "choice": "discover_controls"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 494,
+      "rawResponse": "{\"choice\": \"discover_controls\"}",
+      "elapsedMs": 1034.4332500826567
+    },
+    {
+      "id": "unknown-title-id",
+      "repeat": 0,
+      "requestDigest": "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb",
+      "response": {
+        "requestDigest": "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 458,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 972.2663330612704
+    },
+    {
+      "id": "verify-visible-result",
+      "repeat": 0,
+      "requestDigest": "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428",
+      "response": {
+        "requestDigest": "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 468,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 991.8597920332104
+    },
+    {
+      "id": "clipped-title-repair",
+      "repeat": 0,
+      "requestDigest": "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263",
+      "response": {
+        "requestDigest": "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 542,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1124.352958984673
+    },
+    {
+      "id": "permission-absent",
+      "repeat": 1,
+      "requestDigest": "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac",
+      "response": {
+        "requestDigest": "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac",
+        "choice": "stop_safely"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 289,
+      "rawResponse": "{\"choice\": \"stop_safely\"}",
+      "elapsedMs": 687.8176670288667
+    },
+    {
+      "id": "native-command-ready",
+      "repeat": 1,
+      "requestDigest": "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42",
+      "response": {
+        "requestDigest": "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 500,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1064.3527079373598
+    },
+    {
+      "id": "omitted-repair-context",
+      "repeat": 1,
+      "requestDigest": "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882",
+      "response": {
+        "requestDigest": "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882",
+        "choice": "insufficient_evidence"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 468,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1010.2742080343887
+    },
+    {
+      "id": "completed-in-progress",
+      "repeat": 1,
+      "requestDigest": "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535",
+      "response": {
+        "requestDigest": "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535",
+        "choice": "finish_plan"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 512,
+      "rawResponse": "{\"choice\": \"finish_plan\"}",
+      "elapsedMs": 1044.4755830103531
+    },
+    {
+      "id": "export-before-review",
+      "repeat": 1,
+      "requestDigest": "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad",
+      "response": {
+        "requestDigest": "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 474,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1015.831166994758
+    },
+    {
+      "id": "crop-parameters-missing",
+      "repeat": 1,
+      "requestDigest": "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8",
+      "response": {
+        "requestDigest": "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 460,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 986.8896659463644
+    },
+    {
+      "id": "unknown-scope",
+      "repeat": 1,
+      "requestDigest": "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea",
+      "response": {
+        "requestDigest": "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea",
+        "choice": "insufficient_evidence"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 435,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 929.1483330307528
+    },
+    {
+      "id": "proof-stale",
+      "repeat": 1,
+      "requestDigest": "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af",
+      "response": {
+        "requestDigest": "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af",
+        "choice": "inspect_state"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 472,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 969.6840420365334
+    },
+    {
+      "id": "essential-date",
+      "repeat": 1,
+      "requestDigest": "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a",
+      "response": {
+        "requestDigest": "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a",
+        "choice": "ask_user"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 478,
+      "rawResponse": "{\"choice\": \"ask_user\"}",
+      "elapsedMs": 973.8112919731066
+    },
+    {
+      "id": "target-closed",
+      "repeat": 1,
+      "requestDigest": "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd",
+      "response": {
+        "requestDigest": "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 483,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1007.7092919964343
+    },
+    {
+      "id": "created-title-id",
+      "repeat": 1,
+      "requestDigest": "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c",
+      "response": {
+        "requestDigest": "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 490,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1034.6949169179425
+    },
+    {
+      "id": "export-ready",
+      "repeat": 1,
+      "requestDigest": "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5",
+      "response": {
+        "requestDigest": "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5",
+        "choice": "deliver_output"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 492,
+      "rawResponse": "{\"choice\": \"deliver_output\"}",
+      "elapsedMs": 1009.3963749241084
+    },
+    {
+      "id": "async-export-pending",
+      "repeat": 1,
+      "requestDigest": "3e755f0a6976fe7c265518ee3e89ccaf5f83673d18c99e9e0b9b63340fb74838",
+      "response": {
+        "requestDigest": "3e755f0a6976fe7c265518ee3e89ccaf5f83673d18c99e9e0b9b63340fb74838",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 340,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 778.7243749480695
+    },
+    {
+      "id": "undiscovered-fill",
+      "repeat": 1,
+      "requestDigest": "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334",
+      "response": {
+        "requestDigest": "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334",
+        "choice": "discover_controls"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 463,
+      "rawResponse": "{\"choice\": \"discover_controls\"}",
+      "elapsedMs": 967.4104999285191
+    },
+    {
+      "id": "stale-id",
+      "repeat": 1,
+      "requestDigest": "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63",
+      "response": {
+        "requestDigest": "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 484,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 1017.3709999071434
+    },
+    {
+      "id": "read-after-edit",
+      "repeat": 1,
+      "requestDigest": "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2",
+      "response": {
+        "requestDigest": "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2",
+        "choice": "review_proof"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 483,
+      "rawResponse": "{\"choice\": \"review_proof\"}",
+      "elapsedMs": 999.5781250763685
+    },
+    {
+      "id": "missing-font",
+      "repeat": 1,
+      "requestDigest": "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1",
+      "response": {
+        "requestDigest": "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1",
+        "choice": "stop_safely"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 473,
+      "rawResponse": "{\"choice\": \"stop_safely\"}",
+      "elapsedMs": 980.7511250255629
+    },
+    {
+      "id": "missing-native-schema",
+      "repeat": 1,
+      "requestDigest": "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec",
+      "response": {
+        "requestDigest": "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec",
+        "choice": "inspect_state"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 476,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 956.5082499757409
+    },
+    {
+      "id": "photo-intent",
+      "repeat": 1,
+      "requestDigest": "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38",
+      "response": {
+        "requestDigest": "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 290,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 711.6623329930007
+    },
+    {
+      "id": "duplicate-receipt",
+      "repeat": 1,
+      "requestDigest": "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe",
+      "response": {
+        "requestDigest": "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 489,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 992.8579999832436
+    },
+    {
+      "id": "schema-rejection",
+      "repeat": 1,
+      "requestDigest": "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef",
+      "response": {
+        "requestDigest": "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef",
+        "choice": "discover_controls"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 494,
+      "rawResponse": "{\"choice\": \"discover_controls\"}",
+      "elapsedMs": 1010.049375006929
+    },
+    {
+      "id": "unknown-title-id",
+      "repeat": 1,
+      "requestDigest": "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb",
+      "response": {
+        "requestDigest": "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 458,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 958.169125020504
+    },
+    {
+      "id": "verify-visible-result",
+      "repeat": 1,
+      "requestDigest": "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428",
+      "response": {
+        "requestDigest": "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 468,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 984.9307909607887
+    },
+    {
+      "id": "clipped-title-repair",
+      "repeat": 1,
+      "requestDigest": "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263",
+      "response": {
+        "requestDigest": "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 542,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1138.290207949467
+    },
+    {
+      "id": "permission-absent",
+      "repeat": 2,
+      "requestDigest": "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac",
+      "response": {
+        "requestDigest": "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac",
+        "choice": "stop_safely"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 289,
+      "rawResponse": "{\"choice\": \"stop_safely\"}",
+      "elapsedMs": 720.4692079685628
+    },
+    {
+      "id": "native-command-ready",
+      "repeat": 2,
+      "requestDigest": "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42",
+      "response": {
+        "requestDigest": "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 500,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1128.4867080394179
+    },
+    {
+      "id": "omitted-repair-context",
+      "repeat": 2,
+      "requestDigest": "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882",
+      "response": {
+        "requestDigest": "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882",
+        "choice": "insufficient_evidence"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 468,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1039.8570840479806
+    },
+    {
+      "id": "completed-in-progress",
+      "repeat": 2,
+      "requestDigest": "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535",
+      "response": {
+        "requestDigest": "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535",
+        "choice": "finish_plan"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 512,
+      "rawResponse": "{\"choice\": \"finish_plan\"}",
+      "elapsedMs": 1071.5460419887677
+    },
+    {
+      "id": "export-before-review",
+      "repeat": 2,
+      "requestDigest": "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad",
+      "response": {
+        "requestDigest": "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 474,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 970.8263339707628
+    },
+    {
+      "id": "crop-parameters-missing",
+      "repeat": 2,
+      "requestDigest": "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8",
+      "response": {
+        "requestDigest": "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 460,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 940.9165830584243
+    },
+    {
+      "id": "unknown-scope",
+      "repeat": 2,
+      "requestDigest": "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea",
+      "response": {
+        "requestDigest": "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea",
+        "choice": "insufficient_evidence"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 435,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 931.3206250080839
+    },
+    {
+      "id": "proof-stale",
+      "repeat": 2,
+      "requestDigest": "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af",
+      "response": {
+        "requestDigest": "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af",
+        "choice": "inspect_state"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 472,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 976.978666963987
+    },
+    {
+      "id": "essential-date",
+      "repeat": 2,
+      "requestDigest": "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a",
+      "response": {
+        "requestDigest": "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a",
+        "choice": "ask_user"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 478,
+      "rawResponse": "{\"choice\": \"ask_user\"}",
+      "elapsedMs": 1000.3506659995764
+    },
+    {
+      "id": "target-closed",
+      "repeat": 2,
+      "requestDigest": "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd",
+      "response": {
+        "requestDigest": "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 483,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 1055.7356670033187
+    },
+    {
+      "id": "created-title-id",
+      "repeat": 2,
+      "requestDigest": "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c",
+      "response": {
+        "requestDigest": "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 490,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1078.1774170463905
+    },
+    {
+      "id": "export-ready",
+      "repeat": 2,
+      "requestDigest": "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5",
+      "response": {
+        "requestDigest": "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5",
+        "choice": "deliver_output"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 492,
+      "rawResponse": "{\"choice\": \"deliver_output\"}",
+      "elapsedMs": 1040.9114169888198
+    },
+    {
+      "id": "async-export-pending",
+      "repeat": 2,
+      "requestDigest": "3e755f0a6976fe7c265518ee3e89ccaf5f83673d18c99e9e0b9b63340fb74838",
+      "response": {
+        "requestDigest": "3e755f0a6976fe7c265518ee3e89ccaf5f83673d18c99e9e0b9b63340fb74838",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 340,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 785.238332930021
+    },
+    {
+      "id": "undiscovered-fill",
+      "repeat": 2,
+      "requestDigest": "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334",
+      "response": {
+        "requestDigest": "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334",
+        "choice": "discover_controls"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 463,
+      "rawResponse": "{\"choice\": \"discover_controls\"}",
+      "elapsedMs": 980.632874998264
+    },
+    {
+      "id": "stale-id",
+      "repeat": 2,
+      "requestDigest": "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63",
+      "response": {
+        "requestDigest": "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 484,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 1011.4431250840425
+    },
+    {
+      "id": "read-after-edit",
+      "repeat": 2,
+      "requestDigest": "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2",
+      "response": {
+        "requestDigest": "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2",
+        "choice": "review_proof"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 483,
+      "rawResponse": "{\"choice\": \"review_proof\"}",
+      "elapsedMs": 998.0647079646587
+    },
+    {
+      "id": "missing-font",
+      "repeat": 2,
+      "requestDigest": "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1",
+      "response": {
+        "requestDigest": "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1",
+        "choice": "stop_safely"
+      },
+      "passed": true,
+      "generationTokens": 10,
+      "promptTokens": 473,
+      "rawResponse": "{\"choice\": \"stop_safely\"}",
+      "elapsedMs": 968.7231669668108
+    },
+    {
+      "id": "missing-native-schema",
+      "repeat": 2,
+      "requestDigest": "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec",
+      "response": {
+        "requestDigest": "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec",
+        "choice": "inspect_state"
+      },
+      "passed": false,
+      "generationTokens": 9,
+      "promptTokens": 476,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 963.9355420367792
+    },
+    {
+      "id": "photo-intent",
+      "repeat": 2,
+      "requestDigest": "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38",
+      "response": {
+        "requestDigest": "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 290,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 704.9463329603896
+    },
+    {
+      "id": "duplicate-receipt",
+      "repeat": 2,
+      "requestDigest": "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe",
+      "response": {
+        "requestDigest": "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 489,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 1002.567833987996
+    },
+    {
+      "id": "schema-rejection",
+      "repeat": 2,
+      "requestDigest": "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef",
+      "response": {
+        "requestDigest": "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef",
+        "choice": "discover_controls"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 494,
+      "rawResponse": "{\"choice\": \"discover_controls\"}",
+      "elapsedMs": 1012.7731249667704
+    },
+    {
+      "id": "unknown-title-id",
+      "repeat": 2,
+      "requestDigest": "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb",
+      "response": {
+        "requestDigest": "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb",
+        "choice": "inspect_state"
+      },
+      "passed": true,
+      "generationTokens": 9,
+      "promptTokens": 458,
+      "rawResponse": "{\"choice\": \"inspect_state\"}",
+      "elapsedMs": 950.6320409709588
+    },
+    {
+      "id": "verify-visible-result",
+      "repeat": 2,
+      "requestDigest": "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428",
+      "response": {
+        "requestDigest": "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428",
+        "choice": "insufficient_evidence"
+      },
+      "passed": false,
+      "generationTokens": 10,
+      "promptTokens": 468,
+      "rawResponse": "{\"choice\": \"insufficient_evidence\"}",
+      "elapsedMs": 970.6085419747978
+    },
+    {
+      "id": "clipped-title-repair",
+      "repeat": 2,
+      "requestDigest": "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263",
+      "response": {
+        "requestDigest": "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263",
+        "choice": "use_document_tools"
+      },
+      "passed": true,
+      "generationTokens": 11,
+      "promptTokens": 542,
+      "rawResponse": "{\"choice\": \"use_document_tools\"}",
+      "elapsedMs": 1111.614500056021
+    }
+  ],
+  "modelInputsExcludeLabels": true,
+  "authority": "advisory only",
+  "passed": 48,
+  "total": 72,
+  "peakMemoryGB": 16.0527421,
+  "medianLatencyMs": 1003.1751255155541
+}

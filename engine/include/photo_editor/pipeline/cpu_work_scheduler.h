@@ -10,5 +10,8 @@ namespace photo_editor::pipeline {
 // must not wait on another thread that needs this pool or a caller-held lock.
 // All callbacks finish before return, including when a callback throws.
 void run_cpu_parallel_for(int count, const std::function<void(int)>& work);
+// Limit the tasks claimed by this batch while retaining the shared pool budget.
+void run_cpu_parallel_for(int count, const std::function<void(int)>& work,
+                          int maximum_tasks);
 
 }  // namespace photo_editor::pipeline

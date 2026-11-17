@@ -12,6 +12,7 @@ namespace photo_editor::desktop {
 class AppShellController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString systemUiFontFamily READ systemUiFontFamily CONSTANT)
+  Q_PROPERTY(QVariantMap shortcutBindings READ shortcutOverrides NOTIFY preferencesChanged)
   Q_PROPERTY(bool sessionRecoveryAvailable READ sessionRecoveryAvailable NOTIFY sessionRecoveryChanged)
   Q_PROPERTY(QString sessionRecoverySummary READ sessionRecoverySummary NOTIFY sessionRecoveryChanged)
   Q_PROPERTY(QStringList sessionRecoveryDetails READ sessionRecoveryDetails NOTIFY sessionRecoveryChanged)
@@ -103,6 +104,7 @@ class AppShellController final : public QObject {
   void setCurrentWorkspace(int workspace_index);
 
   Q_INVOKABLE bool revealPath(const QString& path) const;
+  Q_INVOKABLE bool copyTextToClipboard(const QString& text) const;
   Q_INVOKABLE bool openAppDataFolder() const;
   Q_INVOKABLE bool openCacheFolder() const;
   Q_INVOKABLE bool openLogFolder() const;
@@ -159,6 +161,14 @@ class AppShellController final : public QObject {
   Q_INVOKABLE void restartFirstRunExperience();
   Q_INVOKABLE QString prepareSampleProject() const;
   Q_INVOKABLE QVariantMap shortcutOverrides() const;
+  Q_INVOKABLE QVariantList shortcutDefinitions() const;
+  Q_INVOKABLE QString canonicalShortcutSequence(const QString& sequence) const;
+  Q_INVOKABLE QStringList shortcutConflicts(
+      const QString& shortcut_id, const QString& sequence,
+      const QVariantMap& proposed_overrides) const;
+  Q_INVOKABLE bool shortcutKeymapValid(const QVariantMap& overrides) const;
+  Q_INVOKABLE bool exportShortcutKeymap(const QString& path_or_url) const;
+  Q_INVOKABLE bool importShortcutKeymap(const QString& path_or_url);
   Q_INVOKABLE QString shortcutSequence(
       const QString& shortcut_id,
       const QString& default_sequence) const;
@@ -166,7 +176,7 @@ class AppShellController final : public QObject {
       const QString& shortcut_id,
       const QString& sequence);
   Q_INVOKABLE bool setShortcutOverrides(const QVariantMap& overrides);
-  Q_INVOKABLE void resetShortcutOverride(const QString& shortcut_id);
+  Q_INVOKABLE bool resetShortcutOverride(const QString& shortcut_id);
 
  signals:
   void preferencesChanged();

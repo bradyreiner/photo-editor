@@ -80,7 +80,8 @@ Item {
         z: 17
         text: "Preview clipping  Blue shadows / Red highlights"
         color: "#f4f7fa"
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 10
         padding: 5
         background: Rectangle {
@@ -161,7 +162,8 @@ Item {
               ? "Proof gamut  " + overlayStack.softProofProfile
               : "Output gamut  " + overlayStack.outputColorSpace
         color: "#f4f7fa"
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 10
         padding: 5
         background: Rectangle {
@@ -220,7 +222,8 @@ Item {
         z: 17
         text: "Color tool mask"
         color: "#f4f7fa"
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 10
         padding: 5
         background: Rectangle {

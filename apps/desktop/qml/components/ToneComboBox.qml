@@ -6,7 +6,8 @@ ComboBox {
     id: root
 
     property color accent: theme.accentWarm400
-    property bool fitTextToWidth: true
+    // Retained for source compatibility; labels always use the shared type size.
+    property bool fitTextToWidth: false
     property bool showFullTextTooltip: true
     property string accessibleLabel: ""
     property int maximumPopupHeight: theme.scaled(360)
@@ -107,7 +108,7 @@ ComboBox {
                     ? root.objectName + "Option" + String(index)
                     : "toneComboBoxOption" + String(index)
         readonly property string optionText: String(root.textAt(index))
-        implicitHeight: theme.controlHeightDense
+        implicitHeight: Math.max(theme.controlHeightDense, optionLabel.implicitHeight + theme.space4)
         padding: 0
         topPadding: theme.space2
         bottomPadding: theme.space2
@@ -131,10 +132,10 @@ ComboBox {
             font.pixelSize: theme.typeControl
             font.weight: theme.weightControl
             verticalAlignment: Text.AlignVCenter
-            maximumLineCount: 1
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            maximumLineCount: 2
             elide: Text.ElideNone
-            fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
-            minimumPixelSize: theme.typeMicro
+            fontSizeMode: Text.FixedSize
             clip: true
             leftPadding: theme.space8
             rightPadding: theme.space24
@@ -156,9 +157,8 @@ ComboBox {
 
         background: Rectangle {
             radius: theme.radiusControl
-            color: optionDelegate.highlighted ? theme.opticalHoverFill
-                   : optionDelegate.selected ? theme.opticalSelectedFill
-                   : "transparent"
+            color: optionDelegate.highlighted || optionDelegate.hovered
+                   ? theme.opticalHoverFill : "transparent"
             Behavior on color { ColorAnimation { duration: theme.opticalHoverDuration } }
         }
     }
@@ -185,20 +185,19 @@ ComboBox {
         font.pixelSize: root.font.pixelSize
         maximumLineCount: 1
         elide: Text.ElideNone
-        fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
-        minimumPixelSize: theme.typeMicro
+        fontSizeMode: Text.FixedSize
         clip: true
     }
 
-    background: Rectangle {
-        radius: theme.radiusControl
-        color: theme.commandFill("secondary", false, root.hovered, root.down, root.enabled, false)
-        border.width: theme.commandBorderWidth(root.visualFocus)
-        border.color: root.visualFocus ? theme.focusRing : theme.controlEdge
+    background: InputFieldSurface {
+        focused: root.visualFocus
+        hovered: root.hovered || root.down
+        interactiveEnabled: root.enabled
     }
 
     popup: AppPopup {
         margins: theme.space8
+        transientMenu: true
         objectName: root.objectName.length > 0 ? root.objectName + "Popup" : "toneComboBoxPopup"
         parent: root.Overlay.overlay
         x: root.popupOverlay

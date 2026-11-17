@@ -13,6 +13,7 @@ Rectangle {
     property bool recentlyAdded: false
     property bool compact: false
     property bool accentVisible: selected || activeMask || solo || changed
+    property bool contextualActionsFocused: false
     property color accent: theme.accentWarm400
     property color mutedAccent: theme.textMuted
     property string rowKind: "layer"
@@ -80,7 +81,7 @@ Rectangle {
     readonly property string interactionContract: "layer-row-interaction:v1|hover-actions:true|keyboard-actions:true|disabled-reasons:true|rename:properties|reorder:move-buttons-or-menu|delete:separated"
     readonly property string motionContract: "layer-row-motion:v1|duration:" + String(motionDuration) +
                                              "|reveal:subtle|hover-fill:true|accent-fade:true|height-stable:true|layout-shift:false"
-    readonly property bool contextualActionsVisible: hovered || selected || activeMask
+    readonly property bool contextualActionsVisible: hovered || activeFocus || contextualActionsFocused
 
     Layout.fillWidth: true
     Layout.preferredHeight: chromeRowHeight

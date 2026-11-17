@@ -198,7 +198,7 @@ ApplicationWindow {
                         spacing: 5
                         Rectangle { Layout.fillWidth: true; implicitHeight: 32; color: modelData.value; radius: theme.radiusControl; border.color: theme.lineSoft }
                         Text { text: modelData.name; color: theme.textMain; font.pixelSize: theme.typeCaption }
-                        Text { text: String(modelData.value).toUpperCase(); color: theme.textFaint; font.family: theme.fontMono; font.pixelSize: theme.typeMicro }
+                        Text { text: String(modelData.value).toUpperCase(); color: theme.textFaint; font.family: theme.fontNumeric; font.features: theme.numericFontFeatures; font.pixelSize: theme.typeMicro }
                     }
                 }
             }
@@ -215,7 +215,7 @@ ApplicationWindow {
                     required property var modelData
                     Layout.fillWidth: true
                     Text { Layout.fillWidth: true; text: modelData.label; color: theme.textMain; font.family: theme.fontUi; font.pixelSize: modelData.size; font.weight: modelData.weight }
-                    Text { text: modelData.size + " px"; color: theme.textMuted; font.family: theme.fontMono; font.pixelSize: theme.typeCaption }
+                    Text { text: modelData.size + " px"; color: theme.textMuted; font.family: theme.fontNumeric; font.features: theme.numericFontFeatures; font.pixelSize: theme.typeCaption }
                 }
             }
             Text { text: "Density geometry · " + root.previewDensity; color: theme.textStrong; font.pixelSize: theme.typeSection }
@@ -223,7 +223,7 @@ ApplicationWindow {
                 objectName: "uiPrimitivesGeometryReadout"
                 Layout.fillWidth: true
                 text: "Control " + theme.controlHeight + " px   /   Field " + theme.controlHeightTall + " px   /   Panel inset " + theme.panelPadding + " px   /   Related gap " + theme.gapRelated + " px   /   Primary target " + theme.controlHeightPrimary + " px"
-                color: theme.textMain; font.family: theme.fontMono; font.pixelSize: theme.typeCaption; wrapMode: Text.WordWrap
+                color: theme.textMain; font.family: theme.fontNumeric; font.features: theme.numericFontFeatures; font.pixelSize: theme.typeCaption; wrapMode: Text.WordWrap
             }
             Text {
                 Layout.fillWidth: true
@@ -284,7 +284,7 @@ ApplicationWindow {
                     spacing: 6
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { Layout.fillWidth: true; text: modelData.name + ".qml"; color: theme.textMain; font.family: theme.fontMono; font.pixelSize: theme.typeCaption; wrapMode: Text.WrapAnywhere }
+                        Text { Layout.fillWidth: true; text: modelData.name + ".qml"; color: theme.textMain; font.family: theme.fontNumeric; font.features: theme.numericFontFeatures; font.pixelSize: theme.typeCaption; wrapMode: Text.WrapAnywhere }
                         Text { text: modelData.status; color: theme.textMuted; font.pixelSize: theme.typeCaption }
                     }
                     Text { Layout.fillWidth: true; text: modelData.family + " · " + modelData.plan; color: theme.textFaint; font.pixelSize: theme.typeCaption; wrapMode: Text.WordWrap }

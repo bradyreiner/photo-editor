@@ -367,9 +367,9 @@ int main(int argc, char** argv) {
   set_identity_view(mapper.get());
   mapper->setProperty("rotationDegrees", 90.0);
   view_point = invoke_map(mapper.get(), "imageToViewPoint", {0.25, 0.5});
-  image_point = invoke_map(mapper.get(), "viewToImagePoint", {250.0, 70.0});
+  image_point = invoke_map(mapper.get(), "viewToImagePoint", {250.0, 20.0});
   if (!expect_number(view_point, QStringLiteral("x"), 250.0, "rotation image-to-view x") ||
-      !expect_number(view_point, QStringLiteral("y"), 70.0, "rotation image-to-view y") ||
+      !expect_number(view_point, QStringLiteral("y"), 20.0, "rotation image-to-view y") ||
       !expect_number(image_point, QStringLiteral("x"), 0.25, "rotation view-to-image x") ||
       !expect_number(image_point, QStringLiteral("y"), 0.5, "rotation view-to-image y")) {
     return fail("rotation should round trip through image/view coordinates");
@@ -415,8 +415,11 @@ int main(int argc, char** argv) {
     return fail("pointer mapping diagnostics should report mapper-backed view, image, crop, rotation, fit mode, and dpr state");
   }
 
-  const auto studio_workspace_source =
+  const auto studio_workspace_source_actual =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/StudioWorkspace.qml"));
+  auto studio_workspace_source = studio_workspace_source_actual;
+  studio_workspace_source.replace(QStringLiteral("root.editorPreviewController."),
+                                  QStringLiteral("editorPreview."));
   const auto studio_pixel_grid_source =
       read_source_file(QStringLiteral("apps/desktop/qml/components/StudioPixelGridOverlay.qml"));
   const auto studio_thumbnail_card_source =
@@ -448,8 +451,20 @@ int main(int argc, char** argv) {
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskView.qml"));
   const auto mask_canvas_overlay_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskCanvasOverlay.qml"));
-  const auto shared_mask_overlay_source =
+  const auto shared_mask_overlay_source_actual =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/SharedMaskOverlay.qml"));
+  if (!studio_image_viewport_source.contains(
+          QStringLiteral("previewControllerOverride: viewport.previewContext")) ||
+      !shared_mask_overlay_source_actual.contains(QStringLiteral(
+          "readonly property var previewController: previewControllerOverride || editorPreview")) ||
+      shared_mask_overlay_source_actual.contains(QStringLiteral("editorPreview."))) {
+    return fail("Studio's shared mask overlay should use the scoped preview controller and leave global access only in its legacy fallback");
+  }
+  // Keep the existing coordinate source checks readable against the historic
+  // controller name after verifying the actual scoped injection above.
+  auto shared_mask_overlay_source = shared_mask_overlay_source_actual;
+  shared_mask_overlay_source.replace(QStringLiteral("root.previewController"),
+                                     QStringLiteral("editorPreview"));
   const auto mask_inspector_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskInspectorSections.qml"));
   const auto controller_source =
@@ -494,16 +509,16 @@ int main(int argc, char** argv) {
   }
   const QStringList studio_tool_routing_contract = {
       QStringLiteral("function normalizedPointForViewport(x, y) {\n        const point = viewportCoordinateMapper.viewToImagePoint(x, y)"),
-      QStringLiteral("function updatePixelInspectorAt(x, y) {\n        const point = normalizedPointForViewport(x, y)"),
-      QStringLiteral("function handleSamplingPointerPressed(mouse) {\n        if (!previewContext.hasAsset || previewContext.compareMode)\n            return false\n        const point = normalizedPointForViewport(mouse.x, mouse.y)"),
+      QStringLiteral("function updatePixelInspectorAt(x, y) {\n        const point = normalizedOutputPointForViewport(x, y)"),
+      QStringLiteral("function handleSamplingPointerPressed(mouse) {\n        if (!previewContext.hasAsset || previewContext.compareMode)\n            return false\n        const point = normalizedOutputPointForViewport(mouse.x, mouse.y)"),
       QStringLiteral("previewContext.sampleActiveColorRangeAt(point.x, point.y)"),
       QStringLiteral("previewContext.beginActiveLuminanceRangeSample(point.x, point.y)"),
       QStringLiteral("previewContext.commitActiveLuminanceRangeSample(point.x, point.y)"),
       QStringLiteral("function handleMaskPointerPressed(mouse) {\n        if (!maskPointerActive())\n            return false\n        const point = normalizedPointForViewport(mouse.x, mouse.y)"),
-      QStringLiteral("return previewContext.applyActiveSelectionPixel(point.x, point.y, operation)"),
-      QStringLiteral("previewContext.addBrushPointWithPressure(point.x, point.y, 1.0)"),
+      QStringLiteral("return previewContext.applyActiveSelectionSourcePixel(point.x, point.y, operation)"),
+      QStringLiteral("previewContext.addBrushSourcePointWithPressure(point.x, point.y, 1.0)"),
       QStringLiteral("previewContext.appendActivePolygonPoint(point.x, point.y)"),
-      QStringLiteral("previewContext.smartSelectAddAt(point.x, point.y, !previewContext.hasActiveMask)"),
+          QStringLiteral("previewContext.pickMaskAt(point.x, point.y, objectMode, !previewContext.hasActiveMask)"),
       QStringLiteral("const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)"),
       QStringLiteral("previewController.setActiveMaskPatchSourceRegion("),
       QStringLiteral("previewController.setActiveMaskCloneSource(")};
@@ -513,8 +528,8 @@ int main(int argc, char** argv) {
       QStringLiteral("function normalizedStrokePoint(mouseX, mouseY) {\n        const point = imagePointFromItem(previewItem, mouseX, mouseY)"),
       QStringLiteral("function scheduleSmartSelectPreviewFromItem(item, itemX, itemY, force) {\n        const point = imagePointFromItem(item, itemX, itemY)"),
       QStringLiteral("const point = root.imagePointFromItem(brushOverlay, x, y)\n                                if (point.valid) {\n                                    editorPreview.setActiveMaskCloneSource(point.x, point.y)"),
-      QStringLiteral("editorPreview.addBrushPointWithTabletEraser("),
-      QStringLiteral("const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)\n                            if (point.valid)\n                                editorPreview.addBrushPointWithTablet(point.x, point.y"),
+      QStringLiteral("editorPreview.addBrushSourcePointWithTabletEraser("),
+      QStringLiteral("const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)\n                            if (point.valid)\n                                editorPreview.addBrushSourcePointWithTablet(point.x, point.y"),
       QStringLiteral("const point = root.normalizedStrokePoint(mouse.x, mouse.y)\n                if (!point.valid)"),
       QStringLiteral("editorPreview.appendActivePolygonPoint(point.x, point.y)"),
       QStringLiteral("root.scheduleSmartSelectPreviewFromItem(previewItem, mouse.x, mouse.y, false)"),
@@ -525,9 +540,9 @@ int main(int argc, char** argv) {
       QStringLiteral("function normalizedStrokePoint(item, itemX, itemY) {\n        return imagePointFromItem(item, itemX, itemY)"),
       QStringLiteral("const point = root.imagePointFromItem(brushOverlay, x, y)"),
       QStringLiteral("editorPreview.setActiveMaskCloneSource(point.x, point.y)"),
-      QStringLiteral("editorPreview.addBrushPointWithTabletEraser("),
+      QStringLiteral("editorPreview.addBrushSourcePointWithTabletEraser("),
       QStringLiteral("const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)\n                                        if (!point.valid)"),
-      QStringLiteral("editorPreview.addBrushPointWithTablet(point.x, point.y"),
+      QStringLiteral("editorPreview.addBrushSourcePointWithTablet(point.x, point.y"),
       QStringLiteral("const imagePoint = root.normalizedStrokePoint(\n                                                previewItem,\n                                                parent.lassoPointerX,\n                                                parent.lassoPointerY)"),
       QStringLiteral("const imagePoint = root.normalizedStrokePoint(\n                                            previewItem,\n                                            eventPoint.position.x,"),
       QStringLiteral("editorPreview.appendActivePolygonPoint(imagePoint.x, imagePoint.y)")};
@@ -571,8 +586,7 @@ int main(int argc, char** argv) {
       mask_view_source.contains(QStringLiteral("scheduleSmartSelectPreview(point.position.x")) ||
       !studio_image_viewport_source.contains(QStringLiteral("function normalizedPointForViewport(x, y) {\n        const point = viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
       !studio_image_viewport_source.contains(QStringLiteral("if (!previewContext.hasActiveMask || kind === \"object\") {\n            const objectMode = workspaceContext.applyObjectPickModeForModifierState(mouse.modifiers)")) ||
-      !studio_image_viewport_source.contains(QStringLiteral("previewContext.smartSelectSubtractAt(point.x, point.y, !previewContext.hasActiveMask)")) ||
-      !studio_image_viewport_source.contains(QStringLiteral("previewContext.smartSelectAddAt(point.x, point.y, !previewContext.hasActiveMask)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("previewContext.pickMaskAt(point.x, point.y, objectMode, !previewContext.hasActiveMask)")) ||
       studio_image_viewport_source.contains(QStringLiteral("smartSelectAddAt(mouse.x")) ||
       studio_image_viewport_source.contains(QStringLiteral("smartSelectSubtractAt(mouse.x"))) {
     return fail("Smart/Object selection hover, prompt, stroke, and one-click commit paths should all use mapper-backed normalized image coordinates");
@@ -696,7 +710,7 @@ int main(int argc, char** argv) {
       QStringLiteral("onPixelInspectionRequestedChanged: schedulePublishedPreviewViewportUpdate(true)"),
       QStringLiteral("readonly property real sourcePixelScreenWidth: inspectionPixelWidth > 0\n        ? paintedContentWidth / Math.max(1, inspectionPixelWidth)"),
       QStringLiteral("readonly property real sourcePixelScreenHeight: inspectionPixelHeight > 0\n        ? paintedContentHeight / Math.max(1, inspectionPixelHeight)"),
-      QStringLiteral("const rect = viewRectForImage(\n                    pixelX / sourceWidth,\n                    pixelY / sourceHeight,\n                    1.0 / sourceWidth,\n                    1.0 / sourceHeight)"),
+      QStringLiteral("const rect = viewRectForImage(\n                    (pixelX - 0.5) / Math.max(1, sourceWidth - 1),\n                    (pixelY - 0.5) / Math.max(1, sourceHeight - 1),\n                    1.0 / Math.max(1, sourceWidth - 1),\n                    1.0 / Math.max(1, sourceHeight - 1))"),
       QStringLiteral("readonly property string pixelBrushCursorSnapContract: \"pixel-brush-cursor:v2|source-cell:floor|screen-rect:mapper|visible:pixel-grid|source-backed:pixelGridFullResolutionBacked\""),
       QStringLiteral("pixelBrushVisible: workspaceContext.pixelExactToolReady() && viewport.pixelGridVisible"),
       QStringLiteral("readonly property real contentLeft: pixelGridOverlay.paintedContentX"),

@@ -28,6 +28,7 @@ struct SegmentationResult final {
   int refinement_logits_height = 0;
   bool success = false;
   QString error_message;
+  QString refinement_logits_contract;
 };
 
 struct ForegroundInstanceMap final {

@@ -48,12 +48,18 @@ bool TimelineDocumentController::sceneAttachmentGeometrySupported(const Clip& cl
 }
 
 bool TimelineDocumentController::sceneTrackMetadataReady(const Clip& clip) const {
+  const auto ref = clipRefAt(flattenedIndexForClipId(clip.clip_id));
+  const auto* track = trackAt(ref.track_index);
+  return track != nullptr && sceneTrackMetadataReady(clip, *track);
+}
+
+bool TimelineDocumentController::sceneTrackMetadataReady(
+    const Clip& clip, const Track& track) const {
   const auto metadata = clip.motion_tracking.value(QStringLiteral("sceneCamera")).toMap();
   const auto fps = metadata.value(QStringLiteral("fps")).toDouble();
   const auto start = metadata.value(QStringLiteral("trimStart")).toDouble();
   const auto end = metadata.value(QStringLiteral("trimEnd")).toDouble();
-  const auto* track = trackAt(clipRefAt(flattenedIndexForClipId(clip.clip_id)).track_index);
-  return track && sceneAttachmentGeometrySupported(clip, *track) &&
+  return sceneAttachmentGeometrySupported(clip, track) &&
       metadata.value(QStringLiteral("sourceSignature")).toString() == clip.source_identity_signature &&
       !metadata.value(QStringLiteral("solveId")).toString().isEmpty() &&
       std::isfinite(fps) && fps >= 1 && fps <= 30 && std::isfinite(start) && std::isfinite(end) &&
@@ -96,7 +102,7 @@ QVariantList TimelineDocumentController::sceneTrackSources() const {
   for (const auto& track : tracks_) {
     if (track.kind != TrackKind::Video) continue;
     for (const auto& clip : track.clips) {
-      if (!sceneTrackMetadataReady(clip)) continue;
+      if (!sceneTrackMetadataReady(clip, track)) continue;
       const auto metadata = clip.motion_tracking.value(QStringLiteral("sceneCamera")).toMap();
       const auto scene = metadata.value(QStringLiteral("scene")).toMap();
       rows.append(QVariantMap{{QStringLiteral("clipId"), clip.clip_id}, {QStringLiteral("label"), clip.display_label},

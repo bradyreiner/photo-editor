@@ -178,10 +178,14 @@ int main(int argc, char* argv[]) {
   white_balance_change.white_balance_temperature = 6100.0;
   auto demosaic_change = decode_cache_baseline;
   demosaic_change.demosaic_quality = QStringLiteral("Preview");
+  auto exposure_only_change = decode_cache_baseline;
+  exposure_only_change.exposure = 1.9;
   if (photo_editor::desktop::raw_decode_settings_cache_key(
           decode_cache_baseline) !=
           photo_editor::desktop::raw_decode_settings_cache_key(
               engine_profile_change) ||
+      photo_editor::desktop::raw_decode_settings_cache_key(decode_cache_baseline) !=
+          photo_editor::desktop::raw_decode_settings_cache_key(exposure_only_change) ||
       photo_editor::desktop::raw_decode_settings_cache_key(
           decode_cache_baseline) ==
           photo_editor::desktop::raw_decode_settings_cache_key(
@@ -207,6 +211,8 @@ int main(int argc, char* argv[]) {
       !capability.pixel_contract.contains(QStringLiteral("no-camera-matrix")) ||
       !capability.pixel_contract.contains(QStringLiteral("unbalanced")) ||
       capability.applied_controls.contains(QStringLiteral("white-balance")) ||
+      capability.applied_controls.contains(QStringLiteral("exposure")) ||
+      !capability.deferred_controls.contains(QStringLiteral("exposure")) ||
       !capability.deferred_controls.contains(QStringLiteral("white-balance")) ||
       !capability.deferred_controls.contains(
           QStringLiteral("camera-characterization")) ||
@@ -392,6 +398,42 @@ int main(int argc, char* argv[]) {
         "ordinary cross-platform RAW decode must expose a tagged, "
         "decoder-characterized linear-sRGB fallback");
   }
+  auto characterized_baseline = embedded_settings;
+  characterized_baseline.input_transform_enabled = false;
+  QImage characterized_cached;
+  if (!photo_editor::desktop::decode_libraw_scene_linear_image(
+          dng_path, &characterized_cached, 0, characterized_baseline, nullptr) ||
+      characterized_cached != characterized) {
+    return fail("unexposed characterized baseline must retain the same pixels");
+  }
+  for (const auto ev : {-4.0, 1.9, 4.0}) {
+    auto exposed_settings = characterized_baseline;
+    exposed_settings.exposure = ev;
+    QImage exposed;
+    photo_editor::pipeline::DecodedImageMetadata exposed_metadata;
+    const auto before = photo_editor::desktop::libraw_decode_cache_stats();
+    if (!photo_editor::desktop::decode_libraw_scene_linear_image(
+            dng_path, &exposed, 0, exposed_settings, &exposed_metadata) ||
+        exposed != characterized || exposed_metadata.decoder_rendering_applied ||
+        exposed_metadata.pixel_encoding != characterized_metadata.pixel_encoding ||
+        exposed_metadata.camera_transform_applied != characterized_metadata.camera_transform_applied) {
+      return fail("decoder-characterized RAW must also defer exposure without changing pixels or color ownership");
+    }
+    const auto after = photo_editor::desktop::libraw_decode_cache_stats();
+    if (after.hits <= before.hits || after.misses != before.misses) {
+      return fail("decoder-characterized EV edits must reuse packed demosaic samples");
+    }
+    const auto metadata_before = photo_editor::desktop::libraw_decode_cache_stats();
+    if (!photo_editor::desktop::read_libraw_scene_linear_metadata(
+            dng_path, &exposed_metadata, exposed_settings) ||
+        !photo_editor::desktop::read_libraw_scene_linear_metadata(
+            dng_path, &exposed_metadata, characterized_baseline)) {
+      return fail("characterized RAW metadata must remain readable across deferred EV");
+    }
+    if (photo_editor::desktop::libraw_decode_cache_stats().metadata_hits < metadata_before.metadata_hits + 1U) {
+      return fail("decoder-characterized EV edits must share metadata cache entries");
+    }
+  }
   auto cancelled_generation =
       std::atomic<int>{2};
   auto cancelled_decode =
@@ -566,12 +608,42 @@ int main(int argc, char* argv[]) {
       photo_editor::desktop::libraw_decode_cache_stats().hits <= cache_before_repeat.hits)
     return fail("RAW resize cache must preserve exact pixels and reuse matching modes");
   auto different_decode = settings;
-  different_decode.exposure += 0.5;
+  different_decode.demosaic_quality = QStringLiteral("Preview");
   const auto cache_before_change = photo_editor::desktop::libraw_decode_cache_stats();
   if (!photo_editor::desktop::decode_libraw_camera_linear_image(
           dng_path, &repeated, 64, different_decode, nullptr) ||
       photo_editor::desktop::libraw_decode_cache_stats().misses <= cache_before_change.misses)
     return fail("RAW settings changes must invalidate packed samples");
+
+  for (const auto ev : {-4.0, 1.9, 4.0}) {
+    auto exposure_settings = settings;
+    exposure_settings.exposure = ev;
+    auto exposure_metadata = photo_editor::pipeline::DecodedImageMetadata{};
+    const auto before = photo_editor::desktop::libraw_decode_cache_stats();
+    if (!photo_editor::desktop::decode_libraw_camera_linear_image(
+            dng_path, &repeated, 0, exposure_settings, &exposure_metadata) ||
+        repeated != decoded || exposure_metadata.decoder_rendering_applied) {
+      return fail("RAW EV must preserve unexposed camera samples and defer to the float engine");
+    }
+    // An exposure edit must reuse demosaiced source data even when its scalar
+    // gain invalidates downstream adjusted-output caches.
+    const auto after = photo_editor::desktop::libraw_decode_cache_stats();
+    if (after.hits <= before.hits || after.misses != before.misses) {
+      return fail("deferred RAW EV must reuse packed demosaic samples");
+    }
+    const auto before_metadata = photo_editor::desktop::libraw_decode_cache_stats();
+    auto first_metadata = exposure_metadata;
+    if (!photo_editor::desktop::read_libraw_camera_linear_metadata(
+            dng_path, &first_metadata, exposure_settings) ||
+        !photo_editor::desktop::read_libraw_camera_linear_metadata(
+            dng_path, &first_metadata, settings)) {
+      return fail("deferred RAW EV metadata lookup must succeed");
+    }
+    const auto after_metadata = photo_editor::desktop::libraw_decode_cache_stats();
+    if (after_metadata.metadata_hits < before_metadata.metadata_hits + 1U) {
+      return fail("deferred RAW EV must share the bounded metadata cache");
+    }
+  }
 
   using ConcurrentResult =
       std::pair<QImage, photo_editor::pipeline::DecodedImageMetadata>;

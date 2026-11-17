@@ -1,0 +1,62 @@
+LOOKSi campaign studio / 16 November 2026
+
+Open index.html in your own browser to review all five directions and play videos.
+If your viewer does not open local HTML, open the PNGs and MP4s directly.
+Production and rollout guidance: production-playbook.html.
+Editable project tracker: production-tracker.xlsx.
+Scripts, captions, alt text and claims ledger: campaign-briefs.md and copy.json.
+Reference research: research/release-style-research.md.
+
+FIVE DIRECTIONS
+01 A note from the builder / candid founder
+02 Show the work / professional workflow
+03 Start with your eye / welcoming tutorial
+04 The final final club / playful editing pain
+05 A point of view / cinematic editorial
+
+Each direction contains a creative/storyboard board (PNG + SVG), a social image
+(PNG + SVG) and a vertical MP4 motion draft. Boards are standalone creative
+direction layouts, not native Looksy documents. Editable SVGs embed fonts and art.
+
+01–03 videos are animatics. Labels identify the founder and real app footage
+still to record. 04–05 are graphic motion drafts with no founder filming needed.
+All five have an original synthesized audio bed and onscreen copy, no voiceover.
+The exact rendered scripts run 18 seconds; separate live-action master scripts
+run 24 seconds. These are different versions, not a duration discrepancy.
+
+The tracker starts with 15 delivered drafts, zero creative approvals and all
+production tasks pending. Update task completion and review cells when reviewed.
+No posts have been published. No ad spend or publication date is committed.
+Campaign uses requested LOOKSi spelling; application files remain unchanged.
+
+ARTWORK AND FONTS
+The optical artwork is AI generated via the built-in image_gen tool; full prompt
+and provenance are in artwork/provenance.json. It is illustrative brand art and
+does not demonstrate an image edited in Looksi. The waveform is original
+sample-free synthesis; audio/provenance.json describes it. Fonts are bundled
+with their OFL licenses under artwork/fonts/. No reference campaign media copied.
+
+REBUILD CREATIVE
+Requirements: Python 3, Pillow, NumPy, FFmpeg and ffprobe.
+From the repository:
+marketing/.venv/bin/python marketing/campaigns/looksi-launch-2026-11-16/tools/build_creative.py
+Options: --stills-only, --hub-only, --video-only 05.
+The builder also runs from an extracted bundle once Python dependencies exist.
+No API call or paid service is used by the rebuild. Existing artwork is reused.
+
+REBUILD TRACKER
+tracker/build-tracker.mjs uses @oai/artifact-tool from the managed runtime.
+The tracker/node_modules symlink is local build support and is excluded from ZIP.
+The delivered XLSX works independently of that build dependency.
+Rebuilding creates a fresh baseline workbook; it does NOT preserve review edits
+made in the delivered workbook. Save a separate copy before editing the builder.
+
+QA
+qa/package-verification.json records dimensions, codecs, full MP4 decode, local
+HTML link checks and copy/timing agreement. QA contact sheets sample the videos.
+tracker/qa/verification.json records spreadsheet recalculation/input checks.
+The visual assets were inspected directly. Automated browser opening of local
+HTML was blocked by the browser protocol policy, so browser playback/layout
+was not claimed. No workaround was used. Review placement previews before posting.
+
+Local output source and generated creative are retained; no app state changed.

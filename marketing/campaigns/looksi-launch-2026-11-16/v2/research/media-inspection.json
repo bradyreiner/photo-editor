@@ -1,0 +1,35 @@
+{
+  "publisher": "Lux / Sandwich",
+  "source_article": "https://www.lux.camera/introducing-kino-pro-video-camera/",
+  "launch_film_url": "https://storage.ghost.io/c/59/cf/59cfc607-b1ff-45a1-b644-37fe5a6bf7b1/content/media/2024/05/Kino-Sandwich.mp4",
+  "launch_film_metadata": {
+    "duration_seconds": 85.210125,
+    "width": 1920,
+    "height": 1080,
+    "frame_rate": "24000/1001",
+    "video_codec": "hevc",
+    "audio_codec": "aac"
+  },
+  "inspection": "Opening source frames around 0 through 11 seconds and spaced samples across the film were visually inspected. Audio and full continuous playback were not inspected. Sampled frame notes do not establish exact cut boundaries.",
+  "opening_sample_observations": [
+    "0s: full-body male presenter in a bright loft with large windows; no opening logo-only card.",
+    "About 1s: white sentence fragment appears over the wide presenter shot.",
+    "About 2s: close presenter shot; about 3s: sunset silhouette under palms.",
+    "About 5\u20137s: ordinary barbecue and moving-dog footage contrasts with the polished scene.",
+    "About 9\u201311s: camera operator with cinema rig and another man holding a lens create a visible filmmaking context."
+  ],
+  "whole_film_samples": "Spaced frames show a man filming on a phone, close product interactions, black-and-white city imagery, an outdoor presenter, onboarding on a phone and a tennis/selfie sequence, ending in the Kino mark.",
+  "preset_demo_url": "https://storage.ghost.io/c/59/cf/59cfc607-b1ff-45a1-b644-37fe5a6bf7b1/content/media/2024/05/Preset-Preview-2.mp4",
+  "preset_demo_metadata": {
+    "duration_seconds": 29.291667,
+    "width": 1920,
+    "height": 1080,
+    "frame_rate": "24/1",
+    "video_codec": "h264"
+  },
+  "preset_demo_inspection": "Representative frames about three seconds apart were inspected. They show diagonal boundaries comparing two treatments of the same photographic scene across desert, forest, ocean, city and interior imagery. Ends in a filmed-with-Kino lockup. Exact settings, grading fidelity and complete playback unverified.",
+  "practical_implication": "A manifesto and a visual-proof asset can be separate pieces with different jobs. Keep the treatment comparison on the same source; do not use two different images as a before/after.",
+  "rights": "All reference media stayed in temporary local inspection files. No reference art or film is included as a Looksi campaign asset.",
+  "launch_film_sha256": "999d61e2a2e181e551542ee516e46222f8fca4f08bbb258f9b9756d9a1f9ac5b",
+  "preset_demo_sha256": "d9af9df0f72c5bfd20a6b6868b45558f552d006eb77b7533e1c049a2b0b4e8dc"
+}

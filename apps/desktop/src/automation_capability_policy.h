@@ -16,6 +16,7 @@ inline QStringList automation_capability_names() {
 
 inline QString automation_capability_for_command(const QString& command) {
   static const QStringList read_commands{
+      QStringLiteral("app_agent_guide"),
       QStringLiteral("app_list_commands"),
       QStringLiteral("app_command_schema"),
       QStringLiteral("app_inspect_command"),
@@ -43,12 +44,34 @@ inline QString automation_capability_for_command(const QString& command) {
       QStringLiteral("timeline_color_grade_inspect"),
       QStringLiteral("timeline_effects_inspect"),
       QStringLiteral("timeline_playback_performance_inspect"),
+      QStringLiteral("timeline_render_geometry_inspect"),
+      QStringLiteral("timeline_delivery_preflight_inspect"),
+      QStringLiteral("timeline_render_jobs_inspect"),
+      QStringLiteral("timeline_h264_export_inspect"),
+      QStringLiteral("timeline_preview_at_time"),
+      QStringLiteral("timeline_view_navigate"),
+      QStringLiteral("timeline_visible_proof_capture"),
+      QStringLiteral("timeline_task_status"),
+      QStringLiteral("timeline_saved_drafts_list"),
+      QStringLiteral("timeline_document_inspect"),
+      QStringLiteral("timeline_project_inputs_list"),
+      QStringLiteral("timeline_autosave_recovery_inspect"),
+      QStringLiteral("timeline_structure_inspect"),
+      QStringLiteral("timeline_used_media_inspect"),
+      QStringLiteral("timeline_review_notes_inspect"),
   };
   if (read_commands.contains(command)) {
     return QStringLiteral("read");
   }
   if (command == QStringLiteral("photo_export_batch")) {
     return QStringLiteral("export");
+  }
+  if (command == QStringLiteral("timeline_h264_export_enqueue") ||
+      command == QStringLiteral("timeline_h264_export_cancel")) {
+    return QStringLiteral("export");
+  }
+  if (command == QStringLiteral("timeline_task_release_reviewed")) {
+    return QStringLiteral("draft");
   }
   if (command == QStringLiteral("photo_commit_agent_draft") ||
       command == QStringLiteral("photo_resolve_agent_review_issue")) {

@@ -6,6 +6,6 @@ Drawer {
     font.family: drawerTheme.fontUi
     font.pixelSize: drawerTheme.typeBody
     dim: modal
-    background: PopupSurface { radius: 0; shadowColor: "transparent" }
+    background: PopupSurface { docked: true; shadowColor: "transparent" }
     Overlay.modal: Rectangle { color: drawerTheme.popupDim }
 }

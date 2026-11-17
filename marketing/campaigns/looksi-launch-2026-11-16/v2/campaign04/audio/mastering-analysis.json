@@ -1,0 +1,17 @@
+{
+  "target_integrated_lufs": -18,
+  "true_peak_target_dbtp": -1.5,
+  "source_measurement": {
+    "input_i": "-23.64",
+    "input_tp": "-1.71",
+    "input_lra": "6.70",
+    "input_thresh": "-33.88",
+    "output_i": "-19.01",
+    "output_tp": "-1.50",
+    "output_lra": "5.00",
+    "output_thresh": "-29.21",
+    "normalization_type": "dynamic",
+    "target_offset": "1.01"
+  },
+  "process": "Two-pass FFmpeg loudnorm followed by a 0.79-amplitude limiter with auto-level disabled. This is mix normalization, not a platform guarantee. See QA for measured final values."
+}

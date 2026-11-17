@@ -60,7 +60,8 @@ Rectangle {
         Text {
             text: root.statusText
             color: root.statusColor
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 8
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 6

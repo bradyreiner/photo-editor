@@ -4,7 +4,9 @@
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -81,6 +83,47 @@ int main() {
     }
     std::cerr << "Metal ICC backend failed initialization: " << reason << '\n';
     return EXIT_FAILURE;
+  }
+  // CPU-only Layers must enter native ICC publication without changing the
+  // completed scene pixels or their coordinate/color descriptor.
+  auto working_pixels = std::vector<pipeline::ColorPixel>{};
+  working_pixels.reserve(source.size());
+  for (const auto& pixel : source)
+    working_pixels.push_back({pixel.red, pixel.green, pixel.blue, pixel.alpha});
+  working_pixels[0] = {-0.25F, 4.0F, 0.375F, 0.125F};
+  const auto working_descriptor = pipeline::RenderSurfaceDescriptor{
+      .pixel_encoding = pipeline::RenderPixelEncoding::SceneLinearFloat,
+      .color_domain = pipeline::RenderColorDomain::WorkingScene,
+      .range = pipeline::RenderRangeModel::SceneExtended,
+      .alpha = pipeline::RenderAlphaModel::Straight,
+      .color_space_identity = "test:linear-working",
+      .transfer_identity = "linear",
+      .width = kWidth,
+      .height = kHeight,
+      .source_area_x = 0.125,
+      .source_area_y = 0.25,
+      .source_area_width = 0.75,
+      .source_area_height = 0.5,
+  };
+  auto upload_telemetry = pipeline::ColorAdjustmentTelemetry{};
+  const auto uploaded = metal.upload_working_surface(working_pixels, working_descriptor,
+                                                     &upload_telemetry);
+  auto downloaded = std::vector<pipeline::ColorPixel>{};
+  if (uploaded == nullptr || !uploaded->valid_for(working_descriptor) ||
+      !uploaded->copy_pixels(&downloaded) || downloaded.size() != working_pixels.size() ||
+      std::memcmp(downloaded.data(), working_pixels.data(), working_pixels.size() * sizeof(pipeline::ColorPixel)) != 0 ||
+      upload_telemetry.gpu_cpu_to_gpu_bytes != static_cast<std::int64_t>(working_pixels.size() * sizeof(pipeline::ColorPixel)) ||
+      upload_telemetry.gpu_kernel_dispatch_count != 0) {
+    return fail("CPU geometry upload must preserve signed/HDR/alpha pixels and the exact descriptor");
+  }
+  auto cancelled = std::atomic_bool{true};
+  const auto cancellation = pipeline::CancellationToken{.cancellation_requested = &cancelled};
+  auto invalid_pixels = working_pixels;
+  invalid_pixels[0].red = std::numeric_limits<float>::infinity();
+  if (metal.upload_working_surface(working_pixels, working_descriptor, nullptr, cancellation) != nullptr ||
+      metal.upload_working_surface(invalid_pixels, working_descriptor) != nullptr ||
+      metal.upload_working_surface(std::span(working_pixels).first(1), working_descriptor) != nullptr) {
+    return fail("CPU geometry upload must reject cancellation, nonfinite pixels, and dimension mismatches");
   }
   auto gpu = source;
   auto gpu_stats = pipeline::IccTransformLutApplyStats{};

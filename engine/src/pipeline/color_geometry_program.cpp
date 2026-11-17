@@ -135,6 +135,58 @@ CompiledGeometryStageProgram compile_geometry_stage_program(
   return program;
 }
 
+GeometrySampleCoordinates geometry_sample_coordinates(
+    const CompiledGeometryStageProgram& program,
+    float x,
+    float y) {
+  if (!program.active) return {.x = x, .y = y};
+  auto dx = x - program.center_x;
+  auto dy = y - program.center_y;
+  if (std::abs(program.transform_rotation) > 1.0e-6F ||
+      std::abs(program.transform_scale - 1.0F) > 1.0e-6F ||
+      std::abs(program.transform_skew_x) > 1.0e-6F ||
+      std::abs(program.transform_skew_y) > 1.0e-6F) {
+    dx /= program.transform_scale;
+    dy /= program.transform_scale;
+    const auto skewed_dx = dx + dy * program.transform_skew_x;
+    const auto skewed_dy = dy + dx * program.transform_skew_y;
+    const auto cosine = std::cos(-program.transform_rotation);
+    const auto sine = std::sin(-program.transform_rotation);
+    dx = skewed_dx * cosine - skewed_dy * sine;
+    dy = skewed_dx * sine + skewed_dy * cosine;
+  }
+  const auto radius = std::hypot(dx, dy) / program.maximum_radius;
+  const auto radius_squared = radius * radius;
+  const auto distortion_scale = 1.0F / std::max(
+      0.40F, 1.0F + program.distortion_strength *
+          (0.55F * radius_squared +
+           0.20F * radius_squared * radius_squared));
+  const auto normalized_dx = program.center_x > 0.0F
+      ? dx / program.center_x : 0.0F;
+  const auto normalized_dy = program.center_y > 0.0F
+      ? dy / program.center_y : 0.0F;
+  auto sample_x = program.center_x + dx * distortion_scale * std::max(
+      0.35F, 1.0F + program.vertical_perspective * normalized_dy * 0.45F);
+  auto sample_y = program.center_y + dy * distortion_scale * std::max(
+      0.35F, 1.0F + program.horizontal_perspective * normalized_dx * 0.45F);
+  if (std::abs(program.liquify_strength) > 1.0e-6F) {
+    const auto liquify_dx = sample_x - program.liquify_center_x;
+    const auto liquify_dy = sample_y - program.liquify_center_y;
+    const auto distance = std::hypot(liquify_dx, liquify_dy);
+    if (distance < program.liquify_radius) {
+      const auto falloff = 1.0F - smoothstep(
+          0.0F, 1.0F, distance / std::max(1.0F, program.liquify_radius));
+      const auto scale = std::clamp(
+          1.0F - program.liquify_strength * 0.55F * falloff,
+          0.30F, 2.50F);
+      sample_x = program.liquify_center_x + liquify_dx * scale;
+      sample_y = program.liquify_center_y + liquify_dy * scale;
+    }
+  }
+  return {.x = sample_x, .y = sample_y, .dx = dx, .dy = dy,
+          .radius_squared = radius_squared, .radius = radius};
+}
+
 bool apply_compiled_geometry_stage_program(
     std::vector<ColorPixel>* pixels,
     const CompiledGeometryStageProgram& program) {
@@ -147,49 +199,14 @@ bool apply_compiled_geometry_stage_program(
   auto output = std::vector<ColorPixel>(source.size());
   for (std::uint32_t y = 0U; y < program.height; ++y) {
     for (std::uint32_t x = 0U; x < program.width; ++x) {
-      auto dx = static_cast<float>(x) - program.center_x;
-      auto dy = static_cast<float>(y) - program.center_y;
-      if (std::abs(program.transform_rotation) > 1.0e-6F ||
-          std::abs(program.transform_scale - 1.0F) > 1.0e-6F ||
-          std::abs(program.transform_skew_x) > 1.0e-6F ||
-          std::abs(program.transform_skew_y) > 1.0e-6F) {
-        dx /= program.transform_scale;
-        dy /= program.transform_scale;
-        const auto skewed_dx = dx + dy * program.transform_skew_x;
-        const auto skewed_dy = dy + dx * program.transform_skew_y;
-        const auto cosine = std::cos(-program.transform_rotation);
-        const auto sine = std::sin(-program.transform_rotation);
-        dx = skewed_dx * cosine - skewed_dy * sine;
-        dy = skewed_dx * sine + skewed_dy * cosine;
-      }
-      const auto radius = std::hypot(dx, dy) / program.maximum_radius;
-      const auto radius_squared = radius * radius;
-      const auto distortion_scale = 1.0F / std::max(
-          0.40F, 1.0F + program.distortion_strength *
-              (0.55F * radius_squared +
-               0.20F * radius_squared * radius_squared));
-      const auto normalized_dx = program.center_x > 0.0F
-          ? dx / program.center_x : 0.0F;
-      const auto normalized_dy = program.center_y > 0.0F
-          ? dy / program.center_y : 0.0F;
-      auto sample_x = program.center_x + dx * distortion_scale * std::max(
-          0.35F, 1.0F + program.vertical_perspective * normalized_dy * 0.45F);
-      auto sample_y = program.center_y + dy * distortion_scale * std::max(
-          0.35F, 1.0F + program.horizontal_perspective * normalized_dx * 0.45F);
-      if (std::abs(program.liquify_strength) > 1.0e-6F) {
-        const auto liquify_dx = sample_x - program.liquify_center_x;
-        const auto liquify_dy = sample_y - program.liquify_center_y;
-        const auto distance = std::hypot(liquify_dx, liquify_dy);
-        if (distance < program.liquify_radius) {
-          const auto falloff = 1.0F - smoothstep(
-              0.0F, 1.0F, distance / std::max(1.0F, program.liquify_radius));
-          const auto scale = std::clamp(
-              1.0F - program.liquify_strength * 0.55F * falloff,
-              0.30F, 2.50F);
-          sample_x = program.liquify_center_x + liquify_dx * scale;
-          sample_y = program.liquify_center_y + liquify_dy * scale;
-        }
-      }
+      const auto coordinate = geometry_sample_coordinates(
+          program, static_cast<float>(x), static_cast<float>(y));
+      const auto sample_x = coordinate.x;
+      const auto sample_y = coordinate.y;
+      const auto dx = coordinate.dx;
+      const auto dy = coordinate.dy;
+      const auto radius_squared = coordinate.radius_squared;
+      const auto radius = coordinate.radius;
       auto corrected = sample(source, sample_x, sample_y, program);
       if (program.chromatic_aberration_strength > 1.0e-6F &&
           radius > 1.0e-6F) {

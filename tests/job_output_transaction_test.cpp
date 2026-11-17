@@ -42,6 +42,19 @@ int main(int argc, char** argv) {
         !QFileInfo::exists(output) && !QFileInfo::exists(root.filePath("b.mov")), "Cancel between publications and revoke completed artifacts");
   }
   {
+    const auto previous_success = root.filePath("timeline-previous.mov");
+    const auto next_revision = root.filePath("timeline-revision-2.mov");
+    CHECK(write(previous_success, "last successful render"), "Keep the prior published render");
+    JobOutputTransaction failed_revision(next_revision);
+    CHECK(!failed_revision.publish().value("ok").toBool() &&
+        read(previous_success) == "last successful render", "A failed revision leaves the prior render intact");
+    JobOutputTransaction canceled_revision(next_revision);
+    CHECK(write(canceled_revision.stagedPath("timeline-revision-2.mov"), "new render") &&
+        !canceled_revision.publish([]() { return true; }).value("ok").toBool() &&
+        !QFileInfo::exists(next_revision) && read(previous_success) == "last successful render",
+        "A canceled versioned revision leaves the prior render intact");
+  }
+  {
     JobOutputTransaction delivery(output);
     CHECK(write(delivery.stagedPath("a.mov"), "movie") && write(delivery.stagedPath("b.mov"), "extra"), "Stage racing collision");
     CHECK(!delivery.publish([&]() {

@@ -75,10 +75,10 @@ int main() {
       !contains(dialog, "if (!root.hasSessionController() && root.visible && root.agentRunning())") ||
       !contains(conversation, "AgentSessionTerminal {") ||
       !contains(conversation, "visible: root.sessionFlowAvailable") ||
-      !contains(session_terminal, "sessionController.submit(prompt, root.sessionContext())") ||
-      !contains(session_terminal, "root.sessionController.answerQuestions(visibleAnswers)") ||
-      !contains(session_terminal, "root.sessionController.reviseAnswers(answers)") ||
-      !contains(session_terminal, "root.sessionController.start()") ||
+      !contains(session_terminal, "root.controller.submit(prompt, root.sessionContext())") ||
+      !contains(session_terminal, "root.controller.answerQuestions(visibleAnswers)") ||
+      !contains(session_terminal, "root.controller.reviseAnswers(answers)") ||
+      !contains(session_terminal, "root.controller.start()") ||
       !contains(session_terminal, "root.dialog.agentEditController.cancelRun(\"user_requested\")") ||
       !contains(session_terminal, "root.dialog.agentEditController.revertTask()") ||
       !contains(session_terminal, "objectName: \"agentSessionStartButton\"") ||
@@ -87,9 +87,10 @@ int main() {
       !contains(session_terminal, "objectName: \"agentSessionReviseButton\"") ||
       !contains(session_terminal, "function suggestedCopyNeedsReview()") ||
       !contains(session_terminal, "Boolean(root.plan.copySuggestionApprovalRequired)") ||
-      !contains(session_terminal, "SUGGESTED COPY · REVIEW BEFORE START") ||
-      contains(session_terminal, "ScrollView {")) {
-    return fail("the injected session must use the conversational plan/Start flow, real Stop/Revert actions, and a non-scrolling terminal");
+      !contains(session_terminal, "Suggested copy · review before starting") ||
+      !contains(session_terminal, "id: planReviewScroll") ||
+      !contains(session_terminal, "width: planReviewScroll.availableWidth")) {
+    return fail("the injected session must use the conversational plan/Start flow, real Stop/Revert actions, and a readable independently scrolling plan");
   }
 
   if (!contains(dialog, "ai-edit:v13|entry:left-rail-agent-terminal") ||
@@ -169,8 +170,8 @@ int main() {
   }
 
   if (!contains(conversation, "What’s your goal for this photo?") ||
-      !contains(conversation, "I have the photos from your workspace") ||
-      !contains(conversation, "I have the photo from your workspace") ||
+      !contains(conversation, "objectName: \"agentTargetSummary\"") ||
+      !contains(conversation, "text: root.dialog.targetSummary()") ||
       !contains(conversation, "objectName: \"agentPromptEditor\"") ||
       !contains(conversation, "objectName: \"agentStyleStartCard\"") ||
       !contains(conversation, "objectName: \"agentCurrentProjectLookLabel\"") ||
@@ -209,7 +210,7 @@ int main() {
       !contains(conversation, "visible: root.dialog.detailsExpanded") ||
       !contains(conversation, "Add inspiration") ||
       !contains(conversation, "These could help shape the edit") ||
-      !contains(conversation, "OPTIONAL PHOTO REFERENCES") ||
+      !contains(conversation, "Optional photo references") ||
       !contains(conversation, "objectName: \"agentScopeSelector\"") ||
       !contains(conversation, "objectName: \"agentTargetSummary\"") ||
       !contains(conversation, "root.dialog.chooseAvailableScope(index)") ||
@@ -238,7 +239,7 @@ int main() {
       !contains(conversation, "objectName: \"aiEditStoryRoleEvidenceReason\"") ||
       !contains(conversation, "Layout.minimumHeight: visible ? implicitHeight : 0") ||
       !contains(conversation, "Layout.minimumHeight: root.dialog.assignmentStoryMapAvailable() ? 480 : 220") ||
-      !contains(conversation, "NO SCENE CLAIM") ||
+      !contains(conversation, "No scene claim") ||
       !contains(conversation, "objectName: \"aiEditStorySampleNavigator\"") ||
       !contains(conversation, "objectName: \"aiEditStoryPreviousSample\"") ||
       !contains(conversation, "objectName: \"aiEditStorySamplePosition\"") ||
@@ -267,12 +268,12 @@ int main() {
       !contains(conversation, "objectName: consistencyGroupCard.index === 0") ||
       !contains(dialog, "function consistencyMap()") ||
       !contains(dialog, "function consistencyGroups()") ||
-      !contains(conversation, "MEMORY AFTER APPLY") ||
-      !contains(conversation, "text: \"Make Changes\"") ||
+      !contains(conversation, "Memory after apply") ||
+      !contains(conversation, "text: \"Make changes\"") ||
       !contains(dialog, "? \"Create Samples\" : \"Create Edit\"") ||
       !contains(conversation, "? \"Discard samples\" : \"Discard edit\"") ||
       !contains(conversation, "? \"Apply to All\"") ||
-      !contains(conversation, ": \"Commit Edits\"") ||
+      !contains(conversation, ": \"Commit edits\"") ||
       !contains(conversation, "root.dialog.editCommitted") ||
       !contains(conversation, "? \"Done\"") ||
       !contains(conversation, "root.dialog.close()") ||
@@ -283,7 +284,7 @@ int main() {
       !contains(conversation, "Show me two directions") ||
       !contains(conversation, "Compare restrained version") ||
       !contains(conversation, "Taste check · two real renders · you teach the choice") ||
-      !contains(conversation, "remembered only after Commit Edits") ||
+      !contains(conversation, "remembered only after commit edits") ||
       !contains(dialog, "function photographerTasteCheck()") ||
       !contains(dialog, "function startPhotographerTasteCheck()") ||
       !contains(dialog, "directionComparisonFromCalibration") ||
@@ -476,12 +477,12 @@ int main() {
 
   if (!contains(workspace_overlay, "You already have a first look.") ||
       !contains(workspace_overlay,
-                "FAST PROOF PASSED · USE NOW OR WAIT · COMMIT LOCKED") ||
+                "Preview checked. Use it or wait; commit remains locked.") ||
       !contains(workspace_overlay,
-                "FAST PREVIEW · INDEPENDENT PROOF + DEEP REVIEW RUNNING · COMMIT LOCKED") ||
+                "Reversible preview live. Proof and deep review continue; commit remains locked.") ||
       !contains(workspace_overlay,
                 "objectName: \"agentWorkspaceKeepValidatedFastDraftButton\"") ||
-      !contains(workspace_overlay, "Use Proved Draft") ||
+      !contains(workspace_overlay, "Use proved draft") ||
       !contains(workspace_overlay, "keepValidatedFastDraft()") ||
       !contains(workspace_overlay,
                 "objectName: \"agentWorkspaceTwoSpeedDraftChoiceCard\"") ||
@@ -491,25 +492,25 @@ int main() {
                 "objectName: \"agentWorkspaceDeepReviewDraftButton\"") ||
       !contains(workspace_overlay, "chooseTwoSpeedDraftVersion(\"first-look\")") ||
       !contains(workspace_overlay, "chooseTwoSpeedDraftVersion(\"deep-review\")") ||
-      !contains(workspace_overlay, "TWO PROVED VERSIONS") ||
+      !contains(workspace_overlay, "Two proved versions") ||
       !contains(workspace_overlay, "Discard still restores the exact pre-agent edit.") ||
       !contains(workspace_overlay,
                 "objectName: \"agentWorkspaceTwoSpeedTasteCard\"") ||
       !contains(workspace_overlay,
                 "objectName: \"agentWorkspaceTwoSpeedTasteForgetButton\"") ||
-      !contains(workspace_overlay, "CURRENT REQUEST WINS · NO AUTO SELECT") ||
+      !contains(workspace_overlay, "Current request wins · no auto select") ||
       !contains(workspace_overlay, "forgetTwoSpeedTastePreference()") ||
       !contains(workspace_overlay,
                 "objectName: \"agentWorkspaceAssignmentReflectionCard\"") ||
       !contains(workspace_overlay,
                 "objectName: \"agentWorkspaceAssignmentReflectionShapeButton\"") ||
-      !contains(workspace_overlay, "NOTHING REMEMBERED YET") ||
+      !contains(workspace_overlay, "Nothing remembered yet") ||
       !contains(workspace_overlay,
                 "Nothing is remembered until you press Save North Star") ||
       !contains(workspace_overlay, "function fastDraftDeepTargetCountdownSeconds()") ||
       !contains(workspace_overlay, "function fastDraftDeepTargetCountdownText()") ||
-      !contains(workspace_overlay, "DEEP REVIEW TARGET ") ||
-      !contains(workspace_overlay, "PROVED PREVIEW · USE NOW OR WAIT") ||
+      !contains(workspace_overlay, "Deep review target ") ||
+      !contains(workspace_overlay, "Preview checked. Use it or wait.") ||
       !contains(workspace_overlay,
                 "String(root.progressivePreview.mode || \"\") === \"fast-planning-preview\"") ||
       !contains(workspace_overlay,
@@ -622,7 +623,7 @@ int main() {
       !contains(workspace_overlay, "agentWorkspaceVisualCritiqueCard") ||
       !contains(workspace_overlay, "agentWorkspaceVisualCritiqueFinding") ||
       !contains(workspace_overlay, "agentWorkspaceVisualCritiqueEvidence") ||
-      !contains(workspace_overlay, "OLD PATCH DISCARDED") ||
+      !contains(workspace_overlay, "old patch discarded") ||
       !contains(workspace_overlay, "primaryActionLabel") ||
       !contains(controller_source, "agent-proof-rejection-presentation-v1") ||
       !contains(controller_source, "agent-visual-critique-v1") ||
@@ -632,14 +633,14 @@ int main() {
       !contains(controller_source, "Point to repair") ||
       !contains(workspace_overlay, "function trustReceiptText()") ||
       !contains(workspace_overlay, "agentWorkspaceProgressivePreviewReceipt") ||
-      !contains(workspace_overlay, "PREVIEW READY · FINAL CHECK RUNNING · COMMIT LOCKED") ||
-      !contains(workspace_overlay, "Commit Edits unlocks when it passes") ||
+      !contains(workspace_overlay, "Preview ready. Safety check continues; commit remains locked.") ||
+      !contains(workspace_overlay, "commit edits unlocks when it passes") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceLocalPlanningHeartbeat\"") ||
       !contains(workspace_overlay, "function localPlanningReceiptText()") ||
-      !contains(workspace_overlay, "NO PIXELS CHANGED") ||
-      !contains(workspace_overlay, "PROVED PREVIEW · USE NOW OR WAIT") ||
-      !contains(workspace_overlay, "REVERSIBLE PREVIEW LIVE · PROVING") ||
-      !contains(workspace_overlay, "CANCEL SAFE") ||
+      !contains(workspace_overlay, "No pixels changed") ||
+      !contains(workspace_overlay, "Preview checked. Use it or wait.") ||
+      !contains(workspace_overlay, "A reversible preview is live. Checking it now.") ||
+      !contains(workspace_overlay, "root.agentEditController.cancelRun(\"user_cancelled\")") ||
       !contains(workspace_overlay, "firstAsset.groundedSelection") ||
       !contains(workspace_overlay, "awaitingSelectionConfirmation") ||
       !contains(workspace_overlay, "awaitingPlanApproval") ||
@@ -699,7 +700,7 @@ int main() {
       !contains(workspace_overlay, "objectName: \"agentWorkspaceCalibrationCoachExplanation\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceCalibrationCoachBoundary\"") ||
       !contains(workspace_overlay, "function photographerCalibrationCoach()") ||
-      !contains(workspace_overlay, "CALIBRATION COACH") ||
+      !contains(workspace_overlay, "Calibration coach") ||
       !contains(workspace_overlay, "NO AUTO TRAINING · NO THRESHOLD CHANGE") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceCalibrationReviewBoundary\"") ||
       !contains(workspace_overlay, "function openPhotographerCalibrationReview(fileUrl)") ||
@@ -712,15 +713,15 @@ int main() {
       !contains(workspace_overlay, "function finalizePhotographerCalibration(ratingsUrl, packetUrl)") ||
       !contains(workspace_overlay, "finalizePhotographerCalibrationReviewFiles") ||
       !contains(workspace_overlay, "finalizePhotographerCalibrationReviewClipboard") ||
-      !contains(workspace_overlay, "COPY FINISH IS ONE CLICK") ||
+      !contains(workspace_overlay, "copy finish is one click") ||
       !contains(workspace_overlay, "clipboard cleared") ||
       !contains(workspace_overlay, "agent-photographer-calibration-session-handoff-v1") ||
-      !contains(workspace_overlay, "COPY FINISH IS ONE CLICK") ||
-      !contains(workspace_overlay, "VERIFIED PACKET KEPT FOR THIS SESSION") ||
+      !contains(workspace_overlay, "copy finish is one click") ||
+      !contains(workspace_overlay, "verified packet kept for this session") ||
       !contains(workspace_overlay, "source manifest kept unchanged") ||
-      !contains(workspace_overlay, "HUMAN-ONLY GATE") ||
-      !contains(workspace_overlay, "PACKET VERIFIED BEFORE OPEN") ||
-      !contains(workspace_overlay, "AGENT CANNOT RATE") ||
+      !contains(workspace_overlay, "Human-only gate") ||
+      !contains(workspace_overlay, "Packet verified before open") ||
+      !contains(workspace_overlay, "agent cannot rate") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceNorthStarCard\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceNorthStarBrief\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceNorthStarEditor\"") ||
@@ -730,16 +731,16 @@ int main() {
       !contains(workspace_overlay, "objectName: \"agentWorkspaceNorthStarDraftBrief\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceNorthStarDraftProof\"") ||
       !contains(workspace_overlay, "function projectNorthStarDraftReceipt()") ||
-      !contains(workspace_overlay, "ASSIGNMENT COMPASS") ||
-      !contains(workspace_overlay, "USED IN PLAN · CURRENT REQUEST LED") ||
+      !contains(workspace_overlay, "Assignment compass") ||
+      !contains(workspace_overlay, "Used in plan · current request led") ||
       !contains(workspace_overlay, "North Star fit is your call") ||
-      !contains(workspace_overlay, "NO AUTO CULL · NO AUTO RETOUCH") ||
+      !contains(workspace_overlay, "No auto cull · no auto retouch") ||
       !contains(workspace_overlay, "function saveNorthStar()") ||
       !contains(workspace_overlay, "function forgetNorthStar()") ||
-      !contains(workspace_overlay, "FUTURE DRAFTS · CURRENT REQUEST WINS") ||
+      !contains(workspace_overlay, "Future drafts · current request wins") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspacePhotographerTasteCheckCard\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspacePhotographerTasteCheckAction\"") ||
-      !contains(workspace_overlay, "CALIBRATED TASTE CHECK") ||
+      !contains(workspace_overlay, "Calibrated taste check") ||
       !contains(workspace_overlay, "2 REAL RENDERS · LEARNED ONLY AFTER CHOICE + COMMIT") ||
       !contains(workspace_overlay, "compareDraftWithPhotographerCalibration") ||
       !contains(workspace_overlay, "function tasteEvidenceThumbnail(evidence)") ||
@@ -749,29 +750,29 @@ int main() {
       !contains(workspace_overlay, "function confirmPhotographerTastePassport()") ||
       !contains(workspace_overlay, "function cancelPhotographerTastePassport()") ||
       !contains(workspace_overlay, "function exportPhotographerTastePassport(fileUrl)") ||
-      !contains(workspace_overlay, "TASTE PASSPORT · CALIBRATION ONLY · NO PHOTOS OR PATHS") ||
-      !contains(workspace_overlay, "VERIFIED TASTE PASSPORT") ||
+      !contains(workspace_overlay, "Taste passport · calibration only · no photos or paths") ||
+      !contains(workspace_overlay, "Verified taste passport") ||
       !contains(workspace_overlay, "Use for this project") ||
-      !contains(workspace_overlay, "REPLACES CURRENT CALIBRATION · THIS PROJECT ONLY · EDITS UNCHANGED") ||
+      !contains(workspace_overlay, "Replaces the current calibration · this project only · edits unchanged") ||
       !contains(workspace_overlay, "Passport provenance verified · active project only") ||
-      !contains(workspace_overlay, "CALIBRATED") ||
+      !contains(workspace_overlay, "calibrated") ||
       !contains(workspace_overlay, "catalogModel.assetById(normalizedId)") ||
       !contains(workspace_overlay, "function saveTasteName()") ||
       !contains(workspace_overlay, "renameProjectTaste(name)") ||
       !contains(workspace_overlay, "function requestTasteForget(evidence)") ||
       !contains(workspace_overlay, "forgetProjectTasteEvidence(") ||
-      !contains(workspace_overlay, "THIS PROJECT ONLY") ||
-      !contains(workspace_overlay, "NO IMAGE BYTES") ||
-      !contains(workspace_overlay, "EDITS UNCHANGED WHEN FORGOTTEN") ||
+      !contains(workspace_overlay, "This project only") ||
+      !contains(workspace_overlay, "no image bytes") ||
+      !contains(workspace_overlay, "edits unchanged when forgotten") ||
       !contains(workspace_overlay, "agent-edit-strategy-route-v1") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceEditStrategyCard\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceEditStrategyAuthority\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceEditStrategyLabel\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceEditStrategyReason\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceEditStrategyPreserved\"") ||
-      !contains(workspace_overlay, "EDIT APPROACH") ||
-      !contains(workspace_overlay, "CHOSEN FOR THIS PHOTO") ||
-      !contains(workspace_overlay, "PROTECTED · ") ||
+      !contains(workspace_overlay, "Edit approach") ||
+      !contains(workspace_overlay, "Chosen for this photo") ||
+      !contains(workspace_overlay, "Protected · ") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceCorrectionCard\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspacePointToAreaButton\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceSubmitCorrectionButton\"") ||
@@ -784,7 +785,7 @@ int main() {
       !contains(workspace_overlay, "feathered fallback · no object claim") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspacePointResolutionCard\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspacePointResolutionLabel\"") ||
-      !contains(workspace_overlay, "CONTENT BOUNDARY FOUND · CLICK INCLUDED · OUTSIDE PROTECTED") ||
+      !contains(workspace_overlay, "Content boundary found · click included · outside protected") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceCorrectionEditor\"") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceCorrectionScope\"") ||
       !contains(workspace_overlay, "Changing only: ") ||
@@ -806,9 +807,9 @@ int main() {
       !contains(workspace_overlay, "findingDelegate.modelData.targetLabel") ||
       !contains(workspace_overlay, "objectName: \"agentWorkspaceFindingRow\"") ||
       !contains(workspace_overlay, "onClicked: root.requestFinding(findingDelegate.modelData)") ||
-      !contains(workspace_overlay, "text: \"WHAT I SAW\"") ||
-      !contains(workspace_overlay, "text: \"WHAT I'LL CHANGE\"") ||
-      !contains(workspace_overlay, "root.localizedActions().length + \" local \"") ||
+      !contains(workspace_overlay, "text: \"What I found\"") ||
+      !contains(workspace_overlay, "text: \"Planned changes\"") ||
+      !contains(workspace_overlay, "root.localizedActions().length + \" planned \"") ||
       !contains(workspace_overlay, "root.agentEditController.reviseDraft(feedback)") ||
       !contains(workspace_overlay, "rollbackDraft(\"user_discarded\")") ||
       !contains(workspace_overlay, "learned \" + (correctionCount === 1 ? \"correction\" : \"corrections\")")) {

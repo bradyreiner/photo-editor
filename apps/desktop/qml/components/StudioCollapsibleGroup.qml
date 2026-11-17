@@ -29,14 +29,21 @@ ColumnLayout {
     spacing: theme.gapDense
 
     Rectangle {
+        id: groupHeader
+        objectName: group.objectName.length > 0 ? group.objectName + "Header" : ""
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Button
+        Accessible.name: group.title
+        Accessible.description: group.expanded ? "Collapse section" : "Expand section"
+        Keys.onReturnPressed: group.toggled()
+        Keys.onEnterPressed: group.toggled()
+        Keys.onSpacePressed: group.toggled()
         visible: group.headerVisible
         Layout.fillWidth: true
-        Layout.preferredHeight: theme.controlHeightDense
+        Layout.preferredHeight: Math.max(theme.controlHeightDense, groupTitle.implicitHeight + theme.space4)
         color: headerMouse.containsMouse ? theme.editorControlHover : "transparent"
-        border.width: theme.chromeBorderWidth
-        border.color: headerMouse.containsMouse
-                      ? theme.alpha(theme.accentWarm400, 0.30)
-                      : "transparent"
+        border.width: groupHeader.activeFocus ? theme.focusBorderWidth : theme.chromeBorderWidth
+        border.color: theme.focusRing
         radius: theme.radiusPanel
 
         Rectangle {
@@ -66,11 +73,12 @@ ColumnLayout {
                 name: "chevron-right"
                 rotation: group.expanded ? 90 : 0
                 color: theme.textMuted
-                Layout.preferredWidth: 12
-                Layout.preferredHeight: 12
+                Layout.preferredWidth: theme.scaled(12)
+                Layout.preferredHeight: theme.scaled(12)
             }
 
             Label {
+                id: groupTitle
                 Layout.fillWidth: true
                 text: group.title
                 color: theme.textStrong
@@ -78,8 +86,8 @@ ColumnLayout {
                 font.pixelSize: theme.typeLabel
                 font.weight: theme.weightSection
                 font.letterSpacing: 0
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: theme.typeCaption
+                fontSizeMode: Text.FixedSize
+                wrapMode: Text.Wrap
                 elide: Text.ElideNone
             }
 

@@ -1,0 +1,95 @@
+LOOKSi / campaign studio V2 / 16 November 2026
+
+START WITH creative-direction-book.pdf.
+It is a 20-page visual direction book containing the strategy, five campaign
+platforms, actual art/storyboards, matching copy, proof scope and production plan.
+Open index.html manually for the local studio with films, carousels and captions.
+
+WHAT IS DELIVERED
+Five campaign routes, each with a cover image, storyboard board and finished
+primary film. Primary films run 32/42/33/24/36 seconds. Every route has two alternate
+openings, giving 15 full film versions, with 15 matching silent masters.
+There are five rendered Instagram carousels, 31 slides total.
+Editable live-text SVGs and portable outlined vector masters accompany the art.
+Fonts and their OFL licenses are included. Canonical filenames are consistent:
+campaignXX/images/cover.png; campaignXX/storyboard/board.png;
+campaignXX/videos/hero.mp4 (and hero-silent.mp4, hook-b/c variants).
+
+01 / I wanted to make this. — a finished builder letter with actual work.
+02 / NEPAL. In three forms. — a professional output casebook across sessions.
+03 / Keep the gold. Keep the quiet blues. — a specific photo recipe breakdown.
+04 / The last tweak. Again. — an original animated story about creative revision.
+05 / Make room for your eye. — a photographic manifesto with a real product moment.
+
+PRODUCTION TRACKING
+production-tracker.xlsx distinguishes actual file delivery, creative approvals,
+primary prerequisites, optional shoots/capture upgrades and release-only tasks.
+All human creative approvals start Pending. Founder filming is optional for the
+finished letter; a separate self-shoot-director.md is in campaign01/.
+The planning/ directory preserves the longer future capture-led versions.
+Hours are estimates, role labels are hats rather than hired vendors, dates are
+unassigned until scheduling, and launch metrics are blank until measured.
+
+COPY AND STRATEGY
+copybook.md and campaigns.json describe the actual delivered primary executions.
+strategy.md gives the audience jobs, positioning, relative two-week sequence,
+claims/proof boundaries and how to learn from actual responses.
+research/research-v2.md covers 20 specific launch/contrast cases, public audience
+reactions, visual evidence grades and concrete creative mechanisms. Reference
+campaign art/music was not copied into these campaigns.
+
+ACTUAL PRODUCT WORK AND DATES
+The photo pair is fresh native Looksy output from 16 November, using the same
+1800 x 1200 camera JPEG source. Chosen treatment: 5900 K, +12% contrast, +0.15 EV together.
+The six 1920 x 1536 board images are actual native exports from 16 November.
+The native Timeline source is a hash-verified 12-second review export observed
+2November. The main casebook shows a prism/brand still; the complete dated source
+is retained separately. It includes legacy graphic copy that is not adopted as
+a current broad product claim. Genuine native curve footage is dated 25 October.
+These are different scopes/dates, not a fresh continuous end-to-end recording.
+No image response, product screen, founder face or founder voice was fabricated.
+The original source file was not overwritten. The first failed identical-pixel
+finish attempt remains documented but is excluded from every comparison.
+
+The native UI work used a separate LOOKSi / Campaign Workshop V2 project. During
+later Timeline setup the window became inaccessible while the process stayed
+running. No forced close/restart, security-policy change or recovery is claimed.
+The earlier saved Nepal board documents were not edited.
+
+REVIEW BEFORE PUBLICATION
+These are finished review creatives. Human creative, source/likeness permissions
+and placement/community review remain open. No posts, messages, ad buys or
+commercial-offer changes were made. Current release pricing/checkout remains
+unapproved. The primary CTAs invite conversation, rather than purchase.
+
+MEDIA AND COLOR
+New films use original sample-free scores. Archived source audio is not used
+in those films. Sound-on masters use AAC 48 kHz; all final streams have explicit
+limited-range BT.709 matrix/primaries/transfer metadata. Original RGB frames were
+actually converted before encoding; tags alone were not treated as conversion.
+Delivered PNGs carry sRGB profiles. This is production verification, not an
+independent color-accuracy or display qualification.
+
+QA
+qa/final-verification.json binds all 30 final MP4s, frame counts, source hashes,
+native output receipts, 31 slides, local review links and 20 PDF pages.
+qa/final-XX-phone-contact.jpg samples the actual decoded primary streams.
+directorbook/qa/ verifies every rendered PDF page and embedded source-image hash.
+tracker/qa/ verifies workbook controls, formulas and actual file states.
+Two independent creative reviews and the final resolution notes are in qa/.
+The browser tool blocked local-file HTML opening. No workaround was used;
+image/PDF layouts and decoded films were reviewed directly. Open the local studio
+manually, or use the PDF and MP4s directly.
+
+REBUILD
+Python dependencies: Pillow, NumPy and pypdf/reportlab for book/QA; FFmpeg/ffprobe.
+tools/produce_core.py rebuilds02/03/05 from verified media/previews and archives.
+tools/finish_delivery.py creates canonical01masters, sRGB profiles and portable
+vector companions (macOS CoreText; keep the generated outline helper).
+tools/reconcile_plan.py reconciles current copy and preserves future variants.
+tools/build_studio.py builds the local review studio.
+Campaign01/04 and the book have their own source builders.
+Tracker rebuild uses @oai/artifact-tool; do not rebuild over a workbook containing
+your review edits without saving that edited workbook separately first.
+node_modules symlinks, decoded frame caches and temporary render processes are
+excluded from the delivery ZIP. All final creative remains in the workspace.

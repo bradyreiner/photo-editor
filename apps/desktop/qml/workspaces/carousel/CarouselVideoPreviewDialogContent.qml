@@ -145,7 +145,8 @@ ColumnLayout {
                   "  ·  " +
                   (carouselVideoPreviewDialog.loopIntent ? "Loops" : "Plays once")
             color: theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 10
             elide: Text.ElideNone
         }

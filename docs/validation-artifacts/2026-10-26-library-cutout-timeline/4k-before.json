@@ -1,0 +1,101 @@
+{
+    "captures": [
+        {
+            "height": 1834,
+            "name": "4k-stress-after-retime",
+            "path": "/private/tmp/looksy-native-4k-stress/4k-stress-after-retime.png",
+            "width": 3200
+        }
+    ],
+    "droppedFrames": 126,
+    "durationMs": 10012,
+    "eventLoopHeartbeatP95Ms": 18,
+    "frameProcessingMetrics": {
+        "cameraAndBaseGradeMs": 0,
+        "cameraTransformMs": 0,
+        "creativeLutMs": 0,
+        "creativeLutPrepareMs": 0,
+        "decodeNormalizeMs": 57.450776393170585,
+        "frameCacheBytes": 129182064,
+        "frameCacheEnabled": true,
+        "frameCacheEntries": 19,
+        "frameCacheEvictions": 169,
+        "frameCacheFrameTimestampUs": -1,
+        "frameCacheHit": false,
+        "frameCacheHits": 0,
+        "frameCacheIdentityKind": "decoded-content",
+        "frameCacheKeyEligible": true,
+        "frameCacheKeyUnavailableReason": "",
+        "frameCacheLookupMs": 0.0002838280097185811,
+        "frameCacheLookupPerformed": true,
+        "frameCacheMisses": 189,
+        "fusedColorPipelineMs": 0,
+        "gradeApplyMs": 0,
+        "gradeCompileMs": 1.1446139392184217e-06,
+        "height": 978,
+        "lastFrameCacheLookupMs": 0,
+        "lastFrameTotalMs": 57.844,
+        "sampleCount": 173,
+        "sourceKey": "92a93c89-43f6-4d2c-ad72-e43cb3c0ea42|1738x978|50a4d2eff47e055e3bfad4538077c2f81723d0065cc2bf022ca418d46682a5f7",
+        "timelineEffectsMs": 0,
+        "totalMs": 57.5695467938478,
+        "width": 1738
+    },
+    "passed": false,
+    "platform": "cocoa",
+    "playbackDiagnostics": {
+    },
+    "publishedFramesPerSecond": 17.27926488214143,
+    "publishedUniqueTimestampFrames": 173,
+    "requestedQuality": "full",
+    "savedAndReopened": true,
+    "schema": "timeline-native-4k-stress-v1",
+    "sequenceProgressSeconds": 10.005,
+    "sourceFps": 30,
+    "sourceHeight": 2160,
+    "sourceWidth": 3840,
+    "trimRateReverseSourceTime": [
+        {
+            "expectedSourceSeconds": 2.5,
+            "localSeconds": 0.25,
+            "matches": true,
+            "mode": "forward",
+            "sourceSeconds": 2.5
+        },
+        {
+            "expectedSourceSeconds": 4,
+            "localSeconds": 1,
+            "matches": true,
+            "mode": "forward",
+            "sourceSeconds": 4
+        },
+        {
+            "expectedSourceSeconds": 6,
+            "localSeconds": 2,
+            "matches": true,
+            "mode": "forward",
+            "sourceSeconds": 6
+        },
+        {
+            "expectedSourceSeconds": 15.5,
+            "localSeconds": 0.25,
+            "matches": true,
+            "mode": "reverse",
+            "sourceSeconds": 15.5
+        },
+        {
+            "expectedSourceSeconds": 14,
+            "localSeconds": 1,
+            "matches": true,
+            "mode": "reverse",
+            "sourceSeconds": 14
+        },
+        {
+            "expectedSourceSeconds": 12,
+            "localSeconds": 2,
+            "matches": true,
+            "mode": "reverse",
+            "sourceSeconds": 12
+        }
+    ]
+}

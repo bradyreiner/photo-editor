@@ -70,11 +70,11 @@ Rectangle {
         anchors.bottomMargin: 0
         color: "#0f1418"
 
-        Image {
+        ColorManagedImage {
             id: previewImage
             anchors.fill: parent
             anchors.margins: 2
-            source: root.imageSource
+            imageSource: root.imageSource
             asynchronous: true
             cache: true
             fillMode: Image.PreserveAspectFit
@@ -86,15 +86,14 @@ Rectangle {
             anchors.margins: 10
             spacing: 6
 
-            StatusChip {
+            Row {
                 visible: root.rating > 0
-                width: implicitWidth
-                height: implicitHeight
-                text: "R" + root.rating
-                tone: "neutral"
-                compact: true
-                dotVisible: false
-                tooltipText: "Rating " + root.rating
+                spacing: 1
+                Repeater {
+                    model: root.rating
+                    AppIcon { name: "star-gold"; width: theme.scaled(16); height: width }
+                }
+                Accessible.name: root.rating + " stars"
             }
 
             StatusChip {
@@ -169,9 +168,9 @@ Rectangle {
             x: Math.max(10, Math.min(parent.width - width - 10, parent.width * 0.58))
             y: Math.max(10, Math.min(parent.height - height - 10, parent.height * 0.12))
 
-            Image {
+            ColorManagedImage {
                 anchors.centerIn: parent
-                source: root.imageSource
+                imageSource: root.imageSource
                 asynchronous: true
                 cache: true
                 fillMode: Image.PreserveAspectFit

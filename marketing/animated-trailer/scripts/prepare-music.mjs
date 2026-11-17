@@ -1,0 +1,10 @@
+import {mkdir, writeFile} from 'node:fs/promises';
+const url = 'https://assets.mixkit.co/music/777/777.mp3';
+const response = await fetch(url);
+if (!response.ok) throw new Error(`Soundtrack download failed: ${response.status}`);
+const bytes = new Uint8Array(await response.arrayBuffer());
+if (bytes.length < 100000) throw new Error('Unexpectedly short soundtrack file.');
+const folder = new URL('../public/audio/', import.meta.url);
+await mkdir(folder, {recursive: true});
+await writeFile(new URL('a-game-michael-ramir-c.mp3', folder), bytes);
+console.log('Prepared A Game — Michael Ramir C. See music-source.json for provenance.');

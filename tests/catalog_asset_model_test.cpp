@@ -7,8 +7,10 @@
 #include "linked_image_source.h"
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
+#include "fixtures/synthetic_dng.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -177,6 +179,66 @@ int run_first_visible_photo_contract() {
   return EXIT_SUCCESS;
 }
 
+int run_library_recipe_hydration_contract() {
+  using photo_editor::desktop::CatalogAssetModel;
+  auto source = make_asset(QStringLiteral("hydration-source"));
+  auto target = make_asset(QStringLiteral("hydration-target"));
+  source.online = false;
+  target.online = false;
+  photo_editor::desktop::EditRecipeState source_state;
+  source_state.exposure = 0.65;
+  photo_editor::desktop::EditRecipeState target_state;
+  target_state.exposure = -0.4;
+  source.adjustment_patch_json = photo_editor::desktop::serialize_adjustment_patch_json(
+      source_state, photo_editor::desktop::all_adjustment_groups(),
+      photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+  target.adjustment_patch_json = photo_editor::desktop::serialize_adjustment_patch_json(
+      target_state, photo_editor::desktop::all_adjustment_groups(),
+      photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+
+  CatalogAssetModel model;
+  model.replaceAssetsForTesting({source, target});
+  model.setRecipesPendingForTesting({source.asset_id, target.asset_id});
+  model.selectIndexWithModifiers(0, 0, false);
+  if (model.selectedRecipeReady() || model.selectedAssetsRecipesReady() ||
+      model.allAssetRecipesReady() || model.assetById(source.asset_id).value("recipeLoaded").toBool()) {
+    return fail("compact Library rows should report recipe readiness as false without exposing a default recipe");
+  }
+  if (model.applyThumbnailResultForTesting(
+          source.asset_id, source.file_path, QString{}, QStringLiteral("file:///stale-preview.jpg")) ||
+      !model.assetById(source.asset_id).value("thumbnailSource").toString().isEmpty()) {
+    return fail("thumbnail results must not make a compact row look current before its saved recipe is loaded");
+  }
+  model.requestSearchPreviews({source.asset_id, target.asset_id});
+  const auto preview_readiness = model.searchPreviewReadiness({source.asset_id, target.asset_id});
+  if (!preview_readiness.value("complete").toBool() ||
+      !preview_readiness.value("pendingAssetIds").toStringList().isEmpty() ||
+      preview_readiness.value("unavailableAssetIds").toStringList().size() != 2 ||
+      model.selectedAssetId() != source.asset_id) {
+    return fail("scoped preview hydration should report offline targets as terminal without changing selection");
+  }
+  model.releaseSearchPreviews();
+
+  const auto paste_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+      source_state, photo_editor::desktop::all_adjustment_groups(),
+      photo_editor::desktop::AdjustmentPatchScope::SourceAgnostic);
+  if (model.pasteAdjustmentPatchJsonToAssetIds({source.asset_id, target.asset_id}, paste_patch) != 0 ||
+      model.assetById(source.asset_id).value("adjustmentPatchJson").toString() != QString{} ||
+      model.assetById(target.asset_id).value("adjustmentPatchJson").toString() != QString{}) {
+    return fail("a batch paste must not mutate any asset while one saved recipe is still loading");
+  }
+
+  if (!model.applyRecipeForTesting(source.asset_id, source.adjustment_patch_json) ||
+      !model.applyRecipeForTesting(target.asset_id, target.adjustment_patch_json) ||
+      !model.selectedRecipeReady() || !model.selectedAssetsRecipesReady() ||
+      !model.allAssetRecipesReady() ||
+      !model.assetById(source.asset_id).value("recipeLoaded").toBool() ||
+      model.assetById(target.asset_id).value("adjustmentPatchJson").toString() != target.adjustment_patch_json) {
+    return fail("recipe hydration should publish the exact saved patches and reopen edit readiness");
+  }
+  return EXIT_SUCCESS;
+}
+
 int run_library_collection_contract() {
   const auto root = qEnvironmentVariable("PHOTO_EDITOR_APP_DATA_DIR");
   const auto owned_path = QDir(root).filePath(QStringLiteral("canvas-documents/owned/source.png"));
@@ -205,6 +267,28 @@ int run_library_collection_contract() {
   owned.file_path = owned_path;
   auto unowned = make_asset(QStringLiteral("collection-unowned-canvas"));
   unowned.file_path = unowned_path;
+  if (model.sortOrder() != QStringLiteral("capture-asc")) return fail("Default Library ordering must be camera capture order");
+  auto shot_two = make_asset(QStringLiteral("z-shot"));
+  shot_two.file_path = QStringLiteral("/tmp/IMG_2.CR3");
+  shot_two.capture_timestamp = QDateTime::fromString(QStringLiteral("2026-10-28T12:00:00.250-06:00"), Qt::ISODateWithMs);
+  auto shot_ten = shot_two;
+  shot_ten.asset_id = QStringLiteral("a-shot");
+  shot_ten.file_path = QStringLiteral("/tmp/IMG_10.CR3");
+  auto first = shot_two;
+  first.asset_id = QStringLiteral("first-shot");
+  first.capture_timestamp = first.capture_timestamp.addMSecs(-100);
+  auto unknown = make_asset(QStringLiteral("unknown-shot"));
+  unknown.capture_timestamp = {}; unknown.capture_date_value = {};
+  model.replaceAssetsForTesting({unknown, shot_ten, shot_two, first});
+  const auto visible_id = [&model](int index) { return model.assetAt(index).value("assetId").toString(); };
+  if (visible_id(0) != first.asset_id || visible_id(1) != shot_two.asset_id ||
+      visible_id(2) != shot_ten.asset_id || visible_id(3) != unknown.asset_id)
+    return fail("Camera order must retain milliseconds, natural frame-number ties, and unknown dates last");
+  model.setSortOrder(QStringLiteral("capture-desc"));
+  if (visible_id(0) != shot_two.asset_id || visible_id(1) != shot_ten.asset_id ||
+      visible_id(2) != first.asset_id || visible_id(3) != unknown.asset_id)
+    return fail("Reverse camera order must reverse times without scrambling ties or promoting unknown dates");
+  model.setSortOrder(QStringLiteral("capture-asc"));
   model.replaceAssetsForTesting({photo, video, board, owned, unowned});
   model.setMediaCollectionFilter(QStringLiteral("images"));
   model.selectIndex(0);
@@ -214,18 +298,25 @@ int run_library_collection_contract() {
   model.replaceTimelineAssetsForTesting({timeline});
   QElapsedTimer timer;
   timer.start();
-  while (model.rowCount() != 3 && timer.elapsed() < 3000)
+  while (model.rowCount() != 2 && timer.elapsed() < 3000)
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-  if (model.rowCount() != 3 || model.totalAssetCount() != 6 ||
-      model.selectedAssetId() != photo.asset_id || model.galleryAssets().size() != 3) {
-    return fail("Images must exclude board backing sources, preserve ordinary photos and unowned canvases, and retain every record");
+  if (model.rowCount() != 2 || model.totalAssetCount() != 6 ||
+      model.selectedAssetId() != photo.asset_id || model.galleryAssets().size() != 2) {
+    return fail("Photos must exclude all canvases and board sources while retaining every catalog record");
   }
   model.setMediaTypeFilter(QStringLiteral("videos"));
   if (model.rowCount() != 1 || model.selectedMediaType() != QStringLiteral("video"))
     return fail("Images must still support its video filter");
   model.clearFilters();
-  if (model.rowCount() != 3 || model.mediaCollectionFilter() != QStringLiteral("images"))
+  if (model.rowCount() != 2 || model.mediaCollectionFilter() != QStringLiteral("images"))
     return fail("Clearing filters must not put document placeholders back into Images");
+  model.setMediaCollectionFilter(QStringLiteral("canvases"));
+  timer.restart();
+  while (model.rowCount() != 1 && timer.elapsed() < 3000)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+  if (model.rowCount() != 1 || model.assetAt(0).value("assetId").toString() != unowned.asset_id ||
+      model.galleryAssetAt(0).value("fileType").toString() != QStringLiteral("CANVAS"))
+    return fail("Canvases must keep blank documents accessible without duplicating Board sources");
   model.setMediaCollectionFilter(QStringLiteral("all"));
   model.setMediaTypeFilter(QStringLiteral("timelines"));
   if (model.rowCount() != 1 || model.selectedTimelineDocumentPath() != timeline.timeline_document_path)
@@ -296,11 +387,11 @@ QString test_thumbnail_cache_path(
   const QJsonObject dependencies{{file_path, photo_editor::desktop::linked_image_file_revision(file_path)}};
   const auto dependency_identity = QString::fromLatin1(QCryptographicHash::hash(
       QJsonDocument(dependencies).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
-  const auto key = QStringLiteral("photo-v7-display-text-color-policy:%1:%2:%3:768:1280")
+  const auto key = QStringLiteral("photo-v14-style-canvas-and-sensor-highlight:%1:%2:%3:768:1280")
       .arg(file_path, adjustment_identity, dependency_identity);
   const auto hash = QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex();
   return QDir(photo_editor::desktop::AppBootstrap::cacheLocation())
-      .filePath(QStringLiteral("thumbnails/%1.jpg").arg(QString::fromLatin1(hash)));
+      .filePath(QStringLiteral("thumbnails/%1.png").arg(QString::fromLatin1(hash)));
 }
 
 bool wait_for_thumbnail(
@@ -438,6 +529,9 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
   if (run_first_visible_photo_contract() != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+  if (run_library_recipe_hydration_contract() != EXIT_SUCCESS) {
     return EXIT_FAILURE;
   }
 
@@ -821,6 +915,96 @@ int main(int argc, char** argv) {
         std::abs(restored_batch_recipe.temperature - 12.0) > 1e-6) {
       return fail("batch history should restore a selected applied batch state exactly");
     }
+
+    auto one_change_source = make_asset(QStringLiteral("one-change-source"));
+    auto one_change_target = make_asset(QStringLiteral("one-change-target"));
+    auto untouched_target = make_asset(QStringLiteral("untouched-target"));
+    photo_editor::desktop::EditRecipeState one_change_state;
+    one_change_state.exposure = 0.35;
+    one_change_state.temperature = 8.0;
+    const auto one_change_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        one_change_state,
+        photo_editor::desktop::all_adjustment_groups(),
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    one_change_source.adjustment_patch_json = one_change_patch;
+    photo_editor::desktop::EditRecipeState target_before_state;
+    target_before_state.exposure = -0.6;
+    target_before_state.temperature = -12.0;
+    one_change_target.adjustment_patch_json =
+        photo_editor::desktop::serialize_adjustment_patch_json(
+            target_before_state,
+            photo_editor::desktop::all_adjustment_groups(),
+            photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    photo_editor::desktop::EditRecipeState untouched_state;
+    untouched_state.exposure = 1.1;
+    untouched_state.temperature = 20.0;
+    untouched_target.adjustment_patch_json =
+        photo_editor::desktop::serialize_adjustment_patch_json(
+            untouched_state,
+            photo_editor::desktop::all_adjustment_groups(),
+            photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+
+    photo_editor::desktop::CatalogAssetModel one_change_model;
+    one_change_model.replaceAssetsForTesting(
+        {one_change_source, one_change_target, untouched_target});
+    const auto source_recipe_before = adjustment_patch_for_asset(
+        one_change_model.assetById(QStringLiteral("one-change-source")));
+    const auto target_recipe_before = adjustment_patch_for_asset(
+        one_change_model.assetById(QStringLiteral("one-change-target")));
+    const auto untouched_recipe_before = adjustment_patch_for_asset(
+        one_change_model.assetById(QStringLiteral("untouched-target")));
+    const auto history_before_one_change = one_change_model.batchRecipeHistoryEntries().size();
+    const auto changed_target_count = one_change_model.applyAdjustmentPatchJsonToAssetIds(
+        {QStringLiteral("one-change-source"), QStringLiteral("one-change-target")},
+        one_change_patch);
+    const auto changed_target_recipe = adjustment_state_for_asset(
+        one_change_model.assetById(QStringLiteral("one-change-target")));
+    if (changed_target_count != 1 ||
+        adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("one-change-source"))) !=
+            source_recipe_before ||
+        adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("one-change-target"))) ==
+            target_recipe_before ||
+        std::abs(changed_target_recipe.exposure - one_change_state.exposure) > 1e-6 ||
+        std::abs(changed_target_recipe.temperature - one_change_state.temperature) > 1e-6 ||
+        adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("untouched-target"))) !=
+            untouched_recipe_before ||
+        !one_change_model.canUndoBatchRecipe() ||
+        one_change_model.batchRecipeHistoryEntries().size() != history_before_one_change + 1 ||
+        one_change_model.batchRecipeUndoLabel() != QStringLiteral("Synced adjustments across 1 photo")) {
+      return fail("a batch with one no-op source and one changed target should create one undoable change without touching an unselected photo");
+    }
+    one_change_model.undoBatchRecipe();
+    if (adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("one-change-source"))) !=
+            source_recipe_before ||
+        adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("one-change-target"))) !=
+            target_recipe_before ||
+        adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("untouched-target"))) !=
+            untouched_recipe_before ||
+        !one_change_model.canRedoBatchRecipe()) {
+      return fail("single-target batch undo should restore the changed photo while preserving the no-op source and third photo");
+    }
+    one_change_model.redoBatchRecipe();
+    const auto history_after_one_change_redo = one_change_model.batchRecipeHistoryEntries().size();
+    const auto cursor_after_one_change_redo = one_change_model.batchRecipeHistoryCurrentIndex();
+    const auto redone_target_recipe = adjustment_state_for_asset(
+        one_change_model.assetById(QStringLiteral("one-change-target")));
+    if (adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("one-change-target"))) ==
+            target_recipe_before ||
+        std::abs(redone_target_recipe.exposure - one_change_state.exposure) > 1e-6 ||
+        std::abs(redone_target_recipe.temperature - one_change_state.temperature) > 1e-6 ||
+        one_change_model.canRedoBatchRecipe() ||
+        one_change_model.applyAdjustmentPatchJsonToAssetIds(
+            {QStringLiteral("one-change-source"), QStringLiteral("one-change-target")},
+            one_change_patch) != 0 ||
+        adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("one-change-source"))) !=
+            source_recipe_before ||
+        adjustment_patch_for_asset(one_change_model.assetById(QStringLiteral("untouched-target"))) !=
+            untouched_recipe_before ||
+        one_change_model.batchRecipeHistoryEntries().size() != history_after_one_change_redo ||
+        one_change_model.batchRecipeHistoryCurrentIndex() != cursor_after_one_change_redo ||
+        one_change_model.canUndoBatchRecipe() == false) {
+      return fail("repeating an already-applied selective batch should add no history and should preserve the applied undo step");
+    }
     model.setImportPresetAdjustmentPatchJson(
         preset_patch,
         {QStringLiteral("color")});
@@ -1197,12 +1381,25 @@ int main(int argc, char** argv) {
 
     photo_editor::desktop::CatalogAssetModel intelligence_model;
     intelligence_model.replaceAssetsForTesting({duplicate_a, duplicate_b, duplicate_c, sync_peer});
-    intelligence_model.selectIndex(0);
+    intelligence_model.selectAssetById(duplicate_a.asset_id);
 
     if (intelligence_model.selectedDuplicateGroupSize() != 3) {
       return fail("duplicate grouping should cluster copy and variant filenames together");
     }
     if (!intelligence_model.selectedBestShotSuggested()) {
+      std::cerr << "duplicate best-shot diagnostics selected="
+                << intelligence_model.selectedAssetId().toStdString()
+                << " selectedDuplicateGroupSize=" << intelligence_model.selectedDuplicateGroupSize()
+                << " rows=" << intelligence_model.rowCount() << '\n';
+      for (int index = 0; index < intelligence_model.rowCount(); ++index) {
+        const auto asset = intelligence_model.assetAt(index);
+        QJsonObject diagnostic;
+        for (const auto* key : {"assetId", "filePath", "bestShotSuggested", "duplicateConfirmed",
+                 "duplicateGroupKey", "duplicateGroupSize", "duplicateGroupPosition", "burstKey",
+                 "burstSize", "burstPosition", "burstTimeBased"})
+          diagnostic.insert(QString::fromLatin1(key), QJsonValue::fromVariant(asset.value(QString::fromLatin1(key))));
+        std::cerr << QJsonDocument(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
+      }
       return fail("the canonical duplicate should be suggested as the best shot");
     }
     if (intelligence_model.selectedSyncGroupSize() != 4) {
@@ -1286,6 +1483,52 @@ int main(int argc, char** argv) {
           raw_thumbnail_image.height() < 150) {
         return fail("RAW thumbnail fallback should replace bad cache entries with a readable error thumbnail");
       }
+    }
+  }
+
+  if (photo_editor::desktop::raw_camera_linear_decoder_capability().available) {
+    const auto raw_path = runtime_root.filePath(QStringLiteral("thumbs/RAW_exposure.dng"));
+    const auto payload = photo_editor::test_fixtures::synthetic_dng();
+    QFile fixture(raw_path);
+    if (!fixture.open(QIODevice::WriteOnly) ||
+        fixture.write(reinterpret_cast<const char*>(payload.data()),
+                      static_cast<qint64>(payload.size())) != static_cast<qint64>(payload.size())) {
+      return fail("generated RAW thumbnail exposure fixture should be writable");
+    }
+    fixture.close();
+    auto items = QVector<photo_editor::desktop::CatalogAssetItem>{};
+    for (int variant = 0; variant < 3; ++variant) {
+      auto item = make_asset(QStringLiteral("raw-exposure-thumb-%1").arg(variant), QStringLiteral("RAW_exposure.dng"));
+      item.file_path = raw_path;
+      item.location_path = raw_path;
+      photo_editor::desktop::EditRecipeState state;
+      // Exercise the same draft decoder/color boundary used for RAW fallback.
+      state.raw_demosaic_quality = QStringLiteral("Preview");
+      state.raw_exposure = variant == 1 ? 1.9 : 0.0;
+      state.exposure = variant == 2 ? 1.9 : 0.0;
+      item.adjustment_patch_json = photo_editor::desktop::serialize_adjustment_patch_json(
+          state, photo_editor::desktop::all_adjustment_groups(),
+          photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+      items.push_back(std::move(item));
+    }
+    photo_editor::desktop::CatalogAssetModel model;
+    model.replaceAssetsForTesting(items);
+    // Catalog work follows visible demand; requesting a data role alone does
+    // not enqueue the unselected rows in this three-way comparison.
+    model.setVisibleAssetRange(0, 2);
+    auto images = std::array<QImage, 3>{};
+    for (int row = 0; row < 3; ++row) {
+      if (!wait_for_thumbnail(&model, row, 10000)) {
+        std::cerr << "RAW thumbnail comparison row=" << row << '\n';
+        return fail("draft RAW thumbnail generation should preserve canonical decode provenance");
+      }
+      images[static_cast<std::size_t>(row)] = QImage(QUrl(model.data(
+          model.index(row, 0), photo_editor::desktop::CatalogAssetModel::ThumbnailSourceRole)
+              .toString()).toLocalFile());
+    }
+    if (images[0].isNull() || images[1].isNull() || images[2].isNull() ||
+        images[1] != images[2] || images[1] == images[0]) {
+      return fail("draft RAW thumbnails must retain RAW EV and match the float Light-exposure route");
     }
   }
 
@@ -2085,6 +2328,10 @@ int main(int argc, char** argv) {
       }
       import_worker.close();
       qputenv("PHOTO_EDITOR_REPOSITORY_ROOT", helper_root.toUtf8());
+      // These helpers are shell fixtures and never connect to PostgreSQL.
+      // A refused TCP port would make the host endpoint preflight reject them
+      // before execution, while a sandbox denied connection reaches them.
+      qputenv("PHOTO_EDITOR_DATABASE_URL", "fixture://offline-import");
     }
 
     photo_editor::desktop::JobRunner import_runner;

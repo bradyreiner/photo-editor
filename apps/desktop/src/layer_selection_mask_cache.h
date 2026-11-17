@@ -1,6 +1,7 @@
 #pragma once
 
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "photo_editor/pipeline/local_mask_sampling.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -115,6 +116,7 @@ class MaskRasterCache final {
         bytes += text->capacity() + 1;
       bytes += mask.brush_points.capacity() * sizeof(BrushPoint);
       bytes += mask.polygon_points.capacity() * sizeof(CurvePoint);
+      bytes += mask.color_range_sample_hues.capacity() * sizeof(double);
       bytes += mask.segmentation_mask.capacity() + mask.depth_map.capacity();
       bytes += mask.inpaint_patch_pixels.capacity() * sizeof(ColorPixel);
     }
@@ -131,7 +133,8 @@ class MaskRasterCache final {
 inline std::vector<std::uint8_t> rasterize_layer_selection_alpha(
     const LocalMaskSet& set, int width, int height,
     std::span<const ColorPixel> source_pixels,
-    const pipeline::ColorPipelineConfig& color_pipeline) {
+    const pipeline::ColorPipelineConfig& color_pipeline,
+    std::span<const ColorPixel> edge_pixels = {}) {
   if (width <= 0 || height <= 0) return {};
   static MaskRasterCache cache;
   const auto reusable = mask_raster_source_independent(set);
@@ -141,8 +144,16 @@ inline std::vector<std::uint8_t> rasterize_layer_selection_alpha(
   // These masks do not consult either range pixels or the edge image. Passing
   // an empty surface also avoids the scalar rasterizer's full edge-image copy
   // on a cache miss; source-dependent masks keep the complete original input.
-  auto alpha = pipeline::rasterize_local_mask_set_alpha(
-      set, width, height, reusable ? std::span<const ColorPixel>{} : source_pixels, color_pipeline);
+  auto alpha = edge_pixels.size() == source_pixels.size() && !edge_pixels.empty()
+      ? pipeline::rasterize_local_mask_set_alpha_with_context(
+            set, width, height,
+            reusable ? std::span<const ColorPixel>{} : source_pixels,
+            reusable ? std::span<const ColorPixel>{} : edge_pixels,
+            color_pipeline)
+      : pipeline::rasterize_local_mask_set_alpha(
+            set, width, height,
+            reusable ? std::span<const ColorPixel>{} : source_pixels,
+            color_pipeline);
   if (reusable) cache.insert(set, width, height, alpha);
   return alpha;
 }

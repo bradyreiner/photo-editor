@@ -118,6 +118,8 @@ QVariantMap compare(const QImage& reference, const QImage& candidate) {
   const auto b = candidate.convertToFormat(QImage::Format_RGB32);
   const auto count = static_cast<size_t>(a.width()) * static_cast<size_t>(a.height());
   double squared = 0, score = 0;
+  quint64 absolute_codes = 0;
+  std::array<quint64,256> channel_errors{};
   int maximum_code_error = 0;
   for (int channel = 0; channel < 3; ++channel) {
     score += streamed_ssim(a.width(), a.height(), [&](int y, Moments* row) {
@@ -126,17 +128,25 @@ QVariantMap compare(const QImage& reference, const QImage& candidate) {
       for (int x = 0; x < a.width(); ++x) {
         const auto av = static_cast<double>((row_a[x] >> (8 * channel)) & 255) / 255;
         const auto bv = static_cast<double>((row_b[x] >> (8 * channel)) & 255) / 255;
-        maximum_code_error = std::max(maximum_code_error, std::abs(static_cast<int>((row_a[x] >> (8 * channel)) & 255) -
-            static_cast<int>((row_b[x] >> (8 * channel)) & 255)));
+        const auto error = std::abs(static_cast<int>((row_a[x] >> (8 * channel)) & 255) -
+            static_cast<int>((row_b[x] >> (8 * channel)) & 255));
+        maximum_code_error = std::max(maximum_code_error,error);
+        absolute_codes += static_cast<quint64>(error); ++channel_errors[static_cast<size_t>(error)];
         squared += (av - bv) * (av - bv);
         row[x] = {av, bv, av * av, bv * bv, av * bv};
       }
     });
   }
   const auto mse = squared / (static_cast<double>(count) * 3);
+  const auto percentile = static_cast<quint64>(std::ceil(0.99*static_cast<double>(count)*3));
+  quint64 cumulative = 0; int p99 = 0;
+  for (size_t i = 0; i < channel_errors.size(); ++i) {
+    cumulative += channel_errors[i]; if (cumulative >= percentile) { p99 = static_cast<int>(i); break; }
+  }
   return {{"ok", true}, {"width", a.width()}, {"height", a.height()},
       {"metric", "stored-rgb-ssim11-sigma1.5-zero-pad-v1"}, {"identical", mse == 0},
       {"maximumChannelCodeError", maximum_code_error},
+      {"meanAbsoluteChannelCodeError",static_cast<double>(absolute_codes)/(static_cast<double>(count)*3)}, {"p99ChannelCodeError",p99},
       {"mse", mse}, {"psnrDb", mse == 0 ? QVariant() : QVariant(-10 * std::log10(mse))}, {"ssim", score / 3}};
 }
 bool streamed_ssim_test() {
@@ -222,6 +232,8 @@ int main(int argc, char** argv) {
   if (!same.value("identical").toBool() || same.value("ssim").toDouble() != 1 ||
       opposite.value("mse").toDouble() != 1 || opposite.value("psnrDb").toDouble() != 0 ||
       opposite.value("maximumChannelCodeError").toInt() != 255 || same.value("maximumChannelCodeError").toInt() != 0 ||
+      opposite.value("meanAbsoluteChannelCodeError").toDouble() != 255 || opposite.value("p99ChannelCodeError").toInt() != 255 ||
+      same.value("meanAbsoluteChannelCodeError").toDouble() != 0 || same.value("p99ChannelCodeError").toInt() != 0 ||
       opposite.value("ssim").toDouble() != swapped.value("ssim").toDouble() ||
       compare(black, QImage()).value("ok").toBool() ||
       compare(black, QImage(1, 1, QImage::Format_RGB32)).value("ok").toBool() ||

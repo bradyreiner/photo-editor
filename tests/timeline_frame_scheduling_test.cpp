@@ -7,7 +7,10 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
+#include <QMetaObject>
+#include <QQuickWindow>
 #include <QSemaphore>
 #include <QScopeGuard>
 #include <QSignalBlocker>
@@ -15,9 +18,11 @@
 #include <QThread>
 #include <QThreadPool>
 #include <QTimer>
+#include <QVector>
 #include <QtConcurrent>
 #include <functional>
 #include <iostream>
+#include <thread>
 
 namespace photo_editor::desktop {
 // Inject decoded frames at the existing sink boundary without a decoder, device,
@@ -48,6 +53,17 @@ struct TimelinePlaybackFrameTestAccess {
     QImage image(640, 360, QImage::Format_RGBA8888);
     image.fill(color);
     auto frame = QVideoFrame(image);
+    frame.setStartTime(timestamp_us);
+    const auto was_native = controller.native_media_enabled_;
+    controller.native_media_enabled_ = true;
+    controller.handleVideoFrame(frame);
+    controller.native_media_enabled_ = was_native;
+  }
+  static void submitImageAt(
+      TimelinePlaybackController& controller,
+      QImage image,
+      qint64 timestamp_us) {
+    auto frame = QVideoFrame(std::move(image));
     frame.setStartTime(timestamp_us);
     const auto was_native = controller.native_media_enabled_;
     controller.native_media_enabled_ = true;
@@ -100,6 +116,23 @@ struct TimelinePlaybackFrameTestAccess {
     controller.video_sink_.setVideoFrame(frame);
     controller.native_media_enabled_ = was_native;
   }
+  static bool emitNativeFrameSignalFromWorker(
+      TimelinePlaybackController& controller,
+      const QColor& color,
+      qint64 timestamp_us = -1) {
+    QImage image(64, 64, QImage::Format_RGBA8888);
+    image.fill(color);
+    auto frame = QVideoFrame(image);
+    frame.setStartTime(timestamp_us);
+    auto invoked = false;
+    std::thread signal_thread([&controller, frame, &invoked]() {
+      invoked = QMetaObject::invokeMethod(
+          &controller.video_sink_, "videoFrameChanged", Qt::DirectConnection,
+          Q_ARG(QVideoFrame, frame));
+    });
+    signal_thread.join();
+    return invoked;
+  }
   static void syncPausedSameSourceWithCachedFrame(
       TimelinePlaybackController& controller,
       QQuickItem* output,
@@ -116,6 +149,25 @@ struct TimelinePlaybackFrameTestAccess {
     controller.awaiting_media_source_ = false;
     controller.awaiting_position_sync_ = false;
     controller.processed_frame_available_ = true;
+    controller.native_media_enabled_ = true;
+    controller.syncToDocument();
+  }
+  static void preparePausedSinkFrame(
+      TimelinePlaybackController& controller,
+      QQuickItem* output,
+      QImage image) {
+    controller.native_media_enabled_ = false;
+    controller.attachVideoOutput(output);
+    auto frame = QVideoFrame(std::move(image));
+    frame.setStartTime(0);
+    controller.video_sink_.setVideoFrame(frame);
+    controller.current_source_url_ = controller.preferredSourceUrl();
+    controller.active_video_frame_color_key_ =
+        QStringLiteral("stale-test-color-settings");
+    controller.active_video_foreground_cutout_key_ =
+        QStringLiteral("stale-test-clip-settings");
+    controller.awaiting_media_source_ = false;
+    controller.awaiting_position_sync_ = false;
     controller.native_media_enabled_ = true;
     controller.syncToDocument();
   }
@@ -206,6 +258,58 @@ struct TimelinePlaybackFrameTestAccess {
   static bool nativeEnabled(const TimelinePlaybackController& controller) {
     return controller.native_media_enabled_;
   }
+  static QVariantMap seekDiagnostics(
+      const TimelinePlaybackController& controller) {
+    const auto sink_frame = controller.video_sink_.videoFrame();
+    const auto output_item = controller.video_frame_item_.data();
+    const auto sink_image = sink_frame.isValid() ? sink_frame.toImage() : QImage{};
+    const auto sink_center = sink_image.isNull()
+        ? QColor{}
+        : sink_image.pixelColor(sink_image.width() / 2, sink_image.height() / 2);
+    return {
+        {QStringLiteral("nativeMediaEnabled"), controller.native_media_enabled_},
+        {QStringLiteral("workspaceActive"), controller.workspace_active_},
+        {QStringLiteral("awaitingMediaSource"), controller.awaiting_media_source_},
+        {QStringLiteral("awaitingPositionSync"), controller.awaiting_position_sync_},
+        {QStringLiteral("awaitedPositionMs"), controller.awaited_position_ms_},
+        {QStringLiteral("pendingPositionMs"), controller.pending_position_ms_},
+        {QStringLiteral("positionSyncGeneration"),
+         static_cast<qulonglong>(controller.position_sync_generation_)},
+        {QStringLiteral("pendingSeekFrameValid"),
+         controller.pending_seek_video_frame_.isValid()},
+        {QStringLiteral("pendingSeekFrameGeneration"),
+         static_cast<qulonglong>(controller.pending_seek_frame_generation_)},
+        {QStringLiteral("nativePrerollActive"), controller.native_paused_preroll_active_},
+        {QStringLiteral("nativePrerollStatus"), controller.native_paused_preroll_status_},
+        {QStringLiteral("scenePreviewActive"), controller.scene_preview_cache_active_},
+        {QStringLiteral("programClipId"), controller.active_program_clip_id_},
+        {QStringLiteral("programMediaType"),
+         controller.current_program_clip_.value(QStringLiteral("mediaType"))},
+        {QStringLiteral("programFilePath"),
+         controller.current_program_clip_.value(QStringLiteral("filePath"))},
+        {QStringLiteral("activeSource"), controller.current_source_url_},
+        {QStringLiteral("playerSource"), controller.player_.source().toString()},
+        {QStringLiteral("playerPositionMs"), controller.player_.position()},
+        {QStringLiteral("playerMediaStatus"),
+         static_cast<int>(controller.player_.mediaStatus())},
+        {QStringLiteral("processedFrameSource"), controller.processedFrameSource()},
+        {QStringLiteral("processedFrameAvailable"), controller.processed_frame_available_},
+        {QStringLiteral("processedFrameTimestampUs"),
+         controller.processed_frame_timestamp_us_},
+        {QStringLiteral("processedFrameTimestampEstimated"),
+         controller.processed_frame_timestamp_estimated_},
+        {QStringLiteral("frameProcessingActive"), controller.frame_processing_active_},
+        {QStringLiteral("hasPendingVideoFrame"), controller.has_pending_video_frame_},
+        {QStringLiteral("outputAttached"), output_item != nullptr},
+        {QStringLiteral("outputHasWindow"), output_item != nullptr && output_item->window() != nullptr},
+        {QStringLiteral("outputWindowExposed"), output_item != nullptr && output_item->window() != nullptr && output_item->window()->isExposed()},
+        {QStringLiteral("sinkFrameValid"), sink_frame.isValid()},
+        {QStringLiteral("sinkFrameTimestampUs"), sink_frame.isValid() ? sink_frame.startTime() : -1},
+        {QStringLiteral("sinkFrameWidth"), sink_frame.isValid() ? sink_frame.width() : 0},
+        {QStringLiteral("sinkFrameHeight"), sink_frame.isValid() ? sink_frame.height() : 0},
+        {QStringLiteral("sinkCenterColor"), sink_center.name(QColor::HexArgb)},
+    };
+  }
   static void changeGrade(TimelinePlaybackController& controller) {
     controller.active_video_frame_color_key_ = QStringLiteral("fixture-previous-grade");
     controller.syncToDocument();
@@ -233,6 +337,10 @@ struct TimelinePlaybackFrameTestAccess {
   }
   static QString sourceRevision(const TimelinePlaybackController& controller) {
     return controller.active_video_source_revision_;
+  }
+  static QString activeProgramClipId(
+      const TimelinePlaybackController& controller) {
+    return controller.active_program_clip_id_;
   }
   static qint64 processedSourceRevision(
       const TimelinePlaybackController& controller) {
@@ -279,6 +387,50 @@ int main(int argc, char** argv) {
   qputenv("PHOTO_EDITOR_TIMELINE_EFFECT_PRESET_PATH",
           temporary.filePath(QStringLiteral("timeline-effect-presets.json")).toUtf8());
   qputenv("PHOTO_EDITOR_DATABASE_URL", "postgresql://127.0.0.1:1/frame_fixture");
+  {
+    const auto first_source_path =
+        temporary.filePath(QStringLiteral("program-id-first.mp4"));
+    const auto second_source_path =
+        temporary.filePath(QStringLiteral("program-id-second.mp4"));
+    for (const auto& path : {first_source_path, second_source_path}) {
+      QFile source(path);
+      if (!source.open(QIODevice::WriteOnly) ||
+          source.write("program clip id fixture") <= 0) {
+        return fail("The cached Program clip ID fixture sources should be written");
+      }
+    }
+    TimelineDocumentController program_document;
+    program_document.createTimeline(QStringLiteral("Cached Program Clip ID"));
+    program_document.addClipFromGallery(
+        QStringLiteral("video:program-id-first"), first_source_path,
+        QStringLiteral("First Program Source"), 1.0,
+        QStringLiteral("poster://program-id-first"));
+    program_document.addClipFromGallery(
+        QStringLiteral("video:program-id-second"), second_source_path,
+        QStringLiteral("Second Program Source"), 1.0,
+        QStringLiteral("poster://program-id-second"));
+    program_document.selectClip(0);
+    const auto first_program_id = program_document.programClip()
+                                      .value(QStringLiteral("clipId"))
+                                      .toString();
+    TimelinePlaybackController program_playback(&program_document);
+    if (first_program_id.isEmpty() ||
+        TimelinePlaybackFrameTestAccess::activeProgramClipId(program_playback) !=
+            first_program_id) {
+      return fail("Playback synchronization should cache the currently active Program clip ID");
+    }
+    program_document.selectClip(1);
+    const auto expected_second_program_id = program_document.programClip()
+                                                .value(QStringLiteral("clipId"))
+                                                .toString();
+    TimelinePlaybackFrameTestAccess::sync(program_playback);
+    if (expected_second_program_id.isEmpty() ||
+        expected_second_program_id == first_program_id ||
+        TimelinePlaybackFrameTestAccess::activeProgramClipId(program_playback) !=
+            expected_second_program_id) {
+      return fail("The cached Program clip ID should follow a Program selection change");
+    }
+  }
   {
     TimelinePlaybackFrameImageState image_state;
     QImage native_image(64, 32, QImage::Format_RGBA8888);
@@ -703,6 +855,30 @@ int main(int argc, char** argv) {
       return fail("quarter preview quality should process at quarter the attached 640x360 item size and miss the half-size cache entry");
     }
     cache_playback.setPreviewQualityMode(QStringLiteral("full"));
+    // Live frames without decoder PTS must avoid a full-source content hash
+    // on every miss, while paused seek reuse remains exact and enabled.
+    TimelinePlaybackFrameTestAccess::submitWithoutTimestamp(cache_playback, QColor(24, 96, 220));
+    if (!wait_until([&] { return TimelinePlaybackFrameTestAccess::idle(cache_playback); }))
+      return fail("paused reference must settle before live no-PTS playback");
+    const auto paused_reference = TimelinePlaybackFrameTestAccess::image(cache_playback);
+    cache_document.playSequence();
+    TimelinePlaybackFrameTestAccess::submitWithoutTimestamp(cache_playback, QColor(24, 96, 220));
+    if (!wait_until([&] { return TimelinePlaybackFrameTestAccess::idle(cache_playback); }) ||
+        cache_playback.frameProcessingMetrics().value("frameCacheEnabled").toBool() ||
+        !cache_playback.frameProcessingMetrics().value("frameCacheKeyUnavailableReason").toString()
+            .contains("continuous playback") ||
+        TimelinePlaybackFrameTestAccess::image(cache_playback) != paused_reference)
+      return fail("live no-PTS frames must bypass content hashing without changing rendered pixels");
+    TimelinePlaybackFrameTestAccess::submitWithoutTimestamp(cache_playback, QColor(220, 32, 24));
+    if (!wait_until([&] { return TimelinePlaybackFrameTestAccess::idle(cache_playback); }) ||
+        TimelinePlaybackFrameTestAccess::image(cache_playback) == paused_reference)
+      return fail("live no-PTS frames must publish changed pixels instead of reusing stale content");
+    cache_document.pauseSequence();
+    TimelinePlaybackFrameTestAccess::submitWithoutTimestamp(cache_playback, QColor(24, 96, 220));
+    if (!wait_until([&] { return TimelinePlaybackFrameTestAccess::idle(cache_playback); }) ||
+        !cache_playback.frameProcessingMetrics().value("frameCacheEnabled").toBool() ||
+        TimelinePlaybackFrameTestAccess::image(cache_playback) != paused_reference)
+      return fail("pausing must restore exact decoded-content cache behavior");
     std::cout << "Decoded-content frame reuse: first totalMs="
               << first_metrics.value(QStringLiteral("lastFrameTotalMs")).toDouble()
               << " reused totalMs="
@@ -716,6 +892,28 @@ int main(int argc, char** argv) {
     // A composited range already contains the clip grade and effects. Reduced
     // preview modes must resize these pixels without applying that work twice.
     cache_playback.setTimelineEffectsBypassed(false);
+    if (!wait_until([&] {
+          const auto clip = cache_document.programClip();
+          const auto integrity =
+              clip.value(QStringLiteral("sourceIntegrityStatus")).toString();
+          const auto analysis =
+              clip.value(QStringLiteral("mediaAnalysisStatus")).toString();
+          const auto integrity_settled = integrity == QStringLiteral("verified") ||
+                                         integrity == QStringLiteral("mismatch");
+          const auto analysis_settled = analysis != QStringLiteral("queued") &&
+                                        analysis != QStringLiteral("analyzing");
+          return integrity_settled && analysis_settled;
+        })) {
+      const auto clip = cache_document.programClip();
+      std::cerr << "Composite fixture metadata did not settle: integrity='"
+                << clip.value(QStringLiteral("sourceIntegrityStatus")).toString()
+                       .toStdString()
+                << "' analysis='"
+                << clip.value(QStringLiteral("mediaAnalysisStatus")).toString()
+                       .toStdString()
+                << "'\n";
+      return fail("source integrity and media analysis should settle before deriving the composite signature");
+    }
     const auto ranges = cache_document.renderCacheRanges();
     if (ranges.isEmpty()) return fail("the reduced composite fixture needs a cache range");
     const auto cache_directory = temporary.filePath(QStringLiteral("cache/timeline-render-cache"));
@@ -731,7 +929,28 @@ int main(int argc, char** argv) {
     for (const auto& quality : {QStringLiteral("half"), QStringLiteral("quarter")}) {
       cache_playback.setPreviewQualityMode(quality);
       QVariantMap metrics;
-      if (!cache_playback.usingRenderCache() || !submit_same_content(metrics)) {
+      const auto using_composite = cache_playback.usingRenderCache();
+      const auto submitted = using_composite && submit_same_content(metrics);
+      if (!using_composite || !submitted) {
+        const auto current_ranges = cache_document.renderCacheRanges();
+        const auto current_signature = current_ranges.isEmpty()
+            ? QString{}
+            : current_ranges.first().toMap().value(QStringLiteral("signature")).toString();
+        const auto current_path = QDir(cache_directory).filePath(
+            QStringLiteral("%1-%2.mp4").arg(timeline_id, current_signature));
+        std::cerr << "Reduced composite did not reach Program: quality='"
+                  << quality.toStdString() << "' usingRenderCache=" << using_composite
+                  << " submitted=" << submitted << " writtenSignature='"
+                  << signature.toStdString() << "' currentSignature='"
+                  << current_signature.toStdString() << "' writtenExists="
+                  << QFileInfo(composite_file.fileName()).exists() << " currentExists="
+                  << QFileInfo(current_path).exists() << " currentCacheUrl='"
+                  << cache_document.renderCachePlaybackSourceUrl().toStdString()
+                  << "' sampleCount="
+                  << metrics.value(QStringLiteral("sampleCount")).toULongLong()
+                  << " sourceKey='"
+                  << metrics.value(QStringLiteral("sourceKey")).toString().toStdString()
+                  << "'\n";
         return fail("reduced-resolution composite frames should reach Program processing");
       }
       const auto image = TimelinePlaybackFrameTestAccess::image(cache_playback);
@@ -1053,7 +1272,35 @@ int main(int argc, char** argv) {
     }
   }
   {
-    TimelinePlaybackController late_playback(&document);
+    TimelineDocumentController empty_document;
+    TimelinePlaybackController empty_playback(&empty_document);
+    QQuickItem empty_output;
+    empty_output.setSize(QSizeF(64, 64));
+    TimelinePlaybackFrameTestAccess::attachWithCachedFrame(
+        empty_playback, &empty_output, Qt::red);
+    if (!wait_until([&] {
+          return TimelinePlaybackFrameTestAccess::idle(empty_playback);
+        }) || !empty_playback.processedFrameSource().isEmpty()) {
+      return fail("A cached sink frame without an active video Program source must not populate the preview");
+    }
+  }
+  {
+    const auto source_path =
+        temporary.filePath(QStringLiteral("late-attach-source.mp4"));
+    QFile source_file(source_path);
+    if (!source_file.open(QIODevice::WriteOnly) ||
+        source_file.write("late attach source context") <= 0) {
+      return fail("the late-attach video source fixture should be written");
+    }
+    source_file.close();
+    TimelineDocumentController late_document;
+    late_document.createTimeline(QStringLiteral("Late Decoder Frame Attach"));
+    late_document.addClipFromGallery(
+        QStringLiteral("video:late-attach"), source_path,
+        QStringLiteral("Late Attach Source"), 1.0,
+        QStringLiteral("poster://late-attach"));
+    late_document.selectClip(0);
+    TimelinePlaybackController late_playback(&late_document);
     QQuickItem late_output;
     late_output.setSize(QSizeF(64, 64));
     TimelinePlaybackFrameTestAccess::attachWithCachedFrame(late_playback, &late_output, Qt::green);
@@ -1094,11 +1341,34 @@ int main(int argc, char** argv) {
         qunsetenv("PHOTO_EDITOR_TIMELINE_PLAYBACK_HEADLESS");
     });
     {
+      const auto source_path =
+          temporary.filePath(QStringLiteral("cached-paused-seek-source.mp4"));
+      QFile source_file(source_path);
+      if (!source_file.open(QIODevice::WriteOnly) ||
+          source_file.write("cached paused seek source context") <= 0) {
+        return fail("the paused-seek video source fixture should be written");
+      }
+      source_file.close();
+      TimelineDocumentController seek_document;
+      seek_document.createTimeline(QStringLiteral("Cached Paused Seek"));
+      seek_document.addClipFromGallery(
+          QStringLiteral("video:cached-paused-seek"), source_path,
+          QStringLiteral("Cached Paused Seek Source"), 1.0,
+          QStringLiteral("poster://cached-paused-seek"));
+      seek_document.selectClip(0);
       QQuickItem seek_output;
       seek_output.setSize(QSizeF(64, 64));
-      TimelinePlaybackController seek_playback(&document);
+      TimelinePlaybackController seek_playback(&seek_document);
       if (!TimelinePlaybackFrameTestAccess::nativeEnabled(seek_playback))
         return fail("Paused seek scheduling fixture must connect the native QMediaPlayer signal path");
+      const auto seek_program_context =
+          TimelinePlaybackFrameTestAccess::seekDiagnostics(seek_playback);
+      if (seek_playback.activeSourceUrl().isEmpty() ||
+          TimelinePlaybackFrameTestAccess::activeProgramClipId(seek_playback).isEmpty() ||
+          seek_program_context.value(QStringLiteral("programMediaType")).toString() !=
+              QStringLiteral("video")) {
+        return fail("Paused seek scheduling fixture must have an active video Program source");
+      }
       seek_playback.attachVideoOutput(&seek_output);
       QVector<QColor> seek_presented;
       QObject::connect(&seek_playback,
@@ -1111,18 +1381,48 @@ int main(int argc, char** argv) {
 
       seek_playback.attachVideoOutput(nullptr);
       TimelinePlaybackFrameTestAccess::setSinkFrame(seek_playback, Qt::red);
+      if (!TimelinePlaybackFrameTestAccess::emitNativeFrameSignalFromWorker(
+              seek_playback, Qt::red)) {
+        return fail("The worker-thread decoder fixture should emit the native QVideoSink signal");
+      }
       const auto previous = seek_presented.size();
       TimelinePlaybackFrameTestAccess::beginPositionSync(seek_playback, 300);
       seek_playback.attachVideoOutput(&seek_output);
-      if (!TimelinePlaybackFrameTestAccess::acknowledgePosition(seek_playback, 300) ||
-          !wait_until([&] { return TimelinePlaybackFrameTestAccess::idle(seek_playback); }) ||
-          seek_presented.size() != previous ||
-          !seek_playback.processedFrameSource().isEmpty()) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents);
+      if (TimelinePlaybackFrameTestAccess::hasSeekCandidate(seek_playback)) {
+        return fail("A decoder callback queued before a paused seek must be invalidated before candidate admission");
+      }
+      const auto acknowledge_invoked =
+          TimelinePlaybackFrameTestAccess::acknowledgePosition(seek_playback, 300);
+      const auto idle_after_acknowledgment = acknowledge_invoked && wait_until([&] {
+        return TimelinePlaybackFrameTestAccess::idle(seek_playback);
+      });
+      const auto presented_count_unchanged = seek_presented.size() == previous;
+      const auto preview_source_empty = seek_playback.processedFrameSource().isEmpty();
+      if (!acknowledge_invoked || !idle_after_acknowledgment ||
+          !presented_count_unchanged || !preview_source_empty) {
+        const auto diagnostic =
+            TimelinePlaybackFrameTestAccess::seekDiagnostics(seek_playback);
+        std::cerr << "Paused seek aggregate diagnostic: acknowledgeInvoked="
+                  << acknowledge_invoked
+                  << " idleAfterAck=" << idle_after_acknowledgment
+                  << " previousPresented=" << previous
+                  << " currentPresented=" << seek_presented.size()
+                  << " sourceEmpty=" << preview_source_empty;
+        for (auto entry = diagnostic.cbegin(); entry != diagnostic.cend(); ++entry) {
+          std::cerr << " " << entry.key().toStdString() << "="
+                    << entry.value().toString().toStdString();
+        }
+        std::cerr << '\n';
         return fail("A frame cached before a paused seek must not be republished as the seek result");
       }
 
       TimelinePlaybackFrameTestAccess::beginPositionSync(seek_playback, 600);
-      TimelinePlaybackFrameTestAccess::submit(seek_playback, Qt::green);
+      if (!TimelinePlaybackFrameTestAccess::emitNativeFrameSignalFromWorker(
+              seek_playback, Qt::green, 600'000)) {
+        return fail("The fresh worker-thread decoder fixture should emit the native QVideoSink signal");
+      }
+      QCoreApplication::processEvents(QEventLoop::AllEvents);
       if (!TimelinePlaybackFrameTestAccess::hasSeekCandidate(seek_playback) ||
           !TimelinePlaybackFrameTestAccess::acknowledgePosition(seek_playback, 600) ||
           !wait_until([&] { return TimelinePlaybackFrameTestAccess::idle(seek_playback); }) ||
@@ -1285,6 +1585,223 @@ int main(int argc, char** argv) {
       return fail("Scene cache frames should retain exact source timestamps and ignore mismatched Qt Darwin native frames");
     }
     TimelinePlaybackFrameTestAccess::deactivateScenePreview(scene_playback);
+  }
+  {
+    const auto crop_source_path =
+        temporary.filePath(QStringLiteral("source-crop-cache-identity.mp4"));
+    QFile crop_source(crop_source_path);
+    if (!crop_source.open(QIODevice::WriteOnly) ||
+        crop_source.write("source crop frame fixture") <= 0) {
+      return fail("the source-crop frame fixture should be written");
+    }
+    crop_source.close();
+    TimelineDocumentController crop_document;
+    crop_document.createTimeline(QStringLiteral("Source crop preview"));
+    crop_document.addClipFromGallery(
+        QStringLiteral("video:source-crop-preview"), crop_source_path,
+        QStringLiteral("Source crop preview"), 1.0,
+        QStringLiteral("poster://source-crop-preview"));
+    crop_document.selectClip(0);
+    if (!crop_document.setSelectedSourceCrop(0.5, 0.0, 1.0, 1.0)) {
+      return fail("a valid source crop should be accepted for Program preview");
+    }
+    TimelinePlaybackController crop_playback(&crop_document);
+    QQuickItem crop_output;
+    crop_output.setSize(QSizeF(640, 360));
+    crop_playback.attachVideoOutput(&crop_output);
+    QImage source_frame(640, 360, QImage::Format_RGBA8888);
+    source_frame.fill(QColor(220, 36, 44));
+    for (auto y = 0; y < source_frame.height(); ++y) {
+      for (auto x = source_frame.width() / 2; x < source_frame.width(); ++x) {
+        source_frame.setPixelColor(x, y, QColor(34, 62, 224));
+      }
+    }
+    TimelinePlaybackFrameTestAccess::submitImageAt(
+        crop_playback, source_frame, 7'000'000);
+    if (!wait_until([&] {
+          return TimelinePlaybackFrameTestAccess::idle(crop_playback) &&
+                 crop_playback.frameProcessingMetrics()
+                         .value(QStringLiteral("sampleCount")).toULongLong() > 0U;
+        })) {
+      return fail("a cropped decoded Program frame should complete processing");
+    }
+    const auto right_half_crop =
+        TimelinePlaybackFrameTestAccess::image(crop_playback);
+    if (right_half_crop.size() != QSize(320, 360) ||
+        right_half_crop.pixelColor(10, 180).blue() < 180 ||
+        right_half_crop.pixelColor(10, 180).red() > 90) {
+      return fail("Program preview should crop normalized source edges and publish the selected source pixels");
+    }
+    const auto authored_crop = crop_document.currentClip();
+    crop_playback.setSourceCropPreviewEnabled(true);
+    TimelinePlaybackFrameTestAccess::submitImageAt(crop_playback, source_frame, 7'000'000);
+    if (!wait_until([&] {
+          return TimelinePlaybackFrameTestAccess::idle(crop_playback) &&
+                 !crop_playback.processedFrameSource().isEmpty();
+        })) {
+      return fail("source-crop authoring should publish the uncropped source");
+    }
+    const auto uncropped_authoring = TimelinePlaybackFrameTestAccess::image(crop_playback);
+    if (uncropped_authoring.size() != source_frame.size() ||
+        uncropped_authoring.pixelColor(10, 180).red() < 180 ||
+        uncropped_authoring.pixelColor(630, 180).blue() < 180 ||
+        crop_document.currentClip() != authored_crop) {
+      return fail("crop authoring must expose discarded pixels without changing the document crop");
+    }
+    crop_playback.setSourceCropPreviewEnabled(false);
+    TimelinePlaybackFrameTestAccess::submitImageAt(crop_playback, source_frame, 7'000'000);
+    if (!wait_until([&] {
+          return TimelinePlaybackFrameTestAccess::idle(crop_playback) &&
+                 !crop_playback.processedFrameSource().isEmpty();
+        }) || TimelinePlaybackFrameTestAccess::image(crop_playback).size() != QSize(320, 360)) {
+      return fail("leaving crop authoring must restore the authored source crop");
+    }
+    const auto previous_source_revision =
+        TimelinePlaybackFrameTestAccess::processedSourceRevision(crop_playback);
+    if (!crop_document.setSelectedSourceCrop(0.0, 0.0, 0.5, 1.0)) {
+      return fail("changing crop edges should update the active Program source");
+    }
+    TimelinePlaybackFrameTestAccess::submitImageAt(
+        crop_playback, source_frame, 7'000'000);
+    if (!wait_until([&] {
+          return TimelinePlaybackFrameTestAccess::idle(crop_playback) &&
+                 !crop_playback.processedFrameSource().isEmpty() &&
+                 TimelinePlaybackFrameTestAccess::processedSourceRevision(crop_playback) >
+                     previous_source_revision &&
+                 crop_playback.frameProcessingMetrics()
+                         .value(QStringLiteral("frameCacheHit")).isValid();
+        })) {
+      return fail("the changed crop should complete a fresh frame-cache lookup");
+    }
+    const auto left_half_crop = TimelinePlaybackFrameTestAccess::image(crop_playback);
+    if (left_half_crop.size() != QSize(320, 360) ||
+        left_half_crop.pixelColor(10, 180).red() < 170 ||
+        left_half_crop.pixelColor(10, 180).blue() > 90 ||
+        crop_playback.frameProcessingMetrics()
+                .value(QStringLiteral("frameCacheHit")).toBool()) {
+      return fail("changing only the crop must invalidate a same-frame preview cache entry");
+    }
+    crop_playback.attachVideoOutput(nullptr);
+  }
+  {
+    const auto crop_source_path =
+        temporary.filePath(QStringLiteral("paused-source-crop-refresh.mp4"));
+    QFile crop_source(crop_source_path);
+    if (!crop_source.open(QIODevice::WriteOnly) ||
+        crop_source.write("paused source crop refresh fixture") <= 0) {
+      return fail("the paused source-crop fixture should be written");
+    }
+    crop_source.close();
+    TimelineDocumentController crop_document;
+    crop_document.createTimeline(QStringLiteral("Paused Source Crop Refresh"));
+    crop_document.addClipFromGallery(
+        QStringLiteral("video:paused-source-crop"), crop_source_path,
+        QStringLiteral("Paused Source Crop"), 1.0,
+        QStringLiteral("poster://paused-source-crop"));
+    crop_document.selectClip(0);
+    TimelinePlaybackController crop_playback(&crop_document);
+    QQuickItem crop_output;
+    crop_output.setSize(QSizeF(640, 360));
+    QImage source_frame(640, 360, QImage::Format_RGBA8888);
+    for (auto y = 0; y < source_frame.height(); ++y) {
+      for (auto x = 0; x < source_frame.width(); ++x) {
+        source_frame.setPixelColor(
+            x, y, x < source_frame.width() * 2 / 3
+                      ? QColor(28, 200, 50)
+                      : QColor(32, 56, 220));
+      }
+    }
+    TimelinePlaybackFrameTestAccess::preparePausedSinkFrame(
+        crop_playback, &crop_output, source_frame);
+    if (!wait_until([&] {
+          return !crop_playback.processedFrameSource().isEmpty() &&
+                 TimelinePlaybackFrameTestAccess::idle(crop_playback);
+        })) {
+      return fail("the paused RGB-strip source frame should publish before a crop edit");
+    }
+    const auto original_image = TimelinePlaybackFrameTestAccess::image(crop_playback);
+    if (original_image.size() != QSize(640, 360) ||
+        original_image.pixelColor(100, 180).green() < 170 ||
+        original_image.pixelColor(400, 180).green() < 170 ||
+        original_image.pixelColor(600, 180).blue() < 170) {
+      return fail("the paused source frame should retain the full RGB strip before crop editing");
+    }
+    QVector<QImage> edited_publications;
+    QObject::connect(&crop_playback,
+                     &TimelinePlaybackController::processedFrameSourceChanged,
+                     [&] {
+      if (!crop_playback.processedFrameSource().isEmpty()) {
+        edited_publications.append(TimelinePlaybackFrameTestAccess::image(crop_playback));
+      }
+    });
+    const auto original_revision =
+        TimelinePlaybackFrameTestAccess::processedSourceRevision(crop_playback);
+    {
+      WorkerGate gate;
+      QImage stale_frame(640, 360, QImage::Format_RGBA8888);
+      stale_frame.fill(Qt::red);
+      TimelinePlaybackFrameTestAccess::submitImageAt(
+          crop_playback, stale_frame, 0);
+      if (TimelinePlaybackFrameTestAccess::idle(crop_playback)) {
+        return fail("the stale source-crop frame should remain queued behind the worker gate");
+      }
+      if (!crop_document.setSelectedSourceCrop(0.66, 0.0, 1.0, 1.0)) {
+        return fail("the crop-only edit should update the selected source edges");
+      }
+      if (!crop_playback.processedFrameSource().isEmpty()) {
+        return fail("a crop-only edit should clear the prior Program identity while its fresh frame is pending");
+      }
+      gate.open();
+      if (!wait_until([&] {
+            return TimelinePlaybackFrameTestAccess::idle(crop_playback) &&
+                   !crop_playback.processedFrameSource().isEmpty() &&
+                   TimelinePlaybackFrameTestAccess::processedSourceRevision(crop_playback) >
+                       original_revision;
+          })) {
+        return fail("the crop-only edit should reprocess the paused sink frame and publish a fresh Program identity");
+      }
+    }
+    if (edited_publications.size() != 1 ||
+        edited_publications.constFirst().size() != QSize(218, 360) ||
+        edited_publications.constFirst().pixelColor(15, 180).blue() < 170 ||
+        edited_publications.constFirst().pixelColor(15, 180).green() > 100) {
+      return fail("only the fresh crop should publish, with paused Program pixels from the cropped blue strip");
+    }
+    const auto crop_state_is = [&](double left, double top, double right, double bottom) {
+      const auto clip = crop_document.programClip();
+      return qAbs(clip.value(QStringLiteral("sourceCropLeft")).toDouble() - left) < 1e-9 &&
+             qAbs(clip.value(QStringLiteral("sourceCropTop")).toDouble() - top) < 1e-9 &&
+             qAbs(clip.value(QStringLiteral("sourceCropRight")).toDouble() - right) < 1e-9 &&
+             qAbs(clip.value(QStringLiteral("sourceCropBottom")).toDouble() - bottom) < 1e-9;
+    };
+    crop_document.resetSelectedSourceCrop();
+    if (!crop_state_is(0.0, 0.0, 1.0, 1.0) ||
+        !wait_until([&] {
+          return TimelinePlaybackFrameTestAccess::idle(crop_playback) &&
+                 !crop_playback.processedFrameSource().isEmpty();
+        })) {
+      return fail("reset should restore the full paused source crop and refresh Program preview");
+    }
+    const auto reset_image = TimelinePlaybackFrameTestAccess::image(crop_playback);
+    if (reset_image.size() != QSize(640, 360) ||
+        reset_image.pixelColor(400, 180).green() < 170 ||
+        reset_image.pixelColor(600, 180).blue() < 170) {
+      return fail("reset Program preview should restore the complete paused RGB strip");
+    }
+    crop_document.undo();
+    if (!crop_state_is(0.66, 0.0, 1.0, 1.0) ||
+        !wait_until([&] {
+          return TimelinePlaybackFrameTestAccess::idle(crop_playback) &&
+                 !crop_playback.processedFrameSource().isEmpty() &&
+                 TimelinePlaybackFrameTestAccess::image(crop_playback).size() == QSize(218, 360);
+        })) {
+      return fail("undo after reset should restore the prior crop and refresh paused Program preview");
+    }
+    crop_document.undo();
+    if (!crop_state_is(0.0, 0.0, 1.0, 1.0)) {
+      return fail("undo should also restore the source crop that preceded the original crop edit");
+    }
+    crop_playback.attachVideoOutput(nullptr);
   }
   std::cout << "Five overloaded rounds presented active + latest pending frames; 295 pending replacements counted; seek/step/detach/grade/source rejected stale output; reentrant publication, destruction cancellation, and heartbeat passed.\n";
   return 0;

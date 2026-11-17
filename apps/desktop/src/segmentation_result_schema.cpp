@@ -27,6 +27,7 @@ QVariantMap segmentation_mask_variant(
     mask.insert(QStringLiteral("smartSelectRefinementLogits"), result.refinement_logits);
     mask.insert(QStringLiteral("smartSelectRefinementLogitsWidth"), result.refinement_logits_width);
     mask.insert(QStringLiteral("smartSelectRefinementLogitsHeight"), result.refinement_logits_height);
+    mask.insert(QStringLiteral("smartSelectRefinementLogitsContract"), result.refinement_logits_contract);
   }
   return mask;
 }
@@ -100,6 +101,7 @@ SegmentationResult segmentation_result_from_mask_variant(
     result.refinement_logits = refinement_logits;
     result.refinement_logits_width = refinement_logits_width;
     result.refinement_logits_height = refinement_logits_height;
+    result.refinement_logits_contract = mask.value(QStringLiteral("smartSelectRefinementLogitsContract")).toString();
   }
   result.success = valid_segmentation_payload(
       result.mask_data, result.width, result.height);

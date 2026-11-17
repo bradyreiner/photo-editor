@@ -1,0 +1,30 @@
+{
+  "campaign_id": "04",
+  "name": "The last tweak. Again.",
+  "tonality": "Playful, observant, lightly self-aware. A shared creative habit starts a conversation with the builder.",
+  "audience": "Professionals and hobbyists who care about the final feel of a photo, film or layout.",
+  "premise": "The final adjustment keeps turning into another one. One original graphic poster becomes the recurring character.",
+  "product_connection": "I’m building LOOKSi. Photo + video. For people who care how it looks.",
+  "cta": "What’s your ‘last tweak’?",
+  "instagram_caption": "The last tweak. Again.\n\nA tiny nudge. Another crop. Six options that are definitely different.\n\nI’m building LOOKSi, a photo + video editor for professionals and hobbyists who care how it looks.\n\nWhat’s your ‘last tweak’ — the thing you always go back for?",
+  "instagram_short_caption": "One more pixel. You get it.\n\nI’m building LOOKSi for people who care how their photos and videos look. What’s your ‘last tweak’?",
+  "reddit_title": "I’m building a photo + video editor and made a little film about the ‘last tweak’",
+  "reddit_body": "I’m the person building LOOKSi, a photo + video editor. This is an original graphic animation about a familiar creative ritual: one last adjustment that turns into another one.\n\nThe poster and sound design were created for this campaign. I want the product conversation to include people who edit for clients and people who edit for themselves.\n\nWhat do you always go back to adjust — the crop, the color, the timing, something else? A specific workflow example would be useful.",
+  "reddit_placement": "Use only in a community or release thread that permits founder product posts, after checking current rules. The final subreddit is intentionally unassigned.",
+  "cover_alt_text": "On black, large white type reads ‘The last tweak.’ A red correction adds ‘Again.’ An original cream poster with overlapping red, green and blue circular shapes sits inside crop marks. A cursor hovers beside it. The question below is ‘What’s your last tweak?’ The footer says the maker is building LOOKSi for photo and video.",
+  "video_description": "A 24-second graphic film. The phrase ‘The last tweak’ is corrected to ‘Again.’ One original poster moves a little left, a little right, and by one pixel. Its crop changes. Six very similar poster variants appear with the line ‘Yes, they’re different.’ One gets circled. The film pauses, then a cursor nudges the poster once more. The closing text discloses ‘I’m building LOOKSi. Photo + video. For people who care how it looks.’ It asks ‘What’s your last tweak?’ There is original synthesized music and click sound design, with no spoken voice. The meaning is complete with sound off.",
+  "hook_variants": [
+    {"file":"videos/hero.mp4","opening":"The last tweak. Again.","hypothesis":"The direct, familiar phrase may make the editing habit recognizable immediately."},
+    {"file":"videos/hook-b.mp4","opening":"Just one more pixel. Again.","hypothesis":"A precise visual-editing detail may attract people who work with images and layouts."},
+    {"file":"videos/hook-c.mp4","opening":"You said it was done. Again.","hypothesis":"The conversational opening may invite broader recognition from photo and video creators."}
+  ],
+  "test_design": "Change only the first three seconds and their dissolve. Keep audience, placement, caption, observation window and body constant where practical. Organic posts are exploratory learning, not a randomized causal test. Avoid duplicate promotional posts in the same community.",
+  "measures": [
+    "Within-channel opening retention using the platform’s available and explicitly defined denominator.",
+    "Distinct useful replies that name an editing habit or workflow. Deduplicate people per post.",
+    "Profile visits or qualified demo visits only when those counts and tracking definitions are available."
+  ],
+  "decision_rule": "Review comparable results after the chosen observation window. Prefer a hook that keeps relevant creators watching and produces specific workflow replies. Do not declare a winner from unmatched channels, small anecdotal differences or invented targets.",
+  "production_remaining": "Creative review, final campaign naming and caption/placement review. No founder filming, voice recording or app capture is needed for this graphic campaign.",
+  "claims_boundary": "The poster is original campaign artwork. The film does not represent app output, product UI, version management, time savings, shipping status, pricing or verified professional qualification."
+}

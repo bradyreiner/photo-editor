@@ -1,0 +1,13 @@
+import json,sys,hashlib,os
+from pathlib import Path
+P=Path(__file__).resolve().parent;sys.path.insert(0,str(P.parent));from native_review_session import call,save,WORKER
+assert not (P/'p26-admission-intent.json').exists(), 'Inspect the retained task; never replay.'
+doc=call('timeline.inspect_document');assert doc['ready'] and doc['documentHash']=='949d31ad9af52e9f4b817034714e434e37132c981f544104c5c9d1b4ff2d087c'
+assert not call('timeline.inspect_task')['active']
+before=P.parent/'native-projects/looksy-polish-pass25-carousel-scrub-polish.json';sha=hashlib.file_digest(before.open('rb'),'sha256').hexdigest();assert sha=='fbafd357b7595288b22d0100a915c37a77549b76259a29ecacb8de6352d55fc4'
+values={'targetResourceId':doc['resourceId'],'objective':'Fix the native-render-confirmed opening wordmark/title collision at 8.667 seconds by clearing only the outgoing wordmark before the incoming desktop heading. Preserve all P24/P25 improvements and the existing compound reveal.',
+'actions':[{'kind':'framing','summary':'Fade the outgoing brand wordmark before the incoming desktop heading overlaps it.'},{'kind':'delivery','summary':'Save the exact native checkpoint and review the corrected handoff.'}],'assetPaths':[],'outputDirectory':str((P.parent/'native-projects').resolve()),'confirmed':True}
+save(P/'p26-admission-intent.json',{'document':doc,'checkpoint':str(before),'checkpointSha256':sha,'values':values});task=call('timeline.admit_task',values);save(P/'p26-admission-result.json',task)
+plan={'schema':'looksy.native-authoring-plan/v1','name':'P26 native wordmark clears before incoming desktop heading','resourceId':doc['resourceId'],'taskId':task['taskId'],'startingDocumentHash':doc['documentHash'],'composition':{'width':1920,'height':1080,'fps':30},'durationSeconds':298,'steps':[{'id':'p26/wordmark-clear','commandId':'timeline.action.setTimelineClipAnimation','values':{'clipId':'dae4228e-10f8-4305-bf38-e0831c2400d2','channels':[{'parameter':'opacity','keyframes':[{'localSeconds':0,'value':1,'interpolation':'hold'},{'localSeconds':7.9,'value':1,'interpolation':'ease-in-out'},{'localSeconds':8.433333333333334,'value':0,'interpolation':'hold'},{'localSeconds':12,'value':0,'interpolation':'hold'}]}]}}],'planningSnapshot':{'path':str(before),'sha256':sha,'documentHash':doc['documentHash']},'nativeEvidence':['native-p24-opening-after/frame-249.png','native-p24-opening-after/frame-260.png']}
+save(P/'p26-wordmark-plan.json',plan);os.environ['LOOKSY_NATIVE_MCP_SESSION']=str(Path(WORKER['data'])/'automation/session.json');sys.path.insert(0,str(P.parent.parent));from author_native import execute
+execute(P/'p26-wordmark-plan.json',P/'p26-wordmark-execution.json',compact_inspection=True)

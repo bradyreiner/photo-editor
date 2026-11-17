@@ -27,6 +27,154 @@ struct PhotoTextLayoutResult final {
   QString error;
 };
 
+inline QFont photo_text_font_for_attributes(
+    const PhotoTextStyle& style, const QVariantMap& attributes, const QImage& image) {
+  auto family = attributes.value(QStringLiteral("family"), style.family).toString();
+  const auto inherit_axes = family.compare(style.family, Qt::CaseInsensitive) == 0;
+  QFont font(family);
+  if (inherit_axes && !style.face.isEmpty()) font.setStyleName(style.face);
+  font.setPointSizeF(attributes.value(QStringLiteral("size"), style.size).toDouble() *
+      72.0 / image.logicalDpiY());
+  font.setWeight(static_cast<QFont::Weight>(attributes.value(QStringLiteral("weight"), style.weight).toInt()));
+  font.setItalic(attributes.value(QStringLiteral("italic"), style.italic).toBool());
+  font.setUnderline(attributes.value(QStringLiteral("underline"), style.underline).toBool());
+  font.setLetterSpacing(QFont::AbsoluteSpacing, style.tracking);
+  font.setHintingPreference(QFont::PreferNoHinting);
+  if (inherit_axes) apply_photo_text_variable_axes(font, style);
+  return font;
+}
+
+inline QTextCharFormat photo_text_character_format(
+    const PhotoTextStyle& style, const QVariantMap& attributes, const QImage& image) {
+  QTextCharFormat format;
+  if (attributes.contains(QStringLiteral("family")) || attributes.contains(QStringLiteral("size")) ||
+      attributes.contains(QStringLiteral("weight")) || attributes.contains(QStringLiteral("italic")) ||
+      attributes.contains(QStringLiteral("underline")))
+    format.setFont(photo_text_font_for_attributes(style, attributes, image));
+  if (attributes.contains(QStringLiteral("color")))
+    format.setForeground(QColor(attributes.value(QStringLiteral("color")).toString()));
+  if (attributes.contains(QStringLiteral("strokeWidth")) || attributes.contains(QStringLiteral("strokeColor"))) {
+    const auto width = attributes.value(QStringLiteral("strokeWidth"), style.stroke_width).toDouble();
+    const auto color = QColor(attributes.value(QStringLiteral("strokeColor"),
+        style.stroke_color.name(QColor::HexArgb)).toString());
+    format.setTextOutline(width > 0
+        ? QPen(color, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin) : QPen(Qt::NoPen));
+  }
+  return format;
+}
+
+inline QVector<QTextLayout::FormatRange> photo_text_format_ranges(
+    const PhotoTextStyle& style, int text_offset, int text_length, const QImage& image) {
+  QVector<QTextLayout::FormatRange> result;
+  const auto range_end = text_offset + text_length;
+  for (const auto& run : style.runs) {
+    const auto run_start = run.value(QStringLiteral("start")).toInt();
+    if (run_start >= range_end) break;
+    const auto run_end = run_start + run.value(QStringLiteral("length")).toInt();
+    if (run_end <= text_offset) continue;
+    const auto start = std::max(text_offset, run_start);
+    const auto end = std::min(range_end, run_end);
+    if (end <= start) continue;
+    QTextLayout::FormatRange range;
+    range.start = start - text_offset;
+    range.length = end - start;
+    range.format = photo_text_character_format(style, photo_text_run_attributes(run), image);
+    result.push_back(range);
+  }
+  return result;
+}
+
+inline PhotoTextStyle photo_text_style_with_attributes(
+    const PhotoTextStyle& style, const QVariantMap& attributes) {
+  auto result = style;
+  if (attributes.contains(QStringLiteral("family"))) result.family = attributes.value("family").toString();
+  if (attributes.contains(QStringLiteral("size"))) result.size = attributes.value("size").toDouble();
+  if (attributes.contains(QStringLiteral("weight"))) result.weight = attributes.value("weight").toInt();
+  if (attributes.contains(QStringLiteral("italic"))) result.italic = attributes.value("italic").toBool();
+  if (attributes.contains(QStringLiteral("underline"))) result.underline = attributes.value("underline").toBool();
+  if (attributes.contains(QStringLiteral("color"))) result.color = QColor(attributes.value("color").toString());
+  if (attributes.contains(QStringLiteral("strokeWidth"))) result.stroke_width = attributes.value("strokeWidth").toDouble();
+  if (attributes.contains(QStringLiteral("strokeColor"))) result.stroke_color = QColor(attributes.value("strokeColor").toString());
+  return result;
+}
+
+struct PhotoTextFormatSegment final {
+  int start = 0;
+  int length = 0;
+  QVariantMap attributes;
+};
+
+inline QVector<PhotoTextFormatSegment> photo_text_format_segments(
+    const PhotoTextStyle& style, int text_length) {
+  QVector<int> boundaries{0, text_length};
+  auto runs = style.runs;
+  std::sort(runs.begin(), runs.end(), [](const auto& left, const auto& right) {
+    return left.value(QStringLiteral("start")).toInt() < right.value(QStringLiteral("start")).toInt();
+  });
+  QVector<int> run_ends;
+  run_ends.reserve(runs.size());
+  for (const auto& run : runs) {
+    const auto start = qBound(0, run.value(QStringLiteral("start")).toInt(), text_length);
+    const auto end = qBound(0, start + run.value(QStringLiteral("length")).toInt(), text_length);
+    run_ends.push_back(end);
+    if (end > start) {
+      boundaries.push_back(start);
+      boundaries.push_back(end);
+    }
+  }
+  std::sort(boundaries.begin(), boundaries.end());
+  boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+  QVector<PhotoTextFormatSegment> result;
+  qsizetype run_index = 0;
+  for (qsizetype i = 1; i < boundaries.size(); ++i) {
+    const auto start = boundaries.at(i - 1);
+    const auto end = boundaries.at(i);
+    if (end <= start) continue;
+    QVariantMap attributes;
+    while (run_index < runs.size() && run_ends.at(run_index) <= start) ++run_index;
+    if (run_index < runs.size()) {
+      const auto run_start = runs.at(run_index).value(QStringLiteral("start")).toInt();
+      if (run_start <= start && run_ends.at(run_index) >= end)
+        attributes = photo_text_run_attributes(runs.at(run_index));
+    }
+    result.push_back({start, end - start, attributes});
+  }
+  return result;
+}
+
+inline QVector<QTextLayout::FormatRange> photo_text_effect_ranges(
+    const PhotoTextStyle& style, int text_offset, int text_length, bool shadow) {
+  QVector<QTextLayout::FormatRange> result;
+  for (const auto& segment : photo_text_format_segments(style, text_offset + text_length)) {
+    const auto start = std::max(text_offset, segment.start);
+    const auto end = std::min(text_offset + text_length, segment.start + segment.length);
+    if (end <= start) continue;
+    const auto effective = photo_text_style_with_attributes(style, segment.attributes);
+    QTextLayout::FormatRange range;
+    range.start = start - text_offset;
+    range.length = end - start;
+    range.format.setForeground(shadow ? effective.shadow_color : effective.color);
+    range.format.setTextOutline(effective.stroke_width > 0
+        ? QPen(shadow ? effective.shadow_color : effective.stroke_color, effective.stroke_width,
+            Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)
+        : QPen(Qt::NoPen));
+    result.push_back(range);
+  }
+  return result;
+}
+
+inline double photo_text_max_font_size(const PhotoTextStyle& style, int text_offset, int text_length) {
+  auto maximum = style.size;
+  const auto end = text_offset + text_length;
+  for (const auto& run : style.runs) {
+    const auto start = run.value(QStringLiteral("start")).toInt();
+    const auto run_end = start + run.value(QStringLiteral("length")).toInt();
+    if (run_end > text_offset && start < end)
+      maximum = std::max(maximum, run.value(QStringLiteral("size"), style.size).toDouble());
+  }
+  return maximum;
+}
+
 // Keep the path used for glyph placement available to analytic geometry tests
 // and other canvas consumers, so the measured curve is the rendered curve.
 inline QPainterPath build_photo_text_baseline(const PhotoTextStyle& style, QSizeF box) {
@@ -65,6 +213,7 @@ inline PhotoTextLayoutResult rasterize_photo_text_around_contour(
   PhotoTextLayoutResult result;
   if (!std::isfinite(box.width()) || !std::isfinite(box.height()) || box.width() <= 2 * padding ||
       box.height() <= 2 * padding || raster_size.width() <= 0 || raster_size.height() <= 0 ||
+      text.size() > 1048576 ||
       static_cast<qint64>(raster_size.width()) * raster_size.height() > 32LL * 1024 * 1024) {
     result.error = QStringLiteral("Paragraph contour layout exceeds the supported dimensions.");
     return result;
@@ -73,6 +222,7 @@ inline PhotoTextLayoutResult rasterize_photo_text_around_contour(
     result.error = QStringLiteral("Text rendering requires an initialized font runtime.");
     return result;
   }
+  const auto rendering_style = photo_text_style_with_normalized_line_breaks(style, text);
   QVector<QVector<QPointF>> source_contours = style.path_contours;
   if (source_contours.isEmpty()) source_contours.push_back(style.path_points);
   else if (!style.path_points.isEmpty()) source_contours[0] = style.path_points;
@@ -127,12 +277,18 @@ inline PhotoTextLayoutResult rasterize_photo_text_around_contour(
   apply_photo_text_variable_axes(font, style);
   font.setLetterSpacing(QFont::AbsoluteSpacing, style.tracking);
   font.setHintingPreference(QFont::PreferNoHinting);
-  const auto metrics = QFontMetricsF(font);
-  const auto line_height = std::max(style.size * style.line_height, metrics.height());
+  const auto has_character_runs = !rendering_style.runs.isEmpty();
+  const auto max_font_size = photo_text_max_font_size(rendering_style, 0, static_cast<int>(text.size()));
+  auto metric_font = font;
+  metric_font.setPointSizeF(max_font_size * 72.0 / result.image.logicalDpiY());
+  const auto metrics = QFontMetricsF(metric_font);
+  const auto line_height = has_character_runs
+      ? std::max(max_font_size * style.line_height, metrics.height())
+      : std::max(style.size * style.line_height, QFontMetricsF(font).height());
   QPainter painter(&result.image);
   painter.setRenderHint(QPainter::TextAntialiasing);
   auto paragraph_ink = style.color;
-  paragraph_ink.setAlpha(255);
+  if (!has_character_runs) paragraph_ink.setAlpha(255);
   painter.setPen(paragraph_ink);
   painter.scale(raster_size.width() / box.width(), raster_size.height() / box.height());
   painter.setClipRect(QRectF(0, 0, box.width(), box.height()));
@@ -178,6 +334,7 @@ inline PhotoTextLayoutResult rasterize_photo_text_around_contour(
   };
 
   double y = padding;
+  int paragraph_offset = 0;
   for (qsizetype paragraph_index = 0; paragraph_index < paragraphs.size(); ++paragraph_index) {
     const auto& paragraph = paragraphs.at(paragraph_index);
     int cursor = 0;
@@ -195,6 +352,9 @@ inline PhotoTextLayoutResult rasterize_photo_text_around_contour(
       const auto interval = intervals.first();
       QTextLayout layout(paragraph.mid(cursor), font, &result.image);
       layout.setTextOption(option);
+      if (has_character_runs)
+        layout.setFormats(photo_text_format_ranges(rendering_style, paragraph_offset + cursor,
+            static_cast<int>(paragraph.size()) - cursor, result.image));
       layout.beginLayout();
       auto line = layout.createLine();
       if (line.isValid()) {
@@ -211,29 +371,40 @@ inline PhotoTextLayoutResult rasterize_photo_text_around_contour(
       result.overflow = result.overflow || line.naturalTextWidth() > interval.second - interval.first;
       if (!layout_only)
         for (const auto& run : layout.glyphRuns()) result.ink_bounds = result.ink_bounds.united(run.boundingRect());
-      QTextLayout::FormatRange ink;
-      ink.start = 0;
-      ink.length = static_cast<int>(paragraph.size() - cursor);
-      if (style.stroke_width > 0)
-        ink.format.setTextOutline(QPen(style.stroke_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-      if (!layout_only && (style.shadow_x != 0 || style.shadow_y != 0)) {
-        auto shadow = ink;
-        shadow.format.setForeground(style.shadow_color);
+      if (has_character_runs) {
+        if (!layout_only && (style.shadow_x != 0 || style.shadow_y != 0))
+          layout.draw(&painter, QPointF(style.shadow_x, style.shadow_y),
+              photo_text_effect_ranges(rendering_style, paragraph_offset + cursor,
+                  static_cast<int>(paragraph.size()) - cursor, true));
+        if (!layout_only)
+          layout.draw(&painter, QPointF(0, 0), photo_text_effect_ranges(rendering_style,
+              paragraph_offset + cursor, static_cast<int>(paragraph.size()) - cursor, false));
+      } else {
+        QTextLayout::FormatRange ink;
+        ink.start = 0;
+        ink.length = static_cast<int>(paragraph.size() - cursor);
         if (style.stroke_width > 0)
-          shadow.format.setTextOutline(QPen(style.shadow_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        layout.draw(&painter, QPointF(style.shadow_x, style.shadow_y), {shadow});
+          ink.format.setTextOutline(QPen(style.stroke_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        if (!layout_only && (style.shadow_x != 0 || style.shadow_y != 0)) {
+          auto shadow = ink;
+          shadow.format.setForeground(style.shadow_color);
+          if (style.stroke_width > 0)
+            shadow.format.setTextOutline(QPen(style.shadow_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+          layout.draw(&painter, QPointF(style.shadow_x, style.shadow_y), {shadow});
+        }
+        if (!layout_only) layout.draw(&painter, QPointF(0, 0), {ink});
       }
-      if (!layout_only) layout.draw(&painter, QPointF(0, 0), {ink});
       cursor += consumed;
       y += line_height;
       ++result.line_count;
     }
     if (cursor < paragraph.size()) result.overflow = true;
     if (paragraph_index + 1 < paragraphs.size()) y += style.paragraph_spacing;
+    paragraph_offset += static_cast<int>(paragraph.size()) + 1;
   }
   result.content_height = y + padding;
   result.overflow = result.overflow || result.content_height > box.height();
-  if (style.color.alpha() < 255) {
+  if (!has_character_runs && style.color.alpha() < 255) {
     painter.resetTransform();
     painter.setClipping(false);
     painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
@@ -293,8 +464,10 @@ inline PhotoTextLayoutResult rasterize_photo_text(
   QPainter painter(&result.image);
   painter.setRenderHint(QPainter::TextAntialiasing);
   painter.scale(raster_size.width() / box.width(), raster_size.height() / box.height());
+  const auto rendering_style = photo_text_style_with_normalized_line_breaks(style, text);
+  const auto has_character_runs = !rendering_style.runs.isEmpty();
   auto ink_color = style.color;
-  ink_color.setAlpha(255);
+  if (!has_character_runs) ink_color.setAlpha(255);
   painter.setPen(ink_color);
   painter.setClipRect(QRectF(0, 0, box.width(), box.height()));
   QTextOption option;
@@ -304,13 +477,21 @@ inline PhotoTextLayoutResult rasterize_photo_text(
   text.replace(QChar('\r'), QChar('\n'));
   text.replace(QChar(0x2029), QChar('\n'));
   const auto paragraphs = text.split(QChar('\n'), Qt::KeepEmptyParts);
+  const auto max_font_size = photo_text_max_font_size(rendering_style, 0, static_cast<int>(text.size()));
+  auto metric_font = font;
+  metric_font.setPointSizeF(max_font_size * 72.0 / result.image.logicalDpiY());
+  const auto line_advance = has_character_runs ? max_font_size * style.line_height : style.size * style.line_height;
   double y = padding + origin.y();
   bool first_paragraph = true;
+  int paragraph_offset = 0;
   for (const auto& paragraph : paragraphs) {
     if (!first_paragraph) y += style.paragraph_spacing;
     first_paragraph = false;
     QTextLayout layout(paragraph, font, &result.image);
     layout.setTextOption(option);
+    if (has_character_runs)
+      layout.setFormats(photo_text_format_ranges(rendering_style, paragraph_offset,
+          static_cast<int>(paragraph.size()), result.image));
     layout.beginLayout();
     bool has_line = false;
     while (true) {
@@ -323,38 +504,48 @@ inline PhotoTextLayoutResult rasterize_photo_text(
       result.overflow = result.overflow || y - style.baseline_offset < 0 ||
           y - style.baseline_offset + line.height() > box.height() - padding ||
           line.naturalTextWidth() > box.width() - 2 * padding;
-      y += style.size * style.line_height;
+      y += line_advance;
       ++result.line_count;
     }
     layout.endLayout();
     if (!layout_only)
       for (const auto& run : layout.glyphRuns()) result.ink_bounds = result.ink_bounds.united(run.boundingRect());
-    QTextLayout::FormatRange ink;
-    ink.start = 0;
-    ink.length = static_cast<int>(paragraph.size());
-    if (style.stroke_width > 0)
-      ink.format.setTextOutline(QPen(style.stroke_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    if (!layout_only && (style.shadow_x != 0 || style.shadow_y != 0)) {
-      auto shadow = ink;
-      shadow.format.setForeground(style.shadow_color);
+    if (has_character_runs) {
+      if (!layout_only && (style.shadow_x != 0 || style.shadow_y != 0))
+        layout.draw(&painter, QPointF(style.shadow_x, style.shadow_y),
+            photo_text_effect_ranges(rendering_style, paragraph_offset, static_cast<int>(paragraph.size()), true));
+      if (!layout_only)
+        layout.draw(&painter, QPointF(0, 0),
+            photo_text_effect_ranges(rendering_style, paragraph_offset, static_cast<int>(paragraph.size()), false));
+    } else {
+      QTextLayout::FormatRange ink;
+      ink.start = 0;
+      ink.length = static_cast<int>(paragraph.size());
       if (style.stroke_width > 0)
-        shadow.format.setTextOutline(QPen(style.shadow_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-      layout.draw(&painter, QPointF(style.shadow_x, style.shadow_y), {shadow});
+        ink.format.setTextOutline(QPen(style.stroke_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+      if (!layout_only && (style.shadow_x != 0 || style.shadow_y != 0)) {
+        auto shadow = ink;
+        shadow.format.setForeground(style.shadow_color);
+        if (style.stroke_width > 0)
+          shadow.format.setTextOutline(QPen(style.shadow_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        layout.draw(&painter, QPointF(style.shadow_x, style.shadow_y), {shadow});
+      }
+      if (!layout_only) layout.draw(&painter, QPointF(0, 0), {ink});
     }
-    if (!layout_only) layout.draw(&painter, QPointF(0, 0), {ink});
     if (!has_line) {
-      y += style.size * style.line_height;
+      y += line_advance;
       ++result.line_count;
     }
+    paragraph_offset += static_cast<int>(paragraph.size()) + 1;
   }
-  if (style.color.alpha() < 255) {
+  result.content_height = y + padding;
+  result.overflow = result.overflow || result.content_height > box.height();
+  if (!has_character_runs && style.color.alpha() < 255) {
     painter.resetTransform();
     painter.setClipping(false);
     painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
     painter.fillRect(result.image.rect(), QColor(0, 0, 0, style.color.alpha()));
   }
-  result.content_height = y + padding;
-  result.overflow = result.overflow || result.content_height > box.height();
   return result;
 }
 
@@ -370,7 +561,7 @@ inline PhotoTextLayoutResult rasterize_photo_text_on_path(
     result.error = QStringLiteral("Text contour raster exceeds the supported dimensions or memory budget.");
     return result;
   }
-  if (text.contains(QChar::LineFeed) || text.contains(QChar::CarriageReturn)) {
+  if (text.contains(QChar::LineFeed) || text.contains(QChar::CarriageReturn) || text.contains(QChar(0x2029))) {
     result.error = QStringLiteral("Text on a contour currently supports one line. Split paragraph text into editable text layers.");
     return result;
   }
@@ -413,6 +604,7 @@ inline PhotoTextLayoutResult rasterize_photo_text_on_path(
   QTextOption option;
   option.setWrapMode(QTextOption::NoWrap);
   layout.setTextOption(option);
+  layout.setFormats(photo_text_format_ranges(style, 0, static_cast<int>(text.size()), result.image));
   layout.beginLayout();
   auto line = layout.createLine();
   if (line.isValid()) {
@@ -439,7 +631,7 @@ inline PhotoTextLayoutResult rasterize_photo_text_on_path(
   }
   result.content_width = max_advance + std::max(0, glyph_count - 1) * style.path_spacing;
   result.line_count = 1;
-  result.content_height = style.size;
+  result.content_height = photo_text_max_font_size(style, 0, static_cast<int>(text.size()));
   const auto start_distance = style.path_start * path_length;
   const auto end_distance = style.path_end * path_length;
   result.overflow = start_distance + result.content_width > end_distance;
@@ -447,59 +639,66 @@ inline PhotoTextLayoutResult rasterize_photo_text_on_path(
   QPainter painter(&result.image);
   painter.setRenderHint(QPainter::Antialiasing);
   painter.scale(raster_size.width() / box.width(), raster_size.height() / box.height());
-  const auto draw_color = [&](const QPainterPath& glyph_path, const QColor& color, double offset_x, double offset_y) {
+  const auto draw_color = [&](const QPainterPath& glyph_path, const PhotoTextStyle& glyph_style,
+                              const QColor& color, double offset_x, double offset_y) {
     if (glyph_path.isEmpty()) return;
     const auto shifted = glyph_path.translated(offset_x, offset_y);
     painter.setBrush(color);
-    painter.setPen(style.stroke_width > 0
-        ? QPen(style.stroke_color, style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)
+    painter.setPen(glyph_style.stroke_width > 0
+        ? QPen(glyph_style.stroke_color, glyph_style.stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)
         : Qt::NoPen);
-    if (style.stroke_width > 0) painter.drawPath(shifted);
+    if (glyph_style.stroke_width > 0) painter.drawPath(shifted);
     painter.fillPath(shifted, color);
   };
   double spacing_offset = 0;
-  int global_glyph = 0;
-  for (const auto& run : runs) {
-    const auto glyphs = run.glyphIndexes();
-    const auto positions = run.positions();
-    const auto raw_font = run.rawFont();
-    const auto advances = raw_font.advancesForGlyphIndexes(glyphs);
-    const auto size = std::min({glyphs.size(), positions.size(), advances.size()});
-    for (qsizetype i = 0; i < size; ++i, ++global_glyph) {
-      const auto advance = advances.at(i).x();
-      const auto center_distance = start_distance + positions.at(i).x() + spacing_offset + advance * 0.5;
-      spacing_offset += style.path_spacing;
-      if (center_distance < 0 || center_distance > path_length || center_distance > end_distance) continue;
-      const auto percent = baseline.percentAtLength(center_distance);
-      const auto anchor = baseline.pointAtPercent(percent);
-      const auto before = baseline.pointAtPercent(baseline.percentAtLength(std::max(0.0, center_distance - 0.5)));
-      const auto after = baseline.pointAtPercent(baseline.percentAtLength(std::min(path_length, center_distance + 0.5)));
-      const auto angle = std::atan2(after.y() - before.y(), after.x() - before.x()) * 180.0 / std::acos(-1.0);
-      const auto radians = angle * std::acos(-1.0) / 180.0;
-      const auto side_sign = style.path_side == QStringLiteral("left") ? 1.0 : -1.0;
-      const QPointF normal(-std::sin(radians) * style.path_offset * side_sign,
-          std::cos(radians) * style.path_offset * side_sign);
-      QTransform transform;
-      transform.translate(anchor.x() + normal.x(), anchor.y() + normal.y());
-      transform.rotate(angle);
-      transform.translate(-advance * 0.5, 0);
-      const auto glyph_path = transform.map(
-          raw_font.pathForGlyph(glyphs.at(i)).translated(QPointF(0, positions.at(i).y())));
-      if (style.shadow_x != 0 || style.shadow_y != 0) draw_color(glyph_path, style.shadow_color, style.shadow_x, style.shadow_y);
-      draw_color(glyph_path, style.color, 0, 0);
-      if (style.underline) {
-        QPainterPath underline;
-        const auto underline_y = positions.at(i).y() + QFontMetricsF(font).underlinePos();
-        underline.moveTo(0, underline_y);
-        underline.lineTo(advance, underline_y);
-        const auto placed_underline = transform.map(underline);
-        const auto underline_width = std::max(1.0, QFontMetricsF(font).lineWidth());
-        if (style.shadow_x != 0 || style.shadow_y != 0) {
-          painter.setPen(QPen(style.shadow_color, underline_width, Qt::SolidLine, Qt::RoundCap));
-          painter.drawPath(placed_underline.translated(style.shadow_x, style.shadow_y));
+  for (const auto& segment : photo_text_format_segments(style, static_cast<int>(text.size()))) {
+    const auto glyph_style = photo_text_style_with_attributes(style, segment.attributes);
+    const auto segment_runs = layout.glyphRuns(segment.start, segment.length);
+    for (const auto& run : segment_runs) {
+      const auto glyphs = run.glyphIndexes();
+      const auto positions = run.positions();
+      const auto raw_font = run.rawFont();
+      const auto advances = raw_font.advancesForGlyphIndexes(glyphs);
+      const auto size = std::min({glyphs.size(), positions.size(), advances.size()});
+      const auto glyph_font = photo_text_font_for_attributes(style, segment.attributes, result.image);
+      const QFontMetricsF glyph_metrics(glyph_font);
+      for (qsizetype i = 0; i < size; ++i) {
+        const auto advance = advances.at(i).x();
+        const auto center_distance = start_distance + positions.at(i).x() + spacing_offset + advance * 0.5;
+        spacing_offset += style.path_spacing;
+        if (center_distance < 0 || center_distance > path_length || center_distance > end_distance) continue;
+        const auto percent = baseline.percentAtLength(center_distance);
+        const auto anchor = baseline.pointAtPercent(percent);
+        const auto before = baseline.pointAtPercent(baseline.percentAtLength(std::max(0.0, center_distance - 0.5)));
+        const auto after = baseline.pointAtPercent(baseline.percentAtLength(std::min(path_length, center_distance + 0.5)));
+        const auto angle = std::atan2(after.y() - before.y(), after.x() - before.x()) * 180.0 / std::acos(-1.0);
+        const auto radians = angle * std::acos(-1.0) / 180.0;
+        const auto side_sign = style.path_side == QStringLiteral("left") ? 1.0 : -1.0;
+        const QPointF normal(-std::sin(radians) * style.path_offset * side_sign,
+            std::cos(radians) * style.path_offset * side_sign);
+        QTransform transform;
+        transform.translate(anchor.x() + normal.x(), anchor.y() + normal.y());
+        transform.rotate(angle);
+        transform.translate(-advance * 0.5, 0);
+        const auto glyph_path = transform.map(
+            raw_font.pathForGlyph(glyphs.at(i)).translated(QPointF(0, positions.at(i).y())));
+        if (style.shadow_x != 0 || style.shadow_y != 0)
+          draw_color(glyph_path, glyph_style, glyph_style.shadow_color, style.shadow_x, style.shadow_y);
+        draw_color(glyph_path, glyph_style, glyph_style.color, 0, 0);
+        if (glyph_style.underline) {
+          QPainterPath underline;
+          const auto underline_y = positions.at(i).y() + glyph_metrics.underlinePos();
+          underline.moveTo(0, underline_y);
+          underline.lineTo(advance, underline_y);
+          const auto placed_underline = transform.map(underline);
+          const auto underline_width = std::max(1.0, glyph_metrics.lineWidth());
+          if (style.shadow_x != 0 || style.shadow_y != 0) {
+            painter.setPen(QPen(glyph_style.shadow_color, underline_width, Qt::SolidLine, Qt::RoundCap));
+            painter.drawPath(placed_underline.translated(style.shadow_x, style.shadow_y));
+          }
+          painter.setPen(QPen(glyph_style.color, underline_width, Qt::SolidLine, Qt::RoundCap));
+          painter.drawPath(placed_underline);
         }
-        painter.setPen(QPen(style.color, underline_width, Qt::SolidLine, Qt::RoundCap));
-        painter.drawPath(placed_underline);
       }
     }
   }
@@ -520,8 +719,11 @@ inline PhotoPointTextGeometry measure_photo_point_text(const QString& text, cons
   point_style.point_text = true;
   const auto measured = rasterize_photo_text(text, point_style, {8192, 8192}, {1, 1});
   if (!measured.error.isEmpty()) return {{}, {}, measured.error};
-  auto bounds = measured.ink_bounds.adjusted(-style.stroke_width / 2, -style.stroke_width / 2,
-      style.stroke_width / 2, style.stroke_width / 2);
+  auto maximum_stroke = style.stroke_width;
+  for (const auto& run : style.runs)
+    maximum_stroke = std::max(maximum_stroke, run.value(QStringLiteral("strokeWidth"), style.stroke_width).toDouble());
+  auto bounds = measured.ink_bounds.adjusted(-maximum_stroke / 2, -maximum_stroke / 2,
+      maximum_stroke / 2, maximum_stroke / 2);
   bounds = bounds.united(bounds.translated(style.shadow_x, style.shadow_y));
   const auto left = std::floor(std::min(0.0, bounds.left())) - 1;
   const auto top = std::floor(std::min(0.0, bounds.top())) - 1;

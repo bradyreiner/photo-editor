@@ -1,0 +1,9 @@
+{
+  "asset": "original-pulse.wav",
+  "creator": "Original deterministic synthesis in tools/build_creative.py",
+  "method": "Three sine tones at 130.81, 196.00 and 261.63 Hz with soft envelopes, repeated at four story beats. No samples or external music.",
+  "sample_rate": 48000,
+  "channels": 2,
+  "duration_seconds": 18,
+  "role": "Quiet review motion bed. No voiceover. Adjust under recorded founder speech during finishing."
+}

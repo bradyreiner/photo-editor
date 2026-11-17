@@ -1,0 +1,1114 @@
+[
+  {
+    "id": "unknown-title-id",
+    "category": "workflow",
+    "acceptableChoices": [
+      "inspect_state"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Change the existing headline to FIELD NOTES.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "documentLoaded": true,
+        "knownLayerIds": [],
+        "compositionInspected": false
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "created-title-id",
+    "category": "workflow",
+    "acceptableChoices": [
+      "use_document_tools"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Set the new headline to warm white #FFF8F0.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "creationReceipt": {
+          "ok": true,
+          "createdLayerId": "title-17"
+        },
+        "currentLayer": {
+          "id": "title-17",
+          "text": "FIELD NOTES",
+          "color": "#FFFFFF"
+        }
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "read-after-edit",
+    "category": "workflow",
+    "acceptableChoices": [
+      "inspect_state"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Change the existing headline to FIELD NOTES and verify it.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "editReceipt": {
+          "ok": true,
+          "layerId": "title-17",
+          "changed": true
+        },
+        "lastCompositionRead": "before this edit",
+        "currentReadbackAvailable": false
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "verify-visible-result",
+    "category": "workflow",
+    "acceptableChoices": [
+      "review_proof"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Review the completed poster for clipping and readability.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "currentCompositionReadback": "All requested text and typography fields match.",
+        "proof": {
+          "available": false
+        },
+        "pendingEdits": []
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "missing-native-schema",
+    "category": "workflow",
+    "acceptableChoices": [
+      "discover_controls"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Apply a native outer shadow to the title.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "commandDiscovery": {
+          "commandId": "edit.layer.shadow",
+          "available": true
+        },
+        "commandInputSchema": null,
+        "layerId": "title-17"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "native-command-ready",
+    "category": "workflow",
+    "acceptableChoices": [
+      "use_document_tools"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Set the title shadow opacity to 0.4.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "taskAdmission": "ready",
+        "layerId": "title-17",
+        "commandId": "edit.layer.shadow",
+        "commandInputSchema": {
+          "values": {
+            "opacity": "number 0..1"
+          }
+        },
+        "currentOpacity": 0,
+        "available": true
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "undiscovered-fill",
+    "category": "workflow",
+    "acceptableChoices": [
+      "discover_controls"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Create an editable background shape using the native shape controls.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "currentCanvasInspected": true,
+        "nativeShapeCommand": "not discovered",
+        "currentLayers": []
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "duplicate-receipt",
+    "category": "workflow",
+    "acceptableChoices": [
+      "inspect_state"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Create the headline, then set its color to #FFF8F0.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "lastCreationAttempt": {
+          "replayPrevented": true,
+          "alreadyCompleted": true,
+          "createdLayerId": "title-17",
+          "mutationNotApplied": true
+        },
+        "freshInspectionAfterReceipt": false
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "schema-rejection",
+    "category": "workflow",
+    "acceptableChoices": [
+      "discover_controls"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Set title tracking to 4 pixels.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "lastCall": {
+          "tool": "app.invoke_command",
+          "recoverableError": true,
+          "mutationNotApplied": true,
+          "error": "Input schema missing required field units."
+        },
+        "commandSchemaAvailable": false,
+        "layerId": "title-17"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "stale-id",
+    "category": "workflow",
+    "acceptableChoices": [
+      "inspect_state"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Move the subtitle below the headline.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "priorSubtitleId": "subtitle-old",
+        "freshInspection": {
+          "layerIds": [
+            "title-17",
+            "subtitle-new"
+          ]
+        },
+        "subtitleIdentityInCurrentDocument": "unknown",
+        "oldIdStillValid": false
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "crop-parameters-missing",
+    "category": "workflow",
+    "acceptableChoices": [
+      "inspect_state"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Set a tighter portrait crop around the subject.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "currentCrop": "unknown",
+        "canvasDimensions": "unknown",
+        "subjectBounds": "unknown"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "proof-stale",
+    "category": "workflow",
+    "acceptableChoices": [
+      "review_proof"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Check the finished composition before presenting it.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "lastProofRevision": "r4",
+        "currentRevision": "r5",
+        "freshStateReadbackComplete": true,
+        "proofAfterLastEdit": false
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "export-ready",
+    "category": "workflow",
+    "acceptableChoices": [
+      "deliver_output"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Export the approved poster as PNG.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "approvedExport": {
+          "format": "PNG",
+          "destination": "approved local destination"
+        },
+        "nativePreflight": "passed",
+        "currentBoundRenderedReview": "passed",
+        "documentSaved": true,
+        "exportStarted": false,
+        "taskAdmission": "ready"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "export-before-review",
+    "category": "workflow",
+    "acceptableChoices": [
+      "review_proof"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Finish the poster and export it once verified.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "requestedEditsMatchCurrentReadback": true,
+        "nativePreflight": "passed",
+        "currentRenderedProof": "not generated",
+        "exportStarted": false
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "essential-date",
+    "category": "workflow",
+    "acceptableChoices": [
+      "ask_user"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Create a concert poster with the correct venue and date. Ask me for missing facts.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "venue": "provided",
+        "date": null,
+        "dateAvailableInDocumentOrReceipts": false,
+        "allOtherUserInputs": "provided"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "permission-absent",
+    "category": "workflow",
+    "acceptableChoices": [
+      "stop_safely"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "photo.inspect_composition"
+      }
+    ],
+    "state": {
+      "brief": "Delete the existing text layers.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "capabilities": [
+          "read"
+        ],
+        "nativeAdmission": "denied",
+        "reason": "No mutation capability.",
+        "inspectionComplete": true
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "target-closed",
+    "category": "workflow",
+    "acceptableChoices": [
+      "stop_safely"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Continue adjusting the title in the approved document.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "approvedTarget": "document-a",
+        "approvedTargetOpen": false,
+        "activeTarget": "document-b",
+        "reopenApprovedTarget": "unsupported",
+        "targetPolicy": "cannot substitute targets"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "unknown-scope",
+    "category": "ambiguity",
+    "acceptableChoices": [
+      "insufficient_evidence",
+      "ask_user"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Make it better.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {},
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "omitted-repair-context",
+    "category": "ambiguity",
+    "acceptableChoices": [
+      "insufficient_evidence",
+      "inspect_state",
+      "review_proof"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Repair the issue found in the last review.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "projectionOmittedFields": true,
+        "lastReviewIssues": "omitted",
+        "availableEvidence": "no current review details or pixels"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "photo-intent",
+    "category": "workflow",
+    "acceptableChoices": [
+      "finish_plan"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [],
+    "state": {
+      "brief": "Warm the whole photo slightly while keeping natural color.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": false,
+      "observations": {
+        "currentPhotoReadback": {
+          "temperature": 0
+        },
+        "visualAssessment": "neutral daylight",
+        "noCompositionChangesRequested": true
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "clipped-title-repair",
+    "category": "workflow",
+    "acceptableChoices": [
+      "use_document_tools"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Keep the headline at least three times the subtitle size and fix clipping.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "currentReadback": {
+          "headlineSize": 144,
+          "subtitleSize": 48,
+          "headlineTracking": 40,
+          "headlineId": "title-17",
+          "subtitleId": "subtitle-8"
+        },
+        "currentBoundReview": {
+          "issue": "Headline clips at right canvas edge; excessive tracking.",
+          "repairHint": "Reduce title tracking while preserving requested size ratio."
+        },
+        "typographyInputSchemaAvailable": true,
+        "nativeTaskAdmission": "ready"
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "async-export-pending",
+    "category": "workflow",
+    "acceptableChoices": [
+      "inspect_state"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "timeline.inspect_export"
+      },
+      {
+        "name": "timeline.export_h264"
+      }
+    ],
+    "state": {
+      "brief": "Export the approved Timeline as H.264 once.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "exportReceipt": {
+          "accepted": true,
+          "requestId": "81563087-38ce-49bf-a422-dd3c254147b3",
+          "resourceId": "timeline-fixture",
+          "documentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "status": "running"
+        },
+        "instruction": "Never submit a duplicate export while this job is pending."
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "missing-font",
+    "category": "workflow",
+    "acceptableChoices": [
+      "ask_user",
+      "stop_safely"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Use the exact requested font family and face; do not substitute.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": true,
+      "observations": {
+        "fontInventoryRead": true,
+        "requestedFaceAvailable": false,
+        "fontInstallationToolAvailable": false,
+        "nativeInventoryIsComplete": true
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  },
+  {
+    "id": "completed-in-progress",
+    "category": "workflow",
+    "acceptableChoices": [
+      "finish_plan"
+    ],
+    "labelStatus": "developer-authored contract fixture; not human creative judgment",
+    "tools": [
+      {
+        "name": "app.list_commands"
+      },
+      {
+        "name": "app.command_schema"
+      },
+      {
+        "name": "photo.inspect_composition"
+      },
+      {
+        "name": "photo.edit_composition"
+      },
+      {
+        "name": "app.invoke_command"
+      },
+      {
+        "name": "photo.render_current_proof"
+      },
+      {
+        "name": "photo.validate_edit"
+      },
+      {
+        "name": "photo.export_batch"
+      }
+    ],
+    "state": {
+      "brief": "Change headline copy, then verify it. Do not export.",
+      "phase": "sample",
+      "assetId": "fixture-photo",
+      "toolPlanRequired": false,
+      "observations": {
+        "currentReadback": {
+          "requestedCopyMatches": true
+        },
+        "currentBoundRenderedReview": "passed",
+        "allExplicitRequirementsComplete": true,
+        "pendingOperations": []
+      },
+      "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached."
+    }
+  }
+]

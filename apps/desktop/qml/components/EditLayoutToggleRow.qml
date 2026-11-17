@@ -57,7 +57,8 @@ Item {
             Layout.fillWidth: true
             text: root.label
             color: root.active ? theme.textStrong : (rowMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted)
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 8
             font.letterSpacing: 0.55
             font.weight: root.active ? Font.DemiBold : Font.Medium

@@ -13,6 +13,8 @@ GlassSurface {
     required property var catalogAssets
     required property bool collapsed
     required property string activeTab
+    property bool embeddedDockHeader: false
+    property bool workspaceActive: true
     property bool programGangEnabled: false
     property bool programPlaying: false
     property var programGangState: ({})
@@ -31,6 +33,30 @@ GlassSurface {
     property string mediaSearchText: ""
     property var mediaSearchScopes: ["all"]
     property string mediaFilmstripDensity: "standard"
+    property string mediaViewMode: "grid"
+    property real mediaThumbnailTargetSize: 112
+    property int mediaFilterRevision: 0
+    property int mediaCatalogRevision: 0
+    property int mediaFilterCursor: 0
+    property int mediaFilterSourceCount: 0
+    property int mediaFilterActiveRevision: 0
+    property string mediaFilterQuery: ""
+    property var mediaFilterScopes: ["all"]
+    property string mediaFilterBinId: ""
+    property string mediaFilterCollectionId: ""
+    property bool mediaFilterBusy: false
+    property var filteredMediaAssetIds: ({})
+    property int filteredMediaSelectionRevision: 0
+    // Read-only file references used by the loaded timeline. Project-only rows
+    // share the media browser actions but never enter the catalog's visible range.
+    property var projectReferencedMedia: []
+    property var projectReferencedMediaById: ({})
+    property int projectOnlyMediaCount: 0
+    property string projectReferencedMediaFingerprint: ""
+    property bool projectReferencedMediaSnapshotDirty: true
+    property real mediaGridScrollPosition: 0
+    property real mediaListScrollPosition: 0
+    property int mediaSelectionAnchorIndex: -1
     property string mediaBinDraft: ""
     property string mediaBinRenameDraft: ""
     property string selectedMediaBinId: ""
@@ -65,6 +91,43 @@ GlassSurface {
     property int mediaMetadataRevision: 0
     property real previewSeconds: 0
     property bool sourceTapeAutoAdvance: false
+    property real suspendedSourceSeconds: -1
+    property string suspendedSourceUrl: ""
+    property bool sourceDecoderPrimed: false
+    property bool sourceFreshDecoderPending: false
+    property bool sourcePrerollActive: false
+    property bool sourcePrerollFirstFrameSeen: false
+    property bool sourcePrerollSeekIssued: false
+    property bool sourcePrerollSeekAcknowledged: false
+    property int sourcePrerollSeekAcknowledgedFrameGeneration: -1
+    property real sourcePrerollSeekRequestedPositionMs: -1
+    property real sourcePrerollSeekAcknowledgedPositionMs: -1
+    property int sourcePrerollNativeReseekCount: 0
+    property bool sourcePrerollPlayAfterSeek: false
+    property bool sourcePrerollPlaybackHandoffPending: false
+    property int sourcePrerollPlaybackHandoffGeneration: -1
+    property string sourcePrerollPlaybackHandoffUrl: ""
+    property real sourcePrerollPlaybackHandoffTargetSeconds: -1
+    property int sourcePrerollPlaybackStartFrameGeneration: -1
+    property real sourcePrerollPlaybackStartSeconds: -1
+    property bool sourcePrerollFailed: false
+    property bool sourceUserPlaybackRequested: false
+    property int sourceFrameGeneration: 0
+    property int sourcePrerollSeekFrameGeneration: -1
+    property int sourcePrerollGeneration: 0
+    property int sourcePrerollSeekTimerGeneration: -1
+    property int sourcePrerollDeadlineGeneration: -1
+    property real sourcePrerollTargetSeconds: 0
+    property string sourcePrerollUrl: ""
+    property int sourcePrerollCompletedFrameGeneration: -1
+    property int sourcePrerollCompletedSeekFrameGeneration: -1
+    property int sourcePrerollCompletedAcknowledgedFrameGeneration: -1
+    property real sourcePrerollCompletedAcknowledgedPositionMs: -1
+    property real sourcePrerollCompletedTargetSeconds: -1
+    property real sourcePrerollCompletedPositionSeconds: -1
+    property bool sourcePrerollCompletedFrameValid: false
+    readonly property bool sourceViewerActive: workspaceActive && visible && !collapsed && activeTab === "source"
+    readonly property bool mediaBrowserActive: workspaceActive && visible && !collapsed && activeTab === "media"
     readonly property var documentController: timelineDocument !== undefined && timelineDocument !== null ? timelineDocument : null
     readonly property var sourceState: sourceClip !== undefined && sourceClip !== null ? sourceClip : ({})
     readonly property var assetCatalog: catalogAssets !== undefined && catalogAssets !== null ? catalogAssets : null
@@ -85,16 +148,38 @@ GlassSurface {
     readonly property real framesPerSecondValue: documentController !== null ? Number(documentController.framesPerSecond || 30) : 30
     readonly property int assetCountValue: assetCatalog !== null ? Number(assetCatalog.assetCount || 0) : 0
     readonly property int totalAssetCountValue: assetCatalog !== null ? Number(assetCatalog.totalAssetCount || 0) : 0
+    readonly property int browsableMediaCountValue: totalAssetCountValue + projectOnlyMediaCount
+    readonly property int mediaResultCountValue: filteredMediaModel.count
+    readonly property bool mediaFilterResultsPending: mediaFilterBusy
+                                                        || mediaFilterRevision !== mediaFilterActiveRevision
+    readonly property int selectedMediaVisibleAssetCount: {
+        filteredMediaSelectionRevision
+        const visibleIds = filteredMediaAssetIds
+        const selectedIds = selectedMediaAssetIds
+        let count = 0
+        for (let index = 0; index < selectedIds.length; ++index) {
+            if (visibleIds[String(selectedIds[index])] === true)
+                count += 1
+        }
+        return count
+    }
+    readonly property int selectedMediaHiddenAssetCount: mediaFilterResultsPending ? 0
+                                                         : Math.max(0, selectedMediaAssetIds.length
+                                                                     - selectedMediaVisibleAssetCount)
     readonly property var mediaBinsModel: documentController ? documentController.mediaBins : []
     readonly property var selectedMediaAssetValue: selectedMediaAssetIds.length === 1
-                                                    ? catalogAssetForId(selectedMediaAssetIds[0]) : ({})
-    readonly property string selectedMediaTitleValue: String(
-        selectedMediaAssetValue.cameraLabel || selectedMediaAssetValue.displayLabel
-        || selectedMediaAssetValue.assetId || "Media")
+                                                    ? mediaAssetForId(selectedMediaAssetIds[0]) : ({})
+    readonly property string selectedMediaTitleValue: {
+        const fileName = String(selectedMediaAssetValue.filePath || "").split(/[\\/]/).pop()
+        return fileName.length > 0 ? fileName : String(
+            selectedMediaAssetValue.cameraLabel || selectedMediaAssetValue.displayLabel
+            || selectedMediaAssetValue.assetId || "Media")
+    }
     readonly property bool selectedMediaOnlineValue: selectedMediaAssetValue.online === true
     readonly property int mediaFilmstripSampleCount: mediaFilmstripDensity === "compact" ? 5
                                                        : mediaFilmstripDensity === "detailed" ? 15 : 9
-    readonly property string timelineSourcePanelStyleContract: "timeline-source-panel-style:v2|surface:shared|tabs:filter-chip|media-well:semantic|type:shared|spacing:shared|transport:shared|states:empty-disabled-offline|layout:video-editor-preserved|pool:search-filter-browse-selection-actions"
+    readonly property string timelineSourcePanelStyleContract: "timeline-source-panel-style:v3|surface:shared|tabs:filter-chip|media-well:semantic|type:shared|spacing:shared|transport:shared|states:empty-disabled-offline-no-results|layout:video-editor-preserved|pool:virtualized-grid-list-size-filter-count-selection-actions"
+    readonly property string timelineMediaSelectionVisibilityContract: "timeline-media-selection-visibility:v1|selection:persistent|filtered-model-id-map:true|status:hidden-count|pending:updating-results"
     readonly property string timelineUnifiedMediaSearchContract: "timeline-unified-media-search:v2|one-field:filename-metadata-tags-transcript-captions-markers-on-screen-text|fields:search-menu-composable|filters:bin-plus-smart-collection|quoted-phrases:true|results:matched-scope|default-density:query-contextual"
     readonly property string timelineMediaHoverScrubContract: "timeline-media-hover-scrub:v1|pointer:debounced-80ms|density:compact-5-standard-9-detailed-15|decode:ffmpeg-384x216-single-frame|queue:latest-per-asset-bounded-24|cache:bounded-240-files-96mb|full-resolution-per-move:false|ui:hover-contextual"
     readonly property string timelineTakeComparisonContract: "timeline-take-comparison:v1|selection:2-to-8|view:contact-sheet|playback:synchronized-normalized-drift-correction|audio:leader-only|rating:controller-owned|choice:load-source|ui:modular-contextual"
@@ -171,12 +256,365 @@ GlassSurface {
                 + ":" + String(frames).padStart(2, "0")
     }
 
+    function restoreSourceAudioOutput() {
+        sourcePreviewPlayer.audioOutput = sourcePreviewAudio
+    }
+
+    function clearSourcePrerollPlaybackHandoff() {
+        sourcePrerollPlayAfterSeek = false
+        sourcePrerollPlaybackHandoffPending = false
+        sourcePrerollPlaybackHandoffGeneration = -1
+        sourcePrerollPlaybackHandoffUrl = ""
+        sourcePrerollPlaybackHandoffTargetSeconds = -1
+    }
+
+    function finishSourcePrerollPlaybackHandoff(generation, playbackState) {
+        const observedPlaybackState = playbackState === undefined
+                ? sourcePreviewPlayer.playbackState : Number(playbackState)
+        if (!sourcePrerollPlaybackHandoffPending
+                || Number(generation) !== sourcePrerollPlaybackHandoffGeneration
+                || observedPlaybackState === MediaPlayer.PlayingState
+                || sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState)
+            return false
+
+        const expectedUrl = sourcePrerollPlaybackHandoffUrl
+        const targetSeconds = sourcePrerollPlaybackHandoffTargetSeconds
+        const canResume = sourceViewerActive && !programPlaying && !programGangEnabled
+                && hasSource && sourceState.mediaType === "video"
+                && expectedUrl.length > 0
+                && String(sourcePreviewPlayer.source) === expectedUrl
+                && String(sourceState.sourceUrl || "") === expectedUrl
+                && sourceDecoderPrimed && !sourcePrerollActive
+                && Math.abs(sourcePreviewPlayer.position / 1000 - targetSeconds) <= 0.1
+
+        clearSourcePrerollPlaybackHandoff()
+        if (!canResume) {
+            sourceUserPlaybackRequested = false
+            sourceTapeAutoAdvance = false
+            return false
+        }
+
+        sourceUserPlaybackRequested = true
+        sourceTapeAutoAdvance = sourceTapeEnabledValue
+        sourcePrerollPlaybackStartFrameGeneration = sourceFrameGeneration
+        sourcePrerollPlaybackStartSeconds = sourcePreviewPlayer.position / 1000
+        restoreSourceAudioOutput()
+        sourcePreviewPlayer.play()
+        return true
+    }
+
+    function requestSourcePlaybackAfterFreshPreroll() {
+        if (!sourceFreshDecoderPending || sourceDecoderPrimed || !sourceViewerActive
+                || sourceState.mediaType !== "video" || programPlaying || programGangEnabled)
+            return false
+        sourcePrerollFailed = false
+        sourceTapeAutoAdvance = false
+        if (!beginSourcePreroll(previewSeconds))
+            return false
+        sourcePrerollPlayAfterSeek = true
+        sourceUserPlaybackRequested = true
+        return true
+    }
+
+    function cancelSourcePreroll(pausePlayer) {
+        sourcePrerollGeneration += 1
+        sourcePrerollDeadlineTimer.stop()
+        sourcePrerollSeekTimer.stop()
+        sourcePrerollDeadlineGeneration = -1
+        sourcePrerollSeekTimerGeneration = -1
+        const wasActive = sourcePrerollActive
+        sourcePrerollActive = false
+        clearSourcePrerollPlaybackHandoff()
+        sourcePrerollFirstFrameSeen = false
+        sourcePrerollSeekIssued = false
+        sourcePrerollSeekFrameGeneration = -1
+        sourcePrerollSeekAcknowledged = false
+        sourcePrerollSeekAcknowledgedFrameGeneration = -1
+        sourcePrerollSeekRequestedPositionMs = -1
+        sourcePrerollSeekAcknowledgedPositionMs = -1
+        sourcePrerollNativeReseekCount = 0
+        sourcePrerollUrl = ""
+        if (pausePlayer === true && wasActive
+                && sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState)
+            sourcePreviewPlayer.pause()
+    }
+
+    function sourcePrerollIsCurrent(generation) {
+        const expectedGeneration = generation === undefined
+                ? sourcePrerollGeneration : Number(generation)
+        return expectedGeneration === sourcePrerollGeneration
+                && sourcePrerollActive && sourceViewerActive && !programPlaying
+                && !programGangEnabled && !sourceTapeAutoAdvance
+                && hasSource && sourceState.mediaType === "video"
+                && sourcePrerollUrl.length > 0
+                && String(sourcePreviewPlayer.source) === sourcePrerollUrl
+                && String(sourceState.sourceUrl || "") === sourcePrerollUrl
+    }
+
+    function maybeStartSourcePrerollPlayback() {
+        if (!sourcePrerollIsCurrent())
+            return false
+        const durationMs = Number(sourcePreviewPlayer.duration)
+        if (sourcePreviewPlayer.mediaStatus !== MediaPlayer.LoadedMedia
+                || !sourcePreviewPlayer.seekable || !Number.isFinite(durationMs)
+                || durationMs <= 0)
+            return false
+        const frameStepMs = 1000 / Math.max(1, framesPerSecondValue)
+        sourcePrerollTargetSeconds = Math.min(
+                    sourcePrerollTargetSeconds,
+                    Math.max(0, (durationMs - frameStepMs) / 1000))
+        if (durationMs <= sourcePrerollTargetSeconds * 1000)
+            return false
+        sourcePreviewPlayer.audioOutput = null
+        sourceTapeAutoAdvance = false
+        if (sourcePreviewPlayer.playbackState !== MediaPlayer.PlayingState)
+            sourcePreviewPlayer.play()
+        return true
+    }
+
+    function beginSourcePreroll(seconds) {
+        if (!sourceFreshDecoderPending || sourceDecoderPrimed || !sourceViewerActive
+                || programPlaying || programGangEnabled || sourceTapeAutoAdvance || !hasSource
+                || sourceUserPlaybackRequested || sourceState.mediaType !== "video")
+            return false
+        const sourceUrl = String(sourcePreviewPlayer.source)
+        if (sourceUrl.length === 0 || sourceUrl !== String(sourceState.sourceUrl || ""))
+            return false
+        if (!sourcePrerollActive) {
+            sourcePrerollGeneration += 1
+            sourcePrerollActive = true
+            sourcePrerollUrl = sourceUrl
+            sourcePrerollSeekTimerGeneration = sourcePrerollGeneration
+            sourcePrerollDeadlineGeneration = sourcePrerollGeneration
+            sourcePrerollFirstFrameSeen = false
+            sourcePrerollSeekIssued = false
+            sourcePrerollSeekFrameGeneration = -1
+            sourcePrerollSeekAcknowledged = false
+            sourcePrerollSeekAcknowledgedFrameGeneration = -1
+            sourcePrerollSeekRequestedPositionMs = -1
+            sourcePrerollSeekAcknowledgedPositionMs = -1
+            sourcePrerollNativeReseekCount = 0
+            clearSourcePrerollPlaybackHandoff()
+            sourcePrerollFailed = false
+            sourcePrerollCompletedFrameGeneration = -1
+            sourcePrerollCompletedSeekFrameGeneration = -1
+            sourcePrerollCompletedAcknowledgedFrameGeneration = -1
+            sourcePrerollCompletedAcknowledgedPositionMs = -1
+            sourcePrerollCompletedTargetSeconds = -1
+            sourcePrerollCompletedPositionSeconds = -1
+            sourcePrerollCompletedFrameValid = false
+            sourcePrerollPlaybackStartFrameGeneration = -1
+            sourcePrerollPlaybackStartSeconds = -1
+            sourcePreviewPlayer.audioOutput = null
+            sourceTapeAutoAdvance = false
+            sourcePrerollDeadlineTimer.restart()
+        }
+        sourcePrerollTargetSeconds = Math.max(
+                    0, Math.min(Number(sourceState.durationSeconds || 0), Number(seconds || 0)))
+        sourcePrerollSeekIssued = false
+        if (sourcePrerollFirstFrameSeen)
+            sourcePrerollSeekTimer.restart()
+        maybeStartSourcePrerollPlayback()
+        return true
+    }
+
+    function issueSourcePrerollSeek(generation) {
+        if (!sourcePrerollIsCurrent(generation) || !sourcePrerollFirstFrameSeen
+                || !sourcePreviewPlayer.seekable)
+            return
+        const durationMs = Number(sourcePreviewPlayer.duration)
+        const frameStepMs = 1000 / Math.max(1, framesPerSecondValue)
+        if (!Number.isFinite(durationMs) || durationMs <= 0)
+            return
+        const targetMs = Math.max(
+                    0, Math.min(Math.round(sourcePrerollTargetSeconds * 1000),
+                                Math.floor(durationMs - frameStepMs)))
+        sourcePrerollTargetSeconds = targetMs / 1000
+        sourcePrerollSeekFrameGeneration = sourceFrameGeneration
+        sourcePrerollSeekAcknowledged = false
+        sourcePrerollSeekAcknowledgedFrameGeneration = -1
+        sourcePrerollSeekRequestedPositionMs = targetMs
+        sourcePrerollSeekAcknowledgedPositionMs = -1
+        sourcePrerollSeekIssued = true
+        sourcePreviewPlayer.position = targetMs
+    }
+
+    function retrySourcePrerollSeekAfterOvershoot(generation) {
+        if (!sourcePrerollIsCurrent(generation))
+            return false
+        if (sourcePrerollNativeReseekCount >= 1) {
+            failSourcePreroll(sourcePrerollGeneration)
+            return false
+        }
+        sourcePrerollNativeReseekCount += 1
+        sourcePrerollSeekIssued = false
+        sourcePrerollSeekAcknowledged = false
+        sourcePrerollSeekAcknowledgedFrameGeneration = -1
+        sourcePrerollSeekAcknowledgedPositionMs = -1
+        sourcePrerollSeekTimer.restart()
+        return true
+    }
+
+    function completeSourcePreroll() {
+        if (!sourcePrerollIsCurrent())
+            return
+        const completedTargetSeconds = sourcePrerollTargetSeconds
+        const completedSourceUrl = sourcePrerollUrl
+        const playAfterSeek = sourcePrerollPlayAfterSeek
+        const completedSeekFrameGeneration = sourcePrerollSeekFrameGeneration
+        const completedAcknowledgedFrameGeneration =
+            sourcePrerollSeekAcknowledgedFrameGeneration
+        const completedAcknowledgedPositionMs = sourcePrerollSeekAcknowledgedPositionMs
+        const completedFrameGeneration = sourceFrameGeneration
+        const completedFrameValid = sourceFrameAvailable
+        sourcePrerollDeadlineTimer.stop()
+        sourcePrerollSeekTimer.stop()
+        sourcePrerollActive = false
+        sourcePrerollFirstFrameSeen = false
+        sourcePrerollSeekIssued = false
+        sourcePrerollSeekFrameGeneration = -1
+        sourcePrerollSeekAcknowledged = false
+        sourcePrerollSeekAcknowledgedFrameGeneration = -1
+        sourcePrerollSeekRequestedPositionMs = -1
+        sourcePrerollSeekAcknowledgedPositionMs = -1
+        sourcePrerollNativeReseekCount = 0
+        sourcePrerollUrl = ""
+        sourcePrerollPlayAfterSeek = false
+        sourcePrerollPlaybackHandoffPending = playAfterSeek
+        sourcePrerollPlaybackHandoffGeneration = playAfterSeek ? sourcePrerollGeneration : -1
+        sourcePrerollPlaybackHandoffUrl = playAfterSeek ? completedSourceUrl : ""
+        sourcePrerollPlaybackHandoffTargetSeconds = playAfterSeek ? completedTargetSeconds : -1
+        sourcePrerollFailed = false
+        sourceDecoderPrimed = true
+        sourceFreshDecoderPending = false
+        sourceUserPlaybackRequested = playAfterSeek
+        sourceTapeAutoAdvance = false
+        sourcePreviewPlayer.pause()
+        previewSeconds = sourcePreviewPlayer.position / 1000
+        sourcePrerollCompletedTargetSeconds = completedTargetSeconds
+        sourcePrerollCompletedSeekFrameGeneration = completedSeekFrameGeneration
+        sourcePrerollCompletedFrameGeneration = completedFrameGeneration
+        sourcePrerollCompletedPositionSeconds = sourcePreviewPlayer.position / 1000
+        sourcePrerollCompletedFrameValid = completedFrameValid
+        sourcePrerollCompletedAcknowledgedFrameGeneration =
+            completedAcknowledgedFrameGeneration
+        sourcePrerollCompletedAcknowledgedPositionMs = completedAcknowledgedPositionMs
+        if (playAfterSeek && sourcePreviewPlayer.playbackState !== MediaPlayer.PlayingState)
+            finishSourcePrerollPlaybackHandoff(sourcePrerollPlaybackHandoffGeneration)
+    }
+
+    function failSourcePreroll(generation) {
+        if (!sourcePrerollIsCurrent(generation))
+            return
+        const target = sourcePrerollTargetSeconds
+        sourcePrerollGeneration += 1
+        sourcePrerollDeadlineGeneration = -1
+        sourcePrerollSeekTimerGeneration = -1
+        sourcePrerollActive = false
+        clearSourcePrerollPlaybackHandoff()
+        sourcePrerollFirstFrameSeen = false
+        sourcePrerollSeekIssued = false
+        sourcePrerollSeekFrameGeneration = -1
+        sourcePrerollSeekAcknowledged = false
+        sourcePrerollSeekAcknowledgedFrameGeneration = -1
+        sourcePrerollSeekRequestedPositionMs = -1
+        sourcePrerollSeekAcknowledgedPositionMs = -1
+        sourcePrerollNativeReseekCount = 0
+        sourcePrerollUrl = ""
+        sourcePrerollFailed = true
+        sourceTapeAutoAdvance = false
+        sourceUserPlaybackRequested = false
+        sourcePreviewPlayer.pause()
+        sourceVideoMonitor.clearOutput()
+        sourceFrameAvailable = false
+        previewSeconds = target
+    }
+
+    function handleSourceVideoFrame() {
+        sourceFrameGeneration += 1
+        const size = sourceVideoMonitor.videoSink.videoSize
+        if (!sourceViewerActive) {
+            sourceFrameAvailable = false
+            if (size.width > 0 && size.height > 0)
+                sourceVideoMonitor.clearOutput()
+            return
+        }
+        sourceFrameAvailable = size.width > 0 && size.height > 0
+        if (!sourceFrameAvailable)
+            return
+        if (!sourcePrerollActive) {
+            if (sourceFreshDecoderPending
+                    && sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState) {
+                sourceDecoderPrimed = true
+                sourceFreshDecoderPending = false
+                sourceUserPlaybackRequested = false
+            }
+            return
+        }
+        if (!sourcePrerollIsCurrent()) {
+            cancelSourcePreroll(true)
+            return
+        }
+        if (!sourcePrerollFirstFrameSeen) {
+            sourcePrerollFirstFrameSeen = true
+            sourcePrerollSeekFrameGeneration = sourceFrameGeneration
+            sourcePrerollSeekIssued = false
+            sourcePrerollSeekTimer.restart()
+            return
+        }
+        if (!sourcePrerollSeekIssued
+                || sourceFrameGeneration <= sourcePrerollSeekFrameGeneration)
+            return
+        const nativePositionMs = Number(sourcePreviewPlayer.position)
+        const requestedPositionMs = sourcePrerollSeekRequestedPositionMs
+        if (!Number.isFinite(nativePositionMs) || requestedPositionMs < 0)
+            return
+        if (nativePositionMs - requestedPositionMs > 100) {
+            retrySourcePrerollSeekAfterOvershoot(sourcePrerollGeneration)
+            return
+        }
+        if (!sourcePrerollSeekAcknowledged) {
+            if (nativePositionMs <= requestedPositionMs)
+                return
+            sourcePrerollSeekAcknowledged = true
+            sourcePrerollSeekAcknowledgedFrameGeneration = sourceFrameGeneration
+            sourcePrerollSeekAcknowledgedPositionMs = nativePositionMs
+            return
+        }
+        if (sourceFrameGeneration <= sourcePrerollSeekAcknowledgedFrameGeneration ||
+            nativePositionMs <= requestedPositionMs)
+            return
+        const displayedSeconds = nativePositionMs / 1000
+        if (Math.abs(displayedSeconds - sourcePrerollTargetSeconds) <= 0.1)
+            completeSourcePreroll()
+    }
+
     function seekSource(seconds, driveProgram) {
         if (!hasSourceClipValue)
             return
         const bounded = Math.max(0, Math.min(Number(sourceState.durationSeconds || 0), Number(seconds || 0)))
         previewSeconds = bounded
-        sourcePreviewPlayer.position = Math.round(bounded * 1000)
+        if (sourceViewerActive && sourcePrerollActive) {
+            sourcePrerollTargetSeconds = bounded
+            sourcePrerollSeekIssued = false
+            sourcePrerollSeekAcknowledged = false
+            sourcePrerollSeekAcknowledgedFrameGeneration = -1
+            sourcePrerollSeekRequestedPositionMs = -1
+            sourcePrerollSeekAcknowledgedPositionMs = -1
+            sourcePrerollNativeReseekCount = 0
+            if (sourcePrerollFirstFrameSeen)
+                sourcePrerollSeekTimer.restart()
+        } else if (sourceViewerActive && sourceFreshDecoderPending
+                   && !sourceDecoderPrimed && !sourceUserPlaybackRequested
+                   && sourceState.mediaType === "video" && !programGangEnabled
+                   && !sourceTapeAutoAdvance) {
+            beginSourcePreroll(bounded)
+        } else if (sourceViewerActive) {
+            sourcePreviewPlayer.position = Math.round(bounded * 1000)
+        } else {
+            suspendedSourceSeconds = bounded
+            suspendedSourceUrl = String(sourceState.sourceUrl || "")
+        }
         if (programGangEnabled && driveProgram === true)
             root.gangedSourceSeekRequested(bounded)
     }
@@ -295,6 +733,7 @@ GlassSurface {
                     String(documentController.activeSmartCollectionId || "") === collectionId
                     ? "" : collectionId
         }
+        scheduleMediaFilterRefresh()
     }
 
     function mediaSearchScopeMenuItems() {
@@ -371,13 +810,299 @@ GlassSurface {
     function catalogAssetForId(assetId) {
         if (!assetCatalog)
             return ({})
-        const target = String(assetId || "")
-        for (let index = 0; index < assetCatalog.assetCount; ++index) {
-            const asset = assetCatalog.assetAt(index)
-            if (String(asset.assetId || "") === target)
-                return asset
+        return assetCatalog.assetById(String(assetId || "")) || ({})
+    }
+
+    function isCatalogBackedAsset(assetId) {
+        const catalogAsset = catalogAssetForId(assetId)
+        if (String(catalogAsset.assetId || "").length === 0)
+            return false
+        const projectAsset = projectAssetForId(assetId)
+        const projectPath = String(projectAsset.filePath || "")
+        return projectPath.length === 0
+                || projectPath === String(catalogAsset.filePath || "")
+    }
+
+    function selectionIsCatalogBacked() {
+        if (selectedMediaAssetIds.length === 0)
+            return false
+        for (let index = 0; index < selectedMediaAssetIds.length; ++index) {
+            if (!isCatalogBackedAsset(selectedMediaAssetIds[index]))
+                return false
         }
-        return ({})
+        return true
+    }
+
+    function projectAssetForId(assetId) {
+        return projectReferencedMediaById[String(assetId || "")] || ({})
+    }
+
+    function mediaAssetForId(assetId) {
+        const catalogAsset = catalogAssetForId(assetId)
+        const projectAsset = projectAssetForId(assetId)
+        if (String(projectAsset.filePath || "").length > 0) {
+            const media = Object.assign({}, projectAsset, catalogAsset || ({}))
+            const sourcePathDiffers = String(projectAsset.filePath)
+                    !== String(catalogAsset.filePath || "")
+            media.assetId = String(assetId || "")
+            media.filePath = projectAsset.filePath
+            media.mediaType = String(projectAsset.mediaType || catalogAsset.mediaType || "")
+            media.online = projectAsset.online !== false
+            media.thumbnailSource = String(projectAsset.thumbnailSource || projectAsset.posterSource
+                                           || (sourcePathDiffers ? ""
+                                               : catalogAsset.thumbnailSource
+                                                 || catalogAsset.posterSource || ""))
+            media.posterSource = String(projectAsset.posterSource
+                                         || (sourcePathDiffers ? ""
+                                             : catalogAsset.posterSource || ""))
+            if (Number(projectAsset.durationSeconds) > 0)
+                media.durationSeconds = Number(projectAsset.durationSeconds)
+            if (String(projectAsset.durationText || "").length > 0)
+                media.durationText = String(projectAsset.durationText)
+            return media
+        }
+        if (String(catalogAsset.assetId || "").length > 0)
+            return catalogAsset
+        return projectAsset
+    }
+
+    function canRefreshProjectReferencedMedia() {
+        return root.visible && root.workspaceActive && !root.collapsed
+                && root.activeTab === "media"
+    }
+
+    function requestProjectReferencedMediaRefresh() {
+        projectReferencedMediaSnapshotDirty = true
+        if (canRefreshProjectReferencedMedia())
+            projectMediaRefreshTimer.restart()
+    }
+
+    function refreshProjectReferencedMedia() {
+        if (!canRefreshProjectReferencedMedia()) {
+            projectReferencedMediaSnapshotDirty = true
+            return false
+        }
+
+        let sourceRows = projectReferencedMedia
+        const controller = documentController
+        if (controller && typeof controller.snapshotTimelineUsedMedia === "function") {
+            const snapshot = controller.snapshotTimelineUsedMedia()
+            sourceRows = snapshot && typeof snapshot.length === "number" ? snapshot : []
+        } else if (!controller) {
+            sourceRows = []
+        }
+
+        const normalized = []
+        const byId = ({})
+        const seen = ({})
+        for (let index = 0; index < sourceRows.length; ++index) {
+            const source = sourceRows[index] || ({})
+            const assetId = String(source.assetId || source.mediaId || "").trim()
+            const filePath = String(source.filePath || "")
+            const mediaType = String(source.mediaType || "")
+            if (assetId.length === 0 || filePath.length === 0
+                    || (mediaType !== "photo" && mediaType !== "video" && mediaType !== "audio")
+                    || seen[assetId] === true)
+                continue
+            seen[assetId] = true
+            const media = Object.assign({}, source)
+            media.assetId = assetId
+            media.filePath = filePath
+            media.mediaType = mediaType
+            media.timelineReferenced = true
+            if (media.online !== false)
+                media.online = true
+            if (!String(media.displayLabel || "").trim())
+                media.displayLabel = String(media.cameraLabel || media.title
+                                            || filePath.split(/[\\/]/).pop())
+            byId[assetId] = media
+            normalized.push(media)
+        }
+
+        const fingerprint = JSON.stringify(normalized)
+        projectReferencedMediaSnapshotDirty = false
+        if (fingerprint === projectReferencedMediaFingerprint)
+            return false
+
+        projectReferencedMediaFingerprint = fingerprint
+        projectReferencedMedia = normalized
+        projectReferencedMediaById = byId
+        recountProjectOnlyMedia()
+        scheduleMediaFilterRefresh()
+        return true
+    }
+
+    function recountProjectOnlyMedia() {
+        let count = 0
+        for (let index = 0; index < projectReferencedMedia.length; ++index) {
+            const assetId = String(projectReferencedMedia[index].assetId || "")
+            if (String(catalogAssetForId(assetId).assetId || "").length === 0)
+                count += 1
+        }
+        projectOnlyMediaCount = count
+    }
+
+    function mediaSelectionSummary() {
+        const selectedCount = selectedMediaAssetIds.length
+        if (selectedCount === 0)
+            return ""
+        if (mediaFilterResultsPending)
+            return String(selectedCount) + " selected  ·  updating results"
+        const hiddenCount = selectedMediaHiddenAssetCount
+        if (hiddenCount > 0)
+            return String(selectedCount) + " selected  ·  " + String(hiddenCount) + " hidden"
+        if (selectedCount === 1)
+            return selectedMediaTitleValue + "  ·  "
+                    + String(selectedMediaAssetValue.mediaType || "Media")
+        return String(selectedCount) + " selected  ·  choose one to preview or add"
+    }
+
+    function scheduleMediaFilterRefresh() {
+        mediaFilterRevision += 1
+        if (mediaBrowserActive)
+            mediaFilterRefreshTimer.restart()
+    }
+
+    function refreshFilteredMediaModel() {
+        if (!mediaBrowserActive)
+            return
+        mediaSelectionAnchorIndex = -1
+        mediaFilterActiveRevision = mediaFilterRevision
+        mediaFilterCursor = 0
+        mediaFilterSourceCount = assetCatalog ? Math.max(0, Number(assetCatalog.assetCount || 0)) : 0
+        mediaFilterQuery = mediaSearchText.trim()
+        mediaFilterScopes = mediaSearchScopes.slice(0)
+        mediaFilterBinId = documentController
+                ? String(documentController.activeMediaBinId || "") : ""
+        mediaFilterCollectionId = documentController
+                ? String(documentController.activeSmartCollectionId || "") : ""
+        filteredMediaModel.clear()
+        filteredMediaAssetIds = ({})
+        filteredMediaSelectionRevision += 1
+        if (assetCatalog && typeof assetCatalog.setVisibleAssetRange === "function")
+            assetCatalog.setVisibleAssetRange(-1, -1)
+        if (mediaFilterSourceCount + projectReferencedMedia.length === 0) {
+            mediaFilterBusy = false
+            refreshVisibleMediaRange()
+            return
+        }
+        mediaFilterBusy = true
+        mediaFilterBatchTimer.restart()
+    }
+
+    function appendFilteredMediaBatch() {
+        if (!mediaBrowserActive)
+            return
+        if (mediaFilterActiveRevision !== mediaFilterRevision) {
+            mediaFilterBusy = false
+            return
+        }
+        const totalSourceCount = mediaFilterSourceCount + projectReferencedMedia.length
+        const batchEnd = Math.min(totalSourceCount, mediaFilterCursor + 72)
+        const query = mediaFilterQuery
+        const lowerQuery = query.toLocaleLowerCase()
+        for (let index = mediaFilterCursor; index < batchEnd; ++index) {
+            const isCatalogAsset = index < mediaFilterSourceCount
+            const asset = isCatalogAsset
+                    ? assetCatalog.assetAt(index)
+                    : projectReferencedMedia[index - mediaFilterSourceCount]
+            const assetId = String(asset.assetId || "")
+            const mediaType = String(asset.mediaType || "")
+            if (assetId.length === 0
+                    || (mediaType !== "video" && mediaType !== "photo" && mediaType !== "audio"))
+                continue
+            // Keep the first matching catalog row if it passed these filters;
+            // project refs supply IDs absent from the current catalog results.
+            if (!isCatalogAsset && filteredMediaAssetIds[assetId] === true)
+                continue
+            if (documentController
+                    && !documentController.mediaAssetVisibleInBin(assetId, mediaFilterBinId))
+                continue
+            if (documentController
+                    && !documentController.mediaAssetMatchesSmartCollection(
+                        asset, mediaFilterCollectionId))
+                continue
+            if (query.length > 0 && documentController
+                    && documentController.searchMediaAsset(
+                        assetId, query, mediaFilterScopes, asset).matches !== true)
+                continue
+            if (query.length > 0 && !documentController) {
+                const filename = String(asset.filePath || "").split(/[\\/]/).pop()
+                if (filename.toLocaleLowerCase().indexOf(lowerQuery) < 0)
+                    continue
+            }
+            filteredMediaModel.append({
+                "assetId": assetId,
+                "assetIndex": isCatalogAsset ? index : -1,
+                "filteredIndex": filteredMediaModel.count
+            })
+            filteredMediaAssetIds[assetId] = true
+        }
+        filteredMediaSelectionRevision += 1
+        mediaFilterCursor = batchEnd
+        if (batchEnd < totalSourceCount) {
+            mediaFilterBatchTimer.restart()
+            return
+        }
+        mediaFilterBusy = false
+        refreshVisibleMediaRange()
+    }
+
+    function resetMediaFilters() {
+        mediaSearchText = ""
+        mediaSearchScopes = ["all"]
+        if (documentController) {
+            documentController.activeMediaBinId = ""
+            documentController.activeSmartCollectionId = ""
+        }
+        scheduleMediaFilterRefresh()
+    }
+
+    function refreshVisibleMediaRange() {
+        if (!mediaBrowserActive)
+            return
+        if (!assetCatalog || typeof assetCatalog.setVisibleAssetRange !== "function")
+            return
+        const view = mediaViewLoader.item
+        if (!view || !root.visible || root.collapsed || root.activeTab !== "media"
+                || !view.visible || view.width <= 0 || view.height <= 0
+                || filteredMediaModel.count === 0) {
+            assetCatalog.setVisibleAssetRange(-1, -1)
+            return
+        }
+
+        // Sample every visible grid column and the viewport top, middle, and
+        // bottom. Empty trailing cells must not hide earlier columns from the
+        // visible range. Convert filtered rows back to catalog indices.
+        const xs = []
+        if (mediaViewMode === "grid" && Number(view.cellWidth || 0) > 0) {
+            const columns = Math.max(1, Math.ceil(view.width / view.cellWidth))
+            for (let column = 0; column < columns; ++column)
+                xs.push(Math.min(view.width - 1, column * view.cellWidth
+                                 + Math.min(theme.space8, view.cellWidth / 2)))
+        } else {
+            xs.push(1, Math.max(1, view.width / 2), Math.max(1, view.width - 2))
+        }
+        const ys = [1, Math.max(1, view.height / 2), Math.max(1, view.height - 2)]
+        let firstCatalogAsset = Number.POSITIVE_INFINITY
+        let lastCatalogAsset = -1
+        for (let xIndex = 0; xIndex < xs.length; ++xIndex) {
+            for (let yIndex = 0; yIndex < ys.length; ++yIndex) {
+                const filteredIndex = view.indexAt(xs[xIndex], ys[yIndex])
+                if (filteredIndex >= 0) {
+                    const entry = filteredMediaModel.get(filteredIndex)
+                    if (entry && Number(entry.assetIndex) >= 0) {
+                        firstCatalogAsset = Math.min(firstCatalogAsset, Number(entry.assetIndex))
+                        lastCatalogAsset = Math.max(lastCatalogAsset, Number(entry.assetIndex))
+                    }
+                }
+            }
+        }
+        if (lastCatalogAsset < 0 || !Number.isFinite(firstCatalogAsset)) {
+            assetCatalog.setVisibleAssetRange(-1, -1)
+            return
+        }
+        assetCatalog.setVisibleAssetRange(firstCatalogAsset, lastCatalogAsset)
     }
 
     function customFieldsText(fields) {
@@ -592,6 +1317,39 @@ GlassSurface {
         selectedMediaAssetIds = updated
     }
 
+    function selectMediaAsset(assetId, modifiers, filteredIndex) {
+        const id = String(assetId || "")
+        const index = Number(filteredIndex)
+        if (id.length === 0)
+            return
+
+        const modifierFlags = Number(modifiers || 0)
+        const toggleModifier = (modifierFlags & (Qt.ControlModifier | Qt.MetaModifier)) !== 0
+        const shiftModifier = (modifierFlags & Qt.ShiftModifier) !== 0
+        if (shiftModifier && mediaSelectionAnchorIndex >= 0
+                && mediaSelectionAnchorIndex < filteredMediaModel.count
+                && index >= 0 && index < filteredMediaModel.count) {
+            const first = Math.min(mediaSelectionAnchorIndex, index)
+            const last = Math.max(mediaSelectionAnchorIndex, index)
+            let updated = toggleModifier ? selectedMediaAssetIds.slice(0) : []
+            for (let filteredIndex = first; filteredIndex <= last; ++filteredIndex) {
+                const rangeId = String(filteredMediaModel.get(filteredIndex).assetId || "")
+                if (rangeId.length > 0 && updated.indexOf(rangeId) < 0)
+                    updated.push(rangeId)
+            }
+            selectedMediaAssetIds = updated
+            return
+        }
+
+        if (toggleModifier) {
+            toggleMediaSelection(id)
+        } else {
+            selectedMediaAssetIds = [id]
+        }
+        if (index >= 0 && index < filteredMediaModel.count)
+            mediaSelectionAnchorIndex = index
+    }
+
     function toggleMediaSearchScope(scope) {
         const normalized = String(scope || "all")
         if (normalized === "all") {
@@ -618,6 +1376,8 @@ GlassSurface {
         if (!documentController)
             return
         const targets = metadataTargets(assetId)
+        if (!targets.every(function(target) { return root.isCatalogBackedAsset(target) }))
+            return
         if (action === "rating")
             documentController.setMediaAssetRating(targets, Number(value || 0))
         else if (action === "disposition")
@@ -628,6 +1388,8 @@ GlassSurface {
 
     function openMediaTagEditor(assetId) {
         const targets = metadataTargets(assetId)
+        if (!targets.every(function(target) { return root.isCatalogBackedAsset(target) }))
+            return
         if (selectedMediaAssetIds.indexOf(String(assetId || "")) < 0)
             selectedMediaAssetIds = targets
         const metadata = targets.length === 1 ? mediaMetadataFor(targets[0]) : ({})
@@ -746,23 +1508,126 @@ GlassSurface {
     }
 
     function syncSourceMonitor() {
+        // Media and Source are independently dockable instances. Only the
+        // exposed Source viewer owns a decoder; the media browser never does.
+        if (!sourceViewerActive) {
+            suspendSourceMonitor()
+            return
+        }
         if (!hasSourceClipValue) {
+            cancelSourcePreroll(true)
             sourcePreviewPlayer.stop()
+            sourcePreviewPlayer.audioOutput = null
             sourcePreviewPlayer.source = ""
+            sourceDecoderPrimed = false
+            sourceFreshDecoderPending = false
             previewSeconds = 0
             return
         }
 
         if (!root.sourceUsesPlayer()) {
+            cancelSourcePreroll(true)
             sourcePreviewPlayer.stop()
+            sourcePreviewPlayer.audioOutput = null
             sourcePreviewPlayer.source = ""
+            sourceDecoderPrimed = false
+            sourceFreshDecoderPending = false
             previewSeconds = Math.max(0, sourceInSecondsValue)
             return
         }
 
-        if (String(sourcePreviewPlayer.source) !== String(sourceState.sourceUrl || ""))
+        const changedSource = String(sourcePreviewPlayer.source) !== String(sourceState.sourceUrl || "")
+        if (changedSource) {
+            cancelSourcePreroll(true)
+            sourcePreviewPlayer.pause()
             sourcePreviewPlayer.source = sourceState.sourceUrl || ""
-        root.seekSource(Math.max(0, sourceInSecondsValue))
+        }
+        if (changedSource || suspendedSourceSeconds >= 0)
+            root.seekSource(suspendedSourceSeconds >= 0 && suspendedSourceUrl === String(sourceState.sourceUrl || "")
+                            ? suspendedSourceSeconds : Math.max(0, sourceInSecondsValue))
+        suspendedSourceSeconds = -1
+    }
+
+    function suspendSourceMonitor() {
+        if (String(sourcePreviewPlayer.source).length > 0) {
+            suspendedSourceSeconds = Math.max(0, previewSeconds)
+            suspendedSourceUrl = String(sourcePreviewPlayer.source)
+        }
+        sourceTapeAutoAdvance = false
+        cancelSourcePreroll(false)
+        sourceUserPlaybackRequested = false
+        sourcePreviewPlayer.audioOutput = null
+        sourcePreviewPlayer.stop()
+        sourcePreviewPlayer.source = ""
+        sourceDecoderPrimed = false
+        sourceFreshDecoderPending = false
+        sourceVideoMonitor.clearOutput()
+        sourceFrameAvailable = false
+    }
+
+    function suspendForRelease() {
+        sourceTapeAutoAdvance = false
+        setTakeComparisonPlaying(false)
+        pauseSourceMonitor()
+    }
+
+    function pauseSourceMonitor() {
+        sourceTapeAutoAdvance = false
+        if (String(sourcePreviewPlayer.source).length > 0) {
+            suspendedSourceSeconds = Math.max(
+                        0, sourcePrerollActive ? sourcePrerollTargetSeconds : previewSeconds)
+            suspendedSourceUrl = String(sourcePreviewPlayer.source)
+            cancelSourcePreroll(false)
+            sourceUserPlaybackRequested = false
+            sourcePreviewPlayer.pause()
+            previewSeconds = suspendedSourceSeconds
+        }
+        sourceResourceReleaseTimer.restart()
+    }
+
+    onSourceViewerActiveChanged: {
+        if (sourceViewerActive) {
+            sourceResourceReleaseTimer.stop()
+            syncSourceMonitor()
+        } else {
+            pauseSourceMonitor()
+        }
+    }
+
+    Timer {
+        id: sourceResourceReleaseTimer
+        interval: 2000
+        repeat: false
+        onTriggered: if (!root.sourceViewerActive) root.suspendSourceMonitor()
+    }
+
+    Timer {
+        id: sourcePrerollSeekTimer
+        interval: 35
+        repeat: false
+        onTriggered: root.issueSourcePrerollSeek(root.sourcePrerollSeekTimerGeneration)
+    }
+
+    Timer {
+        id: sourcePrerollDeadlineTimer
+        interval: 2000
+        repeat: false
+        onTriggered: root.failSourcePreroll(root.sourcePrerollDeadlineGeneration)
+    }
+
+    onMediaBrowserActiveChanged: {
+        if (mediaBrowserActive) {
+            if (projectReferencedMediaSnapshotDirty)
+                requestProjectReferencedMediaRefresh()
+            if (mediaFilterActiveRevision !== mediaFilterRevision || mediaFilterBusy)
+                mediaFilterRefreshTimer.restart()
+            mediaVisibleRangeTimer.restart()
+        } else {
+            projectMediaRefreshTimer.stop()
+            mediaFilterRefreshTimer.stop()
+            mediaFilterBatchTimer.stop()
+            mediaVisibleRangeTimer.stop()
+        }
     }
 
     function scrollEditorToTop() {
@@ -781,22 +1646,107 @@ GlassSurface {
         return true
     }
 
+    ListModel {
+        id: filteredMediaModel
+    }
+
+    Timer {
+        id: mediaFilterRefreshTimer
+        interval: 90
+        repeat: false
+        onTriggered: root.refreshFilteredMediaModel()
+    }
+
+    Timer {
+        id: projectMediaRefreshTimer
+        interval: 90
+        repeat: false
+        onTriggered: root.refreshProjectReferencedMedia()
+    }
+
+    Timer {
+        id: mediaFilterBatchTimer
+        interval: 1
+        repeat: false
+        onTriggered: root.appendFilteredMediaBatch()
+    }
+
+    Timer {
+        id: mediaVisibleRangeTimer
+        interval: 32
+        repeat: false
+        onTriggered: root.refreshVisibleMediaRange()
+    }
+
+    onMediaSearchTextChanged: {
+        mediaGridScrollPosition = 0
+        mediaListScrollPosition = 0
+        scheduleMediaFilterRefresh()
+    }
+    onMediaSearchScopesChanged: {
+        mediaGridScrollPosition = 0
+        mediaListScrollPosition = 0
+        scheduleMediaFilterRefresh()
+    }
+    onMediaViewModeChanged: mediaVisibleRangeTimer.restart()
+    onMediaThumbnailTargetSizeChanged: mediaVisibleRangeTimer.restart()
+    onActiveTabChanged: {
+        mediaVisibleRangeTimer.restart()
+        if (activeTab === "media")
+            requestProjectReferencedMediaRefresh()
+    }
+    onCollapsedChanged: {
+        mediaVisibleRangeTimer.restart()
+        if (mediaBrowserActive)
+            requestProjectReferencedMediaRefresh()
+    }
+    onWorkspaceActiveChanged: {
+        if (mediaBrowserActive)
+            requestProjectReferencedMediaRefresh()
+    }
+    onTimelineDocumentChanged: {
+        requestProjectReferencedMediaRefresh()
+    }
+
     MediaPlayer {
         id: sourcePreviewPlayer
         objectName: "timelineSourcePreviewPlayer"
         audioOutput: sourcePreviewAudio
         videoOutput: sourceVideoMonitor
-        onSourceChanged: root.sourceFrameAvailable = false
+        onSourceChanged: {
+            root.cancelSourcePreroll(true)
+            root.sourceDecoderPrimed = false
+            root.sourceFreshDecoderPending = String(source).length > 0
+                    && root.hasSource && root.sourceState.mediaType === "video"
+            root.sourcePrerollFailed = false
+            root.sourceUserPlaybackRequested = false
+            sourceVideoMonitor.clearOutput()
+            root.sourceFrameAvailable = false
+        }
 
         onPositionChanged: function(position) {
-            root.previewSeconds = position / 1000
+            root.previewSeconds = root.sourcePrerollActive
+                    ? root.sourcePrerollTargetSeconds : position / 1000
         }
         onPlaybackStateChanged: function(playbackState) {
-            if (playbackState !== MediaPlayer.PlayingState && root.hasSourceClipValue)
+            if (root.sourcePrerollPlaybackHandoffPending) {
+                root.finishSourcePrerollPlaybackHandoff(
+                            root.sourcePrerollPlaybackHandoffGeneration, playbackState)
+                return
+            }
+            if (playbackState !== MediaPlayer.PlayingState && root.hasSourceClipValue) {
+                if (root.sourcePrerollActive) {
+                    root.previewSeconds = root.sourcePrerollTargetSeconds
+                    return
+                }
                 root.previewSeconds = sourcePreviewPlayer.position / 1000
+                root.sourceUserPlaybackRequested = false
+            }
         }
         onMediaStatusChanged: function(mediaStatus) {
-            if (mediaStatus === MediaPlayer.EndOfMedia && root.sourceTapeEnabledValue) {
+            root.maybeStartSourcePrerollPlayback()
+            if (mediaStatus === MediaPlayer.EndOfMedia && root.sourceTapeEnabledValue
+                    && !root.sourcePrerollActive) {
                 const continuePlayback = root.sourceTapeAutoAdvance
                 if (root.documentController.stepSourceTape(1) && continuePlayback)
                     Qt.callLater(function() { if (root.visible) sourcePreviewPlayer.play() })
@@ -804,34 +1754,63 @@ GlassSurface {
                     root.sourceTapeAutoAdvance = false
             }
         }
+        onSeekableChanged: root.maybeStartSourcePrerollPlayback()
+        onDurationChanged: root.maybeStartSourcePrerollPlayback()
     }
 
     onVisibleChanged: {
         if (!visible) {
+            projectMediaRefreshTimer.stop()
             sourceTapeAutoAdvance = false
-            sourcePreviewPlayer.pause()
+            setTakeComparisonPlaying(false)
+            pauseSourceMonitor()
+            if (workspaceActive && activeTab === "media" && assetCatalog
+                    && typeof assetCatalog.setVisibleAssetRange === "function")
+                assetCatalog.setVisibleAssetRange(-1, -1)
+        } else {
+            mediaVisibleRangeTimer.restart()
+            if (mediaBrowserActive)
+                requestProjectReferencedMediaRefresh()
         }
     }
 
     Connections {
         target: sourceVideoMonitor.videoSink
         function onVideoFrameChanged() {
-            const size = sourceVideoMonitor.videoSink.videoSize
-            root.sourceFrameAvailable = size.width > 0 && size.height > 0
+            root.handleSourceVideoFrame()
         }
     }
 
     AudioOutput {
         id: sourcePreviewAudio
         volume: 1.0
-        muted: root.programGangEnabled
+        muted: root.programGangEnabled || root.sourcePrerollActive
     }
 
     onProgramGangEnabledChanged: {
         if (programGangEnabled) {
             sourceTapeAutoAdvance = false
+            cancelSourcePreroll(true)
+            sourceUserPlaybackRequested = false
             sourcePreviewPlayer.pause()
+        } else {
+            if (sourceFreshDecoderPending && sourceViewerActive)
+                beginSourcePreroll(previewSeconds)
         }
+    }
+
+    onProgramPlayingChanged: {
+        if (programPlaying && (sourcePrerollActive || sourcePrerollPlaybackHandoffPending)) {
+            const target = sourcePrerollActive
+                    ? sourcePrerollTargetSeconds : sourcePrerollPlaybackHandoffTargetSeconds
+            cancelSourcePreroll(true)
+            sourceUserPlaybackRequested = false
+            sourcePrerollFailed = false
+            sourcePreviewPlayer.pause()
+            previewSeconds = target
+        } else if (!programPlaying && sourceFreshDecoderPending && sourceViewerActive
+                && !programGangEnabled && !sourceUserPlaybackRequested)
+            beginSourcePreroll(previewSeconds)
     }
 
     Connections {
@@ -848,18 +1827,59 @@ GlassSurface {
 
         function onMediaMetadataChanged() {
             root.mediaMetadataRevision += 1
+            root.scheduleMediaFilterRefresh()
         }
 
         function onSmartCollectionsChanged() {
             root.mediaMetadataRevision += 1
+            root.scheduleMediaFilterRefresh()
+        }
+
+        function onActiveMediaBinChanged() {
+            root.scheduleMediaFilterRefresh()
         }
 
         function onClipsChanged() {
-            root.mediaMetadataRevision += 1
+            root.requestProjectReferencedMediaRefresh()
+        }
+
+        function onSequenceChanged() {
+            root.requestProjectReferencedMediaRefresh()
+        }
+
+        function onTimelineStateChanged() {
+            root.requestProjectReferencedMediaRefresh()
         }
     }
 
-    Component.onCompleted: root.syncSourceMonitor()
+    Connections {
+        target: root.assetCatalog
+        ignoreUnknownSignals: true
+
+        function onDataChanged() {
+            root.mediaCatalogRevision += 1
+            root.recountProjectOnlyMedia()
+            root.scheduleMediaFilterRefresh()
+        }
+        function onAssetCountChanged() {
+            root.recountProjectOnlyMedia()
+            root.scheduleMediaFilterRefresh()
+        }
+        function onTotalAssetCountChanged() {
+            root.recountProjectOnlyMedia()
+            root.scheduleMediaFilterRefresh()
+        }
+        function onMediaDurationsChanged() {
+            root.mediaMetadataRevision += 1
+            root.scheduleMediaFilterRefresh()
+        }
+    }
+
+    Component.onCompleted: {
+        root.syncSourceMonitor()
+        root.requestProjectReferencedMediaRefresh()
+        root.scheduleMediaFilterRefresh()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -867,6 +1887,7 @@ GlassSurface {
         spacing: theme.gapRelated
 
         RowLayout {
+            visible: !root.embeddedDockHeader
             Layout.fillWidth: true
             spacing: theme.gapDense
 
@@ -931,7 +1952,7 @@ GlassSurface {
         }
 
         RowLayout {
-            visible: !collapsed
+            visible: !collapsed && !root.embeddedDockHeader
             Layout.fillWidth: true
             spacing: theme.gapDense
 
@@ -955,7 +1976,7 @@ GlassSurface {
 
             ActionButton {
                 objectName: "timelineImportMediaButton"
-                visible: activeTab === "media" && root.assetCountValue > 0
+                visible: activeTab === "media" && root.browsableMediaCountValue > 0
                 text: "Import"
                 iconName: "plus"
                 compact: true
@@ -1046,7 +2067,7 @@ GlassSurface {
                                         text: "SOURCE TAPE  " + String(root.sourceTapeIndexValue + 1)
                                               + " / " + String(root.sourceTapeItemsValue.length)
                                         color: theme.textStrong
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontUi
                                         font.pixelSize: theme.typeCaption
                                         font.weight: Font.DemiBold
                                     }
@@ -1135,7 +2156,8 @@ GlassSurface {
                                 visible: root.hasSourceClipValue
                                 text: timecodeText(previewSeconds)
                                 color: theme.accentWarm300
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: root.width < 320 ? theme.typeMicro : theme.typeCaption
                                 Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                                 Layout.rightMargin: 0
@@ -1169,6 +2191,7 @@ GlassSurface {
                                 anchors.margins: theme.panelPaddingCompact
                                 visible: root.sourceUsesPlayer() && root.hasSource
                                          && sourceState.mediaType === "video" && root.sourceFrameAvailable
+                                opacity: root.sourcePrerollActive ? 0 : 1
                                 fillMode: VideoOutput.PreserveAspectFit
                             }
 
@@ -1180,9 +2203,24 @@ GlassSurface {
                                 fillMode: Image.PreserveAspectFit
                                 visible: root.hasSource && String(source).length > 0
                                          && (!root.sourceUsesPlayer()
-                                             || (sourceState.mediaType === "video" && !root.sourceFrameAvailable))
+                                             || (sourceState.mediaType === "video"
+                                                 && !root.sourceFreshDecoderPending
+                                                 && !root.sourcePrerollActive
+                                                 && !root.sourceFrameAvailable))
                                 cache: false
                                 asynchronous: true
+                            }
+
+                            Label {
+                                objectName: "timelineSourceFrameLoadingLabel"
+                                anchors.centerIn: parent
+                                visible: root.sourceViewerActive && root.hasSource
+                                         && root.sourceUsesPlayer() && sourceState.mediaType === "video"
+                                         && (root.sourceFreshDecoderPending || root.sourcePrerollActive)
+                                text: root.sourcePrerollFailed ? "Frame unavailable" : "Loading preview…"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
                             }
 
                             ColumnLayout {
@@ -1260,7 +2298,8 @@ GlassSurface {
                                         text: "P " + root.timecodeText(root.programGangState.sequenceSeconds)
                                               + "  ↔  S " + root.timecodeText(root.programGangState.sourceSeconds)
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeMicro
                                         maximumLineCount: 1
                                         elide: Text.ElideRight
@@ -1304,12 +2343,21 @@ GlassSurface {
                                     objectName: "timelineSourcePlayButton"
                                     iconName: root.programGangEnabled
                                               ? (root.programPlaying ? "pause" : "play")
-                                              : (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState ? "pause" : "play")
+                                              : (root.sourcePrerollActive
+                                                 ? (root.sourcePrerollPlayAfterSeek ? "pause" : "play")
+                                                 : (root.sourcePrerollPlaybackHandoffPending
+                                                    || sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState
+                                                    ? "pause" : "play"))
                                     showText: false
                                     compact: true
                                     tooltipText: root.programGangEnabled
                                                  ? (root.programPlaying ? "Pause ganged Program" : "Play ganged Program")
-                                                 : (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause source" : "Play source")
+                                                 : (root.sourcePrerollActive
+                                                    ? (root.sourcePrerollPlayAfterSeek
+                                                       ? "Pause after source seek" : "Play source")
+                                                    : (root.sourcePrerollPlaybackHandoffPending
+                                                       || sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState
+                                                       ? "Pause source" : "Play source"))
                                     enabled: root.hasSourceClipValue
                                     disabledReason: "Load a clip into Source to use playback."
                                     onClicked: {
@@ -1317,10 +2365,29 @@ GlassSurface {
                                             root.gangedPlaybackToggleRequested()
                                             return
                                         }
-                                        if (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState) {
+                                        if (root.sourcePrerollActive) {
+                                            root.sourcePrerollPlayAfterSeek =
+                                                    !root.sourcePrerollPlayAfterSeek
+                                            root.sourceUserPlaybackRequested =
+                                                    root.sourcePrerollPlayAfterSeek
                                             root.sourceTapeAutoAdvance = false
+                                        } else if (root.sourcePrerollPlaybackHandoffPending) {
+                                            root.clearSourcePrerollPlaybackHandoff()
+                                            root.sourceUserPlaybackRequested = false
+                                            root.sourceTapeAutoAdvance = false
+                                        } else if (root.sourceFreshDecoderPending &&
+                                                   !root.sourceDecoderPrimed &&
+                                                   root.sourceState.mediaType === "video") {
+                                            if (!root.requestSourcePlaybackAfterFreshPreroll())
+                                                root.sourcePrerollFailed = true
+                                        } else if (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState) {
+                                            root.sourceTapeAutoAdvance = false
+                                            root.sourceUserPlaybackRequested = false
                                             sourcePreviewPlayer.pause()
                                         } else {
+                                            root.sourcePrerollFailed = false
+                                            root.sourceUserPlaybackRequested = true
+                                            root.restoreSourceAudioOutput()
                                             root.sourceTapeAutoAdvance = root.sourceTapeEnabledValue
                                             sourcePreviewPlayer.play()
                                         }
@@ -1400,7 +2467,8 @@ GlassSurface {
                                 text: "MARKED RANGE  ·  "
                                       + timecodeText(Math.max(0, root.sourceOutSecondsValue - root.sourceInSecondsValue))
                                 color: theme.textMain
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeCaption
                                 font.weight: Font.DemiBold
                             }
@@ -1459,14 +2527,13 @@ GlassSurface {
                             }
                         }
 
-                        RowLayout {
+                        Flow {
                             visible: root.hasSourceClipValue
                             Layout.fillWidth: true
                             spacing: theme.gapDense
 
                             ActionButton {
                                 objectName: "timelineSourceInsertButton"
-                                Layout.fillWidth: true
                                 text: "Insert at Playhead"
                                 iconName: "plus"
                                 tone: "primary"
@@ -1512,9 +2579,9 @@ GlassSurface {
             spacing: theme.gapRelated
 
             RowLayout {
-                visible: root.assetCountValue > 0
+                visible: root.browsableMediaCountValue > 0
                 Layout.fillWidth: true
-                spacing: theme.space4
+                spacing: root.width < theme.scaled(400) ? theme.space2 : theme.space4
 
                 ToneTextField {
                     objectName: "timelineUnifiedMediaSearchField"
@@ -1525,6 +2592,16 @@ GlassSurface {
                     placeholderText: "Search media…"
                     selectByMouse: true
                     onTextChanged: root.mediaSearchText = text
+                }
+
+                ActionButton {
+                    objectName: "timelineClearMediaSearchButton"
+                    visible: root.mediaSearchText.length > 0
+                    iconName: "close"
+                    showText: false
+                    compact: true
+                    tooltipText: "Clear media search"
+                    onClicked: root.mediaSearchText = ""
                 }
 
                 MenuButton {
@@ -1545,13 +2622,14 @@ GlassSurface {
             }
 
             RowLayout {
-                visible: root.assetCountValue > 0
+                visible: root.browsableMediaCountValue > 0
                 Layout.fillWidth: true
-                spacing: theme.space4
+                spacing: root.width < theme.scaled(400) ? theme.space2 : theme.space4
 
                 MenuButton {
                     objectName: "timelineActiveMediaBinFilter"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     text: root.mediaPoolScopeLabel()
                     iconName: root.documentController
                               && String(root.documentController.activeSmartCollectionId || "").length > 0
@@ -1570,22 +2648,117 @@ GlassSurface {
                 }
 
                 Label {
-                    text: root.assetCountValue + (root.assetCountValue === 1 ? " item" : " items")
+                    objectName: "timelineMediaResultCountLabel"
+                    text: String(root.mediaResultCountValue) + " / " + String(root.browsableMediaCountValue)
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontUi
                     font.pixelSize: theme.typeLabel
+                    Accessible.name: String(root.mediaResultCountValue) + " matching media items of "
+                                     + String(root.browsableMediaCountValue) + " available media items"
                 }
 
                 MenuButton {
                     objectName: "timelineMediaPoolBrowseMenuButton"
                     text: "Browse"
                     iconName: "media"
+                    showText: root.width >= theme.scaled(400)
+                    Layout.preferredWidth: root.width < theme.scaled(400)
+                                           ? theme.iconButtonSizeCompact : implicitWidth
+                    Layout.minimumWidth: root.width < theme.scaled(400)
+                                         ? theme.iconButtonSizeCompact : implicitWidth
                     compact: true
                     primaryOpensMenu: true
+                    showMenuIndicator: root.width >= theme.scaled(400)
+                    accessibleName: "Browse media tools"
                     menuWidth: 260
                     tooltipText: "Organize bins and collections, start a source tape, review usage, or adjust preview detail."
                     menuItems: root.mediaPoolBrowseMenuItems()
                     onMenuItemTriggered: function(key) { root.handleMediaPoolBrowseAction(key) }
+                }
+            }
+
+            RowLayout {
+                objectName: "timelineMediaViewControls"
+                visible: root.browsableMediaCountValue > 0
+                Layout.fillWidth: true
+                spacing: theme.space6
+
+                Rectangle {
+                    implicitWidth: mediaViewModeButtons.implicitWidth + theme.space4 * 2
+                    implicitHeight: mediaViewModeButtons.implicitHeight + theme.space4 * 2
+                    radius: theme.radius8
+                    color: theme.alpha(theme.ink950, 0.3)
+                    border.width: theme.hairlineWidth
+                    border.color: theme.alpha(theme.lineSoft, 0.28)
+
+                    RowLayout {
+                        id: mediaViewModeButtons
+                        anchors.fill: parent
+                        anchors.margins: theme.space4
+                        spacing: theme.space2
+
+                        ActionButton {
+                            objectName: "timelineMediaGridViewButton"
+                            text: "Grid"
+                            iconName: "grid"
+                            showText: false
+                            compact: true
+                            embedded: true
+                            active: root.mediaViewMode === "grid"
+                            tooltipText: "Show thumbnail grid"
+                            accessibleName: "Grid view"
+                            onClicked: root.mediaViewMode = "grid"
+                        }
+
+                        ActionButton {
+                            objectName: "timelineMediaListViewButton"
+                            text: "List"
+                            iconName: "list"
+                            showText: false
+                            compact: true
+                            embedded: true
+                            active: root.mediaViewMode === "list"
+                            tooltipText: "Show media list"
+                            accessibleName: "List view"
+                            onClicked: root.mediaViewMode = "list"
+                        }
+                    }
+                }
+
+                Label {
+                    visible: root.mediaViewMode === "grid"
+                    text: root.width < theme.scaled(400) ? "Size" : "Thumbnail size"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                }
+
+                ToolValueSlider {
+                    id: mediaThumbnailSizeSlider
+                    objectName: "timelineMediaThumbnailSizeSlider"
+                    visible: root.mediaViewMode === "grid"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: theme.scaled(40)
+                    Layout.preferredHeight: theme.controlHeightDense
+                    minimumReadableWidth: theme.scaled(40)
+                    label: root.width < theme.scaled(400) ? "Size" : "Thumbnail size"
+                    valueText: Math.round(root.mediaThumbnailTargetSize) + " px"
+                    tooltipText: "Resize media cards in the thumbnail grid."
+                    from: 112
+                    to: 256
+                    stepSize: 16
+                    live: true
+                    value: root.mediaThumbnailTargetSize
+                    onMoved: root.mediaThumbnailTargetSize = Math.round(value / stepSize) * stepSize
+                }
+
+                Label {
+                    visible: root.mediaViewMode === "grid"
+                    text: Math.round(root.mediaThumbnailTargetSize) + " px"
+                    color: theme.textMuted
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
+                    font.pixelSize: theme.typeCaption
                 }
             }
 
@@ -1603,7 +2776,7 @@ GlassSurface {
 
             Item {
                 objectName: "timelineMediaEmptyState"
-                visible: root.assetCountValue === 0 &&
+                visible: root.browsableMediaCountValue === 0 &&
                          (!root.assetCatalog || !root.assetCatalog.loading)
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -1615,8 +2788,7 @@ GlassSurface {
 
                     Label {
                         Layout.fillWidth: true
-                        text: root.totalAssetCountValue > 0
-                              ? "No media in this view" : "No library media"
+                        text: "No library media"
                         color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: theme.typeControl
@@ -1626,9 +2798,7 @@ GlassSurface {
 
                     Label {
                         Layout.fillWidth: true
-                        text: root.totalAssetCountValue > 0
-                              ? "Browse all library media to find a clip."
-                              : "Import files to browse and reuse in this timeline."
+                        text: "Import files to browse and reuse in this timeline."
                         color: theme.textMuted
                         font.family: theme.fontUi
                         font.pixelSize: theme.typeLabel
@@ -1639,22 +2809,21 @@ GlassSurface {
                     ActionButton {
                         objectName: "timelineEmptyMediaImportButton"
                         Layout.alignment: Qt.AlignHCenter
-                        text: root.totalAssetCountValue > 0 ? "Browse Library" : "Open Import"
-                        iconName: root.totalAssetCountValue > 0 ? "media" : "import"
+                        text: "Open Import"
+                        iconName: "import"
                         compact: true
                         tone: "primary"
                         onClicked: {
-                            if (root.totalAssetCountValue > 0)
-                                mediaPickerRequested()
-                            else
-                                importWorkspaceRequested()
+                            importWorkspaceRequested()
                         }
                     }
                 }
             }
 
             Label {
-                visible: root.assetCountValue === 0 && root.assetCatalog &&
+                objectName: "timelineMediaLoadingState"
+                visible: root.assetCountValue === 0 && root.projectReferencedMedia.length === 0
+                         && root.assetCatalog &&
                          root.assetCatalog.loading
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -1664,6 +2833,85 @@ GlassSurface {
                 font.pixelSize: theme.typeLabel
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
+            }
+
+            Item {
+                objectName: "timelineMediaFilterProgressState"
+                visible: root.mediaFilterBusy && root.browsableMediaCountValue > 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                Label {
+                    anchors.centerIn: parent
+                    text: "Filtering media…"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeLabel
+                }
+            }
+
+            Item {
+                objectName: "timelineMediaNoResultsState"
+                visible: !root.mediaFilterBusy && root.browsableMediaCountValue > 0
+                         && root.mediaResultCountValue === 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - theme.space16, theme.scaled(250))
+                    spacing: theme.space8
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "No matching media"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeControl
+                        font.weight: Font.DemiBold
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.mediaSearchText.trim().length > 0
+                              ? "Try a different search or clear the active media filters."
+                              : "No available media matches the selected bin and collection."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeLabel
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    RowLayout {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: theme.space6
+
+                        ActionButton {
+                            objectName: "timelineResetMediaFiltersButton"
+                            text: "Reset Filters"
+                            iconName: "close"
+                            compact: true
+                            tone: "secondary"
+                            enabled: root.mediaSearchText.length > 0
+                                     || root.mediaSearchScopes.indexOf("all") < 0
+                                     || (root.documentController
+                                         && (String(root.documentController.activeMediaBinId || "").length > 0
+                                             || String(root.documentController.activeSmartCollectionId || "").length > 0))
+                            disabledReason: "There are no active search or media filters to reset."
+                            onClicked: root.resetMediaFilters()
+                        }
+
+                        ActionButton {
+                            objectName: "timelineNoResultsBrowseLibraryButton"
+                            text: "Browse Library"
+                            iconName: "media"
+                            compact: true
+                            onClicked: mediaPickerRequested()
+                        }
+                    }
+                }
             }
 
             Rectangle {
@@ -1688,11 +2936,7 @@ GlassSurface {
                             id: selectedMediaContextLabel
                             objectName: "timelineSelectedMediaContextLabel"
                             Layout.fillWidth: true
-                            text: root.selectedMediaAssetIds.length === 1
-                                  ? root.selectedMediaTitleValue + "  ·  "
-                                    + String(root.selectedMediaAssetValue.mediaType || "Media")
-                                  : String(root.selectedMediaAssetIds.length)
-                                    + " selected  ·  choose one to preview or add"
+                            text: root.mediaSelectionSummary()
                             color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: theme.typeLabel
@@ -1704,11 +2948,7 @@ GlassSurface {
                                 id: sharedTooltip5
                                 targetItem: selectedMediaContextLabel
                                 visible: selectedMediaContextLabel.visible && (selectedMediaContextHover.hovered && truncated)
-                                text: root.selectedMediaAssetIds.length === 1
-                                          ? root.selectedMediaTitleValue
-                                            + " · "
-                                            + String(root.selectedMediaAssetValue.mediaType || "Media")
-                                          : String(root.selectedMediaAssetIds.length) + " selected"
+                                text: root.mediaSelectionSummary()
                             }
                             HoverHandler {
                                 id: selectedMediaContextHover
@@ -1721,7 +2961,10 @@ GlassSurface {
                             showText: false
                             compact: true
                             tooltipText: "Clear media selection"
-                            onClicked: root.selectedMediaAssetIds = []
+                            onClicked: {
+                                root.selectedMediaAssetIds = []
+                                root.mediaSelectionAnchorIndex = -1
+                            }
                         }
                     }
 
@@ -1766,7 +3009,9 @@ GlassSurface {
                             objectName: "timelineMediaMultiSelectionActionHint"
                             width: parent.width
                             visible: root.selectedMediaAssetIds.length > 1
-                            text: "Batch actions below apply metadata; add clips one at a time."
+                            text: root.selectionIsCatalogBacked()
+                                  ? "Batch actions below apply metadata; add clips one at a time."
+                                  : "Select one project media item at a time to preview or add it."
                             color: theme.textMuted
                             font.family: theme.fontUi
                             font.pixelSize: theme.typeCaption
@@ -1776,6 +3021,7 @@ GlassSurface {
 
                     Flow {
                         objectName: "timelineMediaBatchMetadataActions"
+                        visible: root.selectionIsCatalogBacked()
                         Layout.fillWidth: true
                         spacing: theme.space4
 
@@ -1867,87 +3113,113 @@ GlassSurface {
                 }
             }
 
-            Label {
-                objectName: "timelineMediaSelectionHint"
-                visible: root.assetCountValue > 0 && root.selectedMediaAssetIds.length === 0
-                Layout.fillWidth: true
-                text: "Select a clip, then Add to Timeline or Preview in Source. Drag to place; Overwrite replaces clips."
-                color: theme.textFaint
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
-                wrapMode: Text.Wrap
-            }
-
-            ListView {
-                id: timelineVirtualizedMediaListView
-                objectName: "timelineVirtualizedMediaList"
-                visible: root.assetCountValue > 0
+            Loader {
+                id: mediaViewLoader
+                objectName: "timelineVirtualizedMediaViewLoader"
+                visible: !root.mediaFilterBusy && root.mediaResultCountValue > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
-                reuseItems: true
-                cacheBuffer: Math.max(height, theme.scaled(320))
-                spacing: theme.gapRelated
-                model: root.assetCatalog
-
-                ScrollBar.vertical: ScrollBar {
-                    id: timelineVirtualizedMediaListScrollBar
-                    policy: ScrollBar.AlwaysOn
-                    visible: timelineVirtualizedMediaListView.contentHeight
-                             > timelineVirtualizedMediaListView.height + 1
-                    interactive: true
+                active: visible
+                sourceComponent: root.mediaViewMode === "grid"
+                                 ? mediaGridViewComponent : mediaListViewComponent
+                onLoaded: {
+                    const restoredY = root.mediaViewMode === "grid"
+                            ? root.mediaGridScrollPosition : root.mediaListScrollPosition
+                    item.contentY = restoredY
+                    mediaVisibleRangeTimer.restart()
                 }
+            }
 
-                delegate: TimelineMediaAssetRow {
-                    trailingScrollbarWidth: timelineVirtualizedMediaListScrollBar.visible
-                                             ? timelineVirtualizedMediaListScrollBar.width : 0
-                    mediaSearchText: root.mediaSearchText
-                    mediaSearchScopes: root.mediaSearchScopes
-                    documentController: root.documentController
-                    searchRevision: root.mediaMetadataRevision
-                    scrubSampleCount: root.mediaFilmstripSampleCount
-                    selected: root.selectedMediaAssetIds.indexOf(assetId) >= 0
-                    mediaMetadata: root.mediaMetadataFor(assetId)
-                    binVisible: root.documentController
-                                ? root.documentController.mediaAssetVisibleInBin(
-                                      assetId,
-                                      root.documentController.activeMediaBinId)
-                                : true
-                    smartCollectionVisible: {
-                        root.mediaMetadataRevision
-                        return root.documentController
-                                ? root.documentController.mediaAssetMatchesSmartCollection(
-                                      root.catalogAssetForId(assetId),
-                                      root.documentController.activeSmartCollectionId)
-                                : true
+            Component {
+                id: mediaGridViewComponent
+
+                GridView {
+                    id: timelineVirtualizedMediaGridView
+                    objectName: "timelineVirtualizedMediaGrid"
+                    readonly property int thumbnailColumnCount: Math.max(1, Math.floor(width / cellWidth))
+                    clip: true
+                    reuseItems: true
+                    cacheBuffer: Math.max(height, theme.scaled(300))
+                    cellWidth: Math.min(width, theme.scaled(root.mediaThumbnailTargetSize) + theme.space8)
+                    cellHeight: Math.round(cellWidth * 0.74) + theme.scaled(48)
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: filteredMediaModel
+                    delegate: TimelineMediaAssetRow {
+                        assetCatalog: root.assetCatalog
+                        projectAsset: root.projectAssetForId(assetId)
+                        catalogRevision: root.mediaCatalogRevision
+                        mediaPanel: root
+                        gridPresentation: true
+                        thumbnailTargetSize: root.mediaThumbnailTargetSize
+                        mediaSearchText: root.mediaSearchText
+                        mediaSearchScopes: root.mediaSearchScopes
+                        documentController: root.documentController
+                        searchRevision: root.mediaMetadataRevision
+                        scrubSampleCount: root.mediaFilmstripSampleCount
+                        selected: root.selectedMediaAssetIds.indexOf(assetId) >= 0
+                        mediaMetadata: root.mediaMetadataFor(assetId)
+                        binVisible: true
+                        smartCollectionVisible: true
                     }
-                    onMediaDragMoved: function(payload, sceneX, sceneY) {
-                        root.mediaDragMoved(payload, sceneX, sceneY)
+
+                    onContentYChanged: {
+                        root.mediaGridScrollPosition = contentY
+                        mediaVisibleRangeTimer.restart()
                     }
-                    onMediaDragDropped: function(payload, sceneX, sceneY) {
-                        root.mediaDragDropped(payload, sceneX, sceneY)
-                    }
-                    onMediaDragCanceled: root.mediaDragCanceled()
-                    onSelectionRequested: function(assetId, modifiers) {
-                        root.toggleMediaSelection(assetId)
-                    }
-                    onMetadataActionRequested: function(assetId, action, value) {
-                        root.applyMediaMetadataAction(assetId, action, value)
-                    }
-                    onTagEditorRequested: function(assetId) {
-                        root.openMediaTagEditor(assetId)
-                    }
-                    onSourceRequested: function(assetId, filePath, titleText, thumbnailSource) {
-                        root.loadIntoSource(assetId, filePath, titleText, thumbnailSource)
-                    }
-                    onInsertRequested: function(assetId, filePath, titleText, thumbnailSource) {
-                        timelineDocument.insertClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)
-                    }
-                    onOverwriteRequested: function(assetId, filePath, titleText, thumbnailSource) {
-                        timelineDocument.overwriteClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)
+                    onWidthChanged: mediaVisibleRangeTimer.restart()
+                    onHeightChanged: mediaVisibleRangeTimer.restart()
+                    onMovementEnded: root.refreshVisibleMediaRange()
+
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AsNeeded
+                        interactive: true
                     }
                 }
             }
+
+            Component {
+                id: mediaListViewComponent
+
+                ListView {
+                    id: timelineVirtualizedMediaListView
+                    objectName: "timelineVirtualizedMediaList"
+                    clip: true
+                    reuseItems: true
+                    cacheBuffer: Math.max(height, theme.scaled(320))
+                    spacing: theme.gapRelated
+                    model: filteredMediaModel
+                    delegate: TimelineMediaAssetRow {
+                        assetCatalog: root.assetCatalog
+                        projectAsset: root.projectAssetForId(assetId)
+                        catalogRevision: root.mediaCatalogRevision
+                        mediaPanel: root
+                        gridPresentation: false
+                        mediaSearchText: root.mediaSearchText
+                        mediaSearchScopes: root.mediaSearchScopes
+                        documentController: root.documentController
+                        searchRevision: root.mediaMetadataRevision
+                        scrubSampleCount: root.mediaFilmstripSampleCount
+                        selected: root.selectedMediaAssetIds.indexOf(assetId) >= 0
+                        mediaMetadata: root.mediaMetadataFor(assetId)
+                        binVisible: true
+                        smartCollectionVisible: true
+                    }
+
+                    onContentYChanged: {
+                        root.mediaListScrollPosition = contentY
+                        mediaVisibleRangeTimer.restart()
+                    }
+                    onWidthChanged: mediaVisibleRangeTimer.restart()
+                    onHeightChanged: mediaVisibleRangeTimer.restart()
+                    onMovementEnded: root.refreshVisibleMediaRange()
+
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AsNeeded
+                        interactive: true
+                    }
+                }
+            }
+
         }
     }
 
@@ -2005,7 +3277,7 @@ GlassSurface {
                     Layout.fillWidth: true
                     text: "T opens tags · 0–5 rates · F favorites · X rejects"
                     color: theme.textFaint
-                    font.family: theme.fontMono
+                    font.family: theme.fontUi
                     font.pixelSize: theme.typeCaption
                     wrapMode: Text.Wrap
                 }
@@ -2118,7 +3390,7 @@ GlassSurface {
                                     Layout.fillWidth: true
                                     text: "TECHNICAL"
                                     color: theme.textMuted
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontUi
                                     font.pixelSize: theme.typeCaption
                                     font.weight: Font.DemiBold
                                 }
@@ -2134,7 +3406,8 @@ GlassSurface {
                                 Layout.fillWidth: true
                                 text: root.technicalVideoSummary()
                                 color: theme.textStrong
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeCaption
                                 wrapMode: Text.Wrap
                             }
@@ -2180,7 +3453,8 @@ GlassSurface {
                                 Layout.fillWidth: true
                                 text: root.technicalAudioSummary()
                                 color: theme.textMain
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeCaption
                                 wrapMode: Text.Wrap
                             }
@@ -2209,7 +3483,7 @@ GlassSurface {
                                 text: root.metadataDisplay(root.mediaInspectorTechnical.filePath,
                                                            root.mediaInspectorAsset.filePath || "Path unavailable")
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontUi
                                 font.pixelSize: theme.typeCaption
                                 wrapMode: Text.WrapAnywhere
                             }
@@ -2230,7 +3504,7 @@ GlassSurface {
                     Label {
                         text: "NOTES"
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontUi
                         font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                     }
@@ -2248,7 +3522,7 @@ GlassSurface {
                     Label {
                         text: "CUSTOM FIELDS"
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontUi
                         font.pixelSize: theme.typeCaption
                         font.weight: Font.DemiBold
                     }
@@ -2360,7 +3634,7 @@ GlassSurface {
                         text: String(root.takeComparisonAssets.length) +
                               " takes · playback follows the first take"
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontUi
                         font.pixelSize: theme.typeCaption
                     }
                 }
@@ -2713,7 +3987,7 @@ GlassSurface {
                                       + (usageRow.modelData.derivative === true ? " · Derivative" : "")
                                 color: usageRow.modelData.offline === true
                                        ? theme.error : theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontUi
                                 font.pixelSize: theme.typeCaption
                                 wrapMode: Text.Wrap
                             }
@@ -2900,7 +4174,7 @@ GlassSurface {
                                         text: String(modelData.ruleCount || 0) + " live rule"
                                               + (Number(modelData.ruleCount || 0) === 1 ? "" : "s")
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontUi
                                         font.pixelSize: theme.typeCaption
                                     }
                                 }
@@ -2958,7 +4232,7 @@ GlassSurface {
                             text: root.smartCollectionEditingId.length > 0
                                   ? "EDIT RULES" : "NEW COLLECTION"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontUi
                             font.pixelSize: theme.typeCaption
                             font.weight: Font.DemiBold
                         }
@@ -3045,6 +4319,7 @@ GlassSurface {
                         }
 
                         ToneTextField {
+                            numericEntry: true
                             objectName: "timelineSmartCollectionMinimumDurationRule"
                             Layout.fillWidth: true
                             text: root.smartCollectionMinimumDurationDraft
@@ -3055,6 +4330,7 @@ GlassSurface {
                         }
 
                         ToneTextField {
+                            numericEntry: true
                             objectName: "timelineSmartCollectionMaximumDurationRule"
                             Layout.fillWidth: true
                             text: root.smartCollectionMaximumDurationDraft
@@ -3166,7 +4442,7 @@ GlassSurface {
         height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(470), Math.max(theme.scaled(320), root.height - theme.space24))))
         x: Math.max(theme.space8, root.width - width - theme.space8)
         y: theme.scaled(116)
-        padding: theme.panelPaddingCompact
+        padding: theme.popupPadding
         closePolicy: Popup.CloseOnEscape
 
         background: PopupSurface {}
@@ -3260,9 +4536,9 @@ GlassSurface {
                         font.pixelSize: theme.typeControl
                     }
                     Label {
-                        text: String(root.assetCountValue)
+                        text: String(root.browsableMediaCountValue)
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontUi
                         font.pixelSize: theme.typeCaption
                     }
                 }

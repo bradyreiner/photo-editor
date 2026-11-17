@@ -1,0 +1,24 @@
+{
+  "sourceSha256": {
+    "scripts/agent-training/gemma_editing_experiment.py": "d7c5f75e676090d17724b997fcec35917fe06a14b22895e80e277523e27df17c",
+    "scripts/agent-training/prepare_editing_data.py": "016f42cad02dd7e614001221057c261f1391b2e003eed1e6b4318f2a4803bdd0",
+    "scripts/agent-training/serve_gemma_editing.py": "6ed16be51c2304a5daf32d14eb50794e5ad45e075314ca98dacd53d3706be3b7",
+    "scripts/agent-training/download_gemma.py": "6ba38d8c608cdc298ca8ebd23b0c73fc8da041e6c53a59f00aa67cdb8ada50ce",
+    "scripts/agent-training/run-gemma-editing.sh": "7a5643addefbd9b0f9e3ca2436f24624eb7001b2b21a07db9a6566b85ef6ecd9",
+    "training/gemma4-editing/model.lock.json": "caae8b3281e549a5edc878a097379100c02cacf8dba3ae1ba4ed1d6269dcb70c",
+    "training/gemma4-editing/requirements.lock.txt": "a3e53035b2da531307e7df8d0e3f62be1579dcf043544fa142c650bda22e045f",
+    "training/gemma4-editing/tool-catalog.json": "8e640e4164a950c5b05e4fdc90eb93639c11f16fc7b9dc3348bd14d12061e2be"
+  },
+  "nativeTestBinarySha256": "001f495f866c36e943f5e55988e3007e89101746deb36443878a86101932b909",
+  "baseFilesReverifiedAfterTraining": true,
+  "modelWeightsTrackedInGit": false,
+  "runtimePath": ".photo-editor/agent-training",
+  "nativeContracts": "2 passed",
+  "corpusAndScoringChecks": "6 passed",
+  "streamedSchemaChat": "passed: seven NDJSON frames, requested JSON object returned",
+  "nativePlannerAndCritic": "passed: image included, no fallback",
+  "temporaryInferenceServer": "stopped after verification",
+  "desktopBuild": "passed; existing editor not restarted",
+  "causalTrainingRunnerAtExecutionSha256": "2d8b1fca6cc4a42b6765c30098d166728273a2637a7fedbb74b9ad691e9e4d34",
+  "catalogDefaultNote": "CLI default now uses the tracked snapshot; it is byte-identical to the private export used during the runs."
+}

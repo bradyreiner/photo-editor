@@ -10,6 +10,8 @@
 #include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <utility>
+
 namespace photo_editor::desktop {
 namespace {
 QString digest(const QByteArray& bytes) {
@@ -39,8 +41,11 @@ SimilaritySearchWork prepare(const QVariantMap& asset, const QString& path,
   if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > max_bytes) return result;
   const auto bytes = file.read(max_bytes + 1);
   if (file.error() != QFileDevice::NoError || bytes.isEmpty() || bytes.size() > max_bytes || cancelled->load()) return result;
-  const auto identity = QJsonDocument(QJsonArray{asset.value("filePath").toString(),
-      asset.value("adjustmentPatchJson").toString(), local, digest(bytes)}).toJson(QJsonDocument::Compact);
+  // The catalog has already checked recipe freshness. The embedding identity
+  // follows the exact encoded pixels; identical previews can reuse a vector
+  // even when their editable recipe metadata differs.
+  const auto identity = QJsonDocument(QJsonArray{"preview-pixels-v2", asset.value("filePath").toString(),
+      local, digest(bytes)}).toJson(QJsonDocument::Compact);
   result.candidate = {digest(asset.value("assetId").toString().toUtf8()), digest(identity)};
   if (cancelled->load()) return result;
   result.ticket = VisualEmbeddingIndex::stage(path, space, result.candidate);
@@ -101,7 +106,7 @@ LocalSimilaritySearch::~LocalSimilaritySearch() {
 
 bool LocalSimilaritySearch::running() const {
   const auto state = encoder_.snapshot();
-  return active_ || work_pending_ || state.value("busy").toBool() ||
+  return catalog_preparing_ || active_ || work_pending_ || state.value("busy").toBool() ||
       (state.value("ownsProcess").toBool() && !state.value("ready").toBool());
 }
 QStringList LocalSimilaritySearch::resultIds() const {
@@ -112,8 +117,37 @@ QStringList LocalSimilaritySearch::resultIds() const {
 void LocalSimilaritySearch::setSetupStatus(const QString& status) {
   if (!configured() && !running()) { status_ = status; emit changed(); }
 }
+void LocalSimilaritySearch::beginCatalogPreparation(const QString& query, const QString& status) {
+  if (running()) return;
+  cancel();
+  cursor_ = skipped_ = reused_ = encoded_ = 0;
+  scope_.clear();
+  asset_ids_.clear();
+  text_vector_.clear();
+  catalog_preparing_ = true;
+  query_ = query.trimmed();
+  status_ = status;
+  emit changed();
+}
+void LocalSimilaritySearch::updateCatalogPreparationStatus(const QString& status) {
+  if (!catalog_preparing_ || status_ == status) return;
+  status_ = status;
+  emit changed();
+}
+void LocalSimilaritySearch::endCatalogPreparation() {
+  if (!catalog_preparing_) return;
+  catalog_preparing_ = false;
+  emit changed();
+}
+void LocalSimilaritySearch::failCatalogPreparation(const QString& status) {
+  if (!catalog_preparing_) return;
+  cancel();
+  status_ = status;
+  emit changed();
+}
 QString LocalSimilaritySearch::indexWarning() const {
-  return skipped_ > 0 ? QStringLiteral("%1 photos have no usable current preview; they were not searched. Similarity does not verify every query detail.").arg(skipped_)
+  return skipped_ > 0 ? QStringLiteral("%1 %2 had no usable current photo preview and were not searched. Similarity does not verify every query detail.")
+      .arg(skipped_).arg(skipped_ == 1 ? QStringLiteral("catalog item") : QStringLiteral("catalog items"))
                       : QStringLiteral("Ranks visual similarity only; even unrelated photos can rank first. Use detail search before treating results as verified matches.");
 }
 bool LocalSimilaritySearch::configure(const QString& python, const QString& worker, const QString& model_root,
@@ -142,21 +176,36 @@ void LocalSimilaritySearch::search(const QString& query, const QVariantList& ass
   if (running()) return;
   invalidate();
   if (!configured() || query.trimmed().isEmpty() || query.size() > 2000 || catalog_key.isEmpty() ||
-      catalog_key.size() > 4096 || assets.size() > 100000 || limit < 1 || limit > 1000) {
-    fail("Similarity search requires a configured encoder, query and explicit bounded catalog scope."); return;
+      catalog_key.size() > 4096 || assets.isEmpty() || assets.size() > 100000 || limit < 1 || limit > 1000) {
+    fail("Similarity search requires a configured encoder, query and non-empty bounded catalog scope."); return;
   }
   QSet<QString> ids;
   qint64 metadata_bytes = 0;
+  QVariantList preview_assets;
+  preview_assets.reserve(assets.size());
   for (const auto& value : assets) {
     const auto asset = value.toMap();
     const auto id = asset.value("assetId").toString();
-    metadata_bytes += asset.value("adjustmentPatchJson").toString().size() * 2;
-    if (id.isEmpty() || id.size() > 4096 || ids.contains(id) || metadata_bytes > 128 * 1024 * 1024) {
-      fail("Invalid, duplicate or oversized search snapshot; no partial scope was searched."); return;
+    const auto file_path = asset.value("filePath").toString();
+    const auto thumbnail_source = asset.value("thumbnailSource").toString();
+    const auto media_type = asset.value("mediaType").toString();
+    metadata_bytes += (id.size() + file_path.size() + thumbnail_source.size() + media_type.size()) * 2;
+    if (id.isEmpty() || id.size() > 4096) {
+      fail("Search snapshot contains an invalid photo ID; no photos were searched."); return;
+    }
+    if (ids.contains(id)) {
+      fail("Search snapshot contains a duplicate photo ID; no photos were searched."); return;
+    }
+    if (metadata_bytes > 128 * 1024 * 1024) {
+      fail("Search preview references exceed the 128 MiB limit; narrow the Library filters and retry."); return;
     }
     ids.insert(id);
+    // Do not retain arbitrary catalog metadata or multi-megabyte edit recipes.
+    preview_assets.append(QVariantMap{{"assetId", id}, {"filePath", file_path},
+        {"thumbnailSource", thumbnail_source}, {"mediaType", media_type},
+        {"searchPreviewCurrent", asset.value("searchPreviewCurrent").toBool()}});
   }
-  query_ = query.trimmed(); assets_ = assets; catalog_key_ = catalog_key; limit_ = limit;
+  query_ = query.trimmed(); assets_ = std::move(preview_assets); catalog_key_ = catalog_key; limit_ = limit;
   cursor_ = 0; skipped_ = 0; reused_ = 0; encoded_ = 0; scope_.clear(); asset_ids_.clear(); text_vector_.clear();
   cancelled_ = std::make_shared<std::atomic_bool>(false);
   active_ = true; phase_ = "start";
@@ -172,6 +221,7 @@ void LocalSimilaritySearch::search(const QString& query, const QVariantList& ass
 void LocalSimilaritySearch::cancel() {
   ++generation_;
   if (cancelled_) cancelled_->store(true);
+  catalog_preparing_ = false;
   active_ = false; request_id_.clear(); results_.clear();
   encoder_.cancel();
   if (encoder_.snapshot().value("state").toString() == "starting") encoder_.stop();

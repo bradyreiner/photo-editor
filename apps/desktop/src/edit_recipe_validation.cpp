@@ -1,11 +1,13 @@
 #include "edit_recipe_state.h"
+#include "edit_recipe_component_storage.h"
 #include "photo_layer_effect_codec.h"
 #include "photo_paint_format.h"
+#include "photo_text_style.h"
+#include "photo_layer_style_validation.h"
 
 #include <cmath>
 
 namespace photo_editor::desktop {
-
 EditRecipeValidationResult validate_edit_recipe_json(
     const QString& recipe_json) {
   EditRecipeValidationResult result;
@@ -30,7 +32,7 @@ EditRecipeValidationResult validate_edit_recipe_json(
     return result;
   }
 
-  const auto object = document.object();
+  auto object = document.object();
   const auto recipe_version_value =
       object.value(QStringLiteral("recipeVersion"));
   const auto recipe_version_number =
@@ -38,7 +40,7 @@ EditRecipeValidationResult validate_edit_recipe_json(
           ? 1.0
           : recipe_version_value.toDouble(-1.0);
   const auto recipe_version = std::isfinite(recipe_version_number) && recipe_version_number >= 1 &&
-          recipe_version_number <= kPhotoPaintEditRecipeVersion
+          recipe_version_number <= kLatestSupportedEditRecipeVersion
       ? static_cast<int>(recipe_version_number) : -1;
   if (recipe_version_value.isUndefined()) {
     // Older flat recipes did not carry a version and remain valid imports.
@@ -48,21 +50,90 @@ EditRecipeValidationResult validate_edit_recipe_json(
       std::floor(recipe_version_number) != recipe_version_number) {
     result.errors.append(
         QStringLiteral("recipeVersion must be a positive integer"));
-  } else if (recipe_version_number > kCurrentEditRecipeVersion && recipe_version != kPhotoEffectsEditRecipeVersion && recipe_version != kPhotoTypographyEditRecipeVersion && recipe_version != kPhotoPaintEditRecipeVersion) {
+  } else if (recipe_version_number > kCurrentEditRecipeVersion && !is_supported_structured_edit_recipe_version(recipe_version)) {
     result.errors.append(
         QStringLiteral("recipeVersion %1 is newer than supported version %2")
             .arg(recipe_version_number)
-            .arg(kPhotoPaintEditRecipeVersion));
+            .arg(kLatestSupportedEditRecipeVersion));
   }
 
+  QString component_error;
+  if (!expand_recipe_component_objects(&object, recipe_version, &component_error)) {
+    result.errors.append(component_error);
+    return result;
+  }
+
+  const auto document_light_value = object.value(
+      QStringLiteral("documentLayerStyleLightAngle"));
+  if (!document_light_value.isUndefined()) {
+    const auto angle = document_light_value.toDouble(-99999.0);
+    if (!document_light_value.isDouble() || !std::isfinite(angle) ||
+        angle < -3600.0 || angle > 3600.0) {
+      result.errors.append(QStringLiteral(
+          "documentLayerStyleLightAngle must be finite and within 3600 degrees"));
+    }
+  }
+  auto adjustment_state_object = object;
+  adjustment_state_object.remove(QStringLiteral("recipeVersion"));
+  const auto lighting_state =
+      parse_edit_adjustment_state_object(adjustment_state_object);
+  const bool requires_document_light =
+      detail::recipe_requires_document_layer_style_light(lighting_state);
+  if ((requires_document_light || !document_light_value.isUndefined()) &&
+      recipe_version < kPhotoDocumentLayerStyleLightEditRecipeVersion) {
+    result.errors.append(QStringLiteral(
+        "Document layer style lighting requires desktop recipeVersion 20."));
+  }
+  if (requires_document_light && document_light_value.isUndefined()) {
+    result.errors.append(QStringLiteral(
+        "Document layer style lighting requires documentLayerStyleLightAngle."));
+  }
+
+  bool has_text_dimensions = false;
   for (const auto* collection : {"layers", "photoLayers"}) {
     const auto layers = object.value(QString::fromLatin1(collection)).toArray();
-    if (detail::photo_layers_have_effect_stacks(layers.toVariantList()) && recipe_version != kPhotoEffectsEditRecipeVersion && recipe_version != kPhotoTypographyEditRecipeVersion && recipe_version != kPhotoPaintEditRecipeVersion)
+    has_text_dimensions = has_text_dimensions ||
+        detail::photo_layers_have_text_dimensions(layers.toVariantList());
+  }
+  if (has_text_dimensions &&
+      recipe_version < kPhotoTextDimensionEditRecipeVersion) {
+    result.errors.append(QStringLiteral(
+        "Dimensional text requires desktop recipeVersion 21."));
+  }
+  if (recipe_version == kPhotoTextDimensionEditRecipeVersion &&
+      !has_text_dimensions) {
+    result.errors.append(QStringLiteral(
+        "Desktop recipeVersion 21 requires a textDimension layer."));
+  }
+
+  QVariantList style_masks;
+  if (detail::photo_layers_have_styles(object.value(QStringLiteral("layers")).toArray().toVariantList()) ||
+      detail::photo_layers_have_styles(object.value(QStringLiteral("photoLayers")).toArray().toVariantList())) {
+    auto adjustment_object = object;
+    adjustment_object.remove(QStringLiteral("recipeVersion"));
+    style_masks = parse_edit_adjustment_state_object(adjustment_object).mask_stack;
+  }
+  for (const auto* collection : {"layers", "photoLayers"}) {
+    const auto layers = object.value(QString::fromLatin1(collection)).toArray();
+    QString text_dimension_error;
+    if (!validate_photo_text_dimensions_in_layers(
+            layers.toVariantList(), &text_dimension_error)) {
+      result.errors.append(QStringLiteral("%1: %2")
+          .arg(QString::fromLatin1(collection), text_dimension_error));
+    }
+    if (detail::photo_layers_have_effect_stacks(layers.toVariantList()) && recipe_version < kPhotoEffectsEditRecipeVersion)
       result.errors.append(QStringLiteral("Layer effect stacks require desktop recipeVersion 14."));
-    if (detail::photo_layers_have_typography(layers.toVariantList()) && recipe_version != kPhotoTypographyEditRecipeVersion && recipe_version != kPhotoPaintEditRecipeVersion)
+    if (detail::photo_layers_have_typography(layers.toVariantList()) && recipe_version < kPhotoTypographyEditRecipeVersion)
       result.errors.append(QStringLiteral("Versioned text requires desktop recipeVersion 15."));
-    if (detail::photo_layers_have_paint_tiles(layers.toVariantList()) && recipe_version != kPhotoPaintEditRecipeVersion)
+    if (detail::photo_layers_have_paint_tiles(layers.toVariantList()) && recipe_version < kPhotoPaintEditRecipeVersion)
       result.errors.append(QStringLiteral("Paint tiles require desktop recipeVersion 16."));
+    if (detail::photo_layers_have_components(layers.toVariantList()) && recipe_version < kPhotoComponentEditRecipeVersion)
+      result.errors.append(QStringLiteral("Editable components require desktop recipeVersion 17."));
+    if (detail::photo_layers_have_styles(layers.toVariantList()) && recipe_version < kPhotoLayerStyleEditRecipeVersion)
+      result.errors.append(QStringLiteral("Shared layer styles require desktop recipeVersion 19."));
+    QString style_error;
+    if (!validate_photo_layer_style_storage(layers.toVariantList(), &style_error, 0, &style_masks))
+      result.errors.append(style_error);
     for (qsizetype index = 0; index < layers.size(); ++index) {
       const auto layer = layers[index].toObject();
       if (layer.contains("paintTiles")) {
@@ -72,14 +143,16 @@ EditRecipeValidationResult validate_edit_recipe_json(
       }
       if (layer.contains("textTypography")) {
         const auto typography = layer.value("textTypography").toObject();
-        if (typography.value("version").toDouble(-1) != 1 && typography.value("version").toDouble(-1) != 2 &&
-            typography.value("version").toDouble(-1) != 3 && typography.value("version").toDouble(-1) != 4 &&
-            typography.value("version").toDouble(-1) != 5 && typography.value("version").toDouble(-1) != 6 &&
-            typography.value("version").toDouble(-1) != 7 &&
-            typography.value("version").toDouble(-1) != 8 &&
-            typography.value("version").toDouble(-1) != 9)
-          result.errors.append(QStringLiteral("%1[%2].textTypography: Unsupported text style version.")
+        QString style_error;
+        const auto decoded_style = decode_photo_text_style(typography, &style_error);
+        if (!decoded_style) {
+          result.errors.append(QStringLiteral("%1[%2].textTypography: %3")
+              .arg(QString::fromLatin1(collection)).arg(index).arg(style_error));
+        } else if (!photo_text_runs_fit_content(decoded_style->runs,
+                       layer.value("text").toString(QStringLiteral("Text")))) {
+          result.errors.append(QStringLiteral("%1[%2].textTypography: character style ranges must fit the text and may not split a Unicode character or CRLF line break")
               .arg(QString::fromLatin1(collection)).arg(index));
+        }
       }
       QString effect_error;
       if (!decode_photo_layer_effects(layers[index].toObject().toVariantMap(), &effect_error))
@@ -88,7 +161,7 @@ EditRecipeValidationResult validate_edit_recipe_json(
     }
   }
 
-  if (recipe_version == kCurrentEditRecipeVersion || recipe_version == kPhotoEffectsEditRecipeVersion || recipe_version == kPhotoTypographyEditRecipeVersion || recipe_version == kPhotoPaintEditRecipeVersion) {
+  if (is_supported_structured_edit_recipe_version(recipe_version)) {
     const QStringList required_objects = {
         QStringLiteral("rawAdjustments"),
         QStringLiteral("globalAdjustments"),

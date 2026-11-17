@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Rectangle {
+Button {
     id: root
 
     property int pageIndex: -1
@@ -21,38 +21,29 @@ Rectangle {
     Layout.fillWidth: true
     implicitHeight: Math.max(showSubtitle ? theme.sidebarRowHeightCompact + theme.space8 : theme.sidebarRowHeightCompact,
                              rowContent.implicitHeight + theme.space10)
-    radius: theme.radiusControl
-    color: selected
-           ? theme.editorSelectionFill
-           : (rowHover.hovered || activeFocus ? theme.editorControlHover : "transparent")
-    border.width: activeFocus ? theme.focusBorderWidth : (selected ? theme.hairlineWidth : 0)
-    border.color: activeFocus
-                  ? theme.focusRing
-                  : selected
-                    ? theme.alpha(theme.editorSelectionEdge, 0.72)
-                    : "transparent"
+    hoverEnabled: true
+    background: CommandButtonSurface {
+        selected: root.selected
+        hovered: rowHover.hovered
+        focused: root.visualFocus
+        interactiveEnabled: root.enabled
+        fillColor: theme.commandFill("secondary", root.selected, rowHover.hovered, false, root.enabled, true)
+    }
     activeFocusOnTab: true
     Accessible.name: title
     Accessible.description: subtitle
     Accessible.role: Accessible.Button
-    Keys.onReturnPressed: root.activated(root.pageIndex)
-    Keys.onEnterPressed: root.activated(root.pageIndex)
-    Keys.onSpacePressed: root.activated(root.pageIndex)
-
-    Behavior on color {
-        ColorAnimation { duration: theme.durationFast }
-    }
-
-    Behavior on border.color {
-        ColorAnimation { duration: theme.durationFast }
-    }
+    Accessible.checked: root.selected
+    Keys.onReturnPressed: if (root.enabled) root.activated(root.pageIndex)
+    Keys.onEnterPressed: if (root.enabled) root.activated(root.pageIndex)
+    onClicked: root.activated(root.pageIndex)
 
     HoverHandler {
         id: rowHover
         cursorShape: Qt.PointingHandCursor
     }
 
-    RowLayout {
+    contentItem: RowLayout {
         id: rowContent
         anchors.fill: parent
         anchors.leftMargin: theme.space10
@@ -67,13 +58,14 @@ Rectangle {
 
             Label {
                 id: titleLabel
+                objectName: "sharedCommandLabel"
                 Layout.fillWidth: true
                 text: root.title
                 color: root.selected ? theme.interaction300 : theme.textMain
                 font.family: theme.fontUi
                 font.pixelSize: theme.typeControl
-                font.weight: root.selected ? Font.DemiBold : Font.Medium
-                fontSizeMode: root.showSubtitle ? Text.HorizontalFit : Text.FixedSize
+                font.weight: theme.weightControl
+                fontSizeMode: Text.FixedSize
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 minimumPixelSize: 10
                 elide: Text.ElideNone
@@ -110,7 +102,4 @@ Rectangle {
         }
     }
 
-    TapHandler {
-        onTapped: root.activated(root.pageIndex)
-    }
 }

@@ -1,0 +1,11 @@
+# Sparse title crop-and-pad experiment
+
+This artifact preserves an isolated one-frame comparison for 112 title inputs from the native review snapshot. It compares the original full-canvas PNG inputs with cropped PNGs that are padded back to their original 1920×1080 canvas before the title overlay chain.
+
+The output RGBA frames are byte-identical: both `framemd5` records have MD5 `c0ea023d2fada95aa7285df35db19945`. The full-canvas baseline took 2.274 s and reported 20,105,740,288 bytes maximum child RSS. Crop-and-pad took 2.437 s and reported 20,820,492,288 bytes maximum child RSS: +7.2% wall time and +3.6% maximum RSS. This one-frame title-only graph is an isolated component measurement, not a full native export benchmark.
+
+The comparison does not justify repadding to the full canvas before the existing clip transform/effect chain. The cropped PNG decoder output is smaller, but the early pad makes the downstream filter frames full-size again; this graph used more time and peak memory. One of the 112 input references is fully opaque across the entire canvas and correctly remains on the original full-frame path. The other 111 references have sparse alpha bounds.
+
+`fixtures/source-inputs/` and `fixtures/sparse-inputs/` contain the exact PNG files used; `source-sha256.json` records original source hashes. `fixtures/sparse-map.tsv` records, in input order, the path, integer placement, source canvas dimensions, and whether the file is cropped. `original.framemd5` and `crop-pad.framemd5` preserve exact decoded-frame output identities.
+
+To reproduce the measurement, run `python3 bench_graph.py` on macOS with FFmpeg on `PATH`; it executes both cases, records each child’s peak RSS with `wait4`, and checks frame equality. The graph reached roughly 19 GiB peak RSS in this isolated run, so run it only when that memory load is acceptable. The script uses one `-loop 1 -framerate 30 -i` input for each line in `fixtures/source-order.txt`. Chain each source through `format=rgba`; for sparse inputs, insert `pad=1920:1080:x:y:color=black@0,format=rgba` using the matching `sparse-map.tsv` row before overlaying inputs in order. Use `-filter_complex_threads 1 -frames:v 1 -pix_fmt rgba -f framemd5`. The source files and original PNGs are unchanged.

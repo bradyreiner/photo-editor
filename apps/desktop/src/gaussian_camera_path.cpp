@@ -1,5 +1,6 @@
 #include "gaussian_camera_path.h"
 #include "gaussian_saved_views.h"
+#include "gaussian_physical_camera.h"
 #include <QJsonObject>
 #include <QQuaternion>
 #include <algorithm>
@@ -38,8 +39,21 @@ GaussianCamera GaussianCameraPath::sample(double seconds) const {
   result.cx = a.cx * (1 - t) + b.cx * t; result.cy = a.cy * (1 - t) + b.cy * t;
   result.photo.focal_scale = a.photo.focal_scale * (1 - t) + b.photo.focal_scale * t;
   result.photo.exposure_ev = a.photo.exposure_ev * (1 - t) + b.photo.exposure_ev * t;
+  result.photo.tone.contrast = a.photo.tone.contrast * (1 - t) + b.photo.tone.contrast * t;
+  result.photo.tone.highlight_compression = a.photo.tone.highlight_compression * (1 - t) + b.photo.tone.highlight_compression * t;
+  result.photo.tone.warmth = std::lerp(a.photo.tone.warmth,b.photo.tone.warmth,t);
+  result.photo.tone.tint = std::lerp(a.photo.tone.tint,b.photo.tone.tint,t);
+  result.photo.tone.vibrance = std::lerp(a.photo.tone.vibrance,b.photo.tone.vibrance,t);
+  result.photo.tone.fade = std::lerp(a.photo.tone.fade,b.photo.tone.fade,t);
   result.photo.lens.focus_distance = a.photo.lens.focus_distance * (1 - t) + b.photo.lens.focus_distance * t;
   result.photo.lens.aperture_radius = a.photo.lens.aperture_radius * (1 - t) + b.photo.lens.aperture_radius * t;
+  if (a.physical && b.physical) {
+    auto physical = a.physical->settings;
+    physical.focal_length_mm = std::lerp(a.physical->settings.focal_length_mm,b.physical->settings.focal_length_mm,static_cast<double>(t));
+    physical.focus_distance_m = std::lerp(a.physical->settings.focus_distance_m,b.physical->settings.focus_distance_m,static_cast<double>(t));
+    const auto configured = make_gaussian_physical_camera(result,result.image_size,physical,true);
+    if (configured.camera) result = *configured.camera;
+  }
   return result;
 }
 std::optional<GaussianCameraPath> gaussian_camera_path(const QVariantMap& settings, const QVariantList& views, QString* error) {
@@ -62,17 +76,33 @@ std::optional<GaussianCameraPath> gaussian_camera_path(const QVariantMap& settin
     if (!camera) return fail("A camera-path shot is missing or invalid.");
     if (!path.view_ids.isEmpty() && path.view_ids.back() == id.toString()) return fail("Adjacent path shots must differ.");
     if (!path.cameras.empty()) {
-      if (camera->physical != path.cameras.front().physical)
-        return fail("Physical camera paths currently require the same scale, sensor gate, focal length, f-stop and focus in every shot. Camera movement and exposure may vary.");
+      const auto& first_camera = path.cameras.front();
+      bool physical_match = camera->physical == first_camera.physical;
+      if (camera->physical && first_camera.physical) {
+        auto current = camera->physical->settings, first = first_camera.physical->settings;
+        current.focal_length_mm = first.focal_length_mm;
+        current.focus_distance_m = first.focus_distance_m;
+        physical_match = current == first && camera->physical->gate_width_mm==first_camera.physical->gate_width_mm &&
+            camera->physical->gate_height_mm==first_camera.physical->gate_height_mm;
+      }
+      if (!physical_match)
+        return fail("Physical path shots must share scale, sensor, active gate and f-stop. Focal length and focus may vary.");
       const auto& lens = camera->photo.lens;
       const auto& first_lens = path.cameras.front().photo.lens;
-      if (lens.blades != first_lens.blades || lens.rotation_degrees != first_lens.rotation_degrees ||
-          lens.roundness != first_lens.roundness || lens.samples != first_lens.samples)
-        return fail("Path shots must share aperture shape, rotation and sampling quality. Focus and aperture size may vary.");
+      if (lens.auto_focus != first_lens.auto_focus || lens.blades != first_lens.blades || lens.rotation_degrees != first_lens.rotation_degrees ||
+          lens.roundness != first_lens.roundness || lens.samples != first_lens.samples ||
+          lens.aperture_edge != first_lens.aperture_edge || lens.vignetting_distance != first_lens.vignetting_distance ||
+          lens.vignetting_scale != first_lens.vignetting_scale || lens.spherical_distortion != first_lens.spherical_distortion ||
+          lens.astigmatism != first_lens.astigmatism || lens.field_curvature != first_lens.field_curvature ||
+          lens.bokeh_aspect != first_lens.bokeh_aspect || lens.ray_traced != first_lens.ray_traced ||
+          lens.pupil_softness != first_lens.pupil_softness)
+        return fail("Path shots must share lens model, aperture shape, edge response, optical vignetting, aberrations and sampling quality. Focus and aperture size may vary.");
       if (camera->photo.look != path.cameras.front().photo.look)
         return fail("Path shots must use the same photographic look. Exposure and lens framing may vary.");
       if (camera->photo.film != path.cameras.front().photo.film)
         return fail("Path shots must use the same grain and halation settings, including seed.");
+      if (camera->photo.post != path.cameras.front().photo.post)
+        return fail("Path shots must share bloom, glare, chromatic aberration and saturation settings.");
       const auto size = path.cameras.front().image_size;
       const double aspect = static_cast<double>(size.width()) / size.height();
       const double other = static_cast<double>(camera->image_size.width()) / camera->image_size.height();

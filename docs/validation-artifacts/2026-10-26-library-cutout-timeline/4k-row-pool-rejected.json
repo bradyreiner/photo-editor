@@ -1,0 +1,101 @@
+{
+    "captures": [
+        {
+            "height": 1834,
+            "name": "4k-stress-after-retime",
+            "path": "/private/tmp/looksy-native-4k-stress/4k-stress-after-retime.png",
+            "width": 3200
+        }
+    ],
+    "droppedFrames": 111,
+    "durationMs": 10013,
+    "eventLoopHeartbeatP95Ms": 18,
+    "frameProcessingMetrics": {
+        "cameraAndBaseGradeMs": 0,
+        "cameraTransformMs": 0,
+        "creativeLutMs": 0,
+        "creativeLutPrepareMs": 0,
+        "decodeNormalizeMs": 51.699562390083166,
+        "frameCacheBytes": 129182064,
+        "frameCacheEnabled": true,
+        "frameCacheEntries": 19,
+        "frameCacheEvictions": 183,
+        "frameCacheFrameTimestampUs": -1,
+        "frameCacheHit": false,
+        "frameCacheHits": 0,
+        "frameCacheIdentityKind": "decoded-content",
+        "frameCacheKeyEligible": true,
+        "frameCacheKeyUnavailableReason": "",
+        "frameCacheLookupMs": 0.0006769937282587436,
+        "frameCacheLookupPerformed": true,
+        "frameCacheMisses": 205,
+        "fusedColorPipelineMs": 0,
+        "gradeApplyMs": 0,
+        "gradeCompileMs": 0,
+        "height": 978,
+        "lastFrameCacheLookupMs": 0.001,
+        "lastFrameTotalMs": 51.413,
+        "sampleCount": 188,
+        "sourceKey": "45601a7a-51cc-4780-a314-c744a24bcb07|1738x978|6c1d169a8b1594a2536098266152c00690d2b5922b5e4a2243f968d6b60319a2",
+        "timelineEffectsMs": 0,
+        "totalMs": 51.83273705585392,
+        "width": 1738
+    },
+    "passed": false,
+    "platform": "cocoa",
+    "playbackDiagnostics": {
+    },
+    "publishedFramesPerSecond": 18.775591730750026,
+    "publishedUniqueTimestampFrames": 188,
+    "requestedQuality": "full",
+    "savedAndReopened": true,
+    "schema": "timeline-native-4k-stress-v1",
+    "sequenceProgressSeconds": 10.002,
+    "sourceFps": 30,
+    "sourceHeight": 2160,
+    "sourceWidth": 3840,
+    "trimRateReverseSourceTime": [
+        {
+            "expectedSourceSeconds": 2.5,
+            "localSeconds": 0.25,
+            "matches": true,
+            "mode": "forward",
+            "sourceSeconds": 2.5
+        },
+        {
+            "expectedSourceSeconds": 4,
+            "localSeconds": 1,
+            "matches": true,
+            "mode": "forward",
+            "sourceSeconds": 4
+        },
+        {
+            "expectedSourceSeconds": 6,
+            "localSeconds": 2,
+            "matches": true,
+            "mode": "forward",
+            "sourceSeconds": 6
+        },
+        {
+            "expectedSourceSeconds": 15.5,
+            "localSeconds": 0.25,
+            "matches": true,
+            "mode": "reverse",
+            "sourceSeconds": 15.5
+        },
+        {
+            "expectedSourceSeconds": 14,
+            "localSeconds": 1,
+            "matches": true,
+            "mode": "reverse",
+            "sourceSeconds": 14
+        },
+        {
+            "expectedSourceSeconds": 12,
+            "localSeconds": 2,
+            "matches": true,
+            "mode": "reverse",
+            "sourceSeconds": 12
+        }
+    ]
+}

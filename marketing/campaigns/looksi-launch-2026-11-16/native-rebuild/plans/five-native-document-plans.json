@@ -1,0 +1,165 @@
+{
+  "status": "authoring plans only",
+  "documents": [
+    {
+      "campaign_id": "01",
+      "document_name": "LOOKSi Campaign 01 - I wanted to make this.",
+      "project_name": "LOOKSi native launch campaigns",
+      "native_workspace": "Edit Boards",
+      "new_canvas_settings": {
+        "name": "LOOKSi Campaign 01 - I wanted to make this.",
+        "projectName": "LOOKSi native launch campaigns",
+        "width": 1080,
+        "height": 1350,
+        "resolution": 144,
+        "background": "color",
+        "color": "#F1EFE7"
+      },
+      "planned_board_count": 6,
+      "native_authoring_route": "UI creates/names the document; a source-agnostic layers preset or native layer clipboard is applied to each actual blank board. Native UI adds next blank board and saves. Current command admission must be live-discovered before optional MCP mutations.",
+      "allowed_sources": [
+        "Raw/source photographs with recorded paths/hashes",
+        "Original abstract art as a single declared ingredient",
+        "Native text, fill, vector and source layer definitions"
+      ],
+      "forbidden_substitute": "Flattened V2 cover/carousel/film frame imported as the board artwork",
+      "proof_per_document": [
+        "Stable app-created document ID and name",
+        "Native layer tree and kinds per board",
+        "At least one live text edit and Undo",
+        "App Save Boards completed",
+        "App native export inspected",
+        "Document reopened and native layer definitions/source references retained"
+      ],
+      "state": "PLANNED - not created or counted complete"
+    },
+    {
+      "campaign_id": "02",
+      "document_name": "LOOKSi Campaign 02 - NEPAL. In three forms.",
+      "project_name": "LOOKSi native launch campaigns",
+      "native_workspace": "Edit Boards",
+      "new_canvas_settings": {
+        "name": "LOOKSi Campaign 02 - NEPAL. In three forms.",
+        "projectName": "LOOKSi native launch campaigns",
+        "width": 1080,
+        "height": 1350,
+        "resolution": 144,
+        "background": "color",
+        "color": "#101418"
+      },
+      "planned_board_count": 6,
+      "native_authoring_route": "UI creates/names the document; a source-agnostic layers preset or native layer clipboard is applied to each actual blank board. Native UI adds next blank board and saves. Current command admission must be live-discovered before optional MCP mutations.",
+      "allowed_sources": [
+        "Raw/source photographs with recorded paths/hashes",
+        "Original abstract art as a single declared ingredient",
+        "Native text, fill, vector and source layer definitions"
+      ],
+      "forbidden_substitute": "Flattened V2 cover/carousel/film frame imported as the board artwork",
+      "proof_per_document": [
+        "Stable app-created document ID and name",
+        "Native layer tree and kinds per board",
+        "At least one live text edit and Undo",
+        "App Save Boards completed",
+        "App native export inspected",
+        "Document reopened and native layer definitions/source references retained"
+      ],
+      "state": "PLANNED - not created or counted complete"
+    },
+    {
+      "campaign_id": "03",
+      "document_name": "LOOKSi Campaign 03 - Keep the gold. Keep the quiet blues.",
+      "project_name": "LOOKSi native launch campaigns",
+      "native_workspace": "Edit Boards",
+      "new_canvas_settings": {
+        "name": "LOOKSi Campaign 03 - Keep the gold. Keep the quiet blues.",
+        "projectName": "LOOKSi native launch campaigns",
+        "width": 1080,
+        "height": 1350,
+        "resolution": 144,
+        "background": "color",
+        "color": "#F1EFE7"
+      },
+      "planned_board_count": 7,
+      "native_authoring_route": "UI creates/names the document; a source-agnostic layers preset or native layer clipboard is applied to each actual blank board. Native UI adds next blank board and saves. Current command admission must be live-discovered before optional MCP mutations.",
+      "allowed_sources": [
+        "Raw/source photographs with recorded paths/hashes",
+        "Original abstract art as a single declared ingredient",
+        "Native text, fill, vector and source layer definitions"
+      ],
+      "forbidden_substitute": "Flattened V2 cover/carousel/film frame imported as the board artwork",
+      "proof_per_document": [
+        "Stable app-created document ID and name",
+        "Native layer tree and kinds per board",
+        "At least one live text edit and Undo",
+        "App Save Boards completed",
+        "App native export inspected",
+        "Document reopened and native layer definitions/source references retained"
+      ],
+      "state": "PLANNED - not created or counted complete"
+    },
+    {
+      "campaign_id": "04",
+      "document_name": "LOOKSi Campaign 04 - The last tweak. Again.",
+      "project_name": "LOOKSi native launch campaigns",
+      "native_workspace": "Edit Boards",
+      "new_canvas_settings": {
+        "name": "LOOKSi Campaign 04 - The last tweak. Again.",
+        "projectName": "LOOKSi native launch campaigns",
+        "width": 1080,
+        "height": 1350,
+        "resolution": 144,
+        "background": "color",
+        "color": "#101418"
+      },
+      "planned_board_count": 6,
+      "native_authoring_route": "UI creates/names the document; a source-agnostic layers preset or native layer clipboard is applied to each actual blank board. Native UI adds next blank board and saves. Current command admission must be live-discovered before optional MCP mutations.",
+      "allowed_sources": [
+        "Raw/source photographs with recorded paths/hashes",
+        "Original abstract art as a single declared ingredient",
+        "Native text, fill, vector and source layer definitions"
+      ],
+      "forbidden_substitute": "Flattened V2 cover/carousel/film frame imported as the board artwork",
+      "proof_per_document": [
+        "Stable app-created document ID and name",
+        "Native layer tree and kinds per board",
+        "At least one live text edit and Undo",
+        "App Save Boards completed",
+        "App native export inspected",
+        "Document reopened and native layer definitions/source references retained"
+      ],
+      "state": "PLANNED - not created or counted complete"
+    },
+    {
+      "campaign_id": "05",
+      "document_name": "LOOKSi Campaign 05 - Make room for your eye.",
+      "project_name": "LOOKSi native launch campaigns",
+      "native_workspace": "Edit Boards",
+      "new_canvas_settings": {
+        "name": "LOOKSi Campaign 05 - Make room for your eye.",
+        "projectName": "LOOKSi native launch campaigns",
+        "width": 1080,
+        "height": 1350,
+        "resolution": 144,
+        "background": "color",
+        "color": "#101418"
+      },
+      "planned_board_count": 6,
+      "native_authoring_route": "UI creates/names the document; a source-agnostic layers preset or native layer clipboard is applied to each actual blank board. Native UI adds next blank board and saves. Current command admission must be live-discovered before optional MCP mutations.",
+      "allowed_sources": [
+        "Raw/source photographs with recorded paths/hashes",
+        "Original abstract art as a single declared ingredient",
+        "Native text, fill, vector and source layer definitions"
+      ],
+      "forbidden_substitute": "Flattened V2 cover/carousel/film frame imported as the board artwork",
+      "proof_per_document": [
+        "Stable app-created document ID and name",
+        "Native layer tree and kinds per board",
+        "At least one live text edit and Undo",
+        "App Save Boards completed",
+        "App native export inspected",
+        "Document reopened and native layer definitions/source references retained"
+      ],
+      "state": "PLANNED - not created or counted complete"
+    }
+  ]
+}

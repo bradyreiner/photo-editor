@@ -23,11 +23,16 @@ QtObject {
     readonly property string fontDisplay: fontUi
     readonly property string fontUi: typeof appShell !== "undefined" && appShell.systemUiFontFamily
                                      ? appShell.systemUiFontFamily : Qt.font({ pixelSize: typeControl }).family
-    readonly property string fontMono: Qt.platform.os === "osx" ? "Menlo" : "Noto Sans Mono"
+    readonly property string fontNumeric: fontUi
+    readonly property var numericFontFeatures: ({ "tnum": 1, "lnum": 1 })
+    // Keep legacy UI consumers on the same clean family.
+    readonly property string fontMono: fontNumeric
+    // An explicitly chosen creative typeface is independent of application chrome.
+    readonly property string fontCreativeMono: Qt.platform.os === "osx" ? "Menlo" : "Noto Sans Mono"
 
     // Looksy identity palette: deep graphite, cool white, and additive RGB.
     readonly property color brandInk: "#050505"
-    readonly property color brandPaper: "#F4F6F8"
+    readonly property color brandPaper: "#F3F3F3"
     readonly property color brandRed: "#FF3B30"
     readonly property color brandGreen: "#30D158"
     readonly property color brandBlue: "#3282FF"
@@ -36,23 +41,25 @@ QtObject {
     readonly property color opticalLight: "#91D9EA"
     readonly property color opticalHoverFill: actionSecondaryHover
     readonly property color opticalSelectedFill: editorSelectionFill
-    readonly property color opticalEdge: highContrast ? brandPaper : "#607B88"
-    readonly property color popupFill: "#24262A"
+    readonly property color opticalEdge: highContrast ? brandPaper : "#787878"
+    readonly property color popupFill: "#242424"
     readonly property color popupDim: "#80000000"
-    readonly property color popupBorder: highContrast ? lineStrong : "#50545B"
-    readonly property int popupRadius: scaled(6)
+    readonly property color popupBorder: lineStrong
+    readonly property int popupBorderWidth: highContrast ? hairlineWidth : chromeBorderWidth
+    readonly property int popupRadius: radiusSurface
+    readonly property int popupPadding: scaled(densityComfortable ? 16 : densityCompact ? 8 : 12)
     readonly property color warningFill: "#302B23"
     readonly property color errorFill: "#342626"
     readonly property int opticalHoverDuration: reducedMotion ? 0 : 120
     readonly property int opticalOpenDuration: reducedMotion ? 0 : 150
     readonly property string opticalStudioContract: "optical-studio:v2|character:friendly-technical|geometry:sharp-compact|hover:subtle-neutral|press:inset|focus:paper|activity:line-character|warnings:static-symbol|media:neutral"
 
-    // Blue identifies selection in small marks and icons; command surfaces
-    // remain graphite, including primary actions such as Import.
-    readonly property color interaction500: "#6486AE"
-    readonly property color interaction400: "#91B4DE"
-    readonly property color interaction300: "#B5CDE9"
-    readonly property color interactionFill: "#272F39"
+    // Neutral luminance steps identify control states. Hue is reserved for
+    // image-editing controls, the brand light, and functional status signals.
+    readonly property color interaction500: "#888888"
+    readonly property color interaction400: "#C4C4C4"
+    readonly property color interaction300: "#E0E0E0"
+    readonly property color interactionFill: "#282828"
     // Display-space registration primitives, reserved for brief completion motion.
     readonly property color lightRed: brandRed
     readonly property color lightGreen: brandGreen
@@ -65,17 +72,17 @@ QtObject {
     readonly property color surfaceTop: ink900
     readonly property color surfaceBottom: ink900
     readonly property color surfaceInset: "#050505"
-    readonly property color controlEdge: highContrast ? "#F1F3F4" : "#41444A"
-    readonly property color actionPrimaryFill: "#35383D"
-    readonly property color actionPrimaryHover: "#3D4045"
-    readonly property color actionPrimaryPressed: "#292C31"
-    readonly property color actionSecondaryFill: ink850
-    readonly property color actionSecondaryHover: "#2D3035"
-    readonly property color actionSecondaryPressed: "#202226"
+    readonly property color controlEdge: highContrast ? "#F1F3F4" : "#444444"
+    readonly property color actionPrimaryFill: "#2D2D2D"
+    readonly property color actionPrimaryHover: "#383838"
+    readonly property color actionPrimaryPressed: "#2C2C2C"
+    readonly property color actionSecondaryFill: "#202020"
+    readonly property color actionSecondaryHover: "#2E2E2E"
+    readonly property color actionSecondaryPressed: "#222222"
     readonly property color actionPrimaryText: brandPaper
     readonly property color fieldFill: ink850
     readonly property color fieldHoverFill: ink800
-    readonly property string darkPaletteContract: "looksy-dark-palette:v8|surfaces:graphite-neutral|controls:graphite-steps|interaction:muted-blue-marks|primary:graphite|brand:rgb-additive|media-well:neutral-black|signals:functional"
+    readonly property string darkPaletteContract: "looksy-dark-palette:v9|surfaces:neutral-charcoal|controls:graphite-steps|interaction:neutral-marks|primary:graphite|brand:rgb-additive|media-well:neutral-black|signals:functional"
 
     // Shared application type scale. Dense editor surfaces should use these
     // semantic steps instead of introducing workspace-specific pixel sizes.
@@ -91,21 +98,21 @@ QtObject {
     readonly property int typePageTitle: scaled(26)
     readonly property int weightControl: Font.Medium
     readonly property int weightSection: Font.DemiBold
-    readonly property string typographyContract: "looksy-typography:v1|family:platform-ui|body:13|caption:12|micro:11|controls:medium|headings:semibold|numeric:aligned|scale:shared"
+    readonly property string typographyContract: "looksy-typography:v1|family:platform-ui|body:13|caption:12|micro:11|controls:medium|headings:semibold|numeric:aligned|scale:shared|numeric-family:platform-ui|figures:tabular-lining"
 
-    readonly property color ink950: "#111214"
-    readonly property color ink900: "#191A1D"
-    readonly property color ink850: "#24262A"
-    readonly property color ink800: "#2C2F34"
-    readonly property color ink750: "#373B42"
-    readonly property color ink700: "#464C56"
-    readonly property color lineStrong: highContrast ? "#F1F3F4" : "#525760"
-    readonly property color lineSoft: highContrast ? "#AEB5BC" : "#353940"
+    readonly property color ink950: "#101010"
+    readonly property color ink900: "#181818"
+    readonly property color ink850: "#242424"
+    readonly property color ink800: "#2D2D2D"
+    readonly property color ink750: "#383838"
+    readonly property color ink700: "#484848"
+    readonly property color lineStrong: highContrast ? "#F1F3F4" : "#585858"
+    readonly property color lineSoft: highContrast ? "#AEB5BC" : "#393939"
 
     readonly property color textStrong: brandPaper
-    readonly property color textMain: highContrast ? "#FFFFFF" : "#E0E2E7"
-    readonly property color textMuted: highContrast ? "#ECEEF1" : "#B0B5BF"
-    readonly property color textFaint: highContrast ? "#CDD1D8" : "#9299A5"
+    readonly property color textMain: highContrast ? "#FFFFFF" : "#E2E2E2"
+    readonly property color textMuted: highContrast ? "#ECEEF1" : "#B5B5B5"
+    readonly property color textFaint: highContrast ? "#CDD1D8" : "#999999"
 
     // Interaction roles stay distinguishable by both hue and shape/text cues.
     // Cool optical light defines actions; selection, keyboard focus, markers,
@@ -113,11 +120,11 @@ QtObject {
     readonly property color primaryAccent: interaction400
     readonly property color selectionAccent: highContrast ? interaction300 : interaction400
     readonly property color focusAccent: brandPaper
-    readonly property color markerAccent: "#AEB4C0"
+    readonly property color markerAccent: "#B4B4B4"
     readonly property color audioAccent: brandGreen
     readonly property color warningAccent: warning
     readonly property color errorAccent: error
-    readonly property string semanticAccentContract: "semantic-accents:v4|primary:graphite|selection:muted-blue|focus:paper|marker:neutral|audio:rgb-green|warning:amber|error:rgb-red|non-color-cues:required"
+    readonly property string semanticAccentContract: "semantic-accents:v4|primary:graphite|selection:neutral|focus:paper|marker:neutral|audio:rgb-green|warning:amber|error:rgb-red|non-color-cues:required"
     readonly property string darkContrastContract: "dark-contrast:v2|normal-text-target:4.5|control-target:3|focus-width:2|composited-surface-review:required"
 
     // Compatibility aliases route existing workspaces through the same roles. They
@@ -136,7 +143,7 @@ QtObject {
     readonly property color warning: "#F6C945"
     readonly property color error: brandRed
     readonly property color focusRing: highContrast ? (darkMode ? "#FFFFFF" : "#000000") : focusAccent
-    readonly property color focusFill: "#20242C"
+    readonly property color focusFill: "#292929"
     readonly property string interactionStateContract: "interaction-states:v2|rest:transparent-or-graphite|hover:subtle-neutral-fill|pressed:inset-neutral|focus:2px-focus-ring|disabled:muted-stable|destructive:error-hue-plus-label|selected:subtle-fill-and-icon-or-weight|motion:theme-duration-fast|no-color-only:true"
 
     readonly property color glassBase: ink900
@@ -144,8 +151,9 @@ QtObject {
     readonly property color glassEdge: lineStrong
     readonly property color editorControlIdle: ink850
     readonly property color editorControlHover: highContrast ? "#5C5C5C" : actionSecondaryHover
-    readonly property color editorSelectionFill: highContrast ? "#30343A" : interactionFill
+    readonly property color editorSelectionFill: highContrast ? "#343434" : interactionFill
     readonly property color editorSelectionEdge: selectionAccent
+    readonly property color timelineSelectionAccent: highContrast ? textStrong : "#79BFFF"
     // Media wells stay neutral in both themes so image and video contrast is
     // stable; surrounding controls continue to follow the active theme.
     readonly property color mediaCanvas: "#050505"
@@ -192,19 +200,25 @@ QtObject {
     readonly property int navUnderlineHeight: 2
     readonly property int sidebarRowHeight: scaled(densityComfortable ? 38 : densityCompact ? 30 : 34)
     readonly property int sidebarRowHeightCompact: scaled(densityComfortable ? 34 : densityCompact ? 28 : 30)
-    readonly property int panelPadding: scaled(densityComfortable ? 16 : densityCompact ? 8 : 12)
+    readonly property int panelPadding: scaled(densityComfortable ? 14 : densityCompact ? 8 : 10)
     readonly property int panelPaddingCompact: scaled(densityComfortable ? 10 : densityCompact ? 6 : 8)
-    readonly property int panelPaddingStandard: scaled(densityComfortable ? 24 : densityCompact ? 16 : 20)
+    readonly property int panelPaddingStandard: scaled(densityComfortable ? 20 : densityCompact ? 12 : 16)
     readonly property int sectionPadding: scaled(densityComfortable ? 12 : densityCompact ? 8 : 10)
     readonly property int sectionPaddingCompact: scaled(densityComfortable ? 10 : densityCompact ? 6 : 8)
-    readonly property int sectionPaddingStandard: scaled(densityComfortable ? 18 : densityCompact ? 12 : 16)
+    readonly property int sectionPaddingStandard: scaled(densityComfortable ? 16 : densityCompact ? 10 : 12)
     readonly property int gapDense: scaled(densityComfortable ? 8 : densityCompact ? 4 : 6)
     readonly property int gapControl: scaled(densityComfortable ? 10 : densityCompact ? 6 : 8)
     readonly property int gapPanel: scaled(densityComfortable ? 10 : densityCompact ? 6 : 8)
+    readonly property int gapCommand: scaled(densityComfortable ? 4 : densityCompact ? 2 : 3)
+    readonly property int sliderTrackBase: 3
+    readonly property int sliderThumbRestBase: 12
+    readonly property int sliderThumbActiveBase: 16
     readonly property int gapRelated: scaled(densityComfortable ? 10 : densityCompact ? 6 : 8)
     readonly property int gapUnrelated: scaled(densityComfortable ? 20 : densityCompact ? 12 : 16)
     readonly property int labelMinWidth: scaled(96)
     readonly property int valueColumnWidth: scaled(58)
+    readonly property int inspectorValueWidth: scaled(80)
+    readonly property int inspectorResetWidth: scaled(28)
     readonly property int menuMinWidth: scaled(180)
     readonly property int menuMaxWidth: scaled(320)
     readonly property int menuItemHeight: scaled(densityComfortable ? 34 : densityCompact ? 28 : 30)
@@ -230,7 +244,7 @@ QtObject {
         if (tone === "danger")
             return alpha(error, hovered ? 0.12 : quiet ? 0 : 0.06)
         if (selected)
-            return hovered ? (highContrast ? editorControlHover : "#303944") : editorSelectionFill
+            return hovered ? (highContrast ? editorControlHover : "#303030") : editorSelectionFill
         if (tone === "primary")
             return hovered ? actionPrimaryHover : actionPrimaryFill
         if (hovered)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "local_mask_compiler.h"
+#include "desktop_source_geometry.h"
 #include "render_plan_store.h"
 #include "flattened_output_renderer.h"
 #include "decoder_provenance.h"
@@ -16,6 +17,7 @@
 #include <QSize>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 
 #include "edit_recipe_state.h"
 
@@ -43,6 +45,8 @@ struct RenderBackendTelemetry final {
   QString decode_preflight;
   QString decode_execution;
   QStringList completed_render_stages;
+  QVariantMap render_stage_elapsed_ms;
+  QVariantMap render_stage_backends;
   int executor_submission_count = 0;
   bool geometry_executor_cache_hit = false;
 };
@@ -56,6 +60,10 @@ struct GpuPipelineSupport final {
 struct RenderMaskOptions final {
   bool rebuild_editable_masks_at_output_resolution = false;
   QRectF camera_profile_source_area = QRectF(0.0, 0.0, 1.0, 1.0);
+  DesktopSourceGeometry source_geometry;
+  // Complete decoded source retained when the input image is physically
+  // cropped, so clone/heal/removal can still sample outside the crop.
+  QImage full_source;
 };
 
 [[nodiscard]] bool preview_supported(const QString& file_path);

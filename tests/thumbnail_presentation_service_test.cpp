@@ -356,5 +356,54 @@ int main() {
     return fail("completed worker failures must retain last-good rows without scheduling a retry loop");
   }
 
+  // A paint-content thumbnail depends on the photographic output policy even
+  // when its immutable tiles and all layer revisions are unchanged. A clean
+  // presentation session must not bypass the new policy's entry-cache key.
+  ThumbnailCacheSession paint_session;
+  ThumbnailPresentationFacts paint_facts;
+  paint_facts.asset_id = "paint-policy";
+  paint_facts.file_path = "/tmp/paint-policy.png";
+  paint_facts.has_asset = true;
+  paint_facts.content_output_policy_identity = thumbnail_content_output_policy_identity(
+      "Linear ProPhoto RGB", "aces2-ocio-v1");
+  const QVariantMap paint_layer{{"id", "paint-policy-layer"}, {"kind", "pixel"},
+      {"paintTiles", QVariantMap{{"tiles", QVariantMap{}}}}};
+  const auto policy_key = [&](const QString& identity) {
+    return thumbnail_entry_cache_key(paint_facts.asset_id,
+        photo_layer_thumbnail_entry_recipe_hash(paint_layer, paint_facts.photo_layer_revision),
+        "paint-policy-layer", {}, kLayerThumbnailEdge, kLayerThumbnailEdge,
+        kLayerThumbnailDevicePixelRatio, photo_layer_thumbnail_output_version(paint_layer, identity),
+        paint_facts.mask_revision);
+  };
+  const auto original_policy = paint_facts.content_output_policy_identity;
+  paint_session.storeEntry(policy_key(original_policy),
+      QVariantMap{{"thumbnailSource", "aces-paint-thumb"}, {"thumbnailReady", true}},
+      32, 1024 * 1024);
+  auto painted = service.presentPhotoLayers({paint_layer}, paint_facts, dependencies, &paint_session);
+  if (paint_session.photoLayerDirty() ||
+      painted.first().toMap().value("thumbnailSource").toString() != "aces-paint-thumb")
+    return fail("paint thumbnail producer and presentation policy keys must agree");
+  paint_facts.content_output_policy_identity = thumbnail_content_output_policy_identity(
+      "Linear ProPhoto RGB", "legacy-oklch-v1");
+  if (policy_key(original_policy) == policy_key(paint_facts.content_output_policy_identity))
+    return fail("paint rendering model must change its thumbnail cache identity");
+  const auto before_policy_refresh = scheduled_count;
+  painted = service.presentPhotoLayers({paint_layer}, paint_facts, dependencies, &paint_session);
+  if (!paint_session.photoLayerDirty() || scheduled_count != before_policy_refresh + 1 ||
+      !painted.first().toMap().value("thumbnailProgressive").toBool())
+    return fail("changing paint output policy must refresh even a previously clean session");
+  paint_session.storeEntry(policy_key(paint_facts.content_output_policy_identity),
+      QVariantMap{{"thumbnailSource", "legacy-paint-thumb"}, {"thumbnailReady", true}},
+      32, 1024 * 1024);
+  painted = service.presentPhotoLayers({paint_layer}, paint_facts, dependencies, &paint_session);
+  if (paint_session.photoLayerDirty() ||
+      painted.first().toMap().value("thumbnailSource").toString() != "legacy-paint-thumb")
+    return fail("new paint output policy must publish its newly rendered content");
+  paint_facts.content_output_policy_identity = thumbnail_content_output_policy_identity(
+      "Linear Display P3", "legacy-oklch-v1");
+  painted = service.presentPhotoLayers({paint_layer}, paint_facts, dependencies, &paint_session);
+  if (!paint_session.photoLayerDirty())
+    return fail("changing the working profile must invalidate paint output thumbnails");
+
   return EXIT_SUCCESS;
 }

@@ -1,0 +1,206 @@
+{
+    "boardScope": "all",
+    "colorProfile": "sRGB",
+    "documentId": "4bec5106-bd3e-4172-888c-74cdff2dc031",
+    "documentName": "NEPAL / NEAR & FAR",
+    "documentSchemaVersion": 11,
+    "exportPreset": {
+        "overrideCount": 0,
+        "presetId": "",
+        "presetVersion": 0
+    },
+    "exportVersion": 1,
+    "exportedAt": "2026-11-16T16:23:22.989Z",
+    "manifestVersion": 2,
+    "outputs": [
+        {
+            "action": "write",
+            "altText": "",
+            "boardIndex": 0,
+            "boardNumber": 1,
+            "boardRole": "content",
+            "colorProfile": "sRGB",
+            "deliveryFormat": "original",
+            "fileName": "nepal-near-far-01.png",
+            "fileType": "PNG",
+            "fitMode": "original",
+            "height": 1536,
+            "plainLanguageDescription": "",
+            "readingOrder": [
+                {
+                    "description": "NEPAL / NEAR & FAR",
+                    "itemId": "",
+                    "key": "slot:primary",
+                    "kind": "image",
+                    "label": "NEPAL / NEAR & FAR",
+                    "position": 1,
+                    "slot": "primary",
+                    "sourceType": "slot",
+                    "text": ""
+                }
+            ],
+            "sha256": "138173ad1357ea060f9cf0d179869477d4b5ee8efb38e02340fcbc11cbfbd91a",
+            "warnings": [
+            ],
+            "width": 1920
+        },
+        {
+            "action": "write",
+            "altText": "",
+            "boardIndex": 1,
+            "boardNumber": 2,
+            "boardRole": "content",
+            "colorProfile": "sRGB",
+            "deliveryFormat": "original",
+            "fileName": "nepal-near-far-02.png",
+            "fileType": "PNG",
+            "fitMode": "original",
+            "height": 1536,
+            "plainLanguageDescription": "",
+            "readingOrder": [
+                {
+                    "description": "canvas-source",
+                    "itemId": "",
+                    "key": "slot:primary",
+                    "kind": "image",
+                    "label": "canvas-source",
+                    "position": 1,
+                    "slot": "primary",
+                    "sourceType": "slot",
+                    "text": ""
+                }
+            ],
+            "sha256": "f9f79d4d6aec047d8e886991c41cf1b63cca049300c1c9c0daf7256e899405da",
+            "warnings": [
+            ],
+            "width": 1920
+        },
+        {
+            "action": "write",
+            "altText": "",
+            "boardIndex": 2,
+            "boardNumber": 3,
+            "boardRole": "content",
+            "colorProfile": "sRGB",
+            "deliveryFormat": "original",
+            "fileName": "nepal-near-far-03.png",
+            "fileType": "PNG",
+            "fitMode": "original",
+            "height": 1536,
+            "plainLanguageDescription": "",
+            "readingOrder": [
+                {
+                    "description": "canvas-source",
+                    "itemId": "",
+                    "key": "slot:primary",
+                    "kind": "image",
+                    "label": "canvas-source",
+                    "position": 1,
+                    "slot": "primary",
+                    "sourceType": "slot",
+                    "text": ""
+                }
+            ],
+            "sha256": "762c860533aad32c59ebc197fdbfda054f24edeb9d809a32125c55273d3396d9",
+            "warnings": [
+            ],
+            "width": 1920
+        },
+        {
+            "action": "write",
+            "altText": "",
+            "boardIndex": 3,
+            "boardNumber": 4,
+            "boardRole": "content",
+            "colorProfile": "sRGB",
+            "deliveryFormat": "original",
+            "fileName": "nepal-near-far-04.png",
+            "fileType": "PNG",
+            "fitMode": "original",
+            "height": 1536,
+            "plainLanguageDescription": "",
+            "readingOrder": [
+                {
+                    "description": "canvas-source",
+                    "itemId": "",
+                    "key": "slot:primary",
+                    "kind": "image",
+                    "label": "canvas-source",
+                    "position": 1,
+                    "slot": "primary",
+                    "sourceType": "slot",
+                    "text": ""
+                }
+            ],
+            "sha256": "1ef8d652a910a8a86ec2effe7c466bdd3e409c1d601069fde6ad2a9a6ed5138c",
+            "warnings": [
+            ],
+            "width": 1920
+        },
+        {
+            "action": "write",
+            "altText": "",
+            "boardIndex": 4,
+            "boardNumber": 5,
+            "boardRole": "content",
+            "colorProfile": "sRGB",
+            "deliveryFormat": "original",
+            "fileName": "nepal-near-far-05.png",
+            "fileType": "PNG",
+            "fitMode": "original",
+            "height": 1536,
+            "plainLanguageDescription": "",
+            "readingOrder": [
+                {
+                    "description": "canvas-source",
+                    "itemId": "",
+                    "key": "slot:primary",
+                    "kind": "image",
+                    "label": "canvas-source",
+                    "position": 1,
+                    "slot": "primary",
+                    "sourceType": "slot",
+                    "text": ""
+                }
+            ],
+            "sha256": "8c8f5684e8d013bc47dbc83659ac5fc042e82c52d47bed965286dffc79d87151",
+            "warnings": [
+            ],
+            "width": 1920
+        },
+        {
+            "action": "write",
+            "altText": "",
+            "boardIndex": 5,
+            "boardNumber": 6,
+            "boardRole": "content",
+            "colorProfile": "sRGB",
+            "deliveryFormat": "original",
+            "fileName": "nepal-near-far-06.png",
+            "fileType": "PNG",
+            "fitMode": "original",
+            "height": 1536,
+            "plainLanguageDescription": "",
+            "readingOrder": [
+                {
+                    "description": "canvas-source",
+                    "itemId": "",
+                    "key": "slot:primary",
+                    "kind": "image",
+                    "label": "canvas-source",
+                    "position": 1,
+                    "slot": "primary",
+                    "sourceType": "slot",
+                    "text": ""
+                }
+            ],
+            "sha256": "f3c2178abc5c96021d8a4768151a66bc6ed55bb38a7335008c16397d8977ebca",
+            "warnings": [
+            ],
+            "width": 1920
+        }
+    ],
+    "ratio": "custom",
+    "warnings": [
+    ]
+}

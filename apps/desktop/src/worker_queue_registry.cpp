@@ -52,6 +52,8 @@ struct UserIntentState final {
   bool workspace_visible = false;
   bool playback_active = false;
   bool interaction_active = false;
+  bool transitioning = false;
+  bool workspace_intent_authoritative = false;
   QStringList visible_item_ids;
   QString focused_item_id;
   qint64 generation = 0;
@@ -78,6 +80,7 @@ QStringList normalized_unique_ids(const QStringList& ids) {
       normalized.push_back(value);
     }
   }
+  normalized.sort();
   return normalized;
 }
 
@@ -101,6 +104,7 @@ bool is_deferrable_background_workflow(const QString& workflow) {
       QStringLiteral("waveform"),
       QStringLiteral("analysis"),
       QStringLiteral("media-analysis"),
+      QStringLiteral("media-integrity"),
       QStringLiteral("silence-analysis"),
       QStringLiteral("beat-analysis"),
       QStringLiteral("loudness-analysis"),
@@ -129,9 +133,13 @@ QVariantMap intent_map(const UserIntentState& state) {
       {QStringLiteral("workspaceVisible"), state.workspace_visible},
       {QStringLiteral("playbackActive"), state.playback_active},
       {QStringLiteral("interactionActive"), state.interaction_active},
+      {QStringLiteral("transitioning"), state.transitioning},
+      {QStringLiteral("workspaceIntentAuthoritative"),
+       state.workspace_intent_authoritative},
       {QStringLiteral("latencySensitive"),
        state.workspace_visible &&
-           (state.playback_active || state.interaction_active)},
+           (state.playback_active || state.interaction_active ||
+            state.transitioning)},
       {QStringLiteral("visibleItemIds"), state.visible_item_ids},
       {QStringLiteral("focusedItemId"), state.focused_item_id},
       {QStringLiteral("generation"), state.generation},
@@ -150,6 +158,68 @@ bool WorkerQueueRegistry::isRegisteredPool(const QString& pool_id) {
   return pools.contains(normalized_pool_id(pool_id));
 }
 
+namespace {
+
+void publish_workspace_intent(
+    const QString& surface,
+    bool workspace_visible,
+    bool playback_active,
+    bool interaction_active,
+    bool transitioning,
+    const QStringList& visible_item_ids,
+    const QString& focused_item_id,
+    bool authoritative) {
+  const auto next_surface = normalized_token(surface, QStringLiteral("background"));
+  const auto next_workspace_visible = workspace_visible;
+  const auto next_playback_active = workspace_visible && playback_active;
+  const auto next_interaction_active = workspace_visible && interaction_active;
+  const auto next_transitioning = workspace_visible && transitioning;
+  const auto next_visible_item_ids = workspace_visible
+                                         ? normalized_unique_ids(visible_item_ids)
+                                         : QStringList{};
+  const auto next_focused_item_id = workspace_visible ? focused_item_id.trimmed() : QString{};
+
+  QMutexLocker locker(&intent_mutex());
+  auto& state = user_intent_state();
+  // A late hidden-workspace callback must not replace the visible editor intent.
+  if (!workspace_visible && state.workspace_visible && state.surface != next_surface) return;
+  if (state.surface == next_surface &&
+      state.workspace_visible == next_workspace_visible &&
+      state.playback_active == next_playback_active &&
+      state.interaction_active == next_interaction_active &&
+      state.transitioning == next_transitioning &&
+      state.workspace_intent_authoritative == authoritative &&
+      state.visible_item_ids == next_visible_item_ids &&
+      state.focused_item_id == next_focused_item_id) {
+    return;
+  }
+  state.surface = next_surface;
+  state.workspace_visible = next_workspace_visible;
+  state.playback_active = next_playback_active;
+  state.interaction_active = next_interaction_active;
+  state.transitioning = next_transitioning;
+  state.workspace_intent_authoritative = authoritative;
+  state.visible_item_ids = next_visible_item_ids;
+  state.focused_item_id = next_focused_item_id;
+  ++state.generation;
+  state.updated_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+}
+
+}  // namespace
+
+void WorkerQueueRegistry::publishWorkspaceIntent(
+    const QString& surface,
+    bool workspace_visible,
+    bool playback_active,
+    bool interaction_active,
+    bool transitioning,
+    const QStringList& visible_item_ids,
+    const QString& focused_item_id) {
+  publish_workspace_intent(
+      surface, workspace_visible, playback_active, interaction_active,
+      transitioning, visible_item_ids, focused_item_id, true);
+}
+
 void WorkerQueueRegistry::publishUserIntent(
     const QString& surface,
     bool workspace_visible,
@@ -157,21 +227,9 @@ void WorkerQueueRegistry::publishUserIntent(
     bool interaction_active,
     const QStringList& visible_item_ids,
     const QString& focused_item_id) {
-  QMutexLocker locker(&intent_mutex());
-  auto& state = user_intent_state();
-  const auto next_surface = normalized_token(surface, QStringLiteral("background"));
-  // A late hidden-workspace callback must not replace the visible editor intent.
-  if (!workspace_visible && state.workspace_visible && state.surface != next_surface) return;
-  state.surface = next_surface;
-  state.workspace_visible = workspace_visible;
-  state.playback_active = workspace_visible && playback_active;
-  state.interaction_active = workspace_visible && interaction_active;
-  state.visible_item_ids = workspace_visible
-                               ? normalized_unique_ids(visible_item_ids)
-                               : QStringList{};
-  state.focused_item_id = workspace_visible ? focused_item_id.trimmed() : QString{};
-  ++state.generation;
-  state.updated_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+  publish_workspace_intent(
+      surface, workspace_visible, playback_active, interaction_active,
+      false, visible_item_ids, focused_item_id, false);
 }
 
 void WorkerQueueRegistry::clearUserIntent(const QString& surface) {
@@ -179,6 +237,12 @@ void WorkerQueueRegistry::clearUserIntent(const QString& surface) {
   QMutexLocker locker(&intent_mutex());
   auto& state = user_intent_state();
   if (!state.surface.isEmpty() && state.surface != normalized_surface) {
+    return;
+  }
+  if (state.surface.isEmpty() && !state.workspace_visible &&
+      !state.playback_active && !state.interaction_active &&
+      !state.transitioning && state.visible_item_ids.isEmpty() &&
+      state.focused_item_id.isEmpty()) {
     return;
   }
   const auto next_generation = state.generation + 1;
@@ -212,9 +276,16 @@ QVariantMap WorkerQueueRegistry::priorityDecision(
   }
 
   const auto latency_sensitive = intent.workspace_visible &&
-                                 (intent.playback_active || intent.interaction_active);
+                                 (intent.playback_active || intent.interaction_active ||
+                                  intent.transitioning);
   const auto foreground = is_foreground_workflow(normalized_workflow);
   const auto background = is_deferrable_background_workflow(normalized_workflow);
+  const auto inactive_timeline = intent.workspace_visible &&
+                                 intent.workspace_intent_authoritative &&
+                                 normalized_surface == QStringLiteral("timeline") &&
+                                 intent.surface != QStringLiteral("timeline");
+  const auto active_surface = intent.workspace_visible &&
+                              normalized_surface == intent.surface;
   const auto focused = !normalized_affected_id.isEmpty() &&
                        normalized_affected_id == intent.focused_item_id;
   const auto visible = !normalized_affected_id.isEmpty() &&
@@ -224,21 +295,35 @@ QVariantMap WorkerQueueRegistry::priorityDecision(
   auto reason = foreground
                     ? QStringLiteral("Direct playback or visible interaction")
                     : QStringLiteral("Manual queue priority");
-  const auto deferred = latency_sensitive && background;
+  const auto defer_for_activity = intent.transitioning || intent.playback_active ||
+                                  (intent.interaction_active &&
+                                   intent.surface != QStringLiteral("library"));
+  const auto deferred = background &&
+                        (defer_for_activity || inactive_timeline);
+  if (active_surface) {
+    effective_rank += 40;
+  }
   if (deferred) {
     effective_rank = qMin(effective_rank, 80);
     effective_priority = QStringLiteral("deferred");
-    reason = intent.playback_active
-                 ? QStringLiteral("Waiting for playback")
-                 : QStringLiteral("Waiting for the active edit");
+    if (intent.transitioning) {
+      reason = QStringLiteral("Waiting for the workspace transition");
+    } else if (intent.playback_active) {
+      reason = QStringLiteral("Waiting for playback");
+    } else if (intent.interaction_active &&
+               intent.surface != QStringLiteral("library")) {
+      reason = QStringLiteral("Waiting for the active edit");
+    } else {
+      reason = QStringLiteral("Waiting until Timeline is active");
+    }
   } else if (focused) {
     effective_rank += 40;
     reason = QStringLiteral("Affects the focused item");
   } else if (visible) {
     effective_rank += 20;
     reason = QStringLiteral("Affects a visible item");
-  } else if (intent.workspace_visible && normalized_surface == intent.surface) {
-    reason = QStringLiteral("Background work outside the visible edit");
+  } else if (active_surface) {
+    reason = QStringLiteral("Background work for the active workspace");
   }
 
   return {
@@ -249,6 +334,7 @@ QVariantMap WorkerQueueRegistry::priorityDecision(
       {QStringLiteral("effectivePriority"), effective_priority},
       {QStringLiteral("effectiveRank"), effective_rank},
       {QStringLiteral("deferred"), deferred},
+      {QStringLiteral("transitioning"), intent.transitioning},
       {QStringLiteral("reason"), reason},
       {QStringLiteral("focused"), focused},
       {QStringLiteral("visible"), visible},

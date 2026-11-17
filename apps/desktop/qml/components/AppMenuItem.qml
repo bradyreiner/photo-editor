@@ -10,7 +10,7 @@ MenuItem {
     property string tooltipText: ""
     property bool danger: false
     property color accent: theme.focusRing
-    readonly property string appMenuItemContract: "app-menu-item:v1|hover:true|keyboard:true|disabled-state:true|shortcut-fit:true|readable-text:true|no-elide:true"
+    readonly property string appMenuItemContract: "app-menu-item:v2|hover:true|keyboard:true|disabled-state:true|system-font:true|wrap:true|no-fit-shrink:true|readable-text:true|no-elide:true"
 
     Theme { id: theme }
 
@@ -47,10 +47,10 @@ MenuItem {
             font.weight: theme.weightControl
             font.letterSpacing: 0
             verticalAlignment: Text.AlignVCenter
-            maximumLineCount: 1
+            maximumLineCount: 2
             elide: Text.ElideNone
-            fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 10
+            fontSizeMode: Text.FixedSize
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             clip: true
         }
 
@@ -58,13 +58,13 @@ MenuItem {
             visible: root.shortcutText.length > 0
             text: root.shortcutText
             color: root.enabled ? theme.textMuted : theme.alpha(theme.textMuted, 0.42)
-            font.family: theme.fontMono
+            font.family: theme.fontUi
             font.pixelSize: theme.typeCaption
             font.letterSpacing: 0
-            maximumLineCount: 1
+            maximumLineCount: 2
             elide: Text.ElideNone
-            fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 10
+            fontSizeMode: Text.FixedSize
+            wrapMode: Text.Wrap
             Layout.maximumWidth: 72
             clip: true
         }

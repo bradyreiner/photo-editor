@@ -79,7 +79,8 @@ Item {
                 Layout.fillWidth: true
                 text: root.detailText
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 wrapMode: Text.WrapAnywhere
                 maximumLineCount: 2
@@ -91,7 +92,8 @@ Item {
             Layout.preferredWidth: 82
             text: root.statusText
             color: root.statusColor
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 9
             horizontalAlignment: Text.AlignRight
             verticalAlignment: Text.AlignVCenter

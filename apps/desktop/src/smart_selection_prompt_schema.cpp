@@ -243,6 +243,7 @@ QVector<QPointF> sampled_smart_select_path_points(
 QVector<SmartSelectPrompt> smart_select_prompts_for_path(
     const QVariantList& points) {
   QVector<SmartSelectPrompt> prompts;
+  QVector<bool> brush_samples;
   const auto prompt_maps = normalized_smart_select_prompt_maps(points);
   prompts.reserve(prompt_maps.size() * 5);
   QVector<QPointF> pending_brush_path;
@@ -255,6 +256,7 @@ QVector<SmartSelectPrompt> smart_select_prompts_for_path(
     for (const auto& point : sampled_points) {
       prompts.append(SmartSelectPrompt{
           .x = point.x(), .y = point.y(), .negative = false});
+      brush_samples.append(true);
     }
     pending_brush_path.clear();
   };
@@ -262,9 +264,7 @@ QVector<SmartSelectPrompt> smart_select_prompts_for_path(
   for (const auto& value : prompt_maps) {
     const auto point = value.toMap();
     const auto type = point.value(QStringLiteral("type")).toString();
-    const auto contributes_to_path =
-        type == QStringLiteral("brush") ||
-        type == QStringLiteral("positive-point");
+    const auto contributes_to_path = type == QStringLiteral("brush");
     if (!contributes_to_path) {
       flush_brush_path();
     }
@@ -273,6 +273,17 @@ QVector<SmartSelectPrompt> smart_select_prompts_for_path(
           .x = point.value(QStringLiteral("x")).toDouble(),
           .y = point.value(QStringLiteral("y")).toDouble(),
           .negative = true});
+      brush_samples.append(false);
+      continue;
+    }
+    if (type == QStringLiteral("positive-point")) {
+      // Independent clicks constrain only the clicked pixels. Interpolating
+      // between them marks intervening background as foreground as well.
+      prompts.append(SmartSelectPrompt{
+          .x = point.value(QStringLiteral("x")).toDouble(),
+          .y = point.value(QStringLiteral("y")).toDouble(),
+          .negative = false});
+      brush_samples.append(false);
       continue;
     }
     if (type == QStringLiteral("box")) {
@@ -285,6 +296,7 @@ QVector<SmartSelectPrompt> smart_select_prompts_for_path(
           .y = (top + bottom) * 0.5,
           .negative = false,
           .box = QRectF(QPointF(left, top), QPointF(right, bottom))});
+      brush_samples.append(false);
       continue;
     }
     if (contributes_to_path) {
@@ -296,6 +308,32 @@ QVector<SmartSelectPrompt> smart_select_prompts_for_path(
     }
   }
   flush_brush_path();
+  // Keep explicit clicks, exclusion points and boxes exact. Bound only the
+  // interpolated stroke samples to the decoder's 64-prompt budget.
+  constexpr int prompt_budget = 64;
+  const auto brush_count = static_cast<int>(std::count(brush_samples.cbegin(), brush_samples.cend(), true));
+  const auto explicit_count = static_cast<int>(prompts.size()) - brush_count;
+  if (prompts.size() > prompt_budget && explicit_count <= prompt_budget) {
+    const auto available = prompt_budget - explicit_count;
+    QVector<SmartSelectPrompt> bounded;
+    bounded.reserve(prompt_budget);
+    int brush_index = 0;
+    int selected_index = 0;
+    for (int i = 0; i < prompts.size(); ++i) {
+      if (!brush_samples[i]) {
+        bounded.append(prompts[i]);
+      } else {
+        const auto next_index = available > 1
+            ? qRound(static_cast<double>(selected_index) * (brush_count - 1) / (available - 1)) : 0;
+        if (selected_index < available && brush_index == next_index) {
+          bounded.append(prompts[i]);
+          ++selected_index;
+        }
+        ++brush_index;
+      }
+    }
+    return bounded;
+  }
   return prompts;
 }
 

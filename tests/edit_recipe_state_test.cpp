@@ -17,6 +17,8 @@
 #include "edit_adjustment_patch.h"
 #include "edit_history_snapshot_store.h"
 #include "edit_recipe_state.h"
+#include "photo_text_style.h"
+#include "photo_editor/pipeline/layer_styles.h"
 
 namespace {
 
@@ -72,9 +74,121 @@ QString compact_json(const QJsonObject& object) {
   return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
+bool component_storage_round_trip() {
+  using namespace photo_editor::desktop;
+  const QByteArray bytes = QByteArray::fromHex("00017fff80402010");
+  const QVariantMap document{
+      {"schema", "looksy.smart-object.document"}, {"version", 1},
+      {"contentId", "00000000-0000-4000-8000-000000000021"}, {"revision", 3},
+      {"canvasWidth", 8}, {"canvasHeight", 6}, {"maskStack", QVariantList{}},
+      {"layers", QVariantList{QVariantMap{{"id", "child"}, {"kind", "pixel"},
+          {"pixelData", bytes}, {"maskData", bytes}, {"pixelWidth", 2}, {"pixelHeight", 1}}}}};
+  EditRecipeState state;
+  for (int i = 0; i != 3; ++i)
+    state.layers.append(QVariantMap{{"id", QStringLiteral("instance-%1").arg(i)},
+        {"kind", "smart-object"}, {"smartObjectDocument", document},
+        {"opacity", 0.25 + i * 0.2}, {"maskData", bytes}, {"transformX", 15.0 + i}});
+  const auto json = serialize_edit_recipe_json(state);
+  const auto root = QJsonDocument::fromJson(json.toUtf8()).object();
+  const auto table = root.value("componentObjectTable").toObject();
+  if (root.value("recipeVersion").toInt() != 18 ||
+      table.value("objects").toArray().size() != 1 ||
+      !validate_edit_recipe_json(json).valid || parse_edit_recipe_json(json).layers != state.layers)
+    return false;
+  const auto legacy = migrate_edit_recipe_json(json, 17);
+  if (legacy.recipe_json.isEmpty() || !legacy.errors.isEmpty() ||
+      legacy.recipe_json.contains("componentObjectTable") ||
+      parse_edit_recipe_json(legacy.recipe_json).layers != state.layers)
+    return false;
+  const auto upgraded = migrate_edit_recipe_json(legacy.recipe_json);
+  if (upgraded.target_version != 18 || upgraded.recipe_json.isEmpty() ||
+      parse_edit_recipe_json(upgraded.recipe_json).layers != state.layers)
+    return false;
+  const auto patch = serialize_adjustment_patch(state, {"layers"}, AdjustmentPatchScope::AssetBound);
+  const auto decoded_patch = parse_adjustment_patch(patch);
+  if (patch.value("version").toInt() != 2 || !decoded_patch.ok() || decoded_patch.state->layers != state.layers)
+    return false;
+  auto invalid = root;
+  invalid.remove("componentObjectTable");
+  if (validate_edit_recipe_json(compact_json(invalid)).valid ||
+      !migrate_edit_recipe_json(compact_json(invalid)).recipe_json.isEmpty()) return false;
+  invalid = root;
+  invalid.insert("recipeVersion", 17);
+  if (validate_edit_recipe_json(compact_json(invalid)).valid) return false;
+  auto invalid_patch = patch;
+  invalid_patch.insert("version", 1);
+  if (parse_adjustment_patch(invalid_patch).ok()) return false;
+  auto conflict = state.layers.last().toMap();
+  auto changed_document = document;
+  changed_document.insert("canvasWidth", 9);
+  conflict.insert("smartObjectDocument", changed_document);
+  state.layers.append(conflict);
+  return serialize_edit_recipe_json(state).isEmpty() &&
+      serialize_adjustment_patch_json(state, {"layers"}, AdjustmentPatchScope::AssetBound).isEmpty();
+}
+
+bool style_storage_round_trip() {
+  using namespace photo_editor::desktop;
+  using namespace photo_editor::pipeline;
+  LayerStyleOperation overlay;
+  overlay.id = "overlay-style";
+  overlay.type_id = "color_overlay";
+  overlay.plane = LayerStylePlane::OnContent;
+  overlay.parameters = LayerStyleColorOverlay{{0.2, 0.5, 2.0, 0.6}};
+  const auto encoded = serialize_layer_style_stack(LayerStyleStack{1, true, {overlay}});
+  if (!encoded) return false;
+  EditRecipeState state;
+  state.layers = {QVariantMap{{"id", "styled"}, {"kind", "text"}, {"text", "Headline"},
+      {"layerStyleStack", QString::fromStdString(*encoded)}, {"layerStyleGlobalLightAngle", 31.5},
+      {"textStrokeWidth", 2.0}, {"textShadowEnabled", true}}};
+  const auto json = serialize_edit_recipe_json(state);
+  const auto root = QJsonDocument::fromJson(json.toUtf8()).object();
+  if (root.value("recipeVersion").toInt() != 19 || !validate_edit_recipe_json(json).valid ||
+      parse_edit_recipe_json(json).layers != state.layers ||
+      !migrate_edit_recipe_json(json, 18).recipe_json.isEmpty()) return false;
+  const auto patch = serialize_adjustment_patch(state, {"layers"}, AdjustmentPatchScope::AssetBound);
+  const auto decoded = parse_adjustment_patch(patch);
+  if (patch.value("version").toInt() != 3 || !decoded.ok() || decoded.state->layers != state.layers) return false;
+  auto invalid_patch = patch;
+  invalid_patch.insert("version", 2);
+  if (parse_adjustment_patch(invalid_patch).ok()) return false;
+  auto masked = state;
+  auto mask = default_mask_definition(QStringLiteral("rectangle"));
+  mask.insert("id", "style-mask-source");
+  mask.insert("maskSetId", "style-mask-set");
+  masked.mask_stack = {mask};
+  overlay.mask_ref = "style-mask-set";
+  const auto masked_stack = serialize_layer_style_stack(LayerStyleStack{1, true, {overlay}});
+  if (!masked_stack) return false;
+  auto masked_layer = masked.layers.first().toMap();
+  masked_layer.insert("layerStyleStack", QString::fromStdString(*masked_stack));
+  masked.layers = {masked_layer};
+  const auto masked_json = serialize_edit_recipe_json(masked);
+  const auto masked_patch = serialize_adjustment_patch(masked, {"layers", "masks"}, AdjustmentPatchScope::AssetBound);
+  const auto parsed_masked_patch = parse_adjustment_patch(masked_patch);
+  if (masked_json.isEmpty() || !validate_edit_recipe_json(masked_json).valid ||
+      parse_edit_recipe_json(masked_json).layers != masked.layers || !parsed_masked_patch.ok() ||
+      parsed_masked_patch.state->layers != masked.layers || parsed_masked_patch.state->mask_stack.isEmpty() ||
+      parsed_masked_patch.state->mask_stack.first().toMap().value("maskSetId").toString() != "style-mask-set") return false;
+  masked.mask_stack.clear();
+  if (!serialize_edit_recipe_json(masked).isEmpty()) return false;
+  auto invalid = root;
+  invalid.insert("recipeVersion", 18);
+  if (validate_edit_recipe_json(compact_json(invalid)).valid) return false;
+  auto layer = state.layers.first().toMap();
+  layer.insert("layerStyleStack", "unsupported style envelope");
+  state.layers = {layer};
+  return serialize_edit_recipe_json(state).isEmpty() &&
+      serialize_adjustment_patch_json(state, {"layers"}, AdjustmentPatchScope::AssetBound).isEmpty();
+}
+
 }  // namespace
 
 int main() {
+  if (!component_storage_round_trip())
+    return fail("shared component recipe, migration and patch storage must be lossless and reject conflicts");
+  if (!style_storage_round_trip())
+    return fail("layer styles require lossless versioned storage and explicit downgrade/malformed-data rejection");
   const QString legacy_recipe =
       QStringLiteral(
           R"({"recipeVersion":2,"exposure":0.75,"brightness":18,"hdrLocalTone":32,"filmicShoulder":22,"filmicToe":-14,"adaptiveContrast":34,"levelsBlackPoint":16,"levelsGamma":-12,"levelsWhitePoint":9,"zoneDeepShadows":-8,"zoneShadows":9,"zoneMidtones":10,"zoneLights":-11,"zoneHighlights":12,"curveHighlights":20,"cropZoom":1.4,"cropPreset":"4x5","linearMaskEnabled":true,"linearMaskExposure":0.35,"linearMaskTemperature":12,"linearMaskFeather":0.3,"linearMaskPosition":0.62,"linearMaskRotation":18,"hslChannel":"Blues","hueAdjustment":14,"saturationAdjustment":-10,"luminanceAdjustment":9})");
@@ -258,6 +372,9 @@ int main() {
           QStringLiteral("vector-geometry") ||
       migrated_legacy_mask.value(QStringLiteral("maskCoordinateSpace")).toString() !=
           QStringLiteral("source-normalized") ||
+      migrated_legacy_mask.contains(QStringLiteral("coordinateSpace")) ||
+      migrated_legacy_mask.contains(QStringLiteral("coordinateArea")) ||
+      migrated_legacy_mask.contains(QStringLiteral("brushCompositeSource")) ||
       !migrated_legacy_mask.value(QStringLiteral("sourceImageRevision")).toString().isEmpty() ||
       migrated_legacy_geometry.value(QStringLiteral("maskRasterWidth")).toInt(-1) != 0 ||
       migrated_legacy_geometry.value(QStringLiteral("maskRasterHeight")).toInt(-1) != 0 ||
@@ -2445,6 +2562,7 @@ int main() {
       !almost_equal(reparsed_mixed_masks.mask_stack.at(1).toMap().value(QStringLiteral("luminanceSamples")).toList().first().toMap().value(QStringLiteral("luminanceMean")).toDouble(), 0.72) ||
       !almost_equal(reparsed_mixed_masks.mask_stack.at(2).toMap().value(QStringLiteral("hueRange")).toDouble(), 0.09) ||
       reparsed_mixed_masks.mask_stack.at(2).toMap().value(QStringLiteral("colorSamples")).toList().size() != 2 ||
+      reparsed_mixed_masks.mask_stack.at(2).toMap().contains(QStringLiteral("colorSampleMode")) ||
       reparsed_mixed_masks.mask_stack.at(2).toMap().value(QStringLiteral("colorSamples")).toList().at(1).toMap().value(QStringLiteral("hex")).toString() != QStringLiteral("#BE7856") ||
       reparsed_mixed_masks.mask_stack.at(3).toMap().value(QStringLiteral("kind")).toString() != QStringLiteral("lasso") ||
       reparsed_mixed_masks.mask_stack.at(3).toMap().value(QStringLiteral("polygonPoints")).toList().size() != 4 ||
@@ -2453,6 +2571,16 @@ int main() {
       !almost_equal(reparsed_mixed_masks.mask_stack.at(4).toMap().value(QStringLiteral("depthSamples")).toList().first().toMap().value(QStringLiteral("depthMean")).toDouble(), 0.71) ||
       reparsed_mixed_masks.mask_stack.at(4).toMap().value(QStringLiteral("depthData")).toByteArray() != QByteArray::fromHex("001080ff")) {
     return fail("structured recipe should round-trip brush, range, lasso, and depth mask data");
+  }
+  auto union_mask_state = mixed_mask_state;
+  auto union_color_mask = union_mask_state.mask_stack.at(2).toMap();
+  union_color_mask.insert(QStringLiteral("colorSampleMode"), QStringLiteral("union"));
+  union_mask_state.mask_stack[2] = union_color_mask;
+  const auto union_reopened = photo_editor::desktop::parse_edit_recipe_json(
+      serialize_edit_recipe_json(union_mask_state));
+  if (union_reopened.mask_stack.at(2).toMap().value(QStringLiteral("colorSampleMode")).toString() !=
+          QStringLiteral("union")) {
+    return fail("explicit additive Color Range mode should survive canonical recipe reopen");
   }
   if (reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("maskSourceClass")).toString() !=
           QStringLiteral("source-resolution-alpha") ||
@@ -2521,6 +2649,10 @@ int main() {
   subject_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("00ff7f3f"));
   subject_mask.insert(QStringLiteral("segmentationWidth"), 2);
   subject_mask.insert(QStringLiteral("segmentationHeight"), 2);
+  const auto cleanup_source_baseline = QByteArray::fromHex("f0e0d0c0");
+  subject_mask.insert(QStringLiteral("generatedMaskCleanupSourceData"), cleanup_source_baseline);
+  subject_mask.insert(QStringLiteral("generatedMaskCleanupSourceWidth"), 2);
+  subject_mask.insert(QStringLiteral("generatedMaskCleanupSourceHeight"), 2);
   subject_mask.insert(QStringLiteral("confidenceData"), QByteArray::fromHex("10203040"));
   subject_mask.insert(QStringLiteral("confidenceWidth"), 2);
   subject_mask.insert(QStringLiteral("confidenceHeight"), 2);
@@ -2568,6 +2700,32 @@ int main() {
       subject_geometry.value(QStringLiteral("segmentationHeight")).toInt() != 2 ||
       subject_geometry.value(QStringLiteral("rasterSchemaVersion")).toInt() != 1) {
     return fail("structured recipe should serialize AI subject segmentation payloads");
+  }
+  if (subject_geometry.value(QStringLiteral("generatedMaskCleanupSourceData")).toString() !=
+          QString::fromLatin1(cleanup_source_baseline.toBase64()) ||
+      subject_geometry.value(QStringLiteral("generatedMaskCleanupSourceWidth")).toInt() != 2 ||
+      subject_geometry.value(QStringLiteral("generatedMaskCleanupSourceHeight")).toInt() != 2) {
+    return fail("legacy mask serialization should preserve the original generated-mask cleanup baseline");
+  }
+  QJsonObject v2_subject_source;
+  for (const auto& set_value : subject_document.value(QStringLiteral("maskSets")).toArray()) {
+    for (const auto& source_value :
+         set_value.toObject().value(QStringLiteral("sources")).toArray()) {
+      const auto source = source_value.toObject();
+      if (source.value(QStringLiteral("id")).toString() == QStringLiteral("subject-ai")) {
+        v2_subject_source = source;
+        break;
+      }
+    }
+    if (!v2_subject_source.isEmpty()) break;
+  }
+  const auto v2_subject_geometry =
+      v2_subject_source.value(QStringLiteral("geometry")).toObject();
+  if (v2_subject_geometry.value(QStringLiteral("generatedMaskCleanupSourceData")).toString() !=
+          QString::fromLatin1(cleanup_source_baseline.toBase64()) ||
+      v2_subject_geometry.value(QStringLiteral("generatedMaskCleanupSourceWidth")).toInt() != 2 ||
+      v2_subject_geometry.value(QStringLiteral("generatedMaskCleanupSourceHeight")).toInt() != 2) {
+    return fail("v2 mask-set serialization should preserve the original generated-mask cleanup baseline");
   }
   if (!subject_geometry.contains(QStringLiteral("confidenceData")) ||
       subject_geometry.value(QStringLiteral("confidenceWidth")).toInt() != 2 ||
@@ -2662,6 +2820,9 @@ int main() {
       !reparsed_subject.value(QStringLiteral("committed")).toBool() ||
       reparsed_subject.value(QStringLiteral("segmentationData")).toByteArray() != QByteArray::fromHex("00ff7f3f") ||
       reparsed_subject.value(QStringLiteral("confidenceData")).toByteArray() != QByteArray::fromHex("10203040") ||
+      reparsed_subject.value(QStringLiteral("generatedMaskCleanupSourceData")).toByteArray() != cleanup_source_baseline ||
+      reparsed_subject.value(QStringLiteral("generatedMaskCleanupSourceWidth")).toInt() != 2 ||
+      reparsed_subject.value(QStringLiteral("generatedMaskCleanupSourceHeight")).toInt() != 2 ||
       reparsed_subject.value(QStringLiteral("confidenceWidth")).toInt() != 2 ||
       reparsed_subject.value(QStringLiteral("confidenceHeight")).toInt() != 2 ||
       reparsed_subject.value(QStringLiteral("confidenceMapSchemaVersion")).toInt() != 1 ||
@@ -2699,6 +2860,22 @@ int main() {
       reparsed_subject.value(QStringLiteral("segmentationWidth")).toInt() != 2 ||
       reparsed_subject.value(QStringLiteral("segmentationHeight")).toInt() != 2) {
     return fail("structured recipe should round-trip AI subject segmentation payloads");
+  }
+
+  auto legacy_subject_document = subject_document;
+  legacy_subject_document.insert(QStringLiteral("maskSets"), QJsonArray{});
+  legacy_subject_document.insert(QStringLiteral("retouchStack"), QJsonArray{});
+  const auto reparsed_legacy_subject = photo_editor::desktop::parse_edit_recipe_json(
+      QString::fromUtf8(QJsonDocument(legacy_subject_document).toJson(QJsonDocument::Compact)));
+  if (reparsed_legacy_subject.mask_stack.size() != 1 ||
+      reparsed_legacy_subject.mask_stack.at(0).toMap()
+              .value(QStringLiteral("generatedMaskCleanupSourceData")).toByteArray() !=
+          cleanup_source_baseline ||
+      reparsed_legacy_subject.mask_stack.at(0).toMap()
+              .value(QStringLiteral("generatedMaskCleanupSourceWidth")).toInt() != 2 ||
+      reparsed_legacy_subject.mask_stack.at(0).toMap()
+              .value(QStringLiteral("generatedMaskCleanupSourceHeight")).toInt() != 2) {
+    return fail("legacy maskStack parsing should restore the original generated-mask cleanup baseline");
   }
 
   EditRecipeState object_mask_state;
@@ -3049,6 +3226,45 @@ int main() {
     return fail("structured recipe should round-trip clone brush metadata");
   }
 
+  auto component_clone = clone_brush;
+  component_clone.insert(QStringLiteral("componentPostCompositeRetouchVersion"), 1);
+  component_clone.insert(QStringLiteral("componentRetouchCanvasWidth"), 128);
+  component_clone.insert(QStringLiteral("componentRetouchCanvasHeight"), 96);
+  EditRecipeState component_clone_state;
+  component_clone_state.mask_stack = {component_clone};
+  const auto component_clone_document = QJsonDocument::fromJson(
+      photo_editor::desktop::serialize_edit_recipe_json(component_clone_state).toUtf8()).object();
+  const auto component_clone_json_mask = component_clone_document
+      .value(QStringLiteral("maskStack")).toArray().at(0).toObject();
+  const auto reparsed_component_clone = photo_editor::desktop::parse_edit_recipe_json(
+      QString::fromUtf8(QJsonDocument(component_clone_document).toJson(QJsonDocument::Compact)))
+      .mask_stack.at(0).toMap();
+  if (component_clone_json_mask.value(QStringLiteral("componentPostCompositeRetouchVersion")).toInt() != 1 ||
+      component_clone_json_mask.value(QStringLiteral("componentRetouchCanvasWidth")).toInt() != 128 ||
+      component_clone_json_mask.value(QStringLiteral("componentRetouchCanvasHeight")).toInt() != 96 ||
+      reparsed_component_clone.value(QStringLiteral("componentPostCompositeRetouchVersion")).toInt() != 1 ||
+      reparsed_component_clone.value(QStringLiteral("componentRetouchCanvasWidth")).toInt() != 128 ||
+      reparsed_component_clone.value(QStringLiteral("componentRetouchCanvasHeight")).toInt() != 96 ||
+      clone_document.value(QStringLiteral("maskStack")).toArray().at(0).toObject().contains(
+          QStringLiteral("componentPostCompositeRetouchVersion"))) {
+    return fail("component retouch source basis must round-trip without changing ordinary retouch recipes");
+  }
+  auto unsupported_component_version = component_clone;
+  unsupported_component_version.insert(QStringLiteral("componentPostCompositeRetouchVersion"), 2);
+  auto oversized_component_basis = component_clone;
+  oversized_component_basis.insert(QStringLiteral("componentRetouchCanvasWidth"), 8192);
+  oversized_component_basis.insert(QStringLiteral("componentRetouchCanvasHeight"), 8192);
+  const auto normalized_unsupported_component =
+      photo_editor::desktop::normalized_mask_definition(unsupported_component_version);
+  const auto normalized_oversized_component =
+      photo_editor::desktop::normalized_mask_definition(oversized_component_basis);
+  if (normalized_unsupported_component.contains(QStringLiteral("componentPostCompositeRetouchVersion")) ||
+      normalized_unsupported_component.contains(QStringLiteral("componentRetouchCanvasWidth")) ||
+      normalized_oversized_component.contains(QStringLiteral("componentPostCompositeRetouchVersion")) ||
+      normalized_oversized_component.contains(QStringLiteral("componentRetouchCanvasHeight"))) {
+    return fail("unsupported component retouch markers and oversized source bases must be rejected by normalization");
+  }
+
   EditRecipeState heal_brush_state;
   QVariantMap heal_brush;
   heal_brush.insert(QStringLiteral("id"), QStringLiteral("heal-brush"));
@@ -3155,6 +3371,8 @@ int main() {
   remove_object_mask.insert(QStringLiteral("inpaintPatchHeight"), 9);
   remove_object_mask.insert(QStringLiteral("inpaintPatchColorSpace"), QStringLiteral("sRGB"));
   remove_object_mask.insert(QStringLiteral("inpaintModelName"), QStringLiteral("cpu-diffusion-inpaint-v1"));
+  remove_object_mask.insert(QStringLiteral("inpaintRuntimeProvider"), QStringLiteral("cpu"));
+  remove_object_mask.insert(QStringLiteral("inpaintAccelerationWarning"), QStringLiteral("CoreML unavailable; CPU selected."));
   remove_object_mask.insert(QStringLiteral("inpaintPatchPayloadBytes"), 1234);
   remove_object_mask.insert(QStringLiteral("inpaintCandidatePayloadBytes"), 5678);
   remove_object_mask.insert(QStringLiteral("inpaintCandidateEvictedCount"), 2);
@@ -3285,6 +3503,10 @@ int main() {
           QStringLiteral("sRGB") ||
       reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintModelName")).toString() !=
           QStringLiteral("cpu-diffusion-inpaint-v1") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintRuntimeProvider")).toString() !=
+          QStringLiteral("cpu") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintAccelerationWarning")).toString() !=
+          QStringLiteral("CoreML unavailable; CPU selected.") ||
       reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintPatchPayloadBytes")).toInt() != 1234 ||
       reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintCandidatePayloadBytes")).toInt() != 5678 ||
       reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintCandidateEvictedCount")).toInt() != 2 ||
@@ -4137,16 +4359,178 @@ int main() {
   {
     using namespace photo_editor::desktop;
     EditRecipeState state;
+    PhotoTextStyle style;
+    style.size = 27.375;
     state.layers = {QVariantMap{{"id", "styled-text"}, {"kind", "text"},
-        {"textTypography", QVariantMap{{"version", 1}, {"size", 27.375}}}}};
+        {"textTypography", encode_photo_text_style(style).toVariantMap()}}};
     const auto json = serialize_edit_recipe_json(state);
     if (QJsonDocument::fromJson(json.toUtf8()).object().value("recipeVersion").toInt() != 15 ||
-        !validate_edit_recipe_json(json).valid || parse_edit_recipe_json(json).layers != state.layers)
+        !validate_edit_recipe_json(json).valid || parse_edit_recipe_json(json).layers != state.layers) {
+      std::cerr << "Typography fixture JSON: " << json.toStdString() << '\n';
+      std::cerr << "Typography validation: " << validate_edit_recipe_json(json).errors.join(QStringLiteral("; ")).toStdString() << '\n';
+      std::cerr << "Typography parsed layers: " << QJsonDocument(QJsonArray::fromVariantList(parse_edit_recipe_json(json).layers)).toJson(QJsonDocument::Compact).constData() << '\n';
       return fail("Typography must retain its opt-in payload in desktop version 15");
+    }
     const auto migration = migrate_edit_recipe_json(json);
     if (!migration.errors.empty() || migration.target_version != 15 ||
         !migrate_edit_recipe_json(json, 14).errors.size())
       return fail("Typography migration must preserve version 15 and reject downgrade");
+  }
+  {
+    using namespace photo_editor::desktop;
+    const QVariantMap source_area{
+        {QStringLiteral("x"), 0.125},
+        {QStringLiteral("y"), 0.25},
+        {QStringLiteral("width"), 0.5},
+        {QStringLiteral("height"), 0.375},
+    };
+    QVariantMap source_brush = default_mask_definition(QStringLiteral("brush"), 1);
+    source_brush.insert(QStringLiteral("id"), QStringLiteral("coordinate-source-brush"));
+    source_brush.insert(QStringLiteral("maskSetId"), QStringLiteral("coordinate-set"));
+    source_brush.insert(QStringLiteral("maskSetName"), QStringLiteral("Coordinate masks"));
+    source_brush.insert(QStringLiteral("coordinateSpace"), QStringLiteral("source"));
+    source_brush.insert(QStringLiteral("brushCompositeSource"), true);
+
+    QVariantMap area_shape = default_mask_definition(QStringLiteral("rectangle"), 2);
+    area_shape.insert(QStringLiteral("id"), QStringLiteral("coordinate-area-shape"));
+    area_shape.insert(QStringLiteral("maskSetId"), QStringLiteral("coordinate-set"));
+    area_shape.insert(QStringLiteral("maskSetName"), QStringLiteral("Coordinate masks"));
+    area_shape.insert(QStringLiteral("coordinateSpace"), QStringLiteral("source-area"));
+    area_shape.insert(QStringLiteral("coordinateArea"), source_area);
+
+    QVariantMap source_raster = default_mask_definition(QStringLiteral("alpha"), 3);
+    source_raster.insert(QStringLiteral("id"), QStringLiteral("coordinate-source-raster"));
+    source_raster.insert(QStringLiteral("maskSetId"), QStringLiteral("coordinate-set"));
+    source_raster.insert(QStringLiteral("maskSetName"), QStringLiteral("Coordinate masks"));
+    source_raster.insert(QStringLiteral("coordinateSpace"), QStringLiteral("source"));
+    source_raster.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("80"));
+    source_raster.insert(QStringLiteral("segmentationWidth"), 1);
+    source_raster.insert(QStringLiteral("segmentationHeight"), 1);
+
+    QVariantMap retouch_brush = default_mask_definition(QStringLiteral("brush"), 4);
+    retouch_brush.insert(QStringLiteral("id"), QStringLiteral("coordinate-retouch-brush"));
+    retouch_brush.insert(QStringLiteral("toolRole"), QStringLiteral("retouch"));
+    retouch_brush.insert(QStringLiteral("coordinateSpace"), QStringLiteral("source-area"));
+    retouch_brush.insert(QStringLiteral("coordinateArea"), source_area);
+    retouch_brush.insert(QStringLiteral("brushCompositeSource"), true);
+
+    EditRecipeState coordinate_state;
+    coordinate_state.mask_stack = {source_brush, area_shape, source_raster, retouch_brush};
+    const auto coordinate_json = serialize_edit_recipe_json(coordinate_state);
+    if (!validate_edit_recipe_json(coordinate_json).valid)
+      return fail("coordinate-basis mask fixtures should remain valid desktop recipes");
+    const auto coordinate_root = QJsonDocument::fromJson(coordinate_json.toUtf8()).object();
+    const auto find_json_mask = [](const QJsonArray& masks, const QString& id) {
+      for (const auto& value : masks) {
+        const auto mask = value.toObject();
+        if (mask.value(QStringLiteral("id")).toString() == id)
+          return mask;
+      }
+      return QJsonObject{};
+    };
+    const auto find_set_source = [&](const QString& id) {
+      for (const auto& set_value : coordinate_root.value(QStringLiteral("maskSets")).toArray()) {
+        const auto source = find_json_mask(
+            set_value.toObject().value(QStringLiteral("sources")).toArray(), id);
+        if (!source.isEmpty())
+          return source;
+      }
+      return QJsonObject{};
+    };
+    const auto json_source_brush = find_json_mask(
+        coordinate_root.value(QStringLiteral("maskStack")).toArray(),
+        QStringLiteral("coordinate-source-brush"));
+    const auto json_area_shape = find_json_mask(
+        coordinate_root.value(QStringLiteral("maskStack")).toArray(),
+        QStringLiteral("coordinate-area-shape"));
+    const auto json_source_raster = find_json_mask(
+        coordinate_root.value(QStringLiteral("maskStack")).toArray(),
+        QStringLiteral("coordinate-source-raster"));
+    const auto json_retouch = find_json_mask(
+        coordinate_root.value(QStringLiteral("retouchStack")).toArray(),
+        QStringLiteral("coordinate-retouch-brush"));
+    const auto json_v2_brush = find_set_source(QStringLiteral("coordinate-source-brush"));
+    const auto json_v2_shape = find_set_source(QStringLiteral("coordinate-area-shape"));
+    const auto json_v2_raster = find_set_source(QStringLiteral("coordinate-source-raster"));
+    const auto has_source_coordinates = [](const QJsonObject& mask,
+                                           const QString& space,
+                                           const QVariantMap& area,
+                                           bool brush_composite) {
+      if (mask.value(QStringLiteral("coordinateSpace")).toString() != space ||
+          mask.value(QStringLiteral("brushCompositeSource")).toBool() != brush_composite ||
+          mask.contains(QStringLiteral("brushCompositeSource")) != brush_composite)
+        return false;
+      if (space == QStringLiteral("source-area")) {
+        return mask.value(QStringLiteral("coordinateArea")).toObject() ==
+            QJsonObject::fromVariantMap(area);
+      }
+      return !mask.contains(QStringLiteral("coordinateArea"));
+    };
+    if (!has_source_coordinates(json_source_brush, QStringLiteral("source"), {}, true) ||
+        !has_source_coordinates(json_area_shape, QStringLiteral("source-area"), source_area, false) ||
+        !has_source_coordinates(json_source_raster, QStringLiteral("source"), {}, false) ||
+        !has_source_coordinates(json_retouch, QStringLiteral("source-area"), source_area, true) ||
+        !has_source_coordinates(json_v2_brush, QStringLiteral("source"), {}, true) ||
+        !has_source_coordinates(json_v2_shape, QStringLiteral("source-area"), source_area, false) ||
+        !has_source_coordinates(json_v2_raster, QStringLiteral("source"), {}, false)) {
+      return fail("legacy and v2 mask serialization should preserve source coordinate basis, exact source areas, and only enabled composite markers");
+    }
+
+    const auto find_state_mask = [](const QVariantList& masks, const QString& id) {
+      for (const auto& value : masks) {
+        const auto mask = value.toMap();
+        if (mask.value(QStringLiteral("id")).toString() == id)
+          return mask;
+      }
+      return QVariantMap{};
+    };
+    const auto has_state_coordinates = [](const QVariantMap& mask,
+                                           const QString& space,
+                                           const QVariantMap& area,
+                                           bool brush_composite) {
+      if (mask.value(QStringLiteral("coordinateSpace")).toString() != space ||
+          mask.value(QStringLiteral("brushCompositeSource")).toBool() != brush_composite ||
+          mask.contains(QStringLiteral("brushCompositeSource")) != brush_composite)
+        return false;
+      if (space == QStringLiteral("source-area"))
+        return mask.value(QStringLiteral("coordinateArea")).toMap() == area;
+      return !mask.contains(QStringLiteral("coordinateArea"));
+    };
+    const auto parsed_coordinates = parse_edit_recipe_json(coordinate_json);
+    if (!has_state_coordinates(find_state_mask(parsed_coordinates.mask_stack,
+                                               QStringLiteral("coordinate-source-brush")),
+                               QStringLiteral("source"), {}, true) ||
+        !has_state_coordinates(find_state_mask(parsed_coordinates.mask_stack,
+                                               QStringLiteral("coordinate-area-shape")),
+                               QStringLiteral("source-area"), source_area, false) ||
+        !has_state_coordinates(find_state_mask(parsed_coordinates.mask_stack,
+                                               QStringLiteral("coordinate-source-raster")),
+                               QStringLiteral("source"), {}, false) ||
+        !has_state_coordinates(find_state_mask(parsed_coordinates.mask_stack,
+                                               QStringLiteral("coordinate-retouch-brush")),
+                               QStringLiteral("source-area"), source_area, true)) {
+      return fail("typed mask-set and retouch parsing should restore source coordinate metadata");
+    }
+
+    auto legacy_mask_root = coordinate_root;
+    legacy_mask_root.insert(QStringLiteral("maskSets"), QJsonArray{});
+    legacy_mask_root.insert(QStringLiteral("retouchStack"), QJsonArray{});
+    const auto legacy_mask_parse = parse_edit_recipe_json(
+        QString::fromUtf8(QJsonDocument(legacy_mask_root).toJson(QJsonDocument::Compact)));
+    if (!has_state_coordinates(find_state_mask(legacy_mask_parse.mask_stack,
+                                               QStringLiteral("coordinate-source-brush")),
+                               QStringLiteral("source"), {}, true) ||
+        !has_state_coordinates(find_state_mask(legacy_mask_parse.mask_stack,
+                                               QStringLiteral("coordinate-area-shape")),
+                               QStringLiteral("source-area"), source_area, false) ||
+        !has_state_coordinates(find_state_mask(legacy_mask_parse.mask_stack,
+                                               QStringLiteral("coordinate-source-raster")),
+                               QStringLiteral("source"), {}, false) ||
+        !has_state_coordinates(find_state_mask(legacy_mask_parse.mask_stack,
+                                               QStringLiteral("coordinate-retouch-brush")),
+                               QStringLiteral("source-area"), source_area, true)) {
+      return fail("legacy maskStack parsing should restore source coordinate metadata");
+    }
   }
   return EXIT_SUCCESS;
 }

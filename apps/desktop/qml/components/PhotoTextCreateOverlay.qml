@@ -21,9 +21,14 @@ Item {
     property point endPoint: Qt.point(0, 0)
     property bool dragging: false
     property var availableFonts: []
-    property string creationText: "Text"
+    property string creationText: ""
+    property var selectExistingText: null
+    signal editExistingRequested()
     property string creationFontFamily: "Helvetica"
-    property real creationFontSize: 48
+    // First-use type should be readable at Fit. Assigning a chosen size or
+    // placing the first text breaks this binding and preserves that source size.
+    property real creationFontSize: imageWidth > 0 && canvasWidth > 0
+        ? Math.min(8192, Math.max(48, Math.ceil(22 * canvasWidth / imageWidth))) : 48
     property color creationColor: "#ffffff"
     signal boxRequested(int x, int y, int width, int height)
     signal pointRequested(int x, int y)
@@ -38,6 +43,7 @@ Item {
     }
 
     function emitTextRequest(x, y, width, height, pointText) {
+        root.creationFontSize = Math.max(1, Math.min(8192, root.creationFontSize))
         textRequested({
             x: x,
             y: y,
@@ -79,6 +85,11 @@ Item {
         onPressed: function(mouse) {
             if (!root.enabled)
                 return
+            if (root.selectExistingText && root.selectExistingText(mouse.x, mouse.y)) {
+                root.dragging = false
+                mouse.accepted = false
+                return
+            }
             if (mouse.x < root.imageX || mouse.y < root.imageY ||
                     mouse.x > root.imageX + root.imageWidth || mouse.y > root.imageY + root.imageHeight) return
             root.startPoint = root.documentPoint(mouse.x, mouse.y)
@@ -93,6 +104,7 @@ Item {
             root.finishBox()
         }
         onCanceled: root.dragging = false
+        onDoubleClicked: root.editExistingRequested()
     }
     Rectangle {
         visible: root.dragging
@@ -148,31 +160,13 @@ Item {
                 Label {
                     text: qsTr("NEW TEXT")
                     color: theme.textStrong
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                     font.weight: Font.DemiBold
                     Accessible.name: qsTr("New text layer")
                 }
                 Item { Layout.fillWidth: true }
-                Label {
-                    text: qsTr("DRAFT")
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: theme.typeMicro
-                }
-            }
-
-            Components.ToneTextArea {
-                id: textInput
-                objectName: "photoTextCreationInput"
-                Layout.fillWidth: true
-                Layout.preferredHeight: theme.scaled(68)
-                text: root.creationText
-                placeholderText: qsTr("Write something…")
-                accessibleLabel: qsTr("Text to create")
-                font.family: root.creationFontFamily
-                font.pixelSize: theme.typeControl
-                onTextChanged: if (root.creationText !== text) root.creationText = text
             }
 
             RowLayout {
@@ -193,6 +187,7 @@ Item {
                     Layout.preferredHeight: theme.controlHeightDense
                     availableFonts: root.availableFonts
                     currentFamily: root.creationFontFamily
+                    previewText: root.creationText
                     enabled: root.active
                     onFamilySelected: function(family) {
                         root.creationFontFamily = family
@@ -225,7 +220,8 @@ Item {
                 Label {
                     text: qsTr("px")
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeCaption
                 }
                 Components.ColorSwatchButton {

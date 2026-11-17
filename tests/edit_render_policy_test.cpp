@@ -20,7 +20,8 @@ int main() {
     if (!photo_editor::desktop::is_local_mask_color_operation(QString("active_mask_") + control))
       return fail("local color controls must not use the geometry-only mask draft");
   for (const auto operation : {"active_mask_name", "active_mask_locked", "active_mask_selection_expand",
-      "selection_brush_start", "smart_selection", "active_mask_position", ""})
+      "selection_brush_start", "smart_selection", "active_mask_position", "invert_layer_mask",
+      "paint_layer_mask", "invert_selection", "load_selection", "transform_selection", "path_selection", ""})
     if (photo_editor::desktop::is_local_mask_color_operation(operation))
       return fail("non-color mask operations must not be classified as color edits");
   for (const auto control : {"operation", "enabled", "solo", "opacity", "density", "inverted",
@@ -35,9 +36,11 @@ int main() {
       return fail("coverage controls must restore exact photograph rendering");
   }
   for (const auto operation : {"active_generated_mask_hole_fill_threshold",
-      "active_generated_mask_island_removal_threshold"})
+      "active_generated_mask_island_removal_threshold", "mask_stack", "invert_layer_mask",
+      "paint_layer_mask", "invert_selection", "load_selection", "transform_selection",
+      "path_selection", "attach_layer_mask", "copy_layer_mask", "delete_layer_selection"})
     if (!photo_editor::desktop::is_local_mask_coverage_operation(operation))
-      return fail("generated mask cleanup must restore exact photograph rendering");
+      return fail("authored mask coverage changes must restore the complete photograph and layers");
   for (const auto operation : {"active_mask_name", "active_mask_locked", "active_mask_brush_size",
       "active_mask_brush_flow", "active_mask_brush_preset", "selection_brush_start",
       "active_mask_exposure", ""})

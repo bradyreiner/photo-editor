@@ -28,6 +28,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <sys/resource.h>
 #include <vector>
 
 #include "photo_editor/pipeline/color_adjustments.h"
@@ -36,6 +37,7 @@
 #include "photo_editor/pipeline/color_transform.h"
 #include "canonical_native_working_fusion.h"
 #include "editor_preview_texture.h"
+#include "native_preview_readback.h"
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 
 namespace {
@@ -160,6 +162,18 @@ struct ParityMetrics final {
         reinterpret_cast<const char*>(image.constScanLine(y)), row_bytes));
   }
   return hash.result().toHex();
+}
+
+[[nodiscard]] std::uint64_t maximum_rss_bytes() {
+  struct rusage usage {};
+  if (getrusage(RUSAGE_SELF, &usage) != 0) {
+    return 0U;
+  }
+#ifdef __APPLE__
+  return static_cast<std::uint64_t>(usage.ru_maxrss);
+#else
+  return static_cast<std::uint64_t>(usage.ru_maxrss) * 1024U;
+#endif
 }
 
 [[nodiscard]] bool valid_reference_id(const QString& value) {
@@ -324,6 +338,57 @@ int main(int argc, char* argv[]) {
     lease.reset();
     if (!lifetime.expired()) return EXIT_FAILURE;
   }
+  {
+    auto texture = photo_editor::desktop::EditorPreviewTexture::create();
+    QImage image(8, 4, QImage::Format_ARGB32);
+    for (int y = 0; y < image.height(); ++y)
+      for (int x = 0; x < image.width(); ++x)
+        image.setPixelColor(x, y, QColor(240, 160, 80, x * 255 / 7));
+    const auto equal_display = [&](const QImage& expected) {
+      const auto actual = read_native_preview_texture(texture.get());
+      if (actual.size() != expected.size()) return false;
+      const auto expected_bytes = expected.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+      const auto actual_bytes = actual.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+      for (int y = 0; y < actual.height(); ++y) {
+        const auto* a = reinterpret_cast<const QRgb*>(actual_bytes.constScanLine(y));
+        const auto* b = reinterpret_cast<const QRgb*>(expected_bytes.constScanLine(y));
+        for (int x = 0; x < actual.width(); ++x)
+          if (std::abs(qRed(a[x]) - qRed(b[x])) > 1 ||
+              std::abs(qGreen(a[x]) - qGreen(b[x])) > 1 ||
+              std::abs(qBlue(a[x]) - qBlue(b[x])) > 1 ||
+              std::abs(qAlpha(a[x]) - qAlpha(b[x])) > 1) return false;
+      }
+      return true;
+    };
+    if (!texture->upload(image) || !equal_display(image)) {
+      std::cerr << "CPU image uploads must premultiply translucent display pixels\n";
+      return EXIT_FAILURE;
+    }
+    image.setPixelColor(5, 2, QColor(45, 200, 85, 93));
+    if (!texture->uploadRegion(image, QRect(4, 1, 3, 2)) || !equal_display(image)) {
+      std::cerr << "SDR region upload must preserve the exact premultiplied image\n";
+      return EXIT_FAILURE;
+    }
+    QImage patch(2, 2, QImage::Format_ARGB32);
+    patch.fill(QColor(80, 160, 240, 60));
+    if (!texture->uploadPatch(patch, QRect(3, 1, 2, 2))) return EXIT_FAILURE;
+    for (int y = 1; y < 3; ++y)
+      for (int x = 3; x < 5; ++x) image.setPixelColor(x, y, patch.pixelColor(0, 0));
+    if (!equal_display(image)) {
+      std::cerr << "Regional display upload must premultiply only the replacement pixels\n";
+      return EXIT_FAILURE;
+    }
+    image = image.convertToFormat(QImage::Format_RGBA16FPx4);
+    if (!texture->upload(image) || !equal_display(image)) {
+      std::cerr << "Floating point display uploads must preserve premultiplied alpha\n";
+      return EXIT_FAILURE;
+    }
+    image.setPixelColor(6, 2, QColor::fromRgbF(1.7F, 0.2F, 0.4F, 0.37F));
+    if (!texture->uploadRegion(image, QRect(5, 1, 3, 3)) || !equal_display(image)) {
+      std::cerr << "HDR region upload must preserve premultiplication and the untouched image\n";
+      return EXIT_FAILURE;
+    }
+  }
 #ifdef NDEBUG
   constexpr auto kBuildMode = "release";
 #else
@@ -424,13 +489,49 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
   auto preview_texture = photo_editor::desktop::EditorPreviewTexture::create();
-  if (preview_texture == nullptr ||
-      !preview_texture->adoptNativeSurface(*surface) ||
-      preview_texture->nativeTextureHandle() != surface->native_texture_handle() ||
-      preview_texture->nativeTextureSize() != QSize(kEdge, kEdge)) {
-    std::cerr << "preview texture must directly adopt the retained full-frame surface\n";
+  if (preview_texture == nullptr) return EXIT_FAILURE;
+  const auto check_display_alpha = [&](const QImage& image,
+                                       const std::vector<std::uint8_t>& straight,
+                                       int width, int height) {
+    if (image.size() != QSize(width, height) || image.format() != QImage::Format_ARGB32_Premultiplied)
+      return false;
+    for (int y = 0; y < height; ++y) {
+      const auto* row = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+      for (int x = 0; x < width; ++x) {
+        const auto i = static_cast<std::size_t>((y * width + x) * 4);
+        const auto expected = qPremultiply(qRgba(straight[i + 2], straight[i + 1],
+                                                straight[i], straight[i + 3]));
+        if (std::abs(qRed(row[x]) - qRed(expected)) > 1 ||
+            std::abs(qGreen(row[x]) - qGreen(expected)) > 1 ||
+            std::abs(qBlue(row[x]) - qBlue(expected)) > 1 ||
+            qAlpha(row[x]) != qAlpha(expected)) return false;
+      }
+    }
+    return true;
+  };
+  // Completed ICC surfaces can have no shared event (no exact-color patch was
+  // necessary). That is a ready producer, not an unavailable native preview.
+  if (surface->native_ready_event_handle() != 0U || !surface->producer_completed_successfully())
+    return EXIT_FAILURE;
+  bool completed_surface_finished = false;
+  bool completed_surface_published = false;
+  if (!preview_texture->adoptNativeSurfaceAsync(*surface, [] { return true; },
+          [&](bool published) {
+            completed_surface_published = published;
+            completed_surface_finished = true;
+          })) {
+    std::cerr << "An already completed producer without a shared event must publish asynchronously\n";
     return EXIT_FAILURE;
   }
+  QElapsedTimer completed_surface_deadline;
+  completed_surface_deadline.start();
+  while (!completed_surface_finished && completed_surface_deadline.elapsed() < 5000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    QThread::msleep(1);
+  }
+  if (!completed_surface_published ||
+      !check_display_alpha(read_native_preview_texture(preview_texture.get()), surface_pixels, kEdge, kEdge))
+    return EXIT_FAILURE;
   const auto adopted_handle = preview_texture->nativeTextureHandle();
   auto async_telemetry = photo_editor::pipeline::ColorAdjustmentTelemetry{};
   const auto async_surface = metal.publish_aces2_output_lut_srgb8_surface(
@@ -495,10 +596,12 @@ int main(int argc, char* argv[]) {
     QThread::msleep(1);
   }
   if (!full_finished.load() || !full_published.load() ||
-      preview_texture->nativeTextureHandle() !=
-          deferred_full_surface->native_texture_handle() ||
       preview_texture->nativeTextureHandle() == patched_handle) {
-    std::cerr << "readiness-fenced full-frame adoption must publish the producer texture\n";
+    std::cerr << "readiness-fenced full-frame adoption must publish the converted display texture\n";
+    return EXIT_FAILURE;
+  }
+  if (!check_display_alpha(read_native_preview_texture(preview_texture.get()), surface_pixels, kEdge, kEdge)) {
+    std::cerr << "Deferred native display publication must preserve premultiplied alpha\n";
     return EXIT_FAILURE;
   }
   const auto full_handle = preview_texture->nativeTextureHandle();
@@ -1663,6 +1766,108 @@ int main(int argc, char* argv[]) {
     std::cerr << "alternating Metal ACES 2 tiers must reuse both cached cube buffers\n";
     return EXIT_FAILURE;
   }
+
+  constexpr auto kCpuReadableWidth = 606;
+  constexpr auto kCpuReadableHeight = 404;
+  constexpr auto kCpuReadableWarmups = 1U;
+  constexpr auto kCpuReadableTrials = 7U;
+  auto cpu_readable_source = std::vector<photo_editor::pipeline::ColorPixel>(
+      static_cast<std::size_t>(kCpuReadableWidth) *
+      static_cast<std::size_t>(kCpuReadableHeight));
+  for (int y = 0; y < kCpuReadableHeight; ++y) {
+    for (int x = 0; x < kCpuReadableWidth; ++x) {
+      const auto index = static_cast<std::size_t>(y) *
+                             static_cast<std::size_t>(kCpuReadableWidth) +
+                         static_cast<std::size_t>(x);
+      const auto xf = static_cast<float>(x) /
+                      static_cast<float>(kCpuReadableWidth - 1);
+      const auto yf = static_cast<float>(y) /
+                      static_cast<float>(kCpuReadableHeight - 1);
+      cpu_readable_source[index] = photo_editor::pipeline::ColorPixel{
+          .red = 0.02F + xf * 2.5F,
+          .green = 0.04F + yf * 1.7F,
+          .blue = 0.01F + (xf + yf) * 0.8F,
+          .alpha = 0.2F + ((x + y) % 7) * 0.1F,
+      };
+    }
+  }
+  auto cpu_readable_expected = cpu_readable_source;
+  for (std::size_t index = 0U; index < cpu_readable_expected.size(); ++index) {
+    cpu_readable_expected[index] =
+        photo_editor::pipeline::apply_aces2_output_lut_target_application(
+            application, cpu_readable_source[index]);
+  }
+  auto cpu_readable_telemetry =
+      photo_editor::pipeline::ColorAdjustmentTelemetry{};
+  auto cpu_readable_times_ms = std::vector<double>{};
+  cpu_readable_times_ms.reserve(kCpuReadableTrials);
+  for (auto iteration = 0U;
+       iteration < kCpuReadableWarmups + kCpuReadableTrials;
+       ++iteration) {
+    auto cpu_readable_pixels = cpu_readable_source;
+    const auto dispatch_start = std::chrono::steady_clock::now();
+    if (!metal.apply_aces2_output_lut_target(
+            &cpu_readable_pixels,
+            kCpuReadableWidth,
+            kCpuReadableHeight,
+            application,
+            &cpu_readable_telemetry)) {
+      std::cerr << "CPU-readable Metal ACES 2 benchmark dispatch failed\n";
+      return EXIT_FAILURE;
+    }
+    const auto elapsed_ms = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - dispatch_start)
+                                .count();
+    if (iteration == kCpuReadableWarmups &&
+        !measure_parity(
+            cpu_readable_expected,
+            cpu_readable_pixels,
+            config.preview_display_target.color_space,
+            &interactive_metrics)) {
+      std::cerr << "CPU-readable Metal ACES 2 benchmark output was invalid\n";
+      return EXIT_FAILURE;
+    }
+    if (iteration >= kCpuReadableWarmups) {
+      cpu_readable_times_ms.push_back(elapsed_ms);
+    }
+  }
+  std::sort(cpu_readable_times_ms.begin(), cpu_readable_times_ms.end());
+  const auto cpu_readable_pixel_bytes = static_cast<std::int64_t>(
+      cpu_readable_source.size() * sizeof(photo_editor::pipeline::ColorPixel));
+  if (cpu_readable_telemetry.gpu_command_buffer_count !=
+          static_cast<std::int64_t>(kCpuReadableWarmups + kCpuReadableTrials) ||
+      cpu_readable_telemetry.gpu_kernel_dispatch_count !=
+          static_cast<std::int64_t>(kCpuReadableWarmups + kCpuReadableTrials) ||
+      cpu_readable_telemetry.gpu_cpu_to_gpu_bytes !=
+          cpu_readable_pixel_bytes *
+              static_cast<std::int64_t>(kCpuReadableWarmups + kCpuReadableTrials) ||
+      cpu_readable_telemetry.gpu_gpu_to_cpu_bytes !=
+          cpu_readable_pixel_bytes *
+              static_cast<std::int64_t>(kCpuReadableWarmups + kCpuReadableTrials) ||
+      cpu_readable_telemetry.gpu_cpu_readback_buffer_pool_hit_count !=
+          static_cast<std::int64_t>(kCpuReadableTrials) ||
+      cpu_readable_telemetry.gpu_cpu_readback_buffer_pool_miss_count !=
+          static_cast<std::int64_t>(kCpuReadableWarmups) ||
+      !parity_passes(interactive_metrics)) {
+    std::cerr << "CPU-readable Metal ACES 2 telemetry or parity contract failed\n";
+    return EXIT_FAILURE;
+  }
+  std::cout << "Metal ACES 2 CPU-readable benchmark: width="
+            << kCpuReadableWidth << " height=" << kCpuReadableHeight
+            << " trials=" << kCpuReadableTrials
+            << " median_ms="
+            << percentile(cpu_readable_times_ms, 0.5)
+            << " p95_ms="
+            << percentile(cpu_readable_times_ms, 0.95)
+            << " cpu_to_gpu_bytes="
+            << cpu_readable_telemetry.gpu_cpu_to_gpu_bytes
+            << " gpu_to_cpu_bytes="
+            << cpu_readable_telemetry.gpu_gpu_to_cpu_bytes
+            << " buffer_pool_hits="
+            << cpu_readable_telemetry.gpu_cpu_readback_buffer_pool_hit_count
+            << " buffer_pool_misses="
+            << cpu_readable_telemetry.gpu_cpu_readback_buffer_pool_miss_count
+            << " max_rss_bytes=" << maximum_rss_bytes() << '\n';
 
   std::cout << "Metal ACES 2 output LUT parity: final_97_p99_delta_e_00="
             << final_metrics.p99_delta_e_00

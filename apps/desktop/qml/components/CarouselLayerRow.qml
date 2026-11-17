@@ -144,7 +144,8 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "G"
                 color: root.accent
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
                 font.weight: Font.Bold
             }

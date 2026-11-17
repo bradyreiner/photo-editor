@@ -123,7 +123,8 @@ ColumnLayout {
                                       (Number(modelData.boardNumber || 0) > 0
                                        ? " · BOARD " + Number(modelData.boardNumber) : "")
                                 color: String(modelData.severity || "info") === "warning" ? theme.warning : theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                                 font.weight: Font.Bold
                             }

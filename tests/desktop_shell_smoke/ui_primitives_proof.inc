@@ -23,6 +23,9 @@
     auto* page_window = qobject_cast<QQuickWindow*>(page);
     if (page_window == nullptr || !wait_for_condition([&] { return page_window->isVisible(); }))
       return fail("Primitives page should open a visible native window");
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
+      activate_native_test_window(page_window);
+    }
     if (page->property("previewFontFamily").toString() != app_shell.systemUiFontFamily())
       return fail("Gallery must use the application's native UI typeface");
 
@@ -77,9 +80,12 @@
       const auto button_size = QSizeF(optical_button->width(), optical_button->height());
       const auto pointer = [&](QEvent::Type type, Qt::MouseButton button, Qt::MouseButtons buttons) {
         const auto point = optical_button->mapToScene(QPointF(optical_button->width() / 2, optical_button->height() / 2));
-        const auto global_point = QPointF(page_window->mapToGlobal(point.toPoint()));
-        QMouseEvent event(type, point, global_point, button, buttons, Qt::NoModifier);
-        QCoreApplication::sendEvent(page_window, &event);
+        Q_UNUSED(buttons);
+        // Use QPA input so Qt's mouse-button state survives frame readback
+        // between press and release on the native threaded renderer.
+        if (type == QEvent::MouseMove) QTest::mouseMove(page_window, point.toPoint());
+        else if (type == QEvent::MouseButtonPress) QTest::mousePress(page_window, button, Qt::NoModifier, point.toPoint());
+        else QTest::mouseRelease(page_window, button, Qt::NoModifier, point.toPoint());
         process_layout_events(3);
       };
       pointer(QEvent::MouseMove, Qt::NoButton, Qt::NoButton);
@@ -91,7 +97,15 @@
           !capture(density + QStringLiteral("-optical-pressed"), {QStringLiteral("uiPrimitivesOpticalSelected")}))
         return fail("Optical pressed finish should render while holding the pointer");
       pointer(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
-      if (!optical->property("sampleActive").toBool() ||
+      if (optical_button->property("down").toBool() ||
+          QSizeF(optical_button->width(), optical_button->height()) != button_size)
+        return fail("Optical release should clear pressed state without changing control geometry");
+      // Native frame capture may relinquish a synthetic held grab. Check the
+      // action using a complete QPA click without a readback between its events.
+      const auto active_before_click = optical->property("sampleActive").toBool();
+      click_native_test_window(page_window, optical_button->mapToScene(QPointF(optical_button->width() / 2, optical_button->height() / 2)).toPoint());
+      process_layout_events(3);
+      if (optical->property("sampleActive").toBool() == active_before_click ||
           QSizeF(optical_button->width(), optical_button->height()) != button_size)
         return fail("Optical interaction should select without changing control geometry");
       if (!send_activation_key(find_named_object(page, QStringLiteral("uiPrimitivesOpticalTooltipButton"))) ||
@@ -237,9 +251,23 @@
         exposure->property("value").toDouble() != 0 || field->property("text").toString() != QStringLiteral("Morning light"))
       return fail("Sample reset should restore fields and sliders");
     auto* combo = find_named_object(page, QStringLiteral("uiPrimitivesComboBox"));
-    if (!send_activation_key(combo) ||
-        !capture(QStringLiteral("input-combo-open"), {QStringLiteral("uiPrimitivesComboBoxOption0")}))
+    bool combo_opened = false;
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
+      auto* combo_item = qobject_cast<QQuickItem*>(combo);
+      if (combo_item) {
+        activate_native_test_window(page_window);
+        combo_item->forceActiveFocus(Qt::TabFocusReason);
+        key_native_test_window(page_window, Qt::Key_Space, Qt::NoModifier);
+        combo_opened = true;
+      }
+    } else {
+      combo_opened = send_activation_key(combo);
+    }
+    if (!combo_opened ||
+        !capture(QStringLiteral("input-combo-open"), {QStringLiteral("uiPrimitivesComboBoxOption0")})) {
+      page_window->grabWindow().save(proof_dir + QStringLiteral("/input-combo-failed.png"));
       return fail("Gallery should render actual selectable combo-box options");
+    }
     auto* combo_popup = combo->property("popup").value<QObject*>();
     if (combo_popup == nullptr || !QMetaObject::invokeMethod(combo_popup, "close"))
       return fail("Combo popup should close before leaving the sample");
@@ -286,7 +314,7 @@
     if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
       // Window shortcuts require an active native window. Direct Qt key
       // delivery alone does not activate the gallery on macOS.
-      page_window->requestActivate();
+      activate_native_test_window(page_window);
       if (!wait_for_condition([&] { return page_window->isActive(); }, 1500))
         return fail("Native gallery must acquire keyboard focus before Escape");
     }
@@ -303,45 +331,117 @@
         !QMetaObject::invokeMethod(shell, "beginImportWorkspace"))
       return fail("Button proof should open the actual Import workspace with a fixture");
     process_layout_events(8);
-    auto* import_workspace = find_named_object(shell, QStringLiteral("importWorkspace"));
     auto* shell_window = qobject_cast<QQuickWindow*>(shell);
+    QQuickItem* import_workspace_item = nullptr;
+    if (shell_window == nullptr || !wait_for_condition([&] {
+          for (auto* candidate : find_named_items(shell, QStringLiteral("importWorkspace"))) {
+            if (item_visible(candidate) && candidate->window() == shell_window) {
+              import_workspace_item = candidate;
+              return true;
+            }
+          }
+          return false;
+        })) {
+      return fail("Button proof should resolve the visible Import workspace in the main window");
+    }
+    QObject* import_workspace = import_workspace_item;
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER") && shell_window != nullptr) {
+      // The separate gallery window was closed immediately before opening
+      // Import; restore the main shell as the native keyboard target.
+      activate_native_test_window(shell_window);
+      if (!wait_for_condition([&] {
+            return shell_window->isActive() && shell_window->isExposed();
+          }, 1500))
+        return fail("Import menu proof should activate the actual main shell after closing the gallery");
+    } else if (shell_window != nullptr) {
+      // Closing a separate window does not give the offscreen platform a
+      // native activation event; request the same shell focus explicitly.
+      shell_window->requestActivate();
+      if (!wait_for_condition([&] { return QGuiApplication::focusWindow() == shell_window; }, 1500))
+        return fail("Import keyboard proof should return focus from the closed gallery to the shell");
+    }
     const auto import_url = QUrl::fromLocalFile(import_source).toString();
     if (!import_workspace || !shell_window ||
         !QMetaObject::invokeMethod(import_workspace, "openSource", Q_ARG(QVariant, QVariant(import_source)),
                                   Q_ARG(QVariant, QVariant(import_url)), Q_ARG(QVariant, QVariant(QStringLiteral("Button proof photos")))) ||
         !wait_for_condition([&] { return import_workspace->property("currentFolderPath").toString() == import_source; }))
       return fail("Import fixture should load through the real source navigation");
+    const auto find_visible_import_item = [&](const QString& object_name) -> QQuickItem* {
+      for (auto* candidate : find_named_items(import_workspace, object_name)) {
+        if (item_visible(candidate) && candidate->window() == shell_window)
+          return candidate;
+      }
+      return nullptr;
+    };
     import_workspace->setProperty("selectedPathsByFile", QVariantMap{{import_photo, true}});
     import_workspace->setProperty("selectionRevision", import_workspace->property("selectionRevision").toInt() + 1);
     process_layout_events(8);
-    auto* import_primary = find_named_object(shell, QStringLiteral("importPrimarySplitButtonPrimaryAction"));
-    auto* import_menu = find_named_object(shell, QStringLiteral("importPrimarySplitButtonMenuAction"));
+    auto* import_primary = find_visible_import_item(QStringLiteral("importPersistentPrimaryButton"));
+    auto* import_more = find_visible_import_item(QStringLiteral("importHeaderMoreMenuButton"));
+    auto* import_more_action = find_visible_import_item(QStringLiteral("importHeaderMoreMenuButtonPrimaryAction"));
     auto* import_surface = import_primary ? import_primary->property("background").value<QObject*>() : nullptr;
-    auto* import_menu_surface = import_menu ? import_menu->property("background").value<QObject*>() : nullptr;
+    auto* import_more_surface = import_more_action ? import_more_action->property("background").value<QObject*>() : nullptr;
     QElapsedTimer import_settle;
     import_settle.start();
-    if (!import_surface || !import_menu_surface ||
+    if (!import_surface || !import_more_surface || !import_more ||
+        import_workspace->property("selectedFileCount").toInt() != 1 ||
+        import_primary->property("text").toString() != QStringLiteral("Import selected photos · 1") ||
         !wait_for_condition([&] { return import_settle.elapsed() >= 160 && import_primary->property("enabled").toBool(); }) ||
         !capture_visual_proof(shell_window, shell, proof_dir, QStringLiteral("import-selected-graphite"), 1440, 900,
-                              {QStringLiteral("importPrimarySplitButton"), QStringLiteral("importMediaGrid")}, &manifest) ||
+                              {QStringLiteral("importPersistentActionBar"), QStringLiteral("importPersistentPrimaryButton"),
+                               QStringLiteral("importHeaderMoreMenuButton"), QStringLiteral("importMediaGrid")}, &manifest) ||
         import_surface->property("fillColor").value<QColor>().hsvSaturationF() > 0.20 ||
-        import_surface->property("fillColor") != import_menu_surface->property("fillColor")) {
+        import_more_surface->property("fillColor").value<QColor>().hsvSaturationF() > 0.20) {
       std::cerr << "Import commands: selected=" << import_workspace->property("selectedFileCount").toInt()
                 << " enabled=" << (import_primary && import_primary->property("enabled").toBool())
                 << " primary=" << (import_surface ? import_surface->property("fillColor").value<QColor>().name().toStdString() : "missing")
-                << " options=" << (import_menu_surface ? import_menu_surface->property("fillColor").value<QColor>().name().toStdString() : "missing") << '\n';
-      return fail("The actual Import primary and options must share a neutral command surface");
+                << " more=" << (import_more_surface ? import_more_surface->property("fillColor").value<QColor>().name().toStdString() : "missing") << '\n';
+      return fail("The persistent Import action and More options should use neutral command styling");
     }
+    auto* import_more_popup = find_named_object(import_workspace, QStringLiteral("importHeaderMoreMenuButtonPopup"));
+    if (!import_more_popup || import_more_action == nullptr) {
+      std::cerr << "Import More target lookup: popup=" << (import_more_popup != nullptr)
+                << " action=" << (import_more_action != nullptr) << '\n';
+      return fail("Import More should resolve its popup and visible secondary button within the active workspace");
+    }
+    if (!send_activation_key(import_more_action)) {
+      std::cerr << "Import More activation: visible=" << item_visible(import_more_action)
+                << " activeFocus=" << import_more_action->hasActiveFocus()
+                << " windowMatches=" << (import_more_action->window() == shell_window)
+                << " windowActive=" << shell_window->isActive()
+                << " enabled=" << import_more_action->isEnabled()
+                << " focusItem=" << (shell_window->activeFocusItem()
+                    ? shell_window->activeFocusItem()->objectName().toStdString() : "none")
+                << " focusWindowMatches=" << (QGuiApplication::focusWindow() == shell_window) << '\n';
+      return fail("Import More should activate through its visible secondary button");
+    }
+    if (!wait_for_condition([&] { return import_more_popup->property("visible").toBool(); }))
+      return fail("Import More should open its secondary folder, preset, and selection actions");
+    auto import_menu_items_value = import_more_popup->property("menuItems");
+    if (import_menu_items_value.canConvert<QJSValue>())
+      import_menu_items_value = import_menu_items_value.value<QJSValue>().toVariant();
+    const auto import_menu_items = import_menu_items_value.toList();
+    if (import_menu_items.size() != 5 ||
+        import_menu_items.at(0).toMap().value(QStringLiteral("label")).toString() != QStringLiteral("Review Current Folder") ||
+        import_menu_items.at(1).toMap().value(QStringLiteral("label")).toString() != QStringLiteral("Review With Preset") ||
+        !capture_visual_proof(shell_window, shell, proof_dir, QStringLiteral("import-more-options-open"), 1440, 900,
+                              {QStringLiteral("importHeaderMoreMenuButton"),
+                               QStringLiteral("importHeaderMoreMenuButtonPopup")}, &manifest) ||
+        !QMetaObject::invokeMethod(import_more, "closeMenu") ||
+        !wait_for_condition([&] { return !import_more_popup->property("visible").toBool(); }))
+      return fail("Import More should keep the folder and preset review options reachable");
     if (!send_activation_key(import_primary) ||
         !wait_for_condition([&] { return import_workspace->property("canConfirmImport").toBool(); }))
       return fail("Import should remain keyboard operable and finish its review scan");
-    auto* import_confirm = find_named_object(shell, QStringLiteral("importPreflightConfirmButton"));
+    auto* import_confirm = find_visible_import_item(QStringLiteral("importPersistentPrimaryButton"));
     QElapsedTimer review_settle;
     review_settle.start();
-    if (!import_confirm ||
+    if (!import_confirm || import_confirm != import_primary ||
         !wait_for_condition([&] { return review_settle.elapsed() >= 160 && import_confirm->property("enabled").toBool(); }) ||
+        import_confirm->property("text").toString() != QStringLiteral("Import selected photos · 1") ||
         !capture_visual_proof(shell_window, shell, proof_dir, QStringLiteral("import-review-graphite"), 1440, 900,
-                              {QStringLiteral("importPreflightConfirmButton")}, &manifest))
+                              {QStringLiteral("importPersistentActionBar"),
+                               QStringLiteral("importPersistentPrimaryButton")}, &manifest))
       return fail("Import should remain keyboard operable and open a usable review");
     import_workspace->setProperty("importProjectChooserOpen", false);
     if (!primitives_warnings.isEmpty()) {

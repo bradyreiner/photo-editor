@@ -1,266 +1,149 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import PhotoEditor
 
 Rectangle {
     id: scopeTile
-
     required property Item workspace
     required property var previewController
     property string kind: "Waveform"
     property bool large: false
     readonly property real preferredTileHeight: Layout.preferredHeight
-
+    readonly property var frame: previewController.scopeFrame || ({})
+    readonly property real rangeMinimum: Number(frame.minimum || 0)
+    readonly property real rangeMaximum: Number(frame.maximum || 1)
     Theme { id: theme }
-
     Layout.fillWidth: true
     Layout.fillHeight: large
-    Layout.minimumHeight: large ? 220 : 112
-    Layout.preferredHeight: large ? (workspace.scopeLayoutPreset === "Quad" ? 320 : 260) : 142
+    Layout.minimumHeight: theme.scaled(large ? 220 : 112)
+    Layout.preferredHeight: theme.scaled(large ? (workspace.scopeLayoutPreset === "Quad" ? 320 : 260) : 160)
     radius: 0
     color: "transparent"
     border.width: 0
-    border.color: theme.lineSoft
+    clip: true
 
     Label {
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.leftMargin: 10
-        anchors.topMargin: 8
+        anchors.left: parent.left; anchors.top: parent.top
+        anchors.margins: theme.space8
         text: scopeTile.kind
         color: theme.textMain
-        font.family: theme.fontUi
-        font.pixelSize: theme.typeLabel
+        font.family: theme.fontUi; font.pixelSize: theme.typeLabel
         font.weight: Font.Medium
-        z: 2
     }
-
+    Label {
+        anchors.right: parent.right; anchors.top: parent.top
+        anchors.margins: theme.space8
+        text: previewController.scopesFrozen ? "Frozen" : ""
+        color: theme.textMuted
+        font.family: theme.fontUi; font.pixelSize: theme.typeCaption
+    }
     HistogramDisplay {
-        anchors.fill: parent
-        anchors.margins: 10
-        anchors.topMargin: 26
+        anchors.fill: parent; anchors.margins: theme.space8; anchors.topMargin: theme.scaled(30)
         visible: scopeTile.kind === "Histogram"
-        redData: previewController.histogramRed
-        greenData: previewController.histogramGreen
-        blueData: previewController.histogramBlue
-        luminanceData: previewController.histogramLuminance
+        redData: scopeTile.frame.histogramRed || []
+        greenData: scopeTile.frame.histogramGreen || []
+        blueData: scopeTile.frame.histogramBlue || []
+        luminanceData: scopeTile.frame.histogramLuminance || []
         showRgb: workspace.scopeShowRgb
         showLuminance: workspace.scopeShowLuma
         logScale: workspace.scopeLogHistogram
         framed: false
-        shadowClipRatio: previewController.histogramSampleCount > 0
-                         ? previewController.histogramShadowClipCount / previewController.histogramSampleCount
-                         : 0
-        highlightClipRatio: previewController.histogramSampleCount > 0
-                            ? previewController.histogramHighlightClipCount / previewController.histogramSampleCount
-                            : 0
+        shadowClipRatio: Number(scopeTile.frame.sampleCount || 0) > 0
+            ? Number(scopeTile.frame.shadowClipCount || 0) / scopeTile.frame.sampleCount : 0
+        highlightClipRatio: Number(scopeTile.frame.sampleCount || 0) > 0
+            ? Number(scopeTile.frame.highlightClipCount || 0) / scopeTile.frame.sampleCount : 0
     }
-
-    Canvas {
-        id: scopeCanvas
+    Item {
+        id: plot
         objectName: "studioScopeCanvas"
-        anchors.fill: parent
-        anchors.margins: 10
-        anchors.topMargin: 26
+        anchors.fill: parent; anchors.margins: theme.space8
+        anchors.topMargin: theme.scaled(30); anchors.bottomMargin: theme.scaled(22)
         visible: scopeTile.kind !== "Histogram"
-
-        onWidthChanged: requestPaint()
-        onHeightChanged: requestPaint()
-        onVisibleChanged: requestPaint()
-
-        onPaint: {
-            // Histogram uses its own canvas. Hidden scopes can still receive
-            // histogram notifications; repaint when visible instead.
-            if (!visible || scopeTile.kind === "Histogram")
-                return
-            const ctx = getContext("2d")
-            ctx.reset()
-            const w = width
-            const h = height
-            const plotY = 7
-            const plotHeight = Math.max(1, h - plotY * 2)
-            const red = previewController.scopeWaveformRed || []
-            const green = previewController.scopeWaveformGreen || []
-            const blue = previewController.scopeWaveformBlue || []
-            const luma = previewController.scopeWaveformLuminance || []
-            const densityRed = previewController.scopeDensityRed || []
-            const densityGreen = previewController.scopeDensityGreen || []
-            const densityBlue = previewController.scopeDensityBlue || []
-            const densityLuma = previewController.scopeDensityLuminance || []
-            const vectors = previewController.scopeVectorscopePoints || []
-            const densityLevels = 64
-
-            function drawGrid(x, y, plotWidth, plotHeight, labels) {
-                if (!workspace.scopeShowGrid)
-                    return
-                ctx.save()
+        Canvas {
+            id: gridCanvas
+            anchors.fill: parent
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            onVisibleChanged: requestPaint()
+            onPaint: {
+                const ctx = getContext("2d")
+                ctx.reset()
+                if (!visible || width < 8 || height < 8 || !scopeTile.workspace.scopeShowGrid) return
+                ctx.strokeStyle = theme.alpha(theme.polar, 0.12)
+                ctx.fillStyle = theme.textMuted
                 ctx.lineWidth = 1
-                ctx.strokeStyle = theme.alpha(theme.polar, 0.075)
-                for (let i = 1; i < 4; ++i) {
-                    const gx = Math.round(x + (plotWidth / 4) * i) + 0.5
-                    ctx.beginPath()
-                    ctx.moveTo(gx, y)
-                    ctx.lineTo(gx, y + plotHeight)
-                    ctx.stroke()
-                }
-                for (let j = 0; j <= 4; ++j) {
-                    const gy = Math.round(y + (plotHeight / 4) * j) + 0.5
-                    ctx.beginPath()
-                    ctx.moveTo(x, gy)
-                    ctx.lineTo(x + plotWidth, gy)
-                    ctx.stroke()
-                }
-                ctx.strokeStyle = theme.alpha(theme.lineSoft, 0.20)
-                ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.max(0, plotWidth - 1), Math.max(0, plotHeight - 1))
-                if (labels) {
-                    ctx.fillStyle = theme.textMuted
-                    ctx.font = "10px \"" + theme.fontUi + "\""
-                    ctx.textAlign = "left"
-                    ctx.textBaseline = "middle"
-                    const values = [["100", 0], ["75", 0.25], ["50", 0.5], ["25", 0.75], ["0", 1]]
-                    for (let k = 0; k < values.length; ++k)
-                        ctx.fillText(values[k][0], 0, y + values[k][1] * plotHeight)
-                }
-                ctx.restore()
-            }
-
-            function channelValue(data, index, key) {
-                if (!data || data.length === 0)
-                    return 0
-                const raw = data[Math.max(0, Math.min(data.length - 1, index))] || 0
-                const value = typeof raw === "object" ? Number(raw[key] || 0) : Number(raw || 0)
-                return Math.max(0, Math.min(1, value))
-            }
-
-            function drawAverage(data, color, x, y, plotWidth, plotHeight, alpha, lineWidth) {
-                if (!workspace.scopeShowTrace)
-                    return
-                const count = data ? data.length : 0
-                if (count < 2)
-                    return
-                const step = plotWidth / Math.max(1, count - 1)
-                ctx.save()
-                ctx.strokeStyle = theme.alpha(color, alpha)
-                ctx.lineWidth = lineWidth
-                ctx.beginPath()
-                for (let i = 0; i < count; ++i) {
-                    const px = x + step * i
-                    const py = y + plotHeight - channelValue(data, i, "avg") * plotHeight
-                    if (i === 0)
-                        ctx.moveTo(px, py)
-                    else
-                        ctx.lineTo(px, py)
-                }
-                ctx.stroke()
-                ctx.restore()
-            }
-
-            function drawDensity(data, color, x, y, plotWidth, plotHeight, alphaScale, pointScale) {
-                if (!workspace.scopeShowDensity || !data || data.length < densityLevels)
-                    return
-                const columns = Math.max(1, Math.floor(data.length / densityLevels))
-                const xStep = plotWidth / columns
-                const yStep = plotHeight / densityLevels
-                ctx.save()
-                ctx.globalCompositeOperation = "lighter"
-                for (let column = 0; column < columns; ++column) {
-                    const px = x + column * xStep
-                    for (let level = 0; level < densityLevels; ++level) {
-                        const density = Number(data[column * densityLevels + level] || 0)
-                        if (density <= 0.008)
-                            continue
-                        const alpha = Math.min(0.72, Math.pow(density, 1.35) * alphaScale)
-                        if (alpha <= 0.006)
-                            continue
-                        ctx.fillStyle = theme.alpha(color, alpha)
-                        ctx.fillRect(px, y + plotHeight - (level + 1) * yStep, Math.max(1, xStep * pointScale), Math.max(1, yStep * 1.05))
+                ctx.font = theme.typeMicro + "px sans-serif"
+                if (scopeTile.kind === "Vectorscope") {
+                    const size = Math.min(width, height)
+                    const cx = width / 2, cy = height / 2, radius = size / 2 - 2
+                    for (const fraction of [0.25, 0.5, 0.75, 1]) {
+                        ctx.beginPath(); ctx.arc(cx, cy, radius * fraction, 0, Math.PI * 2); ctx.stroke()
                     }
-                }
-                ctx.restore()
-            }
-
-            if (scopeTile.kind === "Parade") {
-                const labelWidth = 20
-                const gap = 8
-                const plotX = labelWidth
-                const segment = (w - labelWidth - gap * 2) / 3
-                drawGrid(plotX, plotY, w - plotX, plotHeight, true)
-                if (workspace.scopeShowRgb) {
-                    drawDensity(densityRed, theme.signalRed, plotX, plotY, segment, plotHeight, 0.70, 1.08)
-                    drawDensity(densityGreen, theme.vectorGreen, plotX + segment + gap, plotY, segment, plotHeight, 0.62, 1.08)
-                    drawDensity(densityBlue, theme.signalCyan, plotX + segment * 2 + gap * 2, plotY, segment, plotHeight, 0.62, 1.08)
-                    drawAverage(red, theme.signalRed, plotX, plotY, segment, plotHeight, 0.62, 1.1)
-                    drawAverage(green, theme.vectorGreen, plotX + segment + gap, plotY, segment, plotHeight, 0.58, 1.1)
-                    drawAverage(blue, theme.signalCyan, plotX + segment * 2 + gap * 2, plotY, segment, plotHeight, 0.58, 1.1)
-                }
-                return
-            }
-
-            if (scopeTile.kind === "Vectorscope") {
-                const cx = w / 2
-                const cy = h / 2
-                const radius = Math.max(0, Math.min(w, h) * 0.40)
-                if (radius <= 0)
+                    ctx.beginPath(); ctx.moveTo(cx - radius, cy); ctx.lineTo(cx + radius, cy)
+                    ctx.moveTo(cx, cy - radius); ctx.lineTo(cx, cy + radius); ctx.stroke()
+                    // Reference boxes use the same Rec.709 Y'CbCr mapping as computation.
+                    const targets = [["R",1,0,0],["Y",1,1,0],["G",0,1,0],
+                                     ["C",0,1,1],["B",0,0,1],["M",1,0,1]]
+                    for (const target of targets) {
+                        const r = target[1] * 0.75, g = target[2] * 0.75, b = target[3] * 0.75
+                        const y = 0.2126*r + 0.7152*g + 0.0722*b
+                        const x = cx + (b-y)*0.565*size, py = cy - (r-y)*0.713*size
+                        ctx.strokeRect(x-3,py-3,6,6); ctx.fillText(target[0],x+5,py+3)
+                    }
+                    ctx.strokeStyle = theme.alpha(theme.polar, 0.3)
+                    ctx.beginPath(); ctx.moveTo(cx, cy)
+                    ctx.lineTo(cx - radius * 0.5, cy - radius * 0.866); ctx.stroke()
                     return
-                ctx.save()
-                ctx.strokeStyle = theme.alpha(theme.polar, 0.18)
-                ctx.lineWidth = 1
-                ctx.beginPath()
-                ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-                ctx.stroke()
-                ctx.strokeStyle = theme.alpha(theme.polar, 0.075)
-                ctx.beginPath()
-                ctx.arc(cx, cy, radius * 0.55, 0, Math.PI * 2)
-                ctx.stroke()
-                ctx.beginPath()
-                ctx.moveTo(cx - radius, cy)
-                ctx.lineTo(cx + radius, cy)
-                ctx.moveTo(cx, cy - radius)
-                ctx.lineTo(cx, cy + radius)
-                ctx.stroke()
-                ctx.restore()
-                ctx.save()
-                ctx.globalCompositeOperation = "lighter"
-                for (let i = 0; i < vectors.length; ++i) {
-                    const point = vectors[i]
-                    const px = cx + (Number(point.x || 0.5) - 0.5) * radius * 1.75
-                    const py = cy + (Number(point.y || 0.5) - 0.5) * radius * 1.75
-                    ctx.fillStyle = Qt.rgba(Number(point.red || 0.8), Number(point.green || 0.8), Number(point.blue || 0.8), 0.045 + Number(point.luma || 0.5) * 0.07)
-                    ctx.fillRect(px - 0.65, py - 0.65, 1.5, 1.5)
                 }
-                ctx.fillStyle = theme.alpha(theme.polar, 0.36)
-                ctx.fillRect(cx - 1.1, cy - 1.1, 2.2, 2.2)
-                ctx.restore()
-                return
-            }
-
-            const plotX = 28
-            drawGrid(plotX, plotY, w - plotX, plotHeight, true)
-            if (workspace.scopeShowLuma) {
-                drawDensity(densityLuma, theme.polar, plotX, plotY, w - plotX, plotHeight, 0.46, 1.06)
-                drawAverage(luma, theme.polar, plotX, plotY, w - plotX, plotHeight, 0.58, 1.1)
-            }
-            if (workspace.scopeShowRgb) {
-                drawDensity(densityBlue, theme.signalCyan, plotX, plotY, w - plotX, plotHeight, 0.16, 1.02)
-                drawDensity(densityRed, theme.signalAmber, plotX, plotY, w - plotX, plotHeight, 0.13, 1.02)
-                drawAverage(blue, theme.signalCyan, plotX, plotY, w - plotX, plotHeight, 0.24, 0.9)
-                drawAverage(red, theme.signalAmber, plotX, plotY, w - plotX, plotHeight, 0.20, 0.9)
+                const left = theme.scaled(32)
+                for (let i = 0; i <= 4; ++i) {
+                    const y = height * i / 4
+                    ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(width, y); ctx.stroke()
+                    const value = scopeTile.rangeMaximum - (scopeTile.rangeMaximum-scopeTile.rangeMinimum)*i/4
+                    ctx.fillText((value * 100).toFixed(0), 0, Math.max(9, Math.min(height-1, y+3)))
+                }
             }
         }
-
-        Component.onCompleted: requestPaint()
-
-        Connections {
-            target: scopeTile.previewController
-            function onHistogramChanged() { scopeCanvas.requestPaint() }
+        ScopePlotItem {
+            id: nativePlot
+            objectName: "studioNativeScopePlot"
+            x: scopeTile.kind === "Vectorscope" ? 0 : theme.scaled(32)
+            width: Math.max(1, plot.width-x); height: plot.height
+            frame: scopeTile.frame
+            reference: {
+                const held = scopeTile.workspace.scopeReferenceFrame || ({})
+                return held.domain === scopeTile.frame.domain && held.minimum === scopeTile.frame.minimum
+                    && held.maximum === scopeTile.frame.maximum && String(held.region) === String(scopeTile.frame.region)
+                    ? held : ({})
+            }
+            options: ({mode: scopeTile.kind, gain: scopeTile.workspace.scopeDensityGain,
+                rgb: scopeTile.workspace.scopeShowRgb, luma: scopeTile.workspace.scopeShowLuma,
+                density: scopeTile.workspace.scopeShowDensity, trace: scopeTile.workspace.scopeShowTrace,
+                palette: [theme.signalRed, theme.vectorGreen, theme.signalCyan, theme.polar]})
         }
-        Connections {
-            target: scopeTile.workspace
-            function onScopeShowRgbChanged() { scopeCanvas.requestPaint() }
-            function onScopeShowLumaChanged() { scopeCanvas.requestPaint() }
-            function onScopeShowDensityChanged() { scopeCanvas.requestPaint() }
-            function onScopeShowTraceChanged() { scopeCanvas.requestPaint() }
-            function onScopeShowGridChanged() { scopeCanvas.requestPaint() }
-        }
+        HoverHandler { id: probe }
     }
+    Label {
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        anchors.margins: theme.space8
+        text: {
+            if (scopeTile.kind === "Histogram") return ""
+            if (scopeTile.kind === "Vectorscope") return "75% targets · skin-tone guide"
+            if (!probe.hovered) return "Level % · " + scopeTile.previewController.scopeRangeMode
+            const x = Math.max(0, Math.min(1, (probe.point.position.x-nativePlot.x)/Math.max(1,nativePlot.width)))
+            const y = Math.max(0, Math.min(1, probe.point.position.y/Math.max(1,plot.height)))
+            const value = scopeTile.rangeMaximum - y*(scopeTile.rangeMaximum-scopeTile.rangeMinimum)
+            return "X " + (x*100).toFixed(1) + "% · Level " + (value*100).toFixed(1) + "%"
+        }
+        color: theme.textMuted
+        font.family: theme.fontUi; font.pixelSize: theme.typeMicro
+    }
+    Connections {
+        target: scopeTile.workspace
+        function onScopeShowGridChanged() { gridCanvas.requestPaint() }
+    }
+    onRangeMinimumChanged: gridCanvas.requestPaint()
+    onRangeMaximumChanged: gridCanvas.requestPaint()
+    onKindChanged: gridCanvas.requestPaint()
 }

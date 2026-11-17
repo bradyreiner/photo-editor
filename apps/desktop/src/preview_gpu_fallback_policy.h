@@ -73,6 +73,17 @@ namespace photo_editor::desktop {
     return preview_unsupported_stage_reason(
         QStringLiteral("Layers"), QStringLiteral("retouch_masks"));
   }
+  if (!pipeline_state.post_composite_retouch_masks.empty()) {
+    return preview_unsupported_stage_reason(
+        QStringLiteral("Layers"), QStringLiteral("component_post_composite_retouch"));
+  }
+  if (std::any_of(pipeline_state.photo_layers.cbegin(),
+                  pipeline_state.photo_layers.cend(), [](const auto& layer) {
+                    return !layer.component_retouch_masks.empty();
+                  })) {
+    return preview_unsupported_stage_reason(
+        QStringLiteral("Layers"), QStringLiteral("component_group_retouch"));
+  }
   if (!pipeline_state.local_masks.empty()) {
     return preview_unsupported_stage_reason(
         QStringLiteral("Layers"), QStringLiteral("legacy_local_masks"));
@@ -88,7 +99,8 @@ namespace photo_editor::desktop {
     const auto highlight_analysis =
         photo_editor::pipeline::analyze_highlight_reconstruction(
             pixels, static_cast<int>(pixels.size()), 1,
-            pipeline_state.input_transform);
+            pipeline_state.input_transform,
+            pipeline_state.color_pipeline.input_transform_recipe.highlight_headroom);
     if (highlight_analysis.has_clipping()) {
       return preview_unsupported_stage_reason(
           QStringLiteral("NormalizeRaw"),

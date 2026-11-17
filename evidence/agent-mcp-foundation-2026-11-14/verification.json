@@ -1,0 +1,56 @@
+{
+  "contract": "looksy-agent-mcp-foundation-verification-v1",
+  "host": {
+    "processor": "Apple M4 Pro",
+    "memoryGiB": 48
+  },
+  "nativeChecks": {
+    "passed": 6,
+    "total": 6,
+    "logSha256": "dca1c3e82312e097295fa0b6fb0318cffacb600b3ed0d6b34fec10601a5fc08f"
+  },
+  "adapterChecks": {
+    "passed": 6,
+    "total": 6
+  },
+  "benchmarkRunnerChecks": "passed",
+  "promptCompaction": {
+    "beforeTextBytes": 19907,
+    "afterTextBytes": 15253,
+    "beforeEstimatedContextTokens": 9073,
+    "afterEstimatedContextTokens": 7910,
+    "contextLimit": 8192,
+    "beforeOutcome": "planning_context_budget_exceeded",
+    "afterOutcome": "live image-grounded planner and critic responses, no fallback"
+  },
+  "screening": {
+    "sourceSha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56",
+    "condition": "five warm planning plus critique samples per model",
+    "baseline35bTotalMedianMs": 10476,
+    "candidate9bTotalMedianMs": 13072,
+    "candidateMedianChangePercent": 24.78,
+    "promotionGate": "candidate total median at least 20 percent lower, then unseen full creative workflows with no instruction/visual-quality regression",
+    "decision": "keep current default; candidate does not clear latency gate",
+    "creativeQualification": "not established; critic reviews input fixture, not a rendered application of the planned edit"
+  },
+  "sources": {
+    "apps/desktop/src/agent_local_model.cpp": "de832cb957c0c9118f53c44cbda3247fcf5390749267a8e325a1a7f51aa8ff0b",
+    "apps/desktop/src/agent_workmanship.h": "98c93a67e816db7f3298c2c4aeb96de9041e50e6f02c7d50aae99cd66983c756",
+    "apps/desktop/src/agent_creative_guidance.h": "b48134df9172109a3d35f5aee50a8d1f9e185540824eb488bae46ebedd4a5164",
+    "apps/desktop/src/photo_mcp_server.cpp": "a7fe44ce7a70081b82609b5960e423cea51d31a153b59d2979f59103f1b64b16",
+    "apps/desktop/src/agent_mcp_proof_content.h": "7d2ecd278ec6a31e894eb3b6c33ff6f61cc76643ab687ba744de9f1e7530c4ee",
+    "scripts/looksy-mcp.py": "b3e6d7bd511868134a0c8b3b723bba34f386fb56059893bd325960642744a115",
+    "tests/agent_local_model_test.cpp": "eca09d6d5d84283e4f43123d7d2f85a595cfd27d8d97dde0570533ed88e4c07d",
+    "scripts/perf/run-agent-live-tier-benchmark.py": "358552b4c7adb4fcefc8c2128e3402dc4a2f7d66c1d72f19432c397929cfd531",
+    "apps/desktop/resources/agent-models/models.json": "6dcd8cd07066c1727bed63efe6924be099cfccee5cb6f706c541ff9cc45c98ee"
+  },
+  "testBinarySha256": "001f495f866c36e943f5e55988e3007e89101746deb36443878a86101932b909",
+  "limits": [
+    "No real Claude/Codex GUI client workflow qualification",
+    "No full autonomous creative deliverable qualification",
+    "No model training or automatic default switch",
+    "Existing editor not restarted"
+  ],
+  "desktopBuild": "passed",
+  "bundledAdapterAndGuide": "exact source copies verified"
+}

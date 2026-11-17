@@ -21,7 +21,9 @@ StudioCollapsibleGroup {
         draftAssetId = catalogModel ? catalogModel.selectedAssetId : ""
         draft = catalogModel ? Object.assign({}, catalogModel.selectedMetadata) : ({})
         if (catalogModel && !draft.captureTime) {
-            const asset = catalogModel.assetById(draftAssetId)
+            // Capture time is metadata; selecting a photo must not project its
+            // potentially large raster-edit recipe on the UI thread.
+            const asset = catalogModel.galleryAssetAt(catalogModel.selectedIndex)
             if (asset.captureTimestamp) draft.captureTime = asset.captureTimestamp
         }
         editedFields = ({})

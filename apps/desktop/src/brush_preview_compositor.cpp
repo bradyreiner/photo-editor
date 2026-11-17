@@ -1,5 +1,7 @@
 #include "brush_preview_compositor.h"
 
+#include "photo_editor/pipeline/brush_edge_math.h"
+
 #include <QtMath>
 
 #include <algorithm>
@@ -61,21 +63,25 @@ class CpuBrushPreviewCompositor final : public BrushPreviewCompositor {
     const auto base_green = style.color.greenF();
     const auto base_blue = style.color.blueF();
     const auto style_opacity = clamp_unit(style.opacity);
-    const auto inner_scale = std::clamp(style.hardness, 0.0, 0.98);
+    const auto circular = style.circular;
+    const auto softness = std::clamp(style.feather, circular ? 0.0 : 0.05, 1.0);
+    const auto inner_scale = (1.0 - softness) *
+        (circular ? clamp_unit(style.hardness) : 1.0);
+    const auto min_extent = static_cast<double>(std::max(
+        1, std::min(image->width() - 1, image->height() - 1)));
 
     for (const auto& point : points) {
       const auto clamped_size = std::max(0.01, point.size);
       const auto clamped_flow = clamp_unit(point.flow) * clamp_unit(point.opacity);
+      const auto radius_pixels = clamped_size * min_extent;
       const auto center_x =
           clamp_unit(point.x) * static_cast<double>(std::max(image->width() - 1, 1));
       const auto center_y =
           clamp_unit(point.y) * static_cast<double>(std::max(image->height() - 1, 1));
-      const auto radius_x = std::max(
-          2,
-          static_cast<int>(std::ceil(clamped_size * static_cast<double>(std::max(image->width() - 1, 1)))));
-      const auto radius_y = std::max(
-          2,
-          static_cast<int>(std::ceil(clamped_size * static_cast<double>(std::max(image->height() - 1, 1)))));
+      const auto radius_x = std::max(2, static_cast<int>(std::ceil(circular ? radius_pixels :
+          clamped_size * static_cast<double>(std::max(image->width() - 1, 1)))));
+      const auto radius_y = std::max(2, static_cast<int>(std::ceil(circular ? radius_pixels :
+          clamped_size * static_cast<double>(std::max(image->height() - 1, 1)))));
       const auto min_x = std::max(0, static_cast<int>(std::floor(center_x)) - radius_x);
       const auto max_x = std::min(image->width() - 1, static_cast<int>(std::ceil(center_x)) + radius_x);
       const auto min_y = std::max(0, static_cast<int>(std::floor(center_y)) - radius_y);
@@ -88,32 +94,35 @@ class CpuBrushPreviewCompositor final : public BrushPreviewCompositor {
         for (int x = min_x; x <= max_x; ++x) {
           const auto pixel_x =
               image->width() > 1 ? static_cast<double>(x) / static_cast<double>(image->width() - 1) : 0.5;
-          const auto delta_x = pixel_x - point.x;
-          const auto delta_y = pixel_y - point.y;
-          const auto distance = std::sqrt(delta_x * delta_x + delta_y * delta_y) / clamped_size;
-          const auto weight = clamped_flow * (1.0 - smoothstep(inner_scale, 1.0, distance));
-          const auto src_alpha = clamp_unit(weight * style_opacity);
+          const auto delta_x = pixel_x - clamp_unit(point.x);
+          const auto delta_y = pixel_y - clamp_unit(point.y);
+          const auto distance = circular
+              ? std::hypot(delta_x * static_cast<double>(image->width() - 1),
+                           delta_y * static_cast<double>(image->height() - 1))
+              : std::sqrt(delta_x * delta_x + delta_y * delta_y) / clamped_size;
+          const auto tip_weight = circular
+              ? photo_editor::pipeline::circular_brush_coverage_pixels(
+                    distance, radius_pixels, inner_scale)
+              : 1.0 - smoothstep(inner_scale, 1.0, distance);
+          const auto weight = clamped_flow * tip_weight;
+          const auto src_alpha = clamp_unit(weight * style_opacity * style.color.alphaF());
           if (src_alpha <= 1e-6) {
             continue;
           }
 
-          const auto destination = QColor::fromRgba(scanline[x]);
-          const auto dst_alpha = destination.alphaF();
+          const auto destination = scanline[x];
+          const auto dst_alpha = static_cast<double>(qAlpha(destination)) / 255.0;
           const auto out_alpha = src_alpha + dst_alpha * (1.0 - src_alpha);
-          if (out_alpha <= 1e-6) {
-            continue;
-          }
-
-          const auto out_red =
-              (base_red * src_alpha + destination.redF() * dst_alpha * (1.0 - src_alpha)) / out_alpha;
-          const auto out_green =
-              (base_green * src_alpha + destination.greenF() * dst_alpha * (1.0 - src_alpha)) / out_alpha;
-          const auto out_blue =
-              (base_blue * src_alpha + destination.blueF() * dst_alpha * (1.0 - src_alpha)) / out_alpha;
+          const auto out_red = base_red * src_alpha +
+              static_cast<double>(qRed(destination)) / 255.0 * (1.0 - src_alpha);
+          const auto out_green = base_green * src_alpha +
+              static_cast<double>(qGreen(destination)) / 255.0 * (1.0 - src_alpha);
+          const auto out_blue = base_blue * src_alpha +
+              static_cast<double>(qBlue(destination)) / 255.0 * (1.0 - src_alpha);
           scanline[x] = qRgba(
-              qBound(0, qRound(out_red * 255.0), 255),
-              qBound(0, qRound(out_green * 255.0), 255),
-              qBound(0, qRound(out_blue * 255.0), 255),
+              qBound(0, qRound(std::min(out_red, out_alpha) * 255.0), 255),
+              qBound(0, qRound(std::min(out_green, out_alpha) * 255.0), 255),
+              qBound(0, qRound(std::min(out_blue, out_alpha) * 255.0), 255),
               qBound(0, qRound(out_alpha * 255.0), 255));
         }
       }
@@ -130,6 +139,10 @@ std::unique_ptr<BrushPreviewCompositor> BrushPreviewCompositor::create() {
     return metal;
   }
 #endif
+  return std::make_unique<CpuBrushPreviewCompositor>();
+}
+
+std::unique_ptr<BrushPreviewCompositor> BrushPreviewCompositor::createCpu() {
   return std::make_unique<CpuBrushPreviewCompositor>();
 }
 

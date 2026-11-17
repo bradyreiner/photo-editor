@@ -3,14 +3,18 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QHostAddress>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QTcpServer>
 #include <QTemporaryDir>
+#include <QUuid>
 
 #include "app_bootstrap.h"
 #include "observability.h"
@@ -26,10 +30,24 @@ int fail(const char* message) {
   return EXIT_FAILURE;
 }
 
+struct RemoveFileOnExit final {
+  QString path;
+  ~RemoveFileOnExit() { QFile::remove(path); }
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
+  if (app.arguments().size() == 3 &&
+      app.arguments().at(1) == QStringLiteral("--test-catalog-helper")) {
+    QFile marker(app.arguments().at(2));
+    if (!marker.open(QIODevice::WriteOnly) ||
+        marker.write("helper-ran", 10) != 10) {
+      return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+  }
   QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
   QCoreApplication::setApplicationName(QStringLiteral("AppBootstrapTest"));
 
@@ -440,6 +458,64 @@ int main(int argc, char** argv) {
           .value(QStringLiteral("workspaceVisible")).toBool()) {
     return fail("closing an editing surface should clear its latency-sensitive scheduling intent");
   }
+
+  photo_editor::desktop::WorkerQueueRegistry::publishWorkspaceIntent(
+      QStringLiteral("library"), true, false, false, true);
+  const auto transition_snapshot =
+      photo_editor::desktop::WorkerQueueRegistry::userIntentSnapshot();
+  const auto transition_proxy_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("proxy"), QStringLiteral("timeline"));
+  const auto transition_export_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("asset_export"), QStringLiteral("export"));
+  photo_editor::desktop::WorkerQueueRegistry::publishWorkspaceIntent(
+      QStringLiteral("library"), true, false, false, true);
+  if (!transition_snapshot.value(QStringLiteral("transitioning")).toBool() ||
+      !transition_snapshot.value(QStringLiteral("latencySensitive")).toBool() ||
+      !transition_proxy_decision.value(QStringLiteral("deferred")).toBool() ||
+      !transition_proxy_decision.value(QStringLiteral("reason")).toString().contains(
+          QStringLiteral("transition"), Qt::CaseInsensitive) ||
+      transition_export_decision.value(QStringLiteral("deferred")).toBool() ||
+      photo_editor::desktop::WorkerQueueRegistry::userIntentSnapshot()
+              .value(QStringLiteral("generation")).toLongLong() !=
+          transition_snapshot.value(QStringLiteral("generation")).toLongLong()) {
+    return fail("workspace transitions should defer background Timeline work without blocking final exports or repeatedly advancing unchanged intent generations");
+  }
+
+  photo_editor::desktop::WorkerQueueRegistry::publishWorkspaceIntent(
+      QStringLiteral("library"), true, false, true, false,
+      {QStringLiteral("asset-visible")}, QStringLiteral("asset-visible"));
+  const auto library_thumbnail_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("thumbnail"), QStringLiteral("library"),
+          QStringLiteral("asset-visible"));
+  const auto inactive_timeline_proxy_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("proxy"), QStringLiteral("timeline"),
+          QStringLiteral("clip-visible"), QStringLiteral("high"));
+  const auto inactive_timeline_render_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("timeline_render"), QStringLiteral("timeline"));
+  const auto autosave_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("autosave"), QStringLiteral("timeline"));
+  const auto recovery_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("recovery"), QStringLiteral("timeline"));
+  if (library_thumbnail_decision.value(QStringLiteral("deferred")).toBool() ||
+      library_thumbnail_decision.value(QStringLiteral("effectiveRank")).toInt() <= 180 ||
+      !inactive_timeline_proxy_decision.value(QStringLiteral("deferred")).toBool() ||
+      !inactive_timeline_proxy_decision.value(QStringLiteral("reason")).toString().contains(
+          QStringLiteral("Timeline is active"), Qt::CaseInsensitive) ||
+      inactive_timeline_render_decision.value(QStringLiteral("deferred")).toBool() ||
+      autosave_decision.value(QStringLiteral("deferred")).toBool() ||
+      recovery_decision.value(QStringLiteral("deferred")).toBool()) {
+    return fail("idle Library browsing should keep visible thumbnails foreground while inactive Timeline background work yields and explicit renders, autosaves, and recovery remain eligible");
+  }
+  photo_editor::desktop::WorkerQueueRegistry::clearUserIntent(
+      QStringLiteral("library"));
+
   QProcess bounded_background_process;
   photo_editor::desktop::WorkerQueueRegistry::configureBackgroundProcess(
       &bounded_background_process, QStringLiteral("proxy"));
@@ -525,6 +601,87 @@ int main(int argc, char** argv) {
     std::cerr << postgres_bootstrap_error.toStdString() << '\n';
     return fail("application bootstrap should honor PostgreSQL without creating a SQLite authority");
   }
+
+  const auto probe_helper_name = QStringLiteral("catalog_preflight_fixture_%1")
+                                     .arg(QUuid::createUuid().toString(QUuid::Id128));
+#ifdef Q_OS_WIN
+  const auto probe_executable_name = probe_helper_name + QStringLiteral(".exe");
+#else
+  const auto probe_executable_name = probe_helper_name;
+#endif
+  const auto probe_helper_path = QDir(QCoreApplication::applicationDirPath())
+                                     .filePath(probe_executable_name);
+  if (!QFile::copy(QCoreApplication::applicationFilePath(), probe_helper_path) ||
+      !QFile::setPermissions(
+          probe_helper_path,
+          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner |
+              QFileDevice::ReadUser | QFileDevice::ExeUser)) {
+    QFile::remove(probe_helper_path);
+    return fail("catalog preflight fixture helper should be executable");
+  }
+  const RemoveFileOnExit remove_probe_helper{probe_helper_path};
+
+  QTcpServer closed_endpoint_reservation;
+  if (!closed_endpoint_reservation.listen(QHostAddress::LocalHost, 0)) {
+    return fail("a local TCP port should be available for the refused-endpoint preflight test");
+  }
+  const auto closed_port = closed_endpoint_reservation.serverPort();
+  closed_endpoint_reservation.close();
+  qputenv(
+      "PHOTO_EDITOR_DATABASE_URL",
+      QStringLiteral("postgresql://fixture-user:fixture-secret@127.0.0.1:%1/fixture")
+          .arg(closed_port)
+          .toUtf8());
+  const auto refused_marker_path = QDir(runtime_root.path()).filePath(
+      QStringLiteral("refused-helper-ran"));
+  QElapsedTimer refused_preflight_timer;
+  refused_preflight_timer.start();
+  QString refused_output;
+  QString refused_error;
+  const auto refused_helper_result =
+      photo_editor::desktop::AppBootstrap::runCatalogHelper(
+          probe_helper_name,
+          {QStringLiteral("--test-catalog-helper"), refused_marker_path},
+          &refused_output,
+          &refused_error,
+          15000);
+  if (refused_helper_result ||
+      refused_preflight_timer.elapsed() >= 2000 ||
+      QFileInfo::exists(refused_marker_path) ||
+      !refused_error.contains(QStringLiteral("catalog.database.endpoint_refused")) ||
+      refused_error.contains(QStringLiteral("fixture-user")) ||
+      refused_error.contains(QStringLiteral("fixture-secret"))) {
+    return fail("a refused explicit loopback PostgreSQL endpoint should fail fast without exposing credentials or running the helper");
+  }
+
+  QTcpServer reachable_endpoint;
+  if (!reachable_endpoint.listen(QHostAddress::LocalHost, 0)) {
+    return fail("a local TCP listener should be available for the reachable-endpoint preflight test");
+  }
+  qputenv(
+      "PHOTO_EDITOR_DATABASE_URL",
+      QStringLiteral("postgresql://127.0.0.1:%1/fixture")
+          .arg(reachable_endpoint.serverPort())
+          .toUtf8());
+  const auto reachable_marker_path = QDir(runtime_root.path()).filePath(
+      QStringLiteral("reachable-helper-ran"));
+  QString reachable_output;
+  QString reachable_error;
+  if (!photo_editor::desktop::AppBootstrap::runCatalogHelper(
+          probe_helper_name,
+          {QStringLiteral("--test-catalog-helper"), reachable_marker_path},
+          &reachable_output,
+          &reachable_error,
+          15000)) {
+    std::cerr << reachable_error.toStdString() << '\n';
+    return fail("a reachable explicit loopback PostgreSQL endpoint should continue through the helper route");
+  }
+  QFile reachable_marker(reachable_marker_path);
+  if (!reachable_marker.open(QIODevice::ReadOnly) ||
+      reachable_marker.readAll() != QByteArrayLiteral("helper-ran")) {
+    return fail("the helper should run when the explicit loopback endpoint accepts connections");
+  }
+
   qunsetenv("PHOTO_EDITOR_DATABASE_URL");
   qunsetenv("PHOTO_EDITOR_CACHE_DIR");
   qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");

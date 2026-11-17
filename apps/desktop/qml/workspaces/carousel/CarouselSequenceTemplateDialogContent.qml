@@ -89,7 +89,8 @@ ColumnLayout {
                     Label {
                         text: String(fullSequenceBoardPreview.index + 1).padStart(2, "0")
                         color: fullSequenceBoardPreview.index % 4 === 1 ? "#b9c7ce" : "#5c554d"
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 10
                     }
                     Item { Layout.fillHeight: true }

@@ -4,9 +4,11 @@ Item {
     id: root
 
     property color fillColor: "transparent"
-    property color borderColor: theme.controlEdge
+    property string tone: "secondary"
+    property color borderColor: root.focused ? theme.focusRing : theme.controlEdge
     property color accentColor: theme.primaryAccent
-    property real borderWidth: 0
+    property bool focused: false
+    property real borderWidth: theme.commandBorderWidth(root.focused)
     property real cut: 0
     property real borderOpacity: 1
     property real accentOpacity: 0
@@ -18,6 +20,8 @@ Item {
     property bool selected: false
     property bool interactiveEnabled: true
     readonly property bool lit: interactiveEnabled && (hovered || selected)
+    readonly property string commandSurfaceStyleContract: "command-surface-style:v1|shallow|border:focus-or-high-contrast|hover:fill|selection:fill"
+    readonly property real commandScale: theme.interfaceScale
 
     Theme { id: theme }
 

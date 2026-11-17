@@ -16,6 +16,24 @@
 
 namespace photo_editor::desktop {
 
+inline QString import_worker_duplicate_policy(const QJsonObject& metadata) {
+  const auto policy = metadata.value(QStringLiteral("duplicatePolicy")).toString(QStringLiteral("skip"));
+  const auto replay = metadata.value(QStringLiteral("resumeCount")).toInt() > 0 ||
+                      metadata.value(QStringLiteral("retryCount")).toInt() > 0;
+  const auto paths = metadata.value(QStringLiteral("selectedPaths")).toArray();
+  const auto reviewed = metadata.value(QStringLiteral("importPreflight")).toObject();
+  // Reviewed manifests have already excluded pre-existing skipped files.
+  // A replay must catalog verified identical copies published before an
+  // interruption; changed destinations remain skipped, never overwritten.
+  if (replay && policy == QStringLiteral("skip") && !paths.isEmpty() &&
+      paths.size() == metadata.value(QStringLiteral("selectionCount")).toInt() &&
+      reviewed.value(QStringLiteral("ok")).toBool() &&
+      reviewed.value(QStringLiteral("eligiblePaths")).toArray() == paths &&
+      reviewed.value(QStringLiteral("importableCount")).toInt() == paths.size())
+    return QStringLiteral("reuse-identical");
+  return policy.isEmpty() ? QStringLiteral("skip") : policy;
+}
+
 enum class JobResourceLane { Exclusive, HeavyRender, LightIo };
 struct JobResourceClaim {
   JobResourceLane lane = JobResourceLane::Exclusive;

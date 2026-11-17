@@ -97,7 +97,7 @@ AppPopup {
             Layout.fillHeight: true
             clip: true
             contentWidth: availableWidth
-            TextArea {
+            ToneTextArea {
                 id: detailText
                 objectName: "agentFailureDetailsText"
                 text: root.detailsText
@@ -107,9 +107,10 @@ AppPopup {
                 wrapMode: TextEdit.Wrap
                 color: theme.textMain
                 selectionColor: theme.primaryAccent
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 12
-                background: null
+                inlineField: true
                 Accessible.name: "Full agent failure details"
             }
         }

@@ -1,6 +1,11 @@
 #include "timeline_audio_output.h"
+#include "timeline_pcm_audio_decoder.h"
+
+#include <QCoreApplication>
+#include <QDir>
 
 #include "timeline_audio_math.h"
+#include "timeline_audio_sink_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,6 +15,7 @@
 
 #include <QAudioSink>
 #include <QIODevice>
+#include <QMetaObject>
 #include <QStringList>
 #include <QtMath>
 
@@ -45,6 +51,18 @@ QString normalized_channel_mode(const QString& mode) {
   return kModes.contains(normalized) ? normalized : QStringLiteral("source");
 }
 
+double finite_value(double value, double fallback) {
+  return std::isfinite(value) ? value : fallback;
+}
+
+double bounded_finite_value(
+    double value,
+    double fallback,
+    double minimum,
+    double maximum) {
+  return qBound(minimum, finite_value(value, fallback), maximum);
+}
+
 template <typename Sample>
 double normalized_sample(Sample sample) {
   if constexpr (std::is_same_v<Sample, float>) {
@@ -59,7 +77,7 @@ double normalized_sample(Sample sample) {
 
 template <typename Sample>
 Sample encoded_sample(double sample) {
-  const auto bounded = qBound(-1.0, sample, 1.0);
+  const auto bounded = qBound(-1.0, finite_value(sample, 0.0), 1.0);
   if constexpr (std::is_same_v<Sample, float>) {
     return static_cast<float>(bounded);
   } else if constexpr (std::is_same_v<Sample, quint8>) {
@@ -121,6 +139,8 @@ void process_samples(
     auto left = normalized_sample(samples[index]);
     const auto right_index = channel_count > 1 ? index + 1 : index;
     auto right = normalized_sample(samples[right_index]);
+    if (!std::isfinite(left)) left = 0.0;
+    if (!std::isfinite(right)) right = 0.0;
     if (channel_mode == QStringLiteral("mono-left")) {
       right = left;
     } else if (channel_mode == QStringLiteral("mono-right")) {
@@ -135,35 +155,48 @@ void process_samples(
     if (invert_right_phase) {
       right = -right;
     }
+    const auto gained_left = left * left_gain;
+    const auto gained_right = right * right_gain;
+    if (!std::isfinite(gained_left) || !std::isfinite(gained_right)) {
+      *clipping = true;
+    }
+    left = finite_value(gained_left, 0.0);
+    right = finite_value(gained_right, 0.0);
     processor(&left, &right);
-    left *= left_gain;
-    right *= right_gain;
-    *peak_left = qMax(*peak_left, qAbs(left));
-    *peak_right = qMax(*peak_right, qAbs(right));
-    *true_peak_left = qMax(*true_peak_left, qAbs(left));
-    *true_peak_right = qMax(*true_peak_right, qAbs(right));
+    if (!std::isfinite(left) || !std::isfinite(right)) {
+      *clipping = true;
+    }
+    left = finite_value(left, 0.0);
+    right = finite_value(right, 0.0);
+    constexpr auto kMeterSampleLimit = 1.0e6;
+    const auto measured_left = qBound(-kMeterSampleLimit, left, kMeterSampleLimit);
+    const auto measured_right = qBound(-kMeterSampleLimit, right, kMeterSampleLimit);
+    *peak_left = qMax(*peak_left, qAbs(measured_left));
+    *peak_right = qMax(*peak_right, qAbs(measured_right));
+    *true_peak_left = qMax(*true_peak_left, qAbs(measured_left));
+    *true_peak_right = qMax(*true_peak_right, qAbs(measured_right));
     if (history_size < 4) {
-      left_history[history_size] = left;
-      right_history[history_size] = right;
+      left_history[history_size] = measured_left;
+      right_history[history_size] = measured_right;
       ++history_size;
     } else {
       std::move(left_history + 1, left_history + 4, left_history);
       std::move(right_history + 1, right_history + 4, right_history);
-      left_history[3] = left;
-      right_history[3] = right;
+      left_history[3] = measured_left;
+      right_history[3] = measured_right;
     }
     if (history_size == 4) {
       publish_true_peak_segment(left_history, true_peak_left);
       publish_true_peak_segment(right_history, true_peak_right);
     }
-    *square_sum_left += left * left;
-    *square_sum_right += right * right;
-    *cross_sum += left * right;
+    *square_sum_left += measured_left * measured_left;
+    *square_sum_right += measured_right * measured_right;
+    *cross_sum += measured_left * measured_right;
     if (phase_points != nullptr && phase_points->size() < 128 &&
         *frame_count % phase_stride == 0) {
       phase_points->push_back(QVariantMap{
-          {QStringLiteral("left"), qBound(-1.0, left, 1.0)},
-          {QStringLiteral("right"), qBound(-1.0, right, 1.0)},
+          {QStringLiteral("left"), qBound(-1.0, measured_left, 1.0)},
+          {QStringLiteral("right"), qBound(-1.0, measured_right, 1.0)},
       });
     }
     ++(*frame_count);
@@ -173,24 +206,172 @@ void process_samples(
       samples[right_index] = encoded_sample<Sample>(right);
     }
     for (auto channel = 2; channel < channel_count; ++channel) {
+      auto channel_sample = normalized_sample(samples[index + channel]);
+      if (!std::isfinite(channel_sample)) {
+        channel_sample = 0.0;
+      }
+      const auto channel_gain = qMin(left_gain, right_gain);
+      const auto processed_channel = channel_sample * channel_gain;
+      if (!std::isfinite(processed_channel) || qAbs(processed_channel) > 1.0) {
+        *clipping = true;
+      }
       samples[index + channel] = encoded_sample<Sample>(
-          normalized_sample(samples[index + channel]) * qMin(left_gain, right_gain));
+          processed_channel);
     }
   }
+}
+
+template <typename Sample>
+QByteArray stereo_mixdown(
+    const QByteArray& input,
+    const QAudioFormat& source_format,
+    const QString& channel_mode) {
+  const auto channel_count = source_format.channelCount();
+  const auto sample_count = input.size() / static_cast<qsizetype>(sizeof(Sample));
+  if (channel_count <= 0 || sample_count % channel_count != 0) {
+    return {};
+  }
+  const auto frame_count = sample_count / channel_count;
+  QByteArray output(frame_count * 2 * static_cast<qsizetype>(sizeof(float)), '\0');
+  const auto* source = reinterpret_cast<const Sample*>(input.constData());
+  auto* destination = reinterpret_cast<float*>(output.data());
+  const auto unknown_layout =
+      source_format.channelConfig() == QAudioFormat::ChannelConfigUnknown;
+
+  auto channel_at = [&source_format, channel_count, unknown_layout](
+                        QAudioFormat::AudioChannelPosition position) {
+    if (unknown_layout) {
+      return -1;
+    }
+    const auto offset = source_format.channelOffset(position);
+    return offset >= 0 && offset < channel_count ? offset : -1;
+  };
+  // Unknown layouts conservatively preserve only the first stereo pair. The
+  // caller assigns Qt's channel-count default where one exists; extras remain
+  // unmapped if the format still has no defensible channel positions.
+  const auto resolved_left = unknown_layout ? 0 : channel_at(QAudioFormat::FrontLeft);
+  const auto resolved_right = unknown_layout ? 1 : channel_at(QAudioFormat::FrontRight);
+  const auto left_channel = resolved_left >= 0 ? resolved_left : 0;
+  const auto right_channel = channel_count > 1
+                                 ? (resolved_right >= 0 ? resolved_right : 1)
+                                 : left_channel;
+
+  constexpr auto kMinusThreeDb = 0.7071067811865476;
+  struct Contribution final {
+    QAudioFormat::AudioChannelPosition position;
+    double left_gain;
+    double right_gain;
+  };
+  static constexpr Contribution kContributions[] = {
+      {QAudioFormat::FrontCenter, kMinusThreeDb, kMinusThreeDb},
+      {QAudioFormat::BackLeft, kMinusThreeDb, 0.0},
+      {QAudioFormat::SideLeft, kMinusThreeDb, 0.0},
+      {QAudioFormat::FrontLeftOfCenter, kMinusThreeDb, 0.0},
+      {QAudioFormat::TopFrontLeft, 0.5, 0.0},
+      {QAudioFormat::TopBackLeft, 0.5, 0.0},
+      {QAudioFormat::TopSideLeft, 0.5, 0.0},
+      {QAudioFormat::BottomFrontLeft, 0.5, 0.0},
+      {QAudioFormat::BackRight, 0.0, kMinusThreeDb},
+      {QAudioFormat::SideRight, 0.0, kMinusThreeDb},
+      {QAudioFormat::FrontRightOfCenter, 0.0, kMinusThreeDb},
+      {QAudioFormat::TopFrontRight, 0.0, 0.5},
+      {QAudioFormat::TopBackRight, 0.0, 0.5},
+      {QAudioFormat::TopSideRight, 0.0, 0.5},
+      {QAudioFormat::BottomFrontRight, 0.0, 0.5},
+      {QAudioFormat::BackCenter, 0.5, 0.5},
+      {QAudioFormat::TopCenter, 0.5, 0.5},
+      {QAudioFormat::TopFrontCenter, 0.5, 0.5},
+      {QAudioFormat::TopBackCenter, 0.5, 0.5},
+      {QAudioFormat::BottomFrontCenter, 0.5, 0.5},
+  };
+  const auto take_first_pair = channel_mode == QStringLiteral("stereo") ||
+                               channel_mode == QStringLiteral("dual-mono");
+  const auto take_mono_left = channel_mode == QStringLiteral("mono-left");
+  const auto take_mono_right = channel_mode == QStringLiteral("mono-right");
+
+  for (qsizetype frame = 0; frame < frame_count; ++frame) {
+    const auto sample = [source, frame, channel_count](int channel) {
+      auto value = normalized_sample(source[frame * channel_count + channel]);
+      return std::isfinite(value) ? value : 0.0;
+    };
+    auto left = 0.0;
+    auto right = 0.0;
+    if (channel_count == 1) {
+      left = right = sample(0);
+    } else if (take_mono_left) {
+      left = right = sample(left_channel);
+    } else if (take_mono_right) {
+      left = right = sample(right_channel);
+    } else if (take_first_pair) {
+      left = sample(left_channel);
+      right = sample(right_channel);
+    } else {
+      left = sample(left_channel);
+      right = sample(right_channel);
+      for (const auto& contribution : kContributions) {
+        const auto channel = channel_at(contribution.position);
+        if (channel < 0 || channel == left_channel || channel == right_channel) {
+          continue;
+        }
+        const auto value = sample(channel);
+        left += contribution.left_gain * value;
+        right += contribution.right_gain * value;
+      }
+      // LFE and LFE2 are intentionally omitted so bass effects do not
+      // overload stereo monitoring when no dedicated LFE output exists.
+    }
+    constexpr auto kFloatMaximum =
+        static_cast<double>(std::numeric_limits<float>::max());
+    destination[frame * 2] = static_cast<float>(qBound(
+        -kFloatMaximum, finite_value(left, 0.0), kFloatMaximum));
+    destination[frame * 2 + 1] = static_cast<float>(qBound(
+        -kFloatMaximum, finite_value(right, 0.0), kFloatMaximum));
+  }
+  return output;
 }
 
 }  // namespace
 
 TimelineAudioOutput::TimelineAudioOutput(QObject* parent)
     : QObject(parent),
-      buffer_output_(preferred_audio_format()),
+      buffer_output_(),
       native_audio_enabled_(!qEnvironmentVariableIsSet(
           "PHOTO_EDITOR_TIMELINE_PLAYBACK_HEADLESS")) {
-  connect(
+  buffer_output_connection_ = connect(
       &buffer_output_,
       &QAudioBufferOutput::audioBufferReceived,
       this,
-      [this](const QAudioBuffer& buffer) { processBuffer(buffer); });
+      [this](const QAudioBuffer& buffer) {
+        if (pcm_decoder_ != nullptr) return;
+        const auto callback_generation =
+            output_generation_.load(std::memory_order_acquire);
+        QMetaObject::invokeMethod(
+            this,
+            [this, buffer, callback_generation]() {
+              processBuffer(buffer, callback_generation);
+            },
+            Qt::QueuedConnection);
+      },
+      Qt::DirectConnection);
+#ifdef Q_OS_MACOS
+  if (native_audio_enabled_) {
+    const auto backend = qEnvironmentVariable("QT_MEDIA_BACKEND");
+    auto ffmpeg_plugin_available = false;
+    for (const auto& path : QCoreApplication::libraryPaths()) {
+      if (!QDir(path + QStringLiteral("/multimedia"))
+               .entryList({QStringLiteral("*ffmpeg*")}, QDir::Files).isEmpty()) {
+        ffmpeg_plugin_available = true;
+        break;
+      }
+    }
+    if (backend == QStringLiteral("darwin") || !ffmpeg_plugin_available) {
+      pcm_decoder_ = std::make_unique<TimelinePcmAudioDecoder>(
+          [this](const QAudioBuffer& buffer) {
+            processBuffer(buffer, output_generation_.load(std::memory_order_acquire));
+          });
+    }
+  }
+#endif
   if (native_audio_enabled_) {
     connect(
         &media_devices_,
@@ -248,6 +429,8 @@ TimelineAudioOutput::TimelineAudioOutput(QObject* parent)
 }
 
 TimelineAudioOutput::~TimelineAudioOutput() {
+  output_generation_.fetch_add(1U, std::memory_order_acq_rel);
+  QObject::disconnect(buffer_output_connection_);
   if (sink_ != nullptr) {
     sink_->stop();
   }
@@ -267,12 +450,24 @@ bool TimelineAudioOutput::invertRightPhase() const { return invert_right_phase_;
 double TimelineAudioOutput::eqLowDb() const { return eq_low_db_; }
 double TimelineAudioOutput::eqMidDb() const { return eq_mid_db_; }
 double TimelineAudioOutput::eqHighDb() const { return eq_high_db_; }
+bool TimelineAudioOutput::equalizerEnabled() const { return equalizer_enabled_; }
 bool TimelineAudioOutput::compressorEnabled() const { return compressor_enabled_; }
 double TimelineAudioOutput::compressorThresholdDb() const {
   return compressor_threshold_db_;
 }
 double TimelineAudioOutput::compressorRatio() const { return compressor_ratio_; }
 double TimelineAudioOutput::compressorMakeupDb() const { return compressor_makeup_db_; }
+bool TimelineAudioOutput::limiterEnabled() const { return limiter_enabled_; }
+double TimelineAudioOutput::limiterCeilingDb() const { return limiter_ceiling_db_; }
+bool TimelineAudioOutput::gateEnabled() const { return gate_enabled_; }
+double TimelineAudioOutput::gateThresholdDb() const { return gate_threshold_db_; }
+bool TimelineAudioOutput::deEsserEnabled() const { return deesser_enabled_; }
+double TimelineAudioOutput::deEsserAmount() const { return deesser_amount_; }
+bool TimelineAudioOutput::highPassEnabled() const { return high_pass_enabled_; }
+double TimelineAudioOutput::highPassHz() const { return high_pass_hz_; }
+bool TimelineAudioOutput::lowPassEnabled() const { return low_pass_enabled_; }
+double TimelineAudioOutput::lowPassHz() const { return low_pass_hz_; }
+bool TimelineAudioOutput::processingEnabled() const { return processing_enabled_; }
 bool TimelineAudioOutput::dialogueCleanupEnabled() const {
   return dialogue_cleanup_enabled_;
 }
@@ -301,7 +496,8 @@ double TimelineAudioOutput::phaseCorrelation() const { return phase_correlation_
 QVariantList TimelineAudioOutput::phasePoints() const { return phase_points_; }
 
 void TimelineAudioOutput::setVolume(double volume) {
-  const auto bounded = qBound(0.0, volume, 4.0);
+  // Clip and track gain can add +48 dB; matched bypass may add another +12 dB.
+  const auto bounded = bounded_finite_value(volume, volume_, 0.0, 4096.0);
   if (qAbs(volume_ - bounded) <= 0.0001) {
     return;
   }
@@ -310,7 +506,7 @@ void TimelineAudioOutput::setVolume(double volume) {
 }
 
 void TimelineAudioOutput::setPan(double pan) {
-  const auto bounded = qBound(-1.0, pan, 1.0);
+  const auto bounded = bounded_finite_value(pan, pan_, -1.0, 1.0);
   if (qAbs(pan_ - bounded) <= 0.0001) {
     return;
   }
@@ -364,25 +560,29 @@ void TimelineAudioOutput::setInvertRightPhase(bool enabled) {
 }
 
 void TimelineAudioOutput::setEqLowDb(double value) {
-  const auto bounded = qBound(-12.0, value, 12.0);
+  const auto bounded = bounded_finite_value(value, eq_low_db_, -12.0, 12.0);
   if (qAbs(eq_low_db_ - bounded) <= 0.0001) return;
   eq_low_db_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setEqMidDb(double value) {
-  const auto bounded = qBound(-12.0, value, 12.0);
+  const auto bounded = bounded_finite_value(value, eq_mid_db_, -12.0, 12.0);
   if (qAbs(eq_mid_db_ - bounded) <= 0.0001) return;
   eq_mid_db_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setEqHighDb(double value) {
-  const auto bounded = qBound(-12.0, value, 12.0);
+  const auto bounded = bounded_finite_value(value, eq_high_db_, -12.0, 12.0);
   if (qAbs(eq_high_db_ - bounded) <= 0.0001) return;
   eq_high_db_ = bounded;
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setEqualizerEnabled(bool enabled) {
+  if (equalizer_enabled_ == enabled) return;
+  equalizer_enabled_ = enabled;
   resetProcessingState();
   emit processingChanged();
 }
@@ -395,23 +595,100 @@ void TimelineAudioOutput::setCompressorEnabled(bool enabled) {
 }
 
 void TimelineAudioOutput::setCompressorThresholdDb(double value) {
-  const auto bounded = qBound(-48.0, value, -1.0);
+  const auto bounded = bounded_finite_value(value, compressor_threshold_db_, -48.0, -1.0);
   if (qAbs(compressor_threshold_db_ - bounded) <= 0.0001) return;
   compressor_threshold_db_ = bounded;
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setCompressorRatio(double value) {
-  const auto bounded = qBound(1.0, value, 20.0);
+  const auto bounded = bounded_finite_value(value, compressor_ratio_, 1.0, 20.0);
   if (qAbs(compressor_ratio_ - bounded) <= 0.0001) return;
   compressor_ratio_ = bounded;
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setCompressorMakeupDb(double value) {
-  const auto bounded = qBound(0.0, value, 18.0);
+  const auto bounded = bounded_finite_value(value, compressor_makeup_db_, 0.0, 18.0);
   if (qAbs(compressor_makeup_db_ - bounded) <= 0.0001) return;
   compressor_makeup_db_ = bounded;
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setLimiterEnabled(bool enabled) {
+  if (limiter_enabled_ == enabled) return;
+  limiter_enabled_ = enabled;
+  resetProcessingState();
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setLimiterCeilingDb(double value) {
+  const auto bounded = bounded_finite_value(value, limiter_ceiling_db_, -12.0, 0.0);
+  if (qAbs(limiter_ceiling_db_ - bounded) <= 0.0001) return;
+  limiter_ceiling_db_ = bounded;
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setGateEnabled(bool enabled) {
+  if (gate_enabled_ == enabled) return;
+  gate_enabled_ = enabled;
+  resetProcessingState();
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setGateThresholdDb(double value) {
+  const auto bounded = bounded_finite_value(value, gate_threshold_db_, -80.0, -10.0);
+  if (qAbs(gate_threshold_db_ - bounded) <= 0.0001) return;
+  gate_threshold_db_ = bounded;
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setDeEsserEnabled(bool enabled) {
+  if (deesser_enabled_ == enabled) return;
+  deesser_enabled_ = enabled;
+  resetProcessingState();
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setDeEsserAmount(double value) {
+  const auto bounded = bounded_finite_value(value, deesser_amount_, 0.0, 1.0);
+  if (qAbs(deesser_amount_ - bounded) <= 0.0001) return;
+  deesser_amount_ = bounded;
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setHighPassEnabled(bool enabled) {
+  if (high_pass_enabled_ == enabled) return;
+  high_pass_enabled_ = enabled;
+  resetProcessingState();
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setHighPassHz(double value) {
+  const auto bounded = bounded_finite_value(value, high_pass_hz_, 20.0, 1000.0);
+  if (qAbs(high_pass_hz_ - bounded) <= 0.0001) return;
+  high_pass_hz_ = bounded;
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setLowPassEnabled(bool enabled) {
+  if (low_pass_enabled_ == enabled) return;
+  low_pass_enabled_ = enabled;
+  resetProcessingState();
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setLowPassHz(double value) {
+  const auto bounded = bounded_finite_value(value, low_pass_hz_, 1000.0, 20000.0);
+  if (qAbs(low_pass_hz_ - bounded) <= 0.0001) return;
+  low_pass_hz_ = bounded;
+  emit processingChanged();
+}
+
+void TimelineAudioOutput::setProcessingEnabled(bool enabled) {
+  if (processing_enabled_ == enabled) return;
+  processing_enabled_ = enabled;
+  resetProcessingState();
   emit processingChanged();
 }
 
@@ -423,63 +700,56 @@ void TimelineAudioOutput::setDialogueCleanupEnabled(bool enabled) {
 }
 
 void TimelineAudioOutput::setVoiceIsolationAmount(double value) {
-  const auto bounded = qBound(0.0, value, 1.0);
+  const auto bounded = bounded_finite_value(value, voice_isolation_amount_, 0.0, 1.0);
   if (qAbs(voice_isolation_amount_ - bounded) <= 0.0001) return;
   voice_isolation_amount_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setNoiseReductionAmount(double value) {
-  const auto bounded = qBound(0.0, value, 1.0);
+  const auto bounded = bounded_finite_value(value, noise_reduction_amount_, 0.0, 1.0);
   if (qAbs(noise_reduction_amount_ - bounded) <= 0.0001) return;
   noise_reduction_amount_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setDereverbAmount(double value) {
-  const auto bounded = qBound(0.0, value, 1.0);
+  const auto bounded = bounded_finite_value(value, dereverb_amount_, 0.0, 1.0);
   if (qAbs(dereverb_amount_ - bounded) <= 0.0001) return;
   dereverb_amount_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setHumRemovalAmount(double value) {
-  const auto bounded = qBound(0.0, value, 1.0);
+  const auto bounded = bounded_finite_value(value, hum_removal_amount_, 0.0, 1.0);
   if (qAbs(hum_removal_amount_ - bounded) <= 0.0001) return;
   hum_removal_amount_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setHumFrequencyHz(int value) {
-  const auto normalized = qAbs(value - 50) <= qAbs(value - 60) ? 50 : 60;
+  const auto normalized = value <= 55 ? 50 : 60;
   if (hum_frequency_hz_ == normalized) return;
   hum_frequency_hz_ = normalized;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setArtifactSmoothing(double value) {
-  const auto bounded = qBound(0.0, value, 1.0);
+  const auto bounded = bounded_finite_value(value, artifact_smoothing_, 0.0, 1.0);
   if (qAbs(artifact_smoothing_ - bounded) <= 0.0001) return;
   artifact_smoothing_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setAmbiencePreservation(double value) {
-  const auto bounded = qBound(0.0, value, 1.0);
+  const auto bounded = bounded_finite_value(value, ambience_preservation_, 0.0, 1.0);
   if (qAbs(ambience_preservation_ - bounded) <= 0.0001) return;
   ambience_preservation_ = bounded;
-  resetProcessingState();
   emit processingChanged();
 }
 
 void TimelineAudioOutput::setDuckingGainDb(double value) {
-  const auto bounded = qBound(-30.0, value, 0.0);
+  const auto bounded = bounded_finite_value(value, ducking_gain_db_, -30.0, 0.0);
   if (qAbs(ducking_gain_db_ - bounded) <= 0.0001) return;
   ducking_gain_db_ = bounded;
   emit processingChanged();
@@ -496,7 +766,18 @@ void TimelineAudioOutput::resetProcessingState() {
       band = {};
     }
   }
+  for (auto channel = 0; channel < 2; ++channel) {
+    high_pass_state_[channel] = {};
+    low_pass_state_[channel] = {};
+    deesser_crossover_state_[channel] = {};
+    deesser_detector_state_[channel] = {};
+  }
   compressor_envelope_ = 0.0;
+  gate_envelope_ = 0.0;
+  gate_gain_ = 1.0;
+  deesser_envelope_ = 0.0;
+  limiter_gain_[0] = 1.0;
+  limiter_gain_[1] = 1.0;
   cleanup_fast_envelope_ = 0.0;
   cleanup_slow_envelope_ = 0.0;
   cleanup_gain_ = 1.0;
@@ -508,7 +789,30 @@ QVector<double> TimelineAudioOutput::channelGains() const {
 }
 
 QVector<float> TimelineAudioOutput::processStereoSamplesForTesting(
-    const QVector<float>& interleaved_samples) {
+    const QVector<float>& interleaved_samples,
+    int sample_rate) {
+  return processInterleavedSamplesForTesting(interleaved_samples, 2, sample_rate);
+}
+
+QVector<float> TimelineAudioOutput::processInterleavedSamplesForTesting(
+    const QVector<float>& interleaved_samples,
+    int channel_count,
+    int sample_rate) {
+  const auto layout = channel_count == 2
+                          ? QAudioFormat::ChannelConfigStereo
+                          : QAudioFormat::defaultChannelConfigForChannelCount(channel_count);
+  return processInterleavedSamplesWithConfigForTesting(
+      interleaved_samples, channel_count, layout, sample_rate);
+}
+
+QVector<float> TimelineAudioOutput::processInterleavedSamplesWithConfigForTesting(
+    const QVector<float>& interleaved_samples,
+    int channel_count,
+    QAudioFormat::ChannelConfig channel_config,
+    int sample_rate) {
+  if (channel_count <= 0 || interleaved_samples.size() % channel_count != 0) {
+    return {};
+  }
   auto bytes = QByteArray(
       reinterpret_cast<const char*>(interleaved_samples.constData()),
       interleaved_samples.size() * static_cast<qsizetype>(sizeof(float)));
@@ -521,15 +825,19 @@ QVector<float> TimelineAudioOutput::processStereoSamplesForTesting(
   auto phase_correlation = 0.0;
   QVariantList phase_points;
   auto clipped = false;
-  const QAudioFormat format = preferred_audio_format();
+  auto format = preferred_audio_format();
+  format.setSampleRate(qBound(8000, sample_rate, 192000));
+  format.setChannelCount(channel_count);
+  format.setChannelConfig(channel_config);
   QAudioBuffer buffer(bytes, format, -1);
+  auto output_format = format;
   bytes = processAudioBytes(
-      buffer, &left, &right, &true_peak_left, &true_peak_right,
+      buffer, &output_format, &left, &right, &true_peak_left, &true_peak_right,
       &rms_left, &rms_right, &phase_correlation, &phase_points, &clipped);
   publishMeters(
       left, right, true_peak_left, true_peak_right, rms_left, rms_right,
       phase_correlation, phase_points, clipped);
-  QVector<float> processed(interleaved_samples.size());
+  QVector<float> processed(bytes.size() / static_cast<qsizetype>(sizeof(float)));
   std::copy_n(
       reinterpret_cast<const float*>(bytes.constData()),
       processed.size(),
@@ -552,8 +860,61 @@ void TimelineAudioOutput::resetMeters() {
   emit meterChanged();
 }
 
-void TimelineAudioOutput::processBuffer(const QAudioBuffer& buffer) {
-  if (!buffer.isValid() || buffer.byteCount() <= 0) {
+void TimelineAudioOutput::resetForDiscontinuity() {
+  if (pcm_decoder_ != nullptr) pcm_decoder_->stop();
+  decoded_playing_ = false;
+  output_generation_.fetch_add(1U, std::memory_order_acq_rel);
+  resetProcessingState();
+  pending_audio_.clear();
+  if (sink_ != nullptr) {
+    sink_->reset();
+    sink_device_.clear();
+  }
+}
+
+void TimelineAudioOutput::setOutputSuspended(bool suspended) {
+  if (output_suspended_ == suspended) {
+    return;
+  }
+  output_suspended_ = suspended;
+  resetForDiscontinuity();
+  if (suspended) resetMeters();
+}
+
+bool TimelineAudioOutput::outputSuspended() const {
+  return output_suspended_;
+}
+
+void TimelineAudioOutput::synchronizeDecodedAudio(
+    const QString& source_url, qint64 source_position_ms, double playback_rate,
+    int channels, bool playing) {
+  if (pcm_decoder_ == nullptr) return;
+  playing = playing && !output_suspended_;
+  if (!playing && decoded_playing_) {
+    resetForDiscontinuity();
+    resetMeters();
+  }
+  decoded_playing_ = playing;
+  pcm_decoder_->synchronize(source_url, source_position_ms, playback_rate,
+                            channels, playing);
+}
+
+QVariantMap TimelineAudioOutput::decoderDiagnostics() const {
+  return {{QStringLiteral("pcmFallbackEnabled"), pcm_decoder_ != nullptr},
+          {QStringLiteral("pcmFallbackActive"), pcm_decoder_ != nullptr && pcm_decoder_->active()},
+          {QStringLiteral("pcmFallbackDecodedBufferCount"),
+           static_cast<qulonglong>(pcm_decoder_ != nullptr ? pcm_decoder_->deliveredBufferCount() : 0)},
+          {QStringLiteral("sinkWrittenBytes"), static_cast<qulonglong>(sink_written_bytes_)},
+          {QStringLiteral("sinkError"), sink_ != nullptr ? static_cast<int>(sink_->error()) : 0},
+          {QStringLiteral("pcmFallbackError"), pcm_decoder_ != nullptr ? pcm_decoder_->error() : QString{}}};
+}
+
+void TimelineAudioOutput::processBuffer(
+    const QAudioBuffer& buffer,
+    quint64 callback_generation) {
+  if (callback_generation !=
+          output_generation_.load(std::memory_order_acquire) ||
+      output_suspended_ || !buffer.isValid() || buffer.byteCount() <= 0) {
     return;
   }
   auto left = 0.0;
@@ -565,8 +926,9 @@ void TimelineAudioOutput::processBuffer(const QAudioBuffer& buffer) {
   auto phase_correlation = 0.0;
   QVariantList phase_points;
   auto clipped = false;
+  auto output_format = buffer.format();
   auto bytes = processAudioBytes(
-      buffer, &left, &right, &true_peak_left, &true_peak_right,
+      buffer, &output_format, &left, &right, &true_peak_left, &true_peak_right,
       &rms_left, &rms_right, &phase_correlation, &phase_points, &clipped);
   publishMeters(
       left, right, true_peak_left, true_peak_right, rms_left, rms_right,
@@ -574,13 +936,12 @@ void TimelineAudioOutput::processBuffer(const QAudioBuffer& buffer) {
   if (!native_audio_enabled_ || bytes.isEmpty()) {
     return;
   }
-  ensureSink(buffer.format());
-  pending_audio_.append(bytes);
-  const auto maximum_pending = qMax<qsizetype>(
-      buffer.format().bytesForDuration(kMaximumPendingDurationUs), buffer.byteCount() * 2);
-  if (pending_audio_.size() > maximum_pending) {
-    pending_audio_.remove(0, pending_audio_.size() - maximum_pending);
-  }
+  ensureSink(output_format);
+  const auto maximum_pending_frames = static_cast<qsizetype>(
+      qMax<qint64>(1, output_format.framesForDuration(kMaximumPendingDurationUs)));
+  appendBoundedAudioFrames(
+      &pending_audio_, bytes, maximum_pending_frames,
+      static_cast<qsizetype>(output_format.bytesPerFrame()));
   drainPendingAudio();
   if (!pending_audio_.isEmpty() && !drain_timer_.isActive()) {
     drain_timer_.start();
@@ -603,7 +964,7 @@ void TimelineAudioOutput::ensureSink(const QAudioFormat& format) {
 }
 
 void TimelineAudioOutput::drainPendingAudio() {
-  if (sink_ != nullptr && sink_->error() != QAudio::NoError) {
+  if (sink_ != nullptr && audioSinkErrorNeedsRecovery(sink_->error())) {
     const auto detail = QStringLiteral("The active audio output became unavailable.");
     recoverOutputDevice();
     emit outputDeviceRecoveryRequested(detail);
@@ -615,12 +976,18 @@ void TimelineAudioOutput::drainPendingAudio() {
     }
     return;
   }
-  const auto writable = qMin<qsizetype>(sink_->bytesFree(), pending_audio_.size());
+  const auto bytes_per_frame = static_cast<qsizetype>(sink_format_.bytesPerFrame());
+  if (bytes_per_frame <= 0) {
+    return;
+  }
+  const auto available = qMin<qsizetype>(sink_->bytesFree(), pending_audio_.size());
+  const auto writable = available - available % bytes_per_frame;
   if (writable <= 0) {
     return;
   }
   const auto written = sink_device_->write(pending_audio_.constData(), writable);
   if (written > 0) {
+    sink_written_bytes_ += static_cast<quint64>(written);
     pending_audio_.remove(0, written);
   }
   if (pending_audio_.isEmpty()) {
@@ -672,6 +1039,7 @@ void TimelineAudioOutput::publishMeters(
 
 QByteArray TimelineAudioOutput::processAudioBytes(
     const QAudioBuffer& buffer,
+    QAudioFormat* output_format,
     double* peak_left,
     double* peak_right,
     double* true_peak_left,
@@ -683,9 +1051,53 @@ QByteArray TimelineAudioOutput::processAudioBytes(
     bool* clipping) {
   auto bytes = QByteArray(
       buffer.constData<char>(), buffer.byteCount());
-  const auto channel_count = qMax(1, buffer.format().channelCount());
+  auto processing_format = buffer.format();
+  const auto source_channel_count = qMax(1, processing_format.channelCount());
+  if (source_channel_count != 2) {
+    if (processing_format.channelConfig() == QAudioFormat::ChannelConfigUnknown) {
+      auto default_layout =
+          QAudioFormat::defaultChannelConfigForChannelCount(source_channel_count);
+      if (default_layout == QAudioFormat::ChannelConfigUnknown && source_channel_count == 8) {
+        default_layout = QAudioFormat::ChannelConfigSurround7Dot1;
+      }
+      if (default_layout != QAudioFormat::ChannelConfigUnknown) {
+        processing_format.setChannelConfig(default_layout);
+      }
+    }
+    switch (processing_format.sampleFormat()) {
+      case QAudioFormat::UInt8:
+        bytes = stereo_mixdown<quint8>(bytes, processing_format, channel_mode_);
+        break;
+      case QAudioFormat::Int16:
+        bytes = stereo_mixdown<qint16>(bytes, processing_format, channel_mode_);
+        break;
+      case QAudioFormat::Int32:
+        bytes = stereo_mixdown<qint32>(bytes, processing_format, channel_mode_);
+        break;
+      case QAudioFormat::Float:
+        bytes = stereo_mixdown<float>(bytes, processing_format, channel_mode_);
+        break;
+      case QAudioFormat::Unknown:
+      case QAudioFormat::NSampleFormats:
+        bytes.clear();
+        break;
+    }
+    processing_format.setChannelCount(2);
+    processing_format.setChannelConfig(QAudioFormat::ChannelConfigStereo);
+    // Mix into float so a hot surround sum retains headroom for track gain,
+    // EQ, dynamics and the explicit final device-output saturation.
+    processing_format.setSampleFormat(QAudioFormat::Float);
+  }
+  if (output_format != nullptr) {
+    *output_format = processing_format;
+  }
+  const auto channel_count = qMax(1, processing_format.channelCount());
   const auto gains = channelGains();
-  const auto sample_rate = qMax(8000, buffer.format().sampleRate());
+  const auto sample_rate = qMax(8000, processing_format.sampleRate());
+  if (processing_sample_rate_ != sample_rate) {
+    resetProcessingState();
+    processing_sample_rate_ = sample_rate;
+  }
   auto square_sum_left = 0.0;
   auto square_sum_right = 0.0;
   auto cross_sum = 0.0;
@@ -735,18 +1147,76 @@ QByteArray TimelineAudioOutput::processAudioBytes(
       notch_coefficients(static_cast<double>(hum_frequency_hz_), 18.0),
       notch_coefficients(static_cast<double>(hum_frequency_hz_ * 2), 22.0),
   };
+  const auto low_pass_coefficients = [sample_rate](double frequency) {
+    const auto cutoff = qBound(10.0, frequency, static_cast<double>(sample_rate) * 0.45);
+    const auto omega = 2.0 * std::numbers::pi * cutoff /
+                       static_cast<double>(sample_rate);
+    constexpr auto q = 0.7071067811865476;
+    const auto alpha = qSin(omega) / (2.0 * q);
+    const auto cosine = qCos(omega);
+    const auto a0 = 1.0 + alpha;
+    return Coefficients{
+        ((1.0 - cosine) * 0.5) / a0,
+        (1.0 - cosine) / a0,
+        ((1.0 - cosine) * 0.5) / a0,
+        (-2.0 * cosine) / a0,
+        (1.0 - alpha) / a0,
+    };
+  };
+  const auto high_pass_coefficients = [sample_rate](double frequency) {
+    const auto cutoff = qBound(10.0, frequency, static_cast<double>(sample_rate) * 0.45);
+    const auto omega = 2.0 * std::numbers::pi * cutoff /
+                       static_cast<double>(sample_rate);
+    constexpr auto q = 0.7071067811865476;
+    const auto alpha = qSin(omega) / (2.0 * q);
+    const auto cosine = qCos(omega);
+    const auto a0 = 1.0 + alpha;
+    return Coefficients{
+        ((1.0 + cosine) * 0.5) / a0,
+        (-(1.0 + cosine)) / a0,
+        ((1.0 + cosine) * 0.5) / a0,
+        (-2.0 * cosine) / a0,
+        (1.0 - alpha) / a0,
+    };
+  };
+  const auto band_pass_coefficients = [sample_rate](double frequency, double q) {
+    const auto cutoff = qBound(10.0, frequency, static_cast<double>(sample_rate) * 0.45);
+    const auto omega = 2.0 * std::numbers::pi * cutoff /
+                       static_cast<double>(sample_rate);
+    const auto alpha = qSin(omega) / (2.0 * q);
+    const auto cosine = qCos(omega);
+    const auto a0 = 1.0 + alpha;
+    return Coefficients{
+        alpha / a0,
+        0.0,
+        -alpha / a0,
+        (-2.0 * cosine) / a0,
+        (1.0 - alpha) / a0,
+    };
+  };
+  const auto high_pass_values = high_pass_coefficients(high_pass_hz_);
+  const auto low_pass_values = low_pass_coefficients(low_pass_hz_);
+  const auto deesser_crossover_values = low_pass_coefficients(3800.0);
+  const auto deesser_detector_values = band_pass_coefficients(6500.0, 0.9);
   const auto apply_biquad = [](double sample, const Coefficients& values, BiquadState* state) {
     const auto output = values.b0 * sample + values.b1 * state->x1 +
                         values.b2 * state->x2 - values.a1 * state->y1 -
                         values.a2 * state->y2;
+    const auto finite_output = std::isfinite(output) ? output : 0.0;
     state->x2 = state->x1;
     state->x1 = sample;
     state->y2 = state->y1;
-    state->y1 = output;
-    return std::isfinite(output) ? output : 0.0;
+    state->y1 = finite_output;
+    return finite_output;
   };
   const auto attack = qExp(-1.0 / (0.020 * static_cast<double>(sample_rate)));
   const auto release = qExp(-1.0 / (0.250 * static_cast<double>(sample_rate)));
+  const auto gate_attack = qExp(-1.0 / (0.010 * static_cast<double>(sample_rate)));
+  const auto gate_release = qExp(-1.0 / (0.250 * static_cast<double>(sample_rate)));
+  const auto deesser_attack = qExp(-1.0 / (0.005 * static_cast<double>(sample_rate)));
+  const auto deesser_release = qExp(-1.0 / (0.050 * static_cast<double>(sample_rate)));
+  const auto limiter_attack = qExp(-1.0 / (0.005 * static_cast<double>(sample_rate)));
+  const auto limiter_release = qExp(-1.0 / (0.050 * static_cast<double>(sample_rate)));
   const auto cleanup_fast_attack =
       qExp(-1.0 / (0.004 * static_cast<double>(sample_rate)));
   const auto cleanup_fast_release =
@@ -756,13 +1226,17 @@ QByteArray TimelineAudioOutput::processAudioBytes(
   const auto cleanup_gain_smoothing = qExp(
       -1.0 /
       ((0.003 + 0.080 * artifact_smoothing_) * static_cast<double>(sample_rate)));
-  const auto processor = [this, &coefficients, &hum_coefficients, &apply_biquad,
-                          attack, release, cleanup_fast_attack,
+  const auto processor = [this, &coefficients, &hum_coefficients,
+                          &high_pass_values, &low_pass_values,
+                          &deesser_crossover_values, &deesser_detector_values,
+                          &apply_biquad, attack, release, gate_attack,
+                          gate_release, deesser_attack, deesser_release,
+                          limiter_attack, limiter_release, cleanup_fast_attack,
                           cleanup_fast_release, cleanup_slow,
                           cleanup_gain_smoothing](
                              double* left,
                              double* right) {
-    if (dialogue_cleanup_enabled_) {
+    if (processing_enabled_ && dialogue_cleanup_enabled_) {
       const auto preservation_scale = 1.0 - 0.65 * ambience_preservation_;
       const auto hum_mix = hum_removal_amount_ * preservation_scale;
       if (hum_mix > 0.0001) {
@@ -814,12 +1288,65 @@ QByteArray TimelineAudioOutput::processAudioBytes(
       *right *= cleanup_gain_;
     }
 
-    for (auto band = 0; band < 3; ++band) {
-      *left = apply_biquad(*left, coefficients[band], &eq_state_[0][band]);
-      *right = apply_biquad(*right, coefficients[band], &eq_state_[1][band]);
+    if (processing_enabled_ && high_pass_enabled_) {
+      *left = apply_biquad(*left, high_pass_values, &high_pass_state_[0]);
+      *right = apply_biquad(*right, high_pass_values, &high_pass_state_[1]);
+    }
+    if (processing_enabled_ && low_pass_enabled_) {
+      *left = apply_biquad(*left, low_pass_values, &low_pass_state_[0]);
+      *right = apply_biquad(*right, low_pass_values, &low_pass_state_[1]);
+    }
+    if (processing_enabled_ && deesser_enabled_ && deesser_amount_ > 0.0) {
+      const auto detector_left = apply_biquad(
+          *left, deesser_detector_values, &deesser_detector_state_[0]);
+      const auto detector_right = apply_biquad(
+          *right, deesser_detector_values, &deesser_detector_state_[1]);
+      const auto detector_peak = qMax(qAbs(detector_left), qAbs(detector_right));
+      const auto detector_smoothing = detector_peak > deesser_envelope_
+                                          ? deesser_attack
+                                          : deesser_release;
+      deesser_envelope_ = detector_smoothing * deesser_envelope_ +
+                          (1.0 - detector_smoothing) * detector_peak;
+      const auto detector_db = 20.0 * qLn(qMax(1.0e-9, deesser_envelope_)) /
+                               qLn(10.0);
+      const auto sibilance = qBound(0.0, (detector_db + 32.0) / 20.0, 1.0);
+      const auto reduction_db = deesser_amount_ * 9.0 * sibilance;
+      const auto high_frequency_gain = qPow(10.0, -reduction_db / 20.0);
+      const auto low_left = apply_biquad(
+          *left, deesser_crossover_values, &deesser_crossover_state_[0]);
+      const auto low_right = apply_biquad(
+          *right, deesser_crossover_values, &deesser_crossover_state_[1]);
+      *left = low_left + (*left - low_left) * high_frequency_gain;
+      *right = low_right + (*right - low_right) * high_frequency_gain;
+    }
+    if (processing_enabled_ && gate_enabled_) {
+      const auto input_peak = qMax(qAbs(*left), qAbs(*right));
+      const auto envelope_smoothing = input_peak > gate_envelope_
+                                          ? gate_attack
+                                          : gate_release;
+      gate_envelope_ = envelope_smoothing * gate_envelope_ +
+                       (1.0 - envelope_smoothing) * input_peak;
+      const auto input_db = 20.0 * qLn(qMax(1.0e-9, gate_envelope_)) / qLn(10.0);
+      auto target_gain = 1.0;
+      if (input_db < gate_threshold_db_) {
+        const auto expanded_db = gate_threshold_db_ +
+                                 (input_db - gate_threshold_db_) * 10.0;
+        target_gain = qPow(10.0, qMax(-60.0, expanded_db - input_db) / 20.0);
+      }
+      const auto gain_smoothing = target_gain > gate_gain_ ? gate_attack : gate_release;
+      gate_gain_ = gain_smoothing * gate_gain_ + (1.0 - gain_smoothing) * target_gain;
+      *left *= gate_gain_;
+      *right *= gate_gain_;
+    }
+
+    if (processing_enabled_ && equalizer_enabled_) {
+      for (auto band = 0; band < 3; ++band) {
+        *left = apply_biquad(*left, coefficients[band], &eq_state_[0][band]);
+        *right = apply_biquad(*right, coefficients[band], &eq_state_[1][band]);
+      }
     }
     auto gain_db = ducking_gain_db_;
-    if (compressor_enabled_) {
+    if (processing_enabled_ && compressor_enabled_) {
       const auto peak = qMax(qAbs(*left), qAbs(*right));
       const auto smoothing = peak > compressor_envelope_ ? attack : release;
       compressor_envelope_ = smoothing * compressor_envelope_ + (1.0 - smoothing) * peak;
@@ -834,8 +1361,23 @@ QByteArray TimelineAudioOutput::processAudioBytes(
     const auto dynamics_gain = qPow(10.0, gain_db / 20.0);
     *left *= dynamics_gain;
     *right *= dynamics_gain;
+    if (processing_enabled_ && limiter_enabled_) {
+      const auto output_peak = qMax(qAbs(*left), qAbs(*right));
+      const auto ceiling = qPow(10.0, limiter_ceiling_db_ / 20.0);
+      const auto requested_gain = output_peak > ceiling ? ceiling / output_peak : 1.0;
+      const auto smoothing = requested_gain < limiter_gain_[0]
+                                 ? limiter_attack
+                                 : limiter_release;
+      auto smoothed_gain = smoothing * limiter_gain_[0] +
+                           (1.0 - smoothing) * requested_gain;
+      smoothed_gain = qMin(smoothed_gain, requested_gain);
+      limiter_gain_[0] = smoothed_gain;
+      limiter_gain_[1] = smoothed_gain;
+      *left *= smoothed_gain;
+      *right *= smoothed_gain;
+    }
   };
-  switch (buffer.format().sampleFormat()) {
+  switch (processing_format.sampleFormat()) {
     case QAudioFormat::UInt8:
       process_samples<quint8>(
           &bytes, channel_count, gains.at(0), gains.at(1), channel_mode_, swap_channels_,

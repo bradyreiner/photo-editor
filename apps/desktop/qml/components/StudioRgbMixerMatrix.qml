@@ -172,7 +172,8 @@ Rectangle {
                             anchors.centerIn: parent
                             text: Math.round(mixerCell.cellValue).toString()
                             color: mixerCell.modified ? matrix.accent : "#C8D2DC"
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 11
                             font.weight: Font.Bold
                             font.letterSpacing: 0

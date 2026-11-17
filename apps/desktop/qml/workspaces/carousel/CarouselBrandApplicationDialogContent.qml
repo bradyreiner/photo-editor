@@ -197,7 +197,8 @@ ColumnLayout {
                         Label {
                             text: String(modelData.beforeBackground || "") + " → " + String(modelData.afterBackground || "")
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                         }
                     }
@@ -258,7 +259,8 @@ ColumnLayout {
                                   "\nResult: " + carouselBrandApplicationDialog.styleSummary(modelData.result) +
                                   " · " + String(modelData.overrideAction || "match")
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                             wrapMode: Text.WordWrap
                             elide: Text.ElideNone

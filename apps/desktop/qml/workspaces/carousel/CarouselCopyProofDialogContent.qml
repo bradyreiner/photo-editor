@@ -158,7 +158,8 @@ ColumnLayout {
                         visible: (copyProofIssueRow.modelData.suggestions || []).length > 0
                         text: "Suggestion: " + (copyProofIssueRow.modelData.suggestions || []).join(", ")
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 9
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         elide: Text.ElideNone
@@ -221,7 +222,8 @@ ColumnLayout {
         Layout.fillWidth: true
         text: "Ignored issues stay with this document. Added words persist in your Carousel dictionary."
         color: theme.textFaint
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 9
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
         elide: Text.ElideNone

@@ -1,5 +1,6 @@
 #include "canonical_composite_mask_alpha.h"
 #include "edit_recipe_pipeline_bridge.h"
+#include "edit_recipe_mask_schema.h"
 #include "mask_range_preview_math.h"
 #include "mask_thumbnail_payload_service.h"
 #include "photo_render_utils.h"
@@ -10,6 +11,8 @@
 #include "recipe_mask_sampling.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QElapsedTimer>
 #include <QTemporaryDir>
 #include <iostream>
 
@@ -27,6 +30,54 @@ QImage alpha_thumbnail(const std::vector<std::uint8_t>& alpha, const QSize& size
     return double(alpha[static_cast<std::size_t>(y * size.width() + x)]) / 255.0;
   });
   return scaled_square_thumbnail_image(grayscale_mask_alpha_image(evaluation), kMaskThumbnailBackingEdge);
+}
+
+bool check_native_literal_alpha(const QString& root) {
+  constexpr int edge = 2048;
+  QImage source(edge, edge, QImage::Format_RGB32);
+  source.setColorSpace(QColorSpace(QColorSpace::SRgb)); source.fill(QColor(72, 86, 104));
+  const auto path = QDir(root).filePath("literal-native-alpha.png");
+  if (!source.save(path)) return false;
+  auto mask = default_mask_definition(QStringLiteral("brush"), 1);
+  mask.insert("id", "literal-source"); mask.insert("maskSetId", "literal-set");
+  mask.insert("coordinateSpace", "source");
+  mask.insert("segmentationData", QByteArray(128 * 128, '\0'));
+  mask.insert("segmentationWidth", 128); mask.insert("segmentationHeight", 128);
+  mask.insert("brushPoints", QVariantList{
+      QVariantMap{{"x", 0.10}, {"y", 0.12}, {"size", 0.04}, {"flow", 0.7}},
+      QVariantMap{{"x", 0.18}, {"y", 0.16}, {"size", 0.04}, {"flow", 0.7}}});
+  ThumbnailRefreshQueueRequest request;
+  request.job.file_path = path; request.job.asset_id = "literal-native-proof";
+  request.job.state_signature = "literal-native-proof-v1";
+  request.state.mask_stack = {mask};
+  request.state.exposure = 1.5;  // RGB changes must not change literal coverage.
+  request.mask_sets = {QVariantMap{{"id", "literal-set"}, {"sources", QVariantList{mask}}}};
+  const auto renderers = make_thumbnail_worker_renderers({});
+  QElapsedTimer timer; timer.start();
+  const auto entries = renderers.mask_thumbnail_entries(request);
+  const auto elapsed = timer.elapsed();
+  if (entries.size() != 2) return false;
+  LocalMaskSet compiled;
+  compiled.sources = {compile_pipeline_local_mask(mask,
+      LocalMaskRasterPolicy::RebuildEditableAtOutputResolution, source.size(),
+      QRectF(0, 0, 1, 1), QSizeF(edge - 1, edge - 1))};
+  // Independent engine path with actual RGB/edge pixels, against the worker's
+  // source-free native evaluation. Keep every alpha byte after final resize.
+  const auto pipeline = compile_base_color_adjustment_state(request.state);
+  const std::vector<ColorPixel> rgb(static_cast<std::size_t>(edge) * edge,
+      ColorPixel{0.18F, 0.52F, 0.71F, 0.43F});
+  const auto expected = alpha_thumbnail(rasterize_local_mask_set_alpha_with_context(
+      compiled, edge, edge, rgb, rgb, pipeline.color_pipeline), source.size());
+  for (const auto& value : entries) {
+    const auto entry = value.toMap(); const auto actual = thumbnail(entry);
+    if (actual.size() != expected.size() ||
+        !entry.value("thumbnailMaskInputContract").toString().contains("source-rgb:unused")) return false;
+    for (int y = 0; y < actual.height(); ++y) for (int x = 0; x < actual.width(); ++x)
+      if (actual.pixelColor(x, y).alpha() != expected.pixelColor(x, y).alpha()) return false;
+  }
+  std::cout << "literal_native_alpha source=2048x2048 publication=96x96 exact_rgb_reference=1 worker_ms="
+            << elapsed << '\n';
+  return true;
 }
 
 bool check_stack(ThumbnailRefreshQueueRequest request, const WorkingImage& look,
@@ -223,7 +274,8 @@ bool check_engine_edge_context() {
           before, {}, state.color_pipeline).empty();
 }
 
-bool check(const QString& path, const QString& profile, bool crop) {
+bool check(const QString& path, const QString& profile, bool crop,
+           bool compare_full_resolution = false) {
   ThumbnailRefreshQueueRequest request;
   request.job.file_path = path;
   request.job.asset_id = "mask-color-proof";
@@ -260,19 +312,30 @@ bool check(const QString& path, const QString& profile, bool crop) {
   // rasterizer, starting with full-frame linearization before cropping.
   QImage decoded;
   DecodedImageMetadata metadata;
-  if (!decode_source_image(path, &decoded, kMaskThumbnailBackingEdge, state, &metadata)) return false;
+  if (!decode_source_image(path, &decoded, 0, state, &metadata)) return false;
   if (path.endsWith(".dng", Qt::CaseInsensitive) &&
       (!metadata.is_raw || !decoded_image_requires_engine_input_transform(metadata))) {
     std::cerr << "DNG proof must exercise camera-linear RAW decoding\n";
     return false;
   }
-  const auto pipeline = compile_base_color_adjustment_state(state, &metadata);
+  auto pipeline = compile_base_color_adjustment_state(state, &metadata);
+  const auto source_geometry = DesktopSourceGeometry{decoded.size(), crop_rect_for_image(decoded.size(), state)};
+  const auto edge_area = source_geometry.edge_area();
+  pipeline.input_transform.source_area_x = edge_area.x();
+  pipeline.input_transform.source_area_y = edge_area.y();
+  pipeline.input_transform.source_area_width = edge_area.width();
+  pipeline.input_transform.source_area_height = edge_area.height();
   auto full = working_image_from_qimage(decoded, profile,
       &pipeline.color_pipeline.input_icc_profile_asset,
       decoded_image_requires_engine_input_transform(metadata));
   auto working = crop_working_image(full, crop_rect_for_image(decoded.size(), state));
   // Preserve source-scoped highlight statistics for the crop, as the executor does.
-  auto prefix = prepare_color_prefix_stage_context(full.pixels, full.width, full.height, pipeline);
+  auto full_prefix_state = pipeline;
+  full_prefix_state.input_transform.source_area_x = 0;
+  full_prefix_state.input_transform.source_area_y = 0;
+  full_prefix_state.input_transform.source_area_width = 1;
+  full_prefix_state.input_transform.source_area_height = 1;
+  auto prefix = prepare_color_prefix_stage_context(full.pixels, full.width, full.height, full_prefix_state);
   if (!apply_color_normalize_raw_stage(&working.pixels, working.width, working.height, pipeline, &prefix) ||
       !apply_color_camera_characterization_stage(&working.pixels, working.width, working.height, pipeline, prefix)) return false;
   // Compare final byte masks, not display RGB.
@@ -280,6 +343,15 @@ bool check(const QString& path, const QString& profile, bool crop) {
       !apply_color_tone_stage(&working.pixels, working.width, working.height, pipeline) ||
       !apply_color_curves_stage(&working.pixels, working.width, working.height, pipeline) ||
       !apply_color_look_stage(&working.pixels, working.width, working.height, pipeline)) return false;
+
+  WorkingImage full_resolution;
+  if (compare_full_resolution) {
+    QImage reduced_decode;
+    DecodedImageMetadata reduced_metadata;
+    if (crop || !decode_source_image(path, &reduced_decode, kMaskThumbnailBackingEdge,
+            state, &reduced_metadata) || decoded.width() <= reduced_decode.width()) return false;
+    full_resolution = working;
+  }
 
   int legacy_changed = 0;
   for (const auto& value : entries) {
@@ -300,6 +372,25 @@ bool check(const QString& path, const QString& profile, bool crop) {
     const auto reference = scaled_square_thumbnail_image(
         grayscale_mask_alpha_image(evaluation), kMaskThumbnailBackingEdge);
     const auto actual = thumbnail(entry);
+    if (compare_full_resolution) {
+      LocalMaskSet full_set;
+      for (const auto& mask : masks) full_set.sources.push_back(compile_pipeline_local_mask(
+          mask.toMap(), LocalMaskRasterPolicy::RebuildEditableAtOutputResolution,
+          QSize(full_resolution.width, full_resolution.height)));
+      const auto full_alpha = rasterize_local_mask_set_alpha(full_set, full_resolution.width,
+          full_resolution.height, full_resolution.pixels, pipeline.color_pipeline);
+      const auto full_reference = alpha_thumbnail(full_alpha,
+          QSize(full_resolution.width, full_resolution.height));
+      if (actual.size() != full_reference.size()) return false;
+      for (int y = 0; y < actual.height(); ++y) for (int x = 0; x < actual.width(); ++x)
+        if (actual.pixelColor(x, y).alpha() != full_reference.pixelColor(x, y).alpha()) {
+          std::cerr << "Full-resolution mask alpha differs for " << id.toStdString()
+                    << " at " << x << ',' << y << " actual=" << actual.pixelColor(x, y).alpha()
+                    << " expected=" << full_reference.pixelColor(x, y).alpha()
+                    << " format=" << actual.format() << '/' << full_reference.format() << '\n';
+          return false;
+        }
+    }
     if (actual.size() != reference.size() || !entry.value("thumbnailReady").toBool() ||
         !entry.value("maskAlphaProviderCacheKey").toString().startsWith("sha1:") ||
         !entry.value("thumbnailMaskInputContract").toString().contains("through-look")) return false;
@@ -335,6 +426,7 @@ int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   QTemporaryDir root;
   if (!root.isValid()) return 1;
+  if (!check_native_literal_alpha(root.path())) return 1;
   MaskAlphaEvaluationResult invalid;
   invalid.valid = true;
   invalid.size = QSize(96, 96);
@@ -352,6 +444,18 @@ int main(int argc, char** argv) {
     paths.append(path);
   }
   for (int i = 1; i < argc; ++i) paths.append(QString::fromLocal8Bit(argv[i]));
+  // Six source pixels per backing pixel, with aligned constant-color blocks:
+  // a full-resolution through-Look mask must produce the same displayed alpha.
+  // Include partial source alpha and tagged P3 color, unlike the opaque JPEGs.
+  QImage large(576, 576, QImage::Format_ARGB32);
+  large.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+  for (int y = 0; y < large.height(); ++y) for (int x = 0; x < large.width(); ++x)
+    large.setPixelColor(x, y, x < 288 ? QColor(195, 85, 35, y < 288 ? 100 : 210)
+                                     : QColor(35, 90, 175, y < 288 ? 210 : 100));
+  const auto large_path = root.filePath("large-partial-alpha-p3.png");
+  if (!large.save(large_path)) return 1;
+  for (const auto* profile : {"Linear sRGB", "Linear Display P3", "Linear Rec.2020", "Linear ProPhoto RGB"})
+    if (!check(large_path, QString::fromLatin1(profile), false, true)) return 1;
   for (const auto& path : paths)
     for (const auto* profile : {"Linear sRGB", "Linear Display P3", "Linear Rec.2020", "Linear ProPhoto RGB"})
       for (const auto crop : {false, true})

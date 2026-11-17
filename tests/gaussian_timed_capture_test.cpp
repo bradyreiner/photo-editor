@@ -127,6 +127,7 @@ int main(int argc, char** argv) {
   auto result=prepare_gaussian_timed_capture(manifest_path,project,256,canceled);
   if(!result.value("ok").toBool()) { std::cerr<<result.value("error").toString().toStdString(); return 1; }
   const auto dataset=read_json(QDir(project).filePath("timed-capture.json"));
+  if (dataset.value("colorContract") != "capture-source-color-to-srgb-v2") return 1;
   const auto observations=dataset.value("observations").toList();
   if(observations.size()!=4 || result.value("trainingAvailable").toBool() || result.value("state")!="prepared-not-trained") return 1;
   for(int i=0;i<4;++i) {
@@ -145,6 +146,9 @@ int main(int argc, char** argv) {
   const auto validator = validate_prepared_gaussian_timed_capture;
   const auto initial_verification=validator(project,canceled);
   if (!initial_verification.value("imagesVerified").toBool()) { std::cerr << QJsonDocument::fromVariant(initial_verification).toJson().constData(); return 1; }
+  auto legacy_dataset = dataset; legacy_dataset.insert("colorContract","canonical-decode-and-render-to-srgb-v1");
+  if (!write_json(QDir(project).filePath("timed-capture.json"),legacy_dataset) || !validator(project,canceled).value("imagesVerified").toBool() ||
+      !write_json(QDir(project).filePath("timed-capture.json"),dataset)) return 1;
   controller.setTimedCaptureHandlers(prepare_gaussian_timed_capture,validator);
   const auto gui_project=QDir(root).filePath("controller-project");
   if (!controller.startTimedCapture(manifest_path,gui_project,256).value("ok").toBool() ||

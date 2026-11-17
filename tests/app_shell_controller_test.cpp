@@ -5,6 +5,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QSet>
@@ -214,6 +215,40 @@ int main(int argc, char** argv) {
       }) ||
       controller.setShortcutOverride(QStringLiteral("tool-brush"), QStringLiteral("Ctrl+Alt+7"))) {
     return fail("shortcut customization should persist valid mappings and reject conflicts");
+  }
+  const auto initial_keymap = controller.shortcutOverrides();
+  if (controller.shortcutDefinitions().size() < 30 ||
+      controller.setShortcutOverride(QStringLiteral("timeline-play"), QStringLiteral("V")) ||
+      controller.setShortcutOverride(QStringLiteral("timeline-play"), QStringLiteral("Cmd+K")) ||
+      controller.setShortcutOverride(QStringLiteral("timeline-play"), QStringLiteral("Ctrl+NotAKey")) ||
+      controller.setShortcutOverride(QStringLiteral("timeline-razor"), QStringLiteral("Ctrl+S")) ||
+      controller.setShortcutOverride(QStringLiteral("timeline-play"), QStringLiteral("Ctrl+Q, C")) ||
+      !controller.shortcutConflicts(QStringLiteral("timeline-razor"), QStringLiteral("Cmd+S"), initial_keymap)
+           .contains(QStringLiteral("Save")) ||
+      controller.shortcutKeymapValid({{QStringLiteral("timeline-razor"), QStringLiteral("Ctrl+S")}}) ||
+      controller.shortcutOverrides() != initial_keymap) {
+    return fail("Timeline keymap should reject invalid keys and conflicts against effective defaults without changing settings");
+  }
+  const auto keymap_path = settings_root.filePath(QStringLiteral("editor-keymap.json"));
+  if (!controller.exportShortcutKeymap(keymap_path) ||
+      !controller.setShortcutOverride(QStringLiteral("timeline-play"), QStringLiteral("Ctrl+Shift+7")) ||
+      !controller.importShortcutKeymap(keymap_path) ||
+      controller.shortcutOverrides() != initial_keymap) {
+    return fail("keymap file export/import should restore the complete saved overrides");
+  }
+  QFile invalid_keymap(keymap_path);
+  if (!invalid_keymap.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      invalid_keymap.write("{\"schema\":\"looksy-keymap:v1\",\"overrides\":{\"timeline-play\":\"V\"}}") <= 0) {
+    return fail("invalid keymap fixture should be writable");
+  }
+  invalid_keymap.close();
+  if (controller.importShortcutKeymap(keymap_path) || controller.shortcutOverrides() != initial_keymap ||
+      !controller.setShortcutOverrides({{QStringLiteral("timeline-select"), QStringLiteral("Ctrl+Shift+7")},
+                                        {QStringLiteral("timeline-play"), QStringLiteral("V")}}) ||
+      controller.resetShortcutOverride(QStringLiteral("timeline-select")) ||
+      controller.shortcutSequence(QStringLiteral("timeline-select"), QStringLiteral("V")) != QStringLiteral("Ctrl+Shift+7") ||
+      !controller.setShortcutOverrides(initial_keymap)) {
+    return fail("invalid imports and conflicting resets must preserve the working keymap atomically");
   }
 
   photo_editor::desktop::AppShellController persisted_controller;

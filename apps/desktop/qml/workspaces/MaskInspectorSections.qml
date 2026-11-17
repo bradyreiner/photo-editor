@@ -8,6 +8,9 @@ Column {
     id: root
 
     required property var editRoot
+    readonly property bool unionColorSamples: editorPreview.activeMaskKind === "color" &&
+        editorPreview.activeMaskColorSamples.length > 0 &&
+        String((editorPreview.maskStack[editorPreview.activeMaskIndex] || ({})).colorSampleMode || "") === "union"
     Theme { id: theme }
     MaskRowActions {
         id: maskRowActions
@@ -21,6 +24,9 @@ Column {
         toolItems: root.maskSearchToolItems()
         adjustmentItems: root.maskSearchAdjustmentItems()
     }
+    readonly property bool selectionInverted: editorPreview.editingLayerMask
+        ? (editorPreview.maskStack[editorPreview.activeMaskIndex] || ({})).maskSetSelectionInvert === true
+        : root.editRoot.activeSelectionInverted === true
     property string maskSearchQuery: ""
     property bool diagnosticMaskPreviewModesVisible: false
     property bool runtimeDiagnosticsExpanded: false
@@ -194,6 +200,7 @@ Column {
     }
 
     function maskSearchAdjustmentItems() {
+        if (typeof editRoot.activeMaskHasAdjustments !== "function" || !editRoot.activeMaskHasAdjustments()) return []
         return [
             { category: "Control", label: "Exposure", detail: "Tone adjustment", keywords: "exposure tone ev light local adjustment" },
             { category: "Control", label: "Contrast", detail: "Tone adjustment", keywords: "contrast tone local adjustment" },
@@ -216,21 +223,10 @@ Column {
             editorPreview.activeMaskIndex = result.flatIndex
             return
         }
-        if (result.action === "smart") {
-            editorPreview.addMask("object")
-        } else if (result.action === "brush-add") {
-            editorPreview.startSelectionBrush(false)
-        } else if (result.action === "brush-subtract") {
-            editorPreview.startSelectionBrush(true)
-        } else if (result.action === "lasso") {
-            editorPreview.startLassoSelection(false)
-        } else if (result.action === "polygon") {
-            editorPreview.startPolygonSelection(false)
-        } else if (result.action === "subject") {
-            editorPreview.addAIMask("subject")
-        } else if (result.action && result.action.length > 0) {
-            editorPreview.addMask(result.action)
-        }
+        const action = result.action === "smart" ? "object"
+                : result.action === "brush-subtract" ? "brush-erase" : result.action
+        if (action && action.length > 0)
+            editRoot.handleMaskToolMenuAction(action)
     }
 
     function retouchModeLabel(modeName) {
@@ -434,7 +430,7 @@ Column {
 
     function activeRefineEffectCount() {
         const strengths = root.refineStrengths()
-        let count = editorPreview.activeMaskSelectionInverted ? 1 : 0
+        let count = root.selectionInverted ? 1 : 0
         for (let index = 0; index < strengths.length; ++index) {
             if (strengths[index].value > 0.01)
                 ++count
@@ -522,6 +518,8 @@ Column {
                                 ? "Click or drag a target."
                                 : editRoot.objectPickArmed && editRoot.objectPickMode === "selection-subtract"
                                   ? "Click an object to subtract."
+                                : editRoot.objectPickArmed && editRoot.objectPickMode === "selection-intersect"
+                                  ? "Click an object to keep its overlap."
                                 : editRoot.objectPickArmed
                                   ? "Click an object to select."
                                   : editRoot.polygonDrawArmed
@@ -830,17 +828,17 @@ Column {
             ActionButton {
                 objectName: "maskPreviewShowInvertedButton"
                 Layout.fillWidth: true
-                text: editorPreview.activeMaskSelectionInverted ? "Inverted" : "Normal"
+                text: root.selectionInverted ? "Inverted" : "Normal"
                 compact: true
-                accent: editorPreview.activeMaskSelectionInverted ? "#d98962" : root.maskPreviewOverlayResolvedColor
-                tone: editorPreview.activeMaskSelectionInverted ? "primary" : "secondary"
-                active: editorPreview.activeMaskSelectionInverted
+                accent: root.selectionInverted ? "#d98962" : root.maskPreviewOverlayResolvedColor
+                tone: root.selectionInverted ? "primary" : "secondary"
+                active: root.selectionInverted
                 enabled: editorPreview.hasActiveMask &&
                          editorPreview.activeMaskToolRole !== "retouch"
-                tooltipText: editorPreview.activeMaskSelectionInverted
+                tooltipText: root.selectionInverted
                              ? "Show and edit the normal selected region."
                              : "Show and edit the inverse selected region."
-                onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
+                onClicked: root.editRoot.invertInspectedMaskOrSelection()
             }
         }
 
@@ -1033,12 +1031,7 @@ Column {
                 color: "#f2f4f6"
                 placeholderTextColor: "#6f7882"
                 onTextChanged: root.maskSearchQuery = text
-                background: Rectangle {
-                    radius: 8
-                    color: "#11161a"
-                    border.width: 1
-                    border.color: root.maskSearchQuery.trim().length > 0 ? Qt.alpha(root.activeMaskAccent, 0.50) : "#2a3138"
-                }
+                background: InputFieldSurface { inputControl: parent }
             }
 
             Rectangle {
@@ -1299,6 +1292,7 @@ Column {
 
                                 AppMenu {
                                     id: maskInspectorSourceContextMenu
+                                    transientMenu: true
                                     objectName: "maskInspectorSourceContextMenu"
                                     accent: root.activeMaskAccent
 
@@ -1523,7 +1517,8 @@ Column {
                     width: parent.width
                     text: "Reusable Outputs"
                     color: "#8f98a2"
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 10
                     font.weight: Font.DemiBold
                     font.letterSpacing: 0.8
@@ -1679,6 +1674,7 @@ Column {
 
                     AppMenu {
                         id: maskInspectorRetouchContextMenu
+                        transientMenu: true
                         objectName: "maskInspectorRetouchContextMenu"
                         accent: root.activeMaskAccent
 
@@ -2334,71 +2330,100 @@ Column {
         objectName: "maskSelectionSection"
         width: parent.width
         title: "Selection"
-        subtitle: "Only the essentials. Use Edge below when you need more control."
+        subtitle: "Compare and adjust the selection. Fine edge controls are below."
         visible: editRoot.activeMaskSupportsSelectionRefine() &&
                  editorPreview.activeMaskToolRole !== "retouch"
 
-        RowLayout {
+        GridLayout {
             width: parent.width
-            spacing: 8
-
+            columns: width >= theme.scaled(520) ? 4 : 2
+            columnSpacing: theme.space4
+            rowSpacing: theme.space4
             ActionButton {
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 text: "Invert"
-                active: editorPreview.activeMaskSelectionInverted
-                onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
+                iconName: "compare"
+                showLeadingIcon: true
+                active: root.selectionInverted
+                tooltip: "Swap selected and unselected areas."
+                onClicked: root.editRoot.invertInspectedMaskOrSelection()
             }
-
             ActionButton {
                 Layout.fillWidth: true
-                text: "Reset Edge"
-                tooltip: "Reset matte refinement while preserving the source geometry and local adjustments."
+                Layout.minimumWidth: 0
+                text: "Reset edges"
+                iconName: "reset"
+                showLeadingIcon: true
+                allowLabelWrap: true
+                tooltip: "Reset edge refinement while keeping the original selection shape and adjustments."
                 onClicked: editorPreview.resetActiveMaskRefinement()
             }
-
             ActionButton {
                 objectName: "maskInspectorShowOriginalRefinementButton"
                 Layout.fillWidth: true
-                text: "Show Original"
+                Layout.minimumWidth: 0
+                text: "Before"
+                iconName: "compare"
+                showLeadingIcon: true
                 active: editorPreview.maskRefinementPreviewMode === "original"
-                tooltipText: "Preview this selection before edge refinement without changing the recipe."
+                tooltipText: "Preview the selection before edge refinement."
                 onClicked: editorPreview.maskRefinementPreviewMode = "original"
             }
-
             ActionButton {
                 objectName: "maskInspectorShowRefinedRefinementButton"
                 Layout.fillWidth: true
-                text: "Show Refined"
+                Layout.minimumWidth: 0
+                text: "After"
+                iconName: "target"
+                showLeadingIcon: true
                 active: editorPreview.maskRefinementPreviewMode !== "original"
-                tooltipText: "Preview this selection with current edge refinement."
+                tooltipText: "Preview the selection with your current edge refinement."
                 onClicked: editorPreview.maskRefinementPreviewMode = "refined"
             }
-
-            ActionButton {
-                objectName: "maskInspectorHighQualityRefinementPreviewButton"
+        }
+        StudioCollapsibleGroup {
+            objectName: "selectionPreviewQualityGroup"
+            title: "Preview quality"
+            property bool qualityExpanded: false
+            expanded: qualityExpanded
+            onToggled: qualityExpanded = !qualityExpanded
+            GridLayout {
                 Layout.fillWidth: true
-                text: "High Quality"
-                active: editorPreview.maskRefinementHighQualityPreview
-                tooltipText: "Use a higher-resolution selection refinement preview for expensive edge checks."
-                onClicked: editorPreview.maskRefinementHighQualityPreview = !editorPreview.maskRefinementHighQualityPreview
+                columns: 2
+                columnSpacing: theme.space4
+                ActionButton {
+                    objectName: "maskInspectorHighQualityRefinementPreviewButton"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: "High quality"
+                    iconName: "sparkles"
+                    showLeadingIcon: true
+                    allowLabelWrap: true
+                    active: editorPreview.maskRefinementHighQualityPreview
+                    tooltipText: "Use a higher-resolution preview for inspecting fine selection edges."
+                    onClicked: editorPreview.maskRefinementHighQualityPreview = !editorPreview.maskRefinementHighQualityPreview
+                }
+                ActionButton {
+                    objectName: "maskInspectorFullResolutionPreviewButton"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: "Full resolution"
+                    iconName: "maximize"
+                    showLeadingIcon: true
+                    allowLabelWrap: true
+                    active: editorPreview.maskFullResolutionPreview
+                    tooltipText: "Inspect full-resolution mask coverage without starting a full image render."
+                    onClicked: editorPreview.maskFullResolutionPreview = !editorPreview.maskFullResolutionPreview
+                }
             }
-
-            ActionButton {
-                objectName: "maskInspectorFullResolutionPreviewButton"
-                Layout.fillWidth: true
-                text: "Full Res"
-                active: editorPreview.maskFullResolutionPreview
-                tooltipText: "Use full-resolution mask alpha for the active preview without scheduling a full image render."
-                onClicked: editorPreview.maskFullResolutionPreview = !editorPreview.maskFullResolutionPreview
-            }
-
         }
 
         Label {
             width: parent.width
-            text: editorPreview.activeMaskSelectionInverted
-                  ? "The selection is inverted. Adjustments now target everything outside the visible boundary."
-                  : "Brush Add and Brush Erase paint the selection directly. Use Edge below only when the painted selection needs cleanup."
+            text: root.selectionInverted
+                  ? "The selected region is inverted. Editing is restricted to the opposite area."
+                  : "Refine the selection boundary without changing the photo pixels."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
             font.family: theme.fontUi
@@ -2500,8 +2525,8 @@ Column {
                     Item { Layout.fillWidth: true }
 
                     Label {
-                        text: editorPreview.activeMaskSelectionInverted ? "Inverted" : "Normal"
-                        color: editorPreview.activeMaskSelectionInverted ? "#d98962" : "#8f98a2"
+                        text: root.selectionInverted ? "Inverted" : "Normal"
+                        color: root.selectionInverted ? "#d98962" : "#8f98a2"
                         font.family: theme.fontUi
                         font.pixelSize: 10
                     }
@@ -2692,7 +2717,7 @@ Column {
     MaskSection {
         objectName: "activeMaskAdjustmentSection"
         width: parent.width
-        title: "Adjust"
+        title: "Legacy Selection Adjustments"
         subtitle: editorPreview.activeMaskToolRole === "retouch"
                   ? "Retouch uses its own stroke settings. Image adjustments apply only to selection sets."
                   : (editRoot.activeMaskHasAdjustments()
@@ -2700,7 +2725,7 @@ Column {
                      : "Collapsed until the current selection set needs image adjustments.")
         expandable: true
         expanded: editRoot.activeMaskHasAdjustments()
-        visible: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch"
+        visible: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch" && editRoot.activeMaskHasAdjustments()
 
         RowLayout {
             objectName: "maskAdjustToneGroup"
@@ -3074,9 +3099,12 @@ Column {
     MaskSection {
         width: parent.width
         title: "Brush"
+        subtitle: editorPreview.activeMaskToolRole === "retouch"
+                  ? "Canvas controls cover size and presets; expand for stroke and source tuning."
+                  : "Tune size, flow, hardness, and stroke response."
         visible: editorPreview.activeMaskKind === "brush"
         expandable: true
-        expanded: true
+        expanded: editorPreview.activeMaskToolRole !== "retouch"
 
         Label {
             width: parent.width
@@ -3735,6 +3763,7 @@ Column {
         MaskSlider {
             width: parent.width
             label: "Hue Center"
+            visible: !root.unionColorSamples
             valueText: Math.round(editorPreview.activeMaskRefineHueCenter * 360).toString() + "°"
             from: 0
             to: 1
@@ -3836,6 +3865,17 @@ Column {
         expandable: true
         expanded: true
 
+        Label {
+            objectName: "componentLuminanceRangeSourceHint"
+            width: parent.width
+            visible: Number((root.activeMaskData || ({})).componentRangeSourceVersion || 0) === 1
+            text: "Uses captured component appearance. Resample to include later changes."
+            color: theme.textMuted
+            font.family: theme.fontUi
+            font.pixelSize: 11
+            wrapMode: Text.WordWrap
+        }
+
         RowLayout {
             width: parent.width
             spacing: 6
@@ -3856,7 +3896,8 @@ Column {
                 objectName: "activeMaskLuminanceRangeSampleCountLabel"
                 text: editorPreview.activeMaskLuminanceSamples.length + "/5"
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 font.letterSpacing: 0
             }
@@ -3943,6 +3984,17 @@ Column {
         expandable: true
         expanded: true
 
+        Label {
+            objectName: "componentColorRangeSourceHint"
+            width: parent.width
+            visible: Number((root.activeMaskData || ({})).componentRangeSourceVersion || 0) === 1
+            text: "Uses captured component appearance. Resample to include later changes."
+            color: theme.textMuted
+            font.family: theme.fontUi
+            font.pixelSize: 11
+            wrapMode: Text.WordWrap
+        }
+
         RowLayout {
             width: parent.width
             spacing: 6
@@ -3963,7 +4015,8 @@ Column {
                 objectName: "activeMaskColorRangeSampleCountLabel"
                 text: editorPreview.activeMaskColorSamples.length + "/5"
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 font.letterSpacing: 0
             }
@@ -4085,7 +4138,8 @@ Column {
                 objectName: "activeMaskDepthRangeSampleCountLabel"
                 text: editorPreview.activeMaskDepthSamples.length + "/5"
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 font.letterSpacing: 0
             }

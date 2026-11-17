@@ -15,6 +15,11 @@ Item {
     property real flowValue: 1
     property real hardnessValue: 0.8
     readonly property bool inlineTuningVisible: true
+    readonly property string tipPreviewAccessibleSummary: "Normalized brush tip visual. Hardness " +
+        Math.round(root.hardnessValue * 100) + "% controls edge falloff; Flow " +
+        Math.round(root.flowValue * 100) + "% controls sample opacity."
+    readonly property string tipPreviewTooltipText: root.tipPreviewAccessibleSummary +
+        " Stroke buildup varies with movement and other brush settings."
     property bool sizeDragActive: false
     property var modeMenuItems: []
     property var tuningMenuItems: []
@@ -62,7 +67,8 @@ Item {
         return useful.join("  ");
     }
 
-    implicitWidth: theme.scaled(950)
+    implicitWidth: theme.scaled(root.embedded ? 320 : 950)
+    Layout.minimumWidth: root.embedded ? 0 : implicitWidth
     implicitHeight: hudSurface.implicitHeight
     height: implicitHeight
 
@@ -81,52 +87,50 @@ Item {
         }
     }
 
-    Flow {
+    ColumnLayout {
         id: controls
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: root.embedded ? 0 : theme.space8
-        flow: Flow.LeftToRight
-        spacing: theme.space6
+        spacing: theme.space8
 
         GridLayout {
             id: brushCommandControls
+            Layout.fillWidth: true
             columns: root.embedded ? 3 : 5
-            width: root.embedded ? controls.width : implicitWidth
-            height: root.embedded ? implicitHeight : controls.width >= brushCommandControls.implicitWidth + brushQuickControls.width + controls.spacing ? brushQuickControls.implicitHeight : brushCommandControls.implicitHeight
             columnSpacing: theme.space2
             rowSpacing: theme.space4
 
             Components.MiniButton {
                 objectName: "brushHudAddButton"
-                Layout.alignment: Qt.AlignVCenter
-                text: "Add"
+                Layout.fillWidth: true
+                text: qsTr("Add")
                 role: "segmented"
                 active: root.operation === "add"
                 accent: theme.accentCool400
                 minimumReadableWidth: theme.scaled(58)
-                tooltip: "Paint into the active selection."
+                tooltip: qsTr("Paint into the active selection.")
                 onClicked: root.addRequested()
             }
-
             Components.MiniButton {
                 objectName: "brushHudEraseButton"
-                Layout.alignment: Qt.AlignVCenter
-                text: "Erase"
+                Layout.fillWidth: true
+                text: qsTr("Erase")
                 role: "segmented"
                 active: root.operation === "subtract"
                 accent: theme.error
                 minimumReadableWidth: theme.scaled(60)
-                tooltip: "Erase from the active selection."
+                tooltip: qsTr("Erase from the active selection.")
                 onClicked: root.eraseRequested()
             }
 
             Components.MenuButton {
                 objectName: "brushHudModeMenuButton"
-                Layout.preferredWidth: theme.scaled(104)
+                Layout.fillWidth: true
+                Layout.preferredWidth: theme.scaled(100)
                 Layout.alignment: Qt.AlignVCenter
-                text: "Options"
+                text: qsTr("Brush")
                 iconName: "brush-tool"
                 compact: true
                 primaryOpensMenu: true
@@ -135,8 +139,8 @@ Item {
                 menuWidth: 312
                 menuItemMaxLines: 3
                 menuItems: root.modeMenuItems
-                tooltipText: "Choose brush mode and presets."
-                menuTooltipText: "Brush options"
+                tooltipText: qsTr("Choose a brush preset and painting mode.")
+                menuTooltipText: qsTr("Brush and mode")
                 onClicked: root.modeClicked()
                 onMenuItemTriggered: function (key) {
                     root.modeMenuItemTriggered(key);
@@ -145,7 +149,7 @@ Item {
 
             Components.MiniButton {
                 objectName: "brushHudResetDefaultsButton"
-                Layout.alignment: Qt.AlignVCenter
+                Layout.alignment: Qt.AlignCenter
                 readonly property string brushDefaultContract: root.brushDefaultContract
                 square: true
                 iconName: "reset"
@@ -156,27 +160,61 @@ Item {
 
             Components.MiniButton {
                 objectName: "brushHudDoneButton"
+                Layout.fillWidth: true
                 Layout.alignment: Qt.AlignVCenter
                 minimumReadableWidth: theme.scaled(78)
-                text: "Done"
+                text: qsTr("Done")
                 iconName: "check"
                 role: "primary"
                 onClicked: root.doneRequested()
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: theme.space4
+            Components.BrushPresetPicker {
+                id: selectionPresets
+                objectName: "selectionBrushPresets"
+                Layout.fillWidth: true
+                presetFamily: "selection"
+                currentSettings: ({sizePercent: Number(root.sizePercentText),
+                    hardness: root.hardnessValue, flow: root.flowValue})
+                onPresetSelected: function(settings) {
+                    if (settings.sizePercent !== undefined && isFinite(Number(settings.sizePercent))) {
+                        const text = String(Math.max(1, Math.min(35, Math.round(Number(settings.sizePercent)))))
+                        if (root.acceptSizeText !== null) root.acceptSizeText(text)
+                        else root.sizeTextAccepted(text)
+                    }
+                    if (settings.hardness !== undefined && isFinite(Number(settings.hardness)))
+                        root.hardnessValueEdited(Math.max(0, Math.min(1, Number(settings.hardness))))
+                    if (settings.flow !== undefined && isFinite(Number(settings.flow)))
+                        root.flowValueEdited(Math.max(0.05, Math.min(1, Number(settings.flow))))
+                }
+            }
+            Components.MiniButton {
+                objectName: "selectionBrushPreviewToggle"
+                text: qsTr("Preview")
+                role: "segmented"
+                active: selectionPresets.previewVisible
+                tooltip: qsTr("Show or hide the tip practice area.")
+                onClicked: selectionPresets.previewVisible = !selectionPresets.previewVisible
+            }
+        }
         GridLayout {
             id: brushQuickControls
-            columns: root.embedded ? 1 : 3
-            width: root.embedded ? controls.width : theme.scaled(448)
-            columnSpacing: theme.space12
+            Layout.fillWidth: true
+            // A sidebar needs complete label/value rows. Keep the same tuning
+            // controls full-width until two readable columns fit side by side.
+            columns: root.embedded ? (width < theme.scaled(560) ? 1 : 2) : 3
+            columnSpacing: theme.space8
             rowSpacing: theme.space8
 
             ColumnLayout {
                 Layout.fillWidth: true
+                Layout.columnSpan: root.embedded ? brushQuickControls.columns : 1
                 id: brushSizeControls
-                Layout.preferredWidth: theme.scaled(160)
-                Layout.minimumWidth: theme.scaled(140)
+                Layout.minimumWidth: theme.scaled(120)
                 spacing: theme.space2
 
                 RowLayout {
@@ -192,6 +230,7 @@ Item {
                         Layout.fillWidth: true
                     }
                     ToneTextField {
+                        numericEntry: true
                         id: brushHudSizeField
                         objectName: "brushHudSizeField"
                         accessibleLabel: qsTr("Selection brush size percent")
@@ -206,17 +245,13 @@ Item {
                             top: 35
                         }
                         color: theme.textMain
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: theme.typeControl
                         font.weight: theme.weightControl
                         leftPadding: theme.space4
                         rightPadding: theme.space4
-                        background: Rectangle {
-                            radius: theme.radiusControl
-                            color: brushHudSizeField.activeFocus ? theme.alpha(theme.accentCool400, 0.10) : theme.fieldFill
-                            border.width: brushHudSizeField.activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
-                            border.color: brushHudSizeField.activeFocus ? theme.focusRing : theme.controlEdge
-                        }
+                        background: InputFieldSurface { inputControl: parent }
                         onAccepted: {
                             root.sizeTextAccepted(text);
                             if (root.acceptSizeText === null || root.acceptSizeText(text))
@@ -243,8 +278,62 @@ Item {
                     Label {
                         text: "%"
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: theme.typeCaption
+                    }
+                    Canvas {
+                        id: brushHudTipPreview
+                        objectName: "brushHudTipPreview"
+                        Layout.preferredWidth: theme.controlHeightDense
+                        Layout.preferredHeight: theme.controlHeightDense
+                        Layout.alignment: Qt.AlignVCenter
+                        readonly property real previewHardness: root.hardnessValue
+                        readonly property real previewFlow: root.flowValue
+                        readonly property color previewAccent: root.accent
+                        Accessible.name: qsTr("Brush tip preview")
+                        Accessible.description: root.tipPreviewAccessibleSummary
+                        Accessible.role: Accessible.StaticText
+                        onPreviewHardnessChanged: requestPaint()
+                        onPreviewFlowChanged: requestPaint()
+                        onPreviewAccentChanged: requestPaint()
+
+                        onPaint: {
+                            const context = getContext("2d")
+                            context.save()
+                            context.clearRect(0, 0, width, height)
+
+                            const radius = Math.max(1, Math.min(width, height) * 0.42)
+                            const centerX = width * 0.5
+                            const centerY = height * 0.5
+                            const hardness = Math.max(0, Math.min(1, previewHardness))
+                            const flow = Math.max(0, Math.min(1, previewFlow))
+                            const color = previewAccent.toString()
+
+                            context.globalAlpha = flow
+                            context.beginPath()
+                            context.arc(centerX, centerY, radius, 0, Math.PI * 2, false)
+                            if (hardness >= 0.999) {
+                                context.fillStyle = color
+                            } else {
+                                const falloff = context.createRadialGradient(
+                                    centerX, centerY, 0, centerX, centerY, radius)
+                                falloff.addColorStop(0, color)
+                                if (hardness > 0)
+                                    falloff.addColorStop(hardness, color)
+                                falloff.addColorStop(1, "rgba(0, 0, 0, 0)")
+                                context.fillStyle = falloff
+                            }
+                            context.fill()
+                            context.restore()
+                        }
+
+                        HoverHandler { id: brushHudTipPreviewHover }
+                        Components.AppToolTip {
+                            targetItem: brushHudTipPreview
+                            visible: brushHudTipPreviewHover.hovered
+                            text: root.tipPreviewTooltipText
+                        }
                     }
                 }
 
@@ -269,88 +358,80 @@ Item {
 
             ColumnLayout {
                 id: brushHardnessControls
-                Layout.preferredWidth: theme.scaled(120)
-                Layout.minimumWidth: theme.scaled(112)
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 spacing: theme.space2
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label {
-                        text: qsTr("Hardness")
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: theme.typeCaption
-                        font.weight: theme.weightControl
-                    }
-                    Item {
-                        Layout.fillWidth: true
-                    }
-                    Label {
-                        text: Math.round(root.hardnessValue * 100) + "%"
-                        color: theme.textStrong
-                        font.family: theme.fontMono
-                        font.pixelSize: theme.typeCaption
-                    }
-                }
-
-                Components.ToolValueSlider {
+                Components.InspectorSlider {
                     objectName: "brushHudHardnessVerticalSlider"
                     Layout.fillWidth: true
-                    minimumReadableWidth: theme.scaled(96)
-                    label: qsTr("Selection brush hardness")
-                    tooltipText: qsTr("Hardness: %1%").arg(Math.round(root.hardnessValue * 100))
+                    controlHeight: theme.controlHeightDense
+                    forceCompact: true
+                    showResetButton: false
+                    labelColumnWidth: theme.scaled(76)
+                    label: qsTr("Hardness")
                     from: 0
                     to: 1
                     stepSize: 0.01
                     value: root.hardnessValue
-                    onMoved: root.hardnessValueEdited(value)
+                    valueText: Math.round(root.hardnessValue * 100) + "%"
+                    valueInputMode: "percentNormalized"
+                    onValueDragged: function(nextValue) { root.hardnessValueEdited(nextValue) }
                 }
             }
 
             ColumnLayout {
                 id: brushFlowControls
-                Layout.preferredWidth: theme.scaled(120)
-                Layout.minimumWidth: theme.scaled(104)
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 spacing: theme.space2
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label {
-                        text: qsTr("Flow")
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: theme.typeCaption
-                        font.weight: theme.weightControl
-                    }
-                    Item {
-                        Layout.fillWidth: true
-                    }
-                    Label {
-                        text: Math.round(root.flowValue * 100) + "%"
-                        color: theme.textStrong
-                        font.family: theme.fontMono
-                        font.pixelSize: theme.typeCaption
-                    }
-                }
-
-                Components.ToolValueSlider {
+                Components.InspectorSlider {
                     objectName: "brushHudFlowVerticalSlider"
                     Layout.fillWidth: true
-                    minimumReadableWidth: theme.scaled(96)
-                    label: qsTr("Selection brush flow")
-                    tooltipText: qsTr("Flow: %1%").arg(Math.round(root.flowValue * 100))
+                    controlHeight: theme.controlHeightDense
+                    forceCompact: true
+                    showResetButton: false
+                    labelColumnWidth: theme.scaled(76)
+                    label: qsTr("Flow")
                     from: 0.05
                     to: 1
                     stepSize: 0.01
                     value: root.flowValue
-                    onMoved: root.flowValueEdited(value)
+                    valueText: Math.round(root.flowValue * 100) + "%"
+                    valueInputMode: "percentNormalized"
+                    onValueDragged: function(nextValue) { root.flowValueEdited(nextValue) }
                 }
             }
         }
 
+        Components.BrushStrokePreview {
+            objectName: "selectionBrushTipPreview"
+            Layout.fillWidth: true
+            visible: selectionPresets.previewVisible
+            diameter: Number(root.sizePercentText) * 6
+            hardness: root.hardnessValue
+            flow: root.flowValue
+            ink: root.accent
+        }
+
+        Label {
+            objectName: "brushHudStatusLabel"
+            Layout.fillWidth: true
+            visible: root.resolvedStatusText.length > 0
+            text: root.resolvedStatusText
+            color: theme.textMuted
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
+            font.pixelSize: theme.typeMicro
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            maximumLineCount: 2
+            elide: Text.ElideNone
+        }
+
         Components.MenuButton {
             objectName: "brushHudTuningMenuButton"
-            width: theme.scaled(104)
+            Layout.preferredWidth: theme.scaled(104)
             visible: false
             text: "Tune"
             iconName: "adjust"
@@ -368,17 +449,5 @@ Item {
             }
         }
 
-        Label {
-            objectName: "brushHudStatusLabel"
-            width: theme.scaled(132)
-            visible: root.resolvedStatusText.length > 0
-            text: root.resolvedStatusText
-            color: theme.textMuted
-            font.family: theme.fontMono
-            font.pixelSize: theme.typeMicro
-            verticalAlignment: Text.AlignVCenter
-            maximumLineCount: 1
-            elide: Text.ElideRight
-        }
     }
 }

@@ -26,6 +26,7 @@ Item {
         nameFilters: [qsTr("Looksy brush tip (*.looksybrush)")]
         onAccepted: root.controller.exportPhotoFragmentBrushPreset(root.tipPresetName, selectedFile.toLocalFile())
     }
+    readonly property bool maskTarget: !!controller && controller.editingLayerMask === true
     property bool active: false
     property bool panActive: false
     property Item controlsParent: null
@@ -40,6 +41,13 @@ Item {
     property real imageHeight: 0
     property int canvasWidth: 0
     property int canvasHeight: 0
+    readonly property var authoringSize: {
+        const revision = paintCoordinateMapper.geometryRevision
+        return controller.photoPaintAuthoringSize ? controller.photoPaintAuthoringSize(layerIndex)
+                                                 : Qt.size(canvasWidth, canvasHeight)
+    }
+    readonly property real documentCanvasWidth: Math.max(1, Number(authoringSize.width || canvasWidth))
+    readonly property real documentCanvasHeight: Math.max(1, Number(authoringSize.height || canvasHeight))
     property real brushSize: 32
     property real hardness: 0.8
     property real brushOpacity: 1
@@ -87,8 +95,45 @@ Item {
     property string tipPresetName: ""
     property real tipRotationVariation: 0
     property real tipScaleVariation: 0
+    readonly property var customizableSettings: ({brushSize: brushSize, hardness: hardness,
+        brushOpacity: brushOpacity, flow: flow, brushSpacing: brushSpacing,
+        pressureSize: pressureSize, pressureFlow: pressureFlow, textureMaterial: textureMaterial,
+        textureStrength: textureStrength, textureScale: textureScale, textureAngle: textureAngle,
+        textureSeed: textureSeed, lightFalloff: lightFalloff, lightExposure: lightExposure,
+        lightTaper: lightTaper, lightAccumulation: lightAccumulation,
+        tipLayerId: tipLayerId, tipPresetName: tipPresetName,
+        tipRotationVariation: tipRotationVariation, tipScaleVariation: tipScaleVariation})
+    function applyBrushPreset(settings) {
+        finish(true)
+        const bounds = {brushSize: [1, 4096], hardness: [0, 1], brushOpacity: [0, 1], flow: [0, 1],
+            brushSpacing: [0.02, 1], textureStrength: [0, 1], textureScale: [0.5, 256],
+            textureAngle: [-180, 180], textureSeed: [0, 4294967295], lightFalloff: [0, 1],
+            lightExposure: [-8, 8], lightTaper: [0, 1], tipRotationVariation: [0, 180], tipScaleVariation: [0, 0.9]}
+        for (const key of Object.keys(bounds)) {
+            if (settings[key] === undefined) continue
+            const value = Number(settings[key])
+            if (isFinite(value)) root[key] = Math.max(bounds[key][0], Math.min(bounds[key][1], value))
+        }
+        for (const key of ["pressureSize", "pressureFlow", "lightAccumulation"])
+            if (typeof settings[key] === "boolean") root[key] = settings[key]
+        if (["solid", "dry_ink", "graphite", "light_paint", "photo_fragment"].indexOf(settings.textureMaterial) >= 0)
+            root.textureMaterial = settings.textureMaterial
+        for (const key of ["tipLayerId", "tipPresetName"])
+            if (typeof settings[key] === "string") root[key] = settings[key]
+        refreshCursorTip()
+    }
     property var fragmentLayers: []
-    property bool clipSelection: false
+    property var cursorTipInfo: ({width: 0, height: 0})
+    property real cursorDirectionDegrees: 0
+    property point cursorDocumentPoint: Qt.point(0, 0)
+    function refreshCursorTip() {
+        cursorTipInfo = textureMaterial === "photo_fragment" && controller.photoFragmentCursorTipInfo
+                ? controller.photoFragmentCursorTipInfo(tipLayerId, tipPresetName) : ({width: 0, height: 0})
+    }
+    onTextureMaterialChanged: refreshCursorTip()
+    onTipLayerIdChanged: refreshCursorTip()
+    onTipPresetNameChanged: refreshCursorTip()
+    readonly property bool clipSelection: selectionAvailable
     property bool drawing: false
     property bool advancedControlsExpanded: false
     property real toolOptionsTopMargin: theme.space6
@@ -102,11 +147,13 @@ Item {
         cursorPoint.x >= imageX && cursorPoint.y >= imageY &&
         cursorPoint.x <= imageX + imageWidth && cursorPoint.y <= imageY + imageHeight
     readonly property bool brushCursorVisible: active && !panActive && editable && cursorVisible && cursorInsideImage
-    readonly property real nominalCursorWidth: Math.max(2, brushSize * imageWidth / Math.max(1, canvasWidth))
-    readonly property real nominalCursorHeight: Math.max(2, brushSize * imageHeight / Math.max(1, canvasHeight))
+    readonly property real nominalCursorWidth: Math.max(2, brushSize * imageWidth / documentCanvasWidth)
+    readonly property real nominalCursorHeight: Math.max(2, brushSize * imageHeight / documentCanvasHeight)
     readonly property real cursorSizeResponse: tabletDrawing && pressureSize ? Math.max(0.01, cursorPressure) : 1
-    readonly property bool editable: String(layerData.kind || "") === "pixel" &&
-                                    layerData.locked !== true && layerData.enabled !== false
+    readonly property bool editable: ["pixel", "source"].indexOf(String(layerData.kind || "")) >= 0 &&
+                                    layerData.locked !== true && layerData.enabled !== false &&
+                                    (maskTarget || (layerData.smartObject === undefined && layerData.vectorPath === undefined))
+    readonly property bool selectionAvailable: !!root.controller && !!root.controller.hasWorkingSelection
     signal newLayerRequested()
     function refreshFragmentLayers() {
         const next = [{ id: "", name: qsTr("Choose copied fragment") }]
@@ -138,14 +185,22 @@ Item {
     Connections {
         target: root.controller
         function onControlsChanged() {
-            if (root.textureMaterial === "photo_fragment") root.refreshFragmentLayers()
+            if (root.textureMaterial === "photo_fragment") { root.refreshFragmentLayers(); root.refreshCursorTip() }
         }
     }
 
+    CanvasCoordinateMapper {
+        id: paintCoordinateMapper
+        contentX: root.imageX
+        contentY: root.imageY
+        contentWidth: root.imageWidth
+        contentHeight: root.imageHeight
+        geometryMapper: root.controller
+        coordinateSpace: "paint:" + root.targetId
+    }
     function point(x, y) {
-        // Photo layers composite in the output canvas, after base-image geometry.
-        return Qt.point((x - imageX) * canvasWidth / imageWidth,
-                        (y - imageY) * canvasHeight / imageHeight)
+        const mapped = paintCoordinateMapper.viewToImagePoint(x, y)
+        return Qt.point(mapped.x * documentCanvasWidth, mapped.y * documentCanvasHeight)
     }
     function begin(x, y, pressure, penEraser) {
         if (!editable || imageWidth <= 0 || imageHeight <= 0 ||
@@ -155,7 +210,7 @@ Item {
             color: String(ink), size: brushSize, hardness: hardness, opacity: brushOpacity, flow: flow,
             spacing: brushSpacing,
             erase: eraserTool || erase || penEraser, pressureSize: pressureSize, pressureFlow: pressureFlow,
-            textureMaterial: eraserTool ? "solid" : textureMaterial, textureStrength: textureStrength,
+            textureMaterial: maskTarget || eraserTool || erase || penEraser ? "solid" : textureMaterial, textureStrength: textureStrength,
             textureScale: textureScale, textureAngle: textureAngle, textureSeed: textureSeed,
             lightFalloff: lightFalloff, lightExposure: lightExposure, lightTaper: lightTaper,
             lightAccumulation: lightAccumulation,
@@ -163,8 +218,10 @@ Item {
             tipPresetName: tipPresetName,
             tipRotationVariation: tipRotationVariation,
             tipScaleVariation: tipScaleVariation,
-            clipSelection: clipSelection
+            clipSelection: selectionAvailable
         })
+        cursorDirectionDegrees = 0
+        cursorDocumentPoint = point(x, y)
         move(x, y, pressure)
     }
     function move(x, y, pressure) {
@@ -172,6 +229,9 @@ Item {
         cursorPressure = Math.max(0, Math.min(1, pressure))
         if (!drawing) return
         const p = point(x, y)
+        const dx = p.x - cursorDocumentPoint.x, dy = p.y - cursorDocumentPoint.y
+        if (Math.hypot(dx, dy) > 1e-9) cursorDirectionDegrees = Math.atan2(dy, dx) * 180 / Math.PI
+        cursorDocumentPoint = p
         controller.addPhotoPaintPoint(p.x, p.y, pressure)
     }
     function finish(commit) {
@@ -197,7 +257,7 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         preventStealing: root.drawing
-        cursorShape: root.brushCursorVisible && root.nominalCursorWidth >= 8 ? Qt.BlankCursor
+        cursorShape: projectedPaintCursor.visible && root.nominalCursorWidth >= 8 ? Qt.BlankCursor
                      : root.editable && root.cursorInsideImage ? Qt.CrossCursor : Qt.ArrowCursor
         onEntered: root.cursorVisible = true
         onExited: root.cursorVisible = false
@@ -232,60 +292,88 @@ Item {
             root.finish(true)
         }
     }
-    Item {
+    Canvas {
+        id: projectedPaintCursor
         objectName: "photoPaintCursor"
-        visible: root.brushCursorVisible
+        enabled: false // Decorative canvas must never take hover from the paint input.
+        property int geometryRevision: 0
+        readonly property var contours: {
+            const revision = geometryRevision
+            if (!root.brushCursorVisible || !root.controller.paintCursorContours)
+                return ({})
+            return root.controller.paintCursorContours(
+                        (root.cursorPoint.x - root.imageX) / root.imageWidth,
+                        (root.cursorPoint.y - root.imageY) / root.imageHeight,
+                        root.brushSize, root.cursorSizeResponse, root.hardness,
+                        root.documentCanvasWidth, root.documentCanvasHeight, root.targetId,
+                        {textureMaterial: root.textureMaterial, lightFalloff: root.lightFalloff, textureAngle: root.textureAngle,
+                         erase: root.eraserTool || root.erase || root.cursorPenEraser,
+                         tipWidth: Number(root.cursorTipInfo.width || 0), tipHeight: Number(root.cursorTipInfo.height || 0),
+                         tipRotationVariation: root.tipRotationVariation, tipScaleVariation: root.tipScaleVariation,
+                         directionDegrees: root.cursorDirectionDegrees})
+        }
+        readonly property rect contourBounds: {
+            const points = (contours.outer || []).concat(contours.nominal || [])
+            if (points.length === 0) return Qt.rect(0, 0, 0, 0)
+            let left = root.width, top = root.height, right = 0, bottom = 0
+            for (let index = 0; index < points.length; ++index) {
+                const p = points[index]
+                if (!p.valid) continue
+                const x = root.imageX + p.x * root.imageWidth
+                const y = root.imageY + p.y * root.imageHeight
+                left = Math.min(left, x); top = Math.min(top, y)
+                right = Math.max(right, x); bottom = Math.max(bottom, y)
+            }
+            left = Math.max(0, Math.floor(left - 3)); top = Math.max(0, Math.floor(top - 3))
+            right = Math.min(root.width, Math.ceil(right + 3)); bottom = Math.min(root.height, Math.ceil(bottom + 3))
+            return Qt.rect(left, top, Math.max(0, right - left), Math.max(0, bottom - top))
+        }
+        x: contourBounds.x
+        y: contourBounds.y
+        width: contourBounds.width
+        height: contourBounds.height
+        visible: root.brushCursorVisible && width > 0 && height > 0
         z: 4
-        x: root.cursorPoint.x - width / 2
-        y: root.cursorPoint.y - height / 2
-        width: Math.max(2, root.nominalCursorWidth * root.cursorSizeResponse)
-        height: Math.max(2, root.nominalCursorHeight * root.cursorSizeResponse)
-
-        // Two contrasting edges stay legible over both highlights and shadows.
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: -1
-            radius: width / 2
-            color: "transparent"
-            border.width: 3
-            border.color: "#b3000000"
+        function schedulePaint() { if (visible) requestPaint() }
+        function strokeRing(ctx, points, strokeColor, strokeWidth) {
+            ctx.beginPath()
+            let started = false
+            for (let index = 0; index < points.length; ++index) {
+                const p = points[index]
+                if (!p.valid) { started = false; continue }
+                const px = root.imageX + p.x * root.imageWidth - x
+                const py = root.imageY + p.y * root.imageHeight - y
+                if (!started) { ctx.moveTo(px, py); started = true }
+                else ctx.lineTo(px, py)
+            }
+            ctx.strokeStyle = strokeColor; ctx.lineWidth = strokeWidth; ctx.stroke()
         }
-        Rectangle {
-            anchors.fill: parent
-            radius: width / 2
-            color: "transparent"
-            border.width: 1
-            border.color: root.erase || root.cursorPenEraser ? "#ffd4bf" : "#f4f7fa"
+        onPaint: {
+            const ctx = getContext("2d")
+            ctx.reset(); ctx.clearRect(0, 0, width, height)
+            if (!visible) return
+            strokeRing(ctx, contours.outer || [], "#b3000000", 3)
+            strokeRing(ctx, contours.outer || [], root.erase || root.cursorPenEraser ? "#ffd4bf" : "#f4f7fa", 1)
+            if (contours.innerVisible === true)
+                strokeRing(ctx, contours.inner || [], "#66ffffff", 1)
+            if (root.tabletDrawing && root.pressureSize && root.cursorPressure < 0.95)
+                strokeRing(ctx, contours.nominal || [], "#55ffffff", 1)
+            ctx.fillStyle = "#f4f7fa"
+            ctx.fillRect(root.cursorPoint.x - x - 1.5, root.cursorPoint.y - y - 1.5, 3, 3)
         }
-        Rectangle {
-            anchors.centerIn: parent
-            width: parent.width * root.hardness
-            height: parent.height * root.hardness
-            radius: width / 2
-            visible: root.hardness > 0.05 && root.hardness < 0.95 && parent.width >= 16
-            color: "transparent"
-            border.width: 1
-            border.color: "#66ffffff"
+        onContoursChanged: schedulePaint()
+        onVisibleChanged: schedulePaint()
+        onWidthChanged: schedulePaint()
+        onHeightChanged: schedulePaint()
+        Connections {
+            target: root
+            function onEraseChanged() { projectedPaintCursor.schedulePaint() }
+            function onCursorPenEraserChanged() { projectedPaintCursor.schedulePaint() }
         }
-        Rectangle {
-            anchors.centerIn: parent
-            width: root.nominalCursorWidth
-            height: root.nominalCursorHeight
-            radius: width / 2
-            visible: root.tabletDrawing && root.pressureSize && root.cursorPressure < 0.95
-            color: "transparent"
-            border.width: 1
-            border.color: "#55ffffff"
-        }
-        Rectangle {
-            anchors.centerIn: parent
-            width: root.erase || root.cursorPenEraser ? 7 : 3
-            height: 3
-            radius: 1
-            visible: root.nominalCursorWidth >= 8
-            color: "#f4f7fa"
-            border.width: 1
-            border.color: "#90000000"
+        Connections {
+            target: root.controller
+            function onControlsChanged() { projectedPaintCursor.geometryRevision += 1 }
+            function onPreviewChanged() { projectedPaintCursor.geometryRevision += 1 }
         }
     }
     Item {
@@ -354,10 +442,10 @@ Item {
                 }
             }
         }
-        x: root.controlsParent ? 0 : Math.max(0, (parent.width - width) / 2)
+        x: root.controlsParent ? 0 : Math.max(0, ((parent ? parent.width : 0) - width) / 2)
         y: root.controlsParent ? 0 : root.toolOptionsTopMargin
-        width: root.controlsParent ? Math.max(1, parent.width)
-                                   : Math.max(1, Math.min(theme.scaled(900), Math.max(1, parent.width - theme.space24)))
+        width: root.controlsParent ? Math.max(1, parent ? parent.width : 0)
+                                   : Math.max(1, Math.min(theme.scaled(900), Math.max(1, (parent ? parent.width : 0) - theme.space24)))
         height: controls.implicitHeight + theme.space16
         z: root.controlsParent ? 1 : 5
 
@@ -378,6 +466,7 @@ Item {
         AppPopup {
             id: brushMaterialPopup
             objectName: "photoPaintMaterialPopup"
+            transientMenu: true
             parent: Overlay.overlay
             focus: true
             width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(300), Math.max(1, parent ? parent.width - theme.space8 : theme.scaled(300)))))
@@ -421,7 +510,7 @@ Item {
                             { label: qsTr("Afterglow"), key: "light_paint", description: qsTr("Build up glowing light.") },
                             { label: qsTr("Photo fragments"), key: "photo_fragment", description: qsTr("Stamp copied photo fragments or saved tips.") }
                         ]
-                        delegate: Button {
+                        delegate: ActionButton {
                             id: materialOption
                             required property var modelData
                             required property int index
@@ -432,31 +521,19 @@ Item {
                             Layout.preferredHeight: theme.scaled(74)
                             padding: theme.space4
                             checkable: true
+                            active: checked
                             autoExclusive: true
                             checked: root.textureMaterial === modelData.key
                             Accessible.name: modelData.label
                             Accessible.description: checked ? qsTr("Selected brush material") : qsTr("Select brush material")
                             onClicked: {
                                 photoPaintControls.setBrushMaterial(modelData.key)
-                                brushMaterialPopup.close()
+                                brushMaterialPopup.closeTransient(true)
                             }
                             AppToolTip {
                                 targetItem: materialOption
                                 visible: materialOption.hovered
                                 text: materialOption.modelData.description
-                            }
-                            background: Rectangle {
-                                radius: theme.radiusControl
-                                color: materialOption.activeFocus ? theme.interactionFill
-                                       : materialOption.pressed ? theme.actionSecondaryPressed
-                                       : materialOption.checked ? theme.interactionFill
-                                       : materialOption.hovered ? theme.actionSecondaryHover : theme.surfaceInset
-                                border.width: root.textureMaterial === materialOption.modelData.key
-                                               || materialOption.activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
-                                border.color: root.textureMaterial === materialOption.modelData.key
-                                              || materialOption.activeFocus ? theme.interaction300 : theme.lineSoft
-                                Behavior on color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
-                                Behavior on border.color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
                             }
                             contentItem: ColumnLayout {
                                 spacing: theme.space2
@@ -489,42 +566,47 @@ Item {
             }
         }
 
-        Flow {
+        ColumnLayout {
             id: controls
             anchors.fill: parent
             anchors.margins: theme.space8
-            flow: Flow.LeftToRight
-            spacing: theme.space6
+            spacing: theme.space8
+
+            Flow {
+                id: paintCommandRow
+                Layout.fillWidth: true
+                flow: Flow.LeftToRight
+                spacing: theme.space6
 
             RowLayout {
                 id: paintModeControls
-                height: root.controlsParent ? implicitHeight : paintQuickControls.implicitHeight
+                height: implicitHeight
                 spacing: theme.space2
                 MiniButton {
                     objectName: "photoPaintMode"
                     visible: !root.eraserTool
-                    text: qsTr("Paint")
+                    text: root.maskTarget ? qsTr("Reveal") : qsTr("Paint")
                     role: "segmented"
                     active: !root.erase
                     minimumReadableWidth: theme.scaled(58)
-                    tooltip: qsTr("Paint with the selected brush color.")
+                    tooltip: root.maskTarget ? qsTr("Reveal this layer through its mask. X swaps Reveal and Hide.") : qsTr("Paint with the selected brush color.")
                     enabled: root.editable
                     onClicked: root.erase = false
                 }
                 MiniButton {
                     objectName: "photoPaintEraseMode"
                     visible: !root.eraserTool
-                    text: qsTr("Erase")
+                    text: root.maskTarget ? qsTr("Hide") : qsTr("Erase")
                     role: "segmented"
                     active: root.erase
                     minimumReadableWidth: theme.scaled(58)
-                    tooltip: qsTr("Erase pixels on the active paint layer.")
+                    tooltip: root.maskTarget ? qsTr("Hide this layer through its mask; its pixels stay editable.") : qsTr("Erase pixels on the selected layer.")
                     enabled: root.editable
                     onClicked: root.erase = true
                 }
                 MiniButton {
                     objectName: "photoPaintNewLayerButton"
-                    visible: !root.eraserTool
+                    visible: !root.eraserTool && !root.maskTarget
                     square: true
                     iconName: "plus"
                     role: "icon"
@@ -532,21 +614,12 @@ Item {
                     tooltip: qsTr("Create a new paint layer, then paint on the newly selected layer.")
                     onClicked: root.newLayerRequested()
                 }
-                MiniButton {
-                    objectName: "photoPaintEraseSelection"
-                    square: true
-                    iconName: "delete"
-                    role: "icon"
-                    enabled: root.editable && root.clipSelection && !root.controller.photoPaintBusy
-                    tooltip: qsTr("Erase all pixels inside the active selection.")
-                    onClicked: { root.finish(true); root.controller.erasePixelsFromSelection(root.layerIndex) }
-                }
             }
 
             RowLayout {
                 id: paintColorControls
-                visible: !root.eraserTool
-                height: root.controlsParent ? implicitHeight : paintQuickControls.implicitHeight
+                visible: !root.eraserTool && !root.maskTarget
+                height: implicitHeight
                 spacing: theme.space4
                 Label {
                     text: qsTr("Color")
@@ -558,21 +631,39 @@ Item {
                 ColorSwatchButton {
                     objectName: "photoPaintColorButton"
                     swatchColor: String(root.ink)
-                    label: qsTr("Brush color")
+                    label: qsTr("Paint color")
                     enabled: !root.erase
                     onPicked: colorDialog.open()
                 }
+                ToneTextField {
+                    objectName: "photoPaintColorValue"
+                    Layout.preferredWidth: theme.scaled(94)
+                    Layout.preferredHeight: theme.controlHeightDense
+                    enabled: !root.erase
+                    text: String(root.ink)
+                    Accessible.name: qsTr("Brush color value")
+                    selectByMouse: true
+                    validator: RegularExpressionValidator {
+                        regularExpression: /^#?(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
+                    }
+                    onEditingFinished: {
+                        if (acceptableInput)
+                            root.ink = text.startsWith("#") ? text : "#" + text
+                        text = Qt.binding(() => String(root.ink))
+                    }
+                }
             }
 
-            Button {
+            ActionButton {
                 id: materialChooser
                 objectName: "photoPaintMaterialChooser"
-                visible: !root.eraserTool
+                visible: !root.eraserTool && !root.maskTarget
                 width: root.controlsParent ? Math.max(1, controls.width) : theme.scaled(176)
                 height: theme.controlHeightDense
                 padding: theme.space4
                 enabled: root.editable
-                onClicked: brushMaterialPopup.open()
+                active: brushMaterialPopup.visible
+                onClicked: brushMaterialPopup.toggleTransient(materialChooser)
                 Accessible.name: qsTr("Brush material: %1").arg(photoPaintControls.brushMaterialLabel(root.textureMaterial))
                 Accessible.description: qsTr("Material preview; stroke appearance depends on settings.")
                 AppToolTip {
@@ -580,21 +671,11 @@ Item {
                     visible: materialChooser.hovered && !brushMaterialPopup.visible
                     text: qsTr("Choose a brush material. Stroke appearance depends on your settings.")
                 }
-                background: Rectangle {
-                    radius: theme.radiusControl
-                    color: materialChooser.activeFocus ? theme.interactionFill
-                           : materialChooser.pressed ? theme.actionSecondaryPressed
-                           : materialChooser.hovered ? theme.actionSecondaryHover : theme.surfaceInset
-                    border.width: theme.hairlineWidth
-                    border.color: materialChooser.activeFocus ? theme.interaction300 : theme.lineSoft
-                    Behavior on color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
-                    Behavior on border.color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
-                }
                 contentItem: RowLayout {
                     spacing: theme.space4
                     Canvas {
-                        Layout.preferredWidth: theme.scaled(38)
-                        Layout.preferredHeight: theme.scaled(20)
+                        Layout.preferredWidth: theme.scaled(52)
+                        Layout.preferredHeight: theme.scaled(22)
                         property string materialKey: root.textureMaterial
                         property color inkColor: root.ink
                         onInkColorChanged: requestPaint()
@@ -621,16 +702,6 @@ Item {
                 }
             }
 
-            MiniButton {
-                objectName: "photoPaintAdvancedButton"
-                text: qsTr("Options")
-                iconName: root.advancedControlsExpanded ? "chevron-up" : "chevron-down"
-                role: "secondary"
-                active: root.advancedControlsExpanded
-                tooltip: root.eraserTool ? qsTr("Show eraser pressure, spacing, and selection options.")
-                                        : qsTr("Show pressure, spacing, grain, and selection options.")
-                onClicked: root.advancedControlsExpanded = !root.advancedControlsExpanded
-            }
 
             Label {
                 objectName: "photoPaintStatusLabel"
@@ -642,13 +713,18 @@ Item {
                 verticalAlignment: Text.AlignVCenter
                 Accessible.name: text
                 text: root.controller.photoPaintError.length > 0 ? root.controller.photoPaintError
-                    : !root.editable ? qsTr("Select an unlocked pixel layer in Layers.")
-                    : root.drawing ? (root.eraserTool ? qsTr("Erasing…") : qsTr("Painting…"))
+                    : !root.editable ? (root.layerData.vectorPath !== undefined ? qsTr("Edit this vector with the Pen tool.")
+                        : root.layerData.smartObject !== undefined ? qsTr("Use Replace contents or edit this layer’s mask.")
+                        : qsTr("Select an unlocked photo or pixel layer in Layers."))
+                    : root.drawing ? (root.maskTarget ? (root.erase || root.eraserTool ? qsTr("Hiding…") : qsTr("Revealing…"))
+                        : root.eraserTool || root.erase ? qsTr("Erasing…") : qsTr("Painting…"))
                     : root.controller.photoPaintBusy ? qsTr("Finishing stroke…")
+                    : root.maskTarget ? (root.erase || root.eraserTool ? qsTr("Hide layer mask") : qsTr("Reveal layer mask"))
                     : qsTr("%1 on %2").arg(root.eraserTool || root.erase ? qsTr("Erase") : qsTr("Paint"))
                         .arg(String(root.layerData.displayName || root.layerData.name || qsTr("selected layer")))
                 color: root.controller.photoPaintError.length > 0 ? theme.error : theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 wrapMode: root.controlsParent ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap
                 maximumLineCount: root.controlsParent ? 2 : 1
@@ -661,18 +737,69 @@ Item {
                 height: theme.scaled(30)
                 color: theme.lineSoft
             }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: root.eraserTool ? qsTr("Eraser") : qsTr("Brush")
+                visible: root.controlsParent === null
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                font.weight: theme.weightControl
+            }
+
+            RowLayout {
+                visible: !root.maskTarget
+                Layout.fillWidth: true
+                spacing: theme.space4
+                BrushPresetPicker {
+                    id: presetPicker
+                    objectName: "photoPaintPresets"
+                    Layout.fillWidth: true
+                    currentSettings: root.customizableSettings
+                    onPresetSelected: function(settings) { root.applyBrushPreset(settings) }
+                }
+                MiniButton {
+                    objectName: "photoPaintPreviewToggle"
+                    text: qsTr("Preview")
+                    role: "segmented"
+                    active: presetPicker.previewVisible
+                    tooltip: qsTr("Show or hide the tip practice area.")
+                    onClicked: presetPicker.previewVisible = !presetPicker.previewVisible
+                }
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                visible: !root.eraserTool && !root.maskTarget
+                spacing: theme.space2
+                Repeater {
+                    model: ["#ffffff", "#202020", "#ff6254", "#ffc66d", "#68d5b0", "#78adff"]
+                    delegate: ColorSwatchButton {
+                        required property string modelData
+                        required property int index
+                        objectName: "photoPaintQuickColor" + index
+                        swatchColor: modelData
+                        selected: Qt.colorEqual(root.ink, modelData)
+                        label: qsTr("Use brush color %1").arg(modelData)
+                        enabled: !root.erase
+                        onPicked: function(color) { root.ink = color }
+                    }
+                }
+            }
 
             GridLayout {
                 id: paintQuickControls
-                width: root.controlsParent ? controls.width
-                                           : Math.min(theme.scaled(480), Math.max(theme.scaled(416), photoPaintControls.width - theme.scaled(360)))
-                columns: root.controlsParent ? 1 : 4
-                columnSpacing: theme.space12
+                Layout.fillWidth: true
+                columns: root.controlsParent ? 1 : (photoPaintControls.width >= theme.scaled(780) ? 4 : 2)
+                columnSpacing: theme.space8
                 rowSpacing: theme.space8
 
                 ColumnLayout {
+                    id: paintSizeControls
                     Layout.fillWidth: true
-                    Layout.minimumWidth: theme.scaled(92)
+                    Layout.minimumWidth: 0
                     spacing: theme.space2
                     RowLayout {
                         Layout.fillWidth: true
@@ -684,12 +811,36 @@ Item {
                             font.weight: theme.weightControl
                         }
                         Item { Layout.fillWidth: true }
-                        Label {
-                            text: Math.round(root.brushSize).toString()
-                            color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeCaption
+                        ToneTextField {
+                            id: paintSizeField
+                            objectName: "photoPaintSizeValueField"
+                            numericEntry: true
+                            Layout.preferredWidth: theme.scaled(72)
+                            Layout.preferredHeight: theme.controlHeightDense
+                            enabled: root.editable
+                            text: String(Math.round(root.brushSize))
+                            Accessible.name: qsTr("Brush size in pixels")
+                            selectByMouse: true
                             horizontalAlignment: Text.AlignRight
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                            validator: IntValidator { bottom: 1; top: 4096 }
+                            onEditingFinished: {
+                                if (acceptableInput)
+                                    root.brushSize = Math.max(1, Math.min(4096, Number(text)))
+                                text = Qt.binding(() => String(Math.round(root.brushSize)))
+                            }
+                            Keys.onEscapePressed: function(event) {
+                                text = Qt.binding(() => String(Math.round(root.brushSize)))
+                                focus = false
+                                event.accepted = true
+                            }
+                        }
+                        Label {
+                            text: qsTr("px")
+                            color: theme.textMuted
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
+                            font.pixelSize: theme.typeCaption
                         }
                     }
                     ToolValueSlider {
@@ -706,121 +857,143 @@ Item {
                     }
                 }
 
-                ColumnLayout {
+                InspectorSlider {
+                    objectName: "photoPaintHardness"
                     Layout.fillWidth: true
-                    Layout.minimumWidth: theme.scaled(92)
-                    spacing: theme.space2
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            text: qsTr("Edge")
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeCaption
-                            font.weight: theme.weightControl
-                        }
-                        Item { Layout.fillWidth: true }
-                        Label {
-                            text: Math.round(root.hardness * 100) + "%"
-                            color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeCaption
-                            horizontalAlignment: Text.AlignRight
-                        }
-                    }
-                    ToolValueSlider {
-                        objectName: "photoPaintHardness"
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: theme.scaled(92)
-                        minimumReadableWidth: theme.scaled(92)
-                        label: qsTr("Brush edge hardness")
-                        tooltipText: qsTr("Edge hardness: %1%").arg(Math.round(root.hardness * 100))
-                        from: 0; to: 1; stepSize: 0.01; value: root.hardness; enabled: root.editable
-                        onMoved: root.hardness = value
-                    }
+                    Layout.minimumWidth: 0
+                    controlHeight: theme.controlHeightDense
+                    forceCompact: true
+                    label: qsTr("Edge hardness")
+                    from: 0
+                    to: 1
+                    stepSize: 0.01
+                    value: root.hardness
+                    valueText: Math.round(root.hardness * 100) + "%"
+                    valueInputMode: "percentNormalized"
+                    defaultValue: 0.8
+                    enabled: root.editable
+                    disabledReason: qsTr("Select an unlocked pixel layer to paint.")
+                    onValueDragged: function(nextValue) { root.hardness = nextValue }
+                    onResetRequested: valueDragged(defaultValue)
                 }
 
-                ColumnLayout {
+                InspectorSlider {
+                    objectName: "photoPaintOpacity"
                     Layout.fillWidth: true
-                    Layout.minimumWidth: theme.scaled(92)
-                    spacing: theme.space2
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            text: qsTr("Opacity")
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeCaption
-                            font.weight: theme.weightControl
-                        }
-                        Item { Layout.fillWidth: true }
-                        Label {
-                            text: Math.round(root.brushOpacity * 100) + "%"
-                            color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeCaption
-                            horizontalAlignment: Text.AlignRight
-                        }
-                    }
-                    ToolValueSlider {
-                        objectName: "photoPaintOpacity"
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: theme.scaled(92)
-                        minimumReadableWidth: theme.scaled(92)
-                        label: qsTr("Brush opacity")
-                        tooltipText: qsTr("Opacity: %1%").arg(Math.round(root.brushOpacity * 100))
-                        from: 0; to: 1; stepSize: 0.01; value: root.brushOpacity; enabled: root.editable
-                        onMoved: root.brushOpacity = value
-                    }
+                    Layout.minimumWidth: 0
+                    controlHeight: theme.controlHeightDense
+                    forceCompact: true
+                    label: qsTr("Opacity")
+                    from: 0
+                    to: 1
+                    stepSize: 0.01
+                    value: root.brushOpacity
+                    valueText: Math.round(root.brushOpacity * 100) + "%"
+                    valueInputMode: "percentNormalized"
+                    defaultValue: 1
+                    enabled: root.editable
+                    disabledReason: qsTr("Select an unlocked pixel layer to paint.")
+                    onValueDragged: function(nextValue) { root.brushOpacity = nextValue }
+                    onResetRequested: valueDragged(defaultValue)
                 }
 
-                ColumnLayout {
+                InspectorSlider {
+                    objectName: "photoPaintFlow"
                     Layout.fillWidth: true
-                    Layout.minimumWidth: theme.scaled(92)
-                    spacing: theme.space2
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            text: qsTr("Flow")
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeCaption
-                            font.weight: theme.weightControl
-                        }
-                        Item { Layout.fillWidth: true }
-                        Label {
-                            text: Math.round(root.flow * 100) + "%"
-                            color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeCaption
-                            horizontalAlignment: Text.AlignRight
-                        }
-                    }
-                    ToolValueSlider {
-                        objectName: "photoPaintFlow"
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: theme.scaled(92)
-                        minimumReadableWidth: theme.scaled(92)
-                        label: qsTr("Brush flow")
-                        tooltipText: qsTr("Flow: %1%").arg(Math.round(root.flow * 100))
-                        from: 0; to: 1; stepSize: 0.01; value: root.flow; enabled: root.editable
-                        onMoved: root.flow = value
-                    }
+                    Layout.minimumWidth: 0
+                    controlHeight: theme.controlHeightDense
+                    forceCompact: true
+                    label: qsTr("Flow")
+                    from: 0
+                    to: 1
+                    stepSize: 0.01
+                    value: root.flow
+                    valueText: Math.round(root.flow * 100) + "%"
+                    valueInputMode: "percentNormalized"
+                    defaultValue: 1
+                    enabled: root.editable
+                    disabledReason: qsTr("Select an unlocked pixel layer to paint.")
+                    onValueDragged: function(nextValue) { root.flow = nextValue }
+                    onResetRequested: valueDragged(defaultValue)
+                }
+            }
+
+            BrushStrokePreview {
+                objectName: "photoPaintTipPreview"
+                Layout.fillWidth: true
+                visible: presetPicker.previewVisible
+                diameter: root.brushSize
+                hardness: root.hardness
+                flow: root.flow
+                strokeOpacity: root.brushOpacity
+                spacing: root.brushSpacing
+                ink: root.ink
+                erase: root.eraserTool || root.erase || root.maskTarget
+            }
+
+
+            MiniButton {
+                Layout.fillWidth: true
+                objectName: "photoPaintAdvancedButton"
+                text: root.advancedControlsExpanded ? qsTr("Fewer settings") : qsTr("More settings")
+                iconName: root.advancedControlsExpanded ? "chevron-up" : "chevron-down"
+                role: "secondary"
+                active: root.advancedControlsExpanded
+                tooltip: root.eraserTool ? qsTr("Show eraser spacing and tablet pressure controls.")
+                                        : qsTr("Show stroke spacing, tablet pressure, texture, and selection controls.")
+                onClicked: root.advancedControlsExpanded = !root.advancedControlsExpanded
+            }
+
+
+            RowLayout {
+                objectName: "photoPaintSelectionActions"
+                visible: root.selectionAvailable
+                Layout.fillWidth: true
+                spacing: theme.space4
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Selection")
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                    font.weight: theme.weightControl
+                }
+                MiniButton {
+                    objectName: "photoPaintEraseSelection"
+                    text: qsTr("Erase selected pixels")
+                    iconName: "delete"
+                    role: "destructive"
+                    minimumReadableWidth: theme.scaled(150)
+                    enabled: root.editable && root.selectionAvailable && !root.controller.photoPaintBusy
+                    disabledReason: root.controller.photoPaintBusy
+                        ? qsTr("Finish the active stroke before erasing the selection.")
+                        : !root.editable
+                            ? qsTr("Select an unlocked photo or pixel layer before erasing pixels.")
+                            : qsTr("Create or select a selection before erasing selected pixels.")
+                    tooltip: qsTr("Erase pixels inside the active selection from this layer.")
+                    onClicked: { root.finish(true); root.controller.erasePixelsFromSelection(root.layerIndex) }
                 }
             }
 
             ColumnLayout {
                 objectName: "photoPaintAdvancedControls"
-                width: Math.max(1, root.controlsParent ? controls.width : photoPaintControls.width - theme.space16)
-                Layout.alignment: Qt.AlignVCenter
+                Layout.fillWidth: true
                 visible: root.advancedControlsExpanded
                 spacing: theme.space8
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Stroke & response")
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                    font.weight: theme.weightControl
+                }
                 Flow {
                     Layout.fillWidth: true
                     spacing: theme.space8
                     Label {
                         text: qsTr("Material")
-                        visible: !root.eraserTool
+                        visible: false
                         height: theme.controlHeightDense
                         verticalAlignment: Text.AlignVCenter
                         color: theme.textMuted
@@ -854,7 +1027,7 @@ Item {
                     }
                     ToolValueSlider {
                         objectName: "photoPaintTextureStrength"
-                        visible: !root.eraserTool && root.textureMaterial !== "solid"
+                        visible: !root.eraserTool && !root.maskTarget && ["dry_ink", "graphite"].indexOf(root.textureMaterial) >= 0
                         width: theme.scaled(116)
                         height: theme.controlHeightDense + theme.space24
                         showCaption: true
@@ -867,9 +1040,10 @@ Item {
                 }
                 Flow {
                     Layout.fillWidth: true
+                    visible: !root.eraserTool && !root.maskTarget && ["dry_ink", "graphite"].indexOf(root.textureMaterial) >= 0
                     spacing: theme.space8
                     Column {
-                        visible: !root.eraserTool && root.textureMaterial !== "solid"
+                        visible: !root.eraserTool && !root.maskTarget && root.textureMaterial !== "solid"
                         width: theme.scaled(62)
                         spacing: theme.space2
                         Label {
@@ -879,6 +1053,7 @@ Item {
                             font.pixelSize: theme.typeCaption
                         }
                     ToneTextField {
+                        numericEntry: true
                         objectName: "photoPaintTextureScale"
                         width: theme.scaled(62)
                         height: theme.controlHeightDense
@@ -889,7 +1064,7 @@ Item {
                     }
                     }
                     Column {
-                        visible: !root.eraserTool && root.textureMaterial !== "solid"
+                        visible: !root.eraserTool && !root.maskTarget && root.textureMaterial !== "solid"
                         width: theme.scaled(58)
                         spacing: theme.space2
                         Label {
@@ -899,6 +1074,7 @@ Item {
                             font.pixelSize: theme.typeCaption
                         }
                     ToneTextField {
+                        numericEntry: true
                         objectName: "photoPaintTextureAngle"
                         width: theme.scaled(58)
                         height: theme.controlHeightDense
@@ -909,7 +1085,7 @@ Item {
                     }
                     }
                     Column {
-                        visible: !root.eraserTool && root.textureMaterial !== "solid"
+                        visible: !root.eraserTool && !root.maskTarget && root.textureMaterial !== "solid"
                         width: theme.scaled(68)
                         spacing: theme.space2
                         Label {
@@ -919,6 +1095,7 @@ Item {
                             font.pixelSize: theme.typeCaption
                         }
                     ToneTextField {
+                        numericEntry: true
                         objectName: "photoPaintTextureSeed"
                         width: theme.scaled(68)
                         height: theme.controlHeightDense
@@ -928,15 +1105,75 @@ Item {
                         onEditingFinished: if (acceptableInput) root.textureSeed = Number(text)
                     }
                     }
-                    MiniButton { objectName: "photoPaintPressureSize"; text: qsTr("Pressure size"); iconName: "adjust"; role: "segmented"; active: root.pressureSize; tooltip: qsTr("Pressure controls brush size."); onClicked: root.pressureSize = !root.pressureSize }
-                    MiniButton { objectName: "photoPaintPressureFlow"; text: qsTr("Pressure flow"); iconName: "effects"; role: "segmented"; active: root.pressureFlow; tooltip: qsTr("Pressure controls brush flow."); onClicked: root.pressureFlow = !root.pressureFlow }
-                    MiniButton { objectName: "photoPaintSelection"; text: qsTr("Clip to selection"); iconName: "masks"; role: "segmented"; active: root.clipSelection; tooltip: qsTr("Clip painting to the active selection."); onClicked: root.clipSelection = !root.clipSelection }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.space4
+                    Label {
+                        text: qsTr("Tablet pressure")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: theme.weightControl
+                    }
+                    Item { Layout.fillWidth: true }
+                    MiniButton {
+                        objectName: "photoPaintPressureSize"
+                        text: qsTr("Size")
+                        iconName: "adjust"
+                        role: "segmented"
+                        active: root.pressureSize
+                        Accessible.name: qsTr("Pressure controls brush size")
+                        tooltip: qsTr("Use stylus pressure to vary brush size.")
+                        onClicked: root.pressureSize = !root.pressureSize
+                    }
+                    MiniButton {
+                        objectName: "photoPaintPressureFlow"
+                        text: qsTr("Flow")
+                        iconName: "effects"
+                        role: "segmented"
+                        active: root.pressureFlow
+                        Accessible.name: qsTr("Pressure controls brush flow")
+                        tooltip: qsTr("Use stylus pressure to vary brush flow.")
+                        onClicked: root.pressureFlow = !root.pressureFlow
+                    }
+                }
+                RowLayout {
+                    visible: root.selectionAvailable
+                    Layout.fillWidth: true
+                    spacing: theme.space4
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Selection behavior")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: theme.weightControl
+                    }
+                    MiniButton {
+                        objectName: "photoPaintSelection"
+                        text: qsTr("Selection active")
+                        iconName: "masks"
+                        role: "segmented"
+                        active: root.selectionAvailable
+                        enabled: root.selectionAvailable
+                        disabledReason: qsTr("Create or select a selection before clipping strokes.")
+                        tooltip: qsTr("Strokes stay inside the selection. Click to deselect (Ctrl/Cmd+D).")
+                        onClicked: root.controller.deselectWorkingSelection()
+                    }
                 }
                 Flow {
                     Layout.fillWidth: true
                     objectName: "photoPaintFragmentControls"
-                    visible: !root.eraserTool && root.textureMaterial === "photo_fragment"
+                    visible: !root.eraserTool && !root.maskTarget && root.textureMaterial === "photo_fragment"
                     spacing: theme.space8
+                    Label {
+                        text: qsTr("Photo fragments")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: theme.weightControl
+                    }
                     Component.onCompleted: root.refreshFragmentLayers()
                     ToneComboBox {
                         objectName: "photoPaintFragmentSource"
@@ -989,8 +1226,15 @@ Item {
                 Flow {
                     Layout.fillWidth: true
                     objectName: "photoPaintFragmentPresetControls"
-                    visible: !root.eraserTool && root.textureMaterial === "photo_fragment"
+                    visible: !root.eraserTool && !root.maskTarget && root.textureMaterial === "photo_fragment"
                     spacing: theme.space8
+                    Label {
+                        text: qsTr("Reusable tip")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: theme.weightControl
+                    }
                     ToneTextField {
                         id: fragmentPresetName
                         objectName: "photoPaintFragmentPresetName"
@@ -1045,8 +1289,15 @@ Item {
                 Flow {
                     Layout.fillWidth: true
                     objectName: "photoPaintLightControls"
-                    visible: !root.eraserTool && root.textureMaterial === "light_paint"
+                    visible: !root.eraserTool && !root.maskTarget && root.textureMaterial === "light_paint"
                     spacing: theme.space8
+                    Label {
+                        text: qsTr("Afterglow")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: theme.weightControl
+                    }
                     ToolValueSlider {
                         objectName: "photoPaintLightFalloff"
                         width: theme.scaled(130)

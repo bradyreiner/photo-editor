@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QColor>
 #include <QColorSpace>
 #include <QDir>
@@ -21,7 +22,9 @@
 #include <QImage>
 #include <QImageReader>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointF>
+#include <QProcess>
 #include <QRectF>
 #include <QTemporaryDir>
 #include <QThread>
@@ -36,16 +39,20 @@
 #include "editor_preview_image_sink.h"
 #include "preset_thumbnail_result_cache.h"
 #include "edit_recipe_pipeline_bridge.h"
+#include "desktop_pipeline_state_compiler.h"
 #include "render_plan_store.h"
 #include "scaled_mask_matte_service.h"
 #include "app_bootstrap.h"
 #include "ai_model_runtime.h"
 #include "dcp_test_fixture.h"
 #include "photo_render_utils.h"
+#include "photo_layer_effect_codec.h"
+#include "thumbnail_refresh_queue_service.h"
 #include "preview_backend_controller.h"
 #include "photo_editor/io/hdr_avif_io.h"
 #include "photo_editor/io/openexr_io.h"
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "photo_editor/pipeline/layer_styles.h"
 #include "raw_image_decoder.h"
 #include "segmentation_result_schema.h"
 #include "working_image.h"
@@ -188,7 +195,7 @@ int capture_built_in_preset_baseline(const QString& output_directory) {
       {"Clean Black and White", built_in_preset_portrait_source_image()},
   };
   for (const auto& preset_render : preset_renders) {
-    const auto preset_state =
+    const auto original_preset_state =
         photo_editor::desktop::parse_adjustment_payload_or_legacy_recipe(
             controller.presetAdjustmentPatchJson(
                 QString::fromLatin1(
@@ -196,29 +203,104 @@ int capture_built_in_preset_baseline(const QString& output_directory) {
             .state.value_or(
                 photo_editor::desktop::
                     EditState{});
-    const auto rendered =
-        photo_editor::desktop::render_output_image_with_backend(
-            preset_render.source,
-            preset_state,
-            photo_editor::desktop::preview_color_space(),
-            QImage::Format_ARGB32,
-            photo_editor::desktop::RenderBackendPreference::CpuOnly);
-    if (rendered.isNull()) {
-      return fail("built-in preset baseline render should produce an image");
+    const auto probe_models = qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_PRESET_MODEL_PROBE")
+        ? QStringList{QStringLiteral("aces2-ocio-v1"), QStringLiteral("aces2-hellwig-jmh-v1"),
+              QStringLiteral("legacy-oklch-v1")}
+        : QStringList{original_preset_state.photographic_rendering_model};
+    for (const auto& model : probe_models) {
+      auto preset_state = original_preset_state;
+      preset_state.photographic_rendering_model = model;
+      const auto rendered =
+          photo_editor::desktop::render_output_image_with_backend(
+              preset_render.source,
+              preset_state,
+              photo_editor::desktop::preview_color_space(),
+              QImage::Format_ARGB32,
+              photo_editor::desktop::RenderBackendPreference::CpuOnly);
+      if (rendered.isNull()) {
+        return fail("built-in preset baseline render should produce an image");
+      }
+      auto file_stem = QString::fromLatin1(preset_render.name).toLower();
+      file_stem.replace(QLatin1Char(' '), QLatin1Char('-'));
+      if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_PRESET_MODEL_PROBE")) file_stem += '-' + model;
+      const auto source_path =
+          QDir(output_directory).filePath(file_stem + QStringLiteral("-source.png"));
+      const auto rendered_path =
+          QDir(output_directory).filePath(file_stem + QStringLiteral("-rendered.png"));
+      if (!preset_render.source.save(source_path) || !rendered.save(rendered_path)) {
+        return fail("built-in preset baseline images should be writable");
+      }
+      std::cout << "built_in_preset_baseline=" << preset_render.name
+                << "|model=" << model.toStdString()
+                << "|hash=" << image_hash(rendered)
+                << "|source=" << source_path.toStdString()
+                << "|rendered=" << rendered_path.toStdString() << '\n';
+      if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_PRESET_MODEL_PROBE") &&
+          model == QStringLiteral("aces2-ocio-v1")) {
+        const auto interactive_image = photo_editor::desktop::render_output_image_with_backend(
+            preset_render.source, preset_state, photo_editor::desktop::preview_color_space(),
+            QImage::Format_ARGB32, photo_editor::desktop::RenderBackendPreference::CpuOnly,
+            nullptr, nullptr, {}, photo_editor::pipeline::RemovalQuality::Interactive);
+        if (interactive_image.isNull() || !interactive_image.save(
+                QDir(output_directory).filePath(file_stem + "-interactive.png")))
+          return fail("Interactive preset quality probe must render and save");
+        std::cout << "built_in_preset_quality=" << preset_render.name
+                  << "|interactive_hash=" << image_hash(interactive_image)
+                  << "|final_hash=" << image_hash(rendered) << '\n';
+        auto direct = photo_editor::desktop::working_image_from_qimage(
+            preset_render.source, preset_state.working_color_profile);
+        const auto pipeline = photo_editor::desktop::compile_desktop_pipeline_state(
+            preset_state, nullptr, photo_editor::desktop::compile_color_pipeline_config(preset_state),
+            photo_editor::desktop::DesktopRenderPurpose::Output,
+            photo_editor::desktop::LocalMaskRasterPolicy::UseStoredRaster,
+            QSize(direct.width, direct.height), direct.pixels);
+        if (direct.isNull() || !photo_editor::pipeline::apply_color_adjustments(
+                &direct.pixels, direct.width, direct.height, pipeline,
+                photo_editor::pipeline::RemovalQuality::Final))
+          return fail("Preset direct engine reference should render");
+        photo_editor::desktop::WorkingImageQImageTelemetry direct_telemetry;
+        const auto direct_image = photo_editor::desktop::qimage_from_working_image(direct,
+            photo_editor::desktop::preview_color_space(), QImage::Format_ARGB32,
+            preset_state.working_color_profile, {}, &direct_telemetry,
+            photo_editor::desktop::WorkingImageOutputTransform{
+                .color_pipeline = &pipeline.color_pipeline,
+                .target = photo_editor::pipeline::GamutWarningTarget::ExportOutput,
+                .allow_metal_output_lut = false});
+        const auto admission = photo_editor::desktop::RenderPlanStore::shared().admit(
+            QStringLiteral("preset-model-probe:%1").arg(file_stem), {}, preset_state,
+            preset_render.source.size(), photo_editor::pipeline::RenderPurpose::Export,
+            photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation);
+        if (!admission.admitted || !admission.plan.has_value())
+          return fail("Preset canonical reference should be admitted");
+        const auto canonical_image = photo_editor::desktop::render_output_image_with_backend(
+            preset_render.source, preset_state, photo_editor::desktop::preview_color_space(),
+            QImage::Format_ARGB32, photo_editor::desktop::RenderBackendPreference::CpuOnly,
+            nullptr, nullptr, {}, photo_editor::pipeline::RemovalQuality::Final,
+            photo_editor::desktop::RenderOutputPolicy::DisplayReferred, &*admission.plan);
+        if (direct_image.isNull() || canonical_image.isNull()) return fail("Preset references must publish");
+        int direct_delta = 0, canonical_delta = 0;
+        for (int y = 0; y < rendered.height(); ++y)
+          for (int x = 0; x < rendered.width(); ++x) {
+            const auto actual = rendered.pixelColor(x, y);
+            const auto independent = direct_image.pixelColor(x, y);
+            const auto canonical = canonical_image.pixelColor(x, y);
+            direct_delta = std::max(direct_delta, std::max({std::abs(actual.red()-independent.red()),
+                std::abs(actual.green()-independent.green()), std::abs(actual.blue()-independent.blue()),
+                std::abs(actual.alpha()-independent.alpha())}));
+            canonical_delta = std::max(canonical_delta, std::max({std::abs(actual.red()-canonical.red()),
+                std::abs(actual.green()-canonical.green()), std::abs(actual.blue()-canonical.blue()),
+                std::abs(actual.alpha()-canonical.alpha())}));
+          }
+        if (!direct_image.save(QDir(output_directory).filePath(file_stem + "-direct.png")) ||
+            !canonical_image.save(QDir(output_directory).filePath(file_stem + "-canonical.png")))
+          return fail("Preset reference artifacts must save");
+        std::cout << "built_in_preset_reference=" << preset_render.name
+                  << "|model=" << model.toStdString() << "|direct_hash=" << image_hash(direct_image)
+                  << "|canonical_hash=" << image_hash(canonical_image)
+                  << "|direct_max_rgba8=" << direct_delta << "|canonical_max_rgba8=" << canonical_delta
+                  << "|processor=" << direct_telemetry.color_processor.toStdString() << '\n';
+      }
     }
-    auto file_stem = QString::fromLatin1(preset_render.name).toLower();
-    file_stem.replace(QLatin1Char(' '), QLatin1Char('-'));
-    const auto source_path =
-        QDir(output_directory).filePath(file_stem + QStringLiteral("-source.png"));
-    const auto rendered_path =
-        QDir(output_directory).filePath(file_stem + QStringLiteral("-rendered.png"));
-    if (!preset_render.source.save(source_path) || !rendered.save(rendered_path)) {
-      return fail("built-in preset baseline images should be writable");
-    }
-    std::cout << "built_in_preset_baseline=" << preset_render.name
-              << "|hash=" << image_hash(rendered)
-              << "|source=" << source_path.toStdString()
-              << "|rendered=" << rendered_path.toStdString() << '\n';
   }
   return EXIT_SUCCESS;
 }
@@ -990,6 +1072,20 @@ namespace photo_editor::desktop {
 RenderResult render_preview_request_for_test(const RenderRequest& request);
 
 struct EditorPreviewControllerTestAccess {
+  static bool mask_work_idle(const EditorPreviewController& controller) {
+    const auto& coordinator = controller.mask_worker_coordinator_;
+    const auto& active_preview = coordinator.activeMaskPreviewWorker();
+    return !active_preview.running() && !active_preview.pending() &&
+        !coordinator.activeMaskOutlinePending() &&
+        !coordinator.activeMaskOutlineWatcher().isRunning() &&
+        !coordinator.smartSelectPreviewPending() &&
+        !coordinator.smartSelectPreviewWatcher().isRunning() &&
+        !coordinator.smartSelectCommitPending() &&
+        !coordinator.smartSelectCommitWatcher().isRunning() &&
+        !coordinator.brushRasterCommitWatcher().isRunning() &&
+        !coordinator.inpaintApplyWatcher().isRunning() &&
+        !coordinator.inpaintRegenerateWatcher().isRunning();
+  }
   // Functional assertions inspect settled output. Admission latency and stale
   // publication are covered independently by the dedicated async tests.
   static QString settled_mask_preview_source(const EditorPreviewController& controller) {
@@ -1009,6 +1105,9 @@ struct EditorPreviewControllerTestAccess {
   }
   static EditState current_state(const EditorPreviewController& controller) {
     return controller.currentState();
+  }
+  static int photo_layer_revision(const EditorPreviewController& controller) {
+    return controller.thumbnail_cache_session_.photoLayerRevision();
   }
   static QString cache_path_for_selection(
       const EditorPreviewController& controller,
@@ -1317,6 +1416,9 @@ struct EditorPreviewControllerTestAccess {
   }
   static bool thumbnail_refresh_queue_pending(const EditorPreviewController& controller) {
     return controller.thumbnail_refresh_coordinator_.pending();
+  }
+  static QVariantMap thumbnail_refresh_queue_fields(const EditorPreviewController& controller) {
+    return controller.thumbnailRefreshQueueFields();
   }
   static bool thumbnail_refresh_queue_timer_active(const EditorPreviewController& controller) {
     return controller.thumbnail_refresh_coordinator_.timerActive();
@@ -2140,13 +2242,316 @@ int grading_panel_reset_regression() {
   return EXIT_SUCCESS;
 }
 
+bool wait_for_preview_idle_bounded(
+    photo_editor::desktop::EditorPreviewController& preview_controller,
+    int timeout_ms = 2000) {
+  auto elapsed_ms = 0;
+  while (elapsed_ms < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    const auto layer_adjustment_timer_active =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            photo_layer_adjustment_render_timer_active(preview_controller);
+    const auto interactive_render_timer_active =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            interactive_render_timer_active(preview_controller);
+    const auto transaction_preview_timer_active =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            edit_transaction_interactive_preview_timer_active(preview_controller);
+    if (!preview_controller.processing() &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+            preview_controller) &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_running(
+            preview_controller) &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+            preview_controller) &&
+        !interactive_render_timer_active && !transaction_preview_timer_active &&
+        !layer_adjustment_timer_active) {
+      return true;
+    }
+    QThread::msleep(25);
+    elapsed_ms += 25;
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  const auto layer_adjustment_timer_active =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          photo_layer_adjustment_render_timer_active(preview_controller);
+  const auto interactive_render_timer_active =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          interactive_render_timer_active(preview_controller);
+  const auto transaction_preview_timer_active =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          edit_transaction_interactive_preview_timer_active(preview_controller);
+  return !preview_controller.processing() &&
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+          preview_controller) &&
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_running(
+          preview_controller) &&
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+          preview_controller) &&
+      !interactive_render_timer_active && !transaction_preview_timer_active &&
+      !layer_adjustment_timer_active;
+}
+
+int duplicate_mask_policy_regression(const QString& source_path) {
+  auto owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& controller = *owner;
+  controller.loadAsset(QStringLiteral("duplicate-mask-policy-asset"), source_path,
+      QString(), QString(), QString(), QString(), QString());
+  if (!wait_for_preview_idle_bounded(controller))
+    return fail("duplicate policy controller should finish its source preview");
+  controller.addMask(QStringLiteral("linear"));
+  if (controller.photoLayerCount() != 0 ||
+      !controller.addFillLayer(QStringLiteral("#808080"), QStringLiteral("Masked target")) ||
+      !controller.linkActiveSelectionToPhotoLayer(0) || controller.photoLayerCount() != 1) {
+    return fail("duplicate policy setup should explicitly create and mask a content layer");
+  }
+  const auto source_masked_layer = controller.photoLayers().at(0).toMap();
+  const auto source_mask_set_id =
+      source_masked_layer.value(QStringLiteral("selectionMaskSetId")).toString();
+  if (source_mask_set_id.isEmpty()) return fail("duplicate policy source layer should have a mask link");
+  if (!controller.addPhotoLayerStyle(0, QStringLiteral("color_overlay")))
+    return fail("duplicate policy setup should add a masked layer style");
+  const auto source_styles = controller.photoLayerStyles(0);
+  if (source_styles.isEmpty()) return fail("duplicate policy source should expose its layer style");
+  const auto source_style_id = source_styles.constFirst().toMap().value(QStringLiteral("id")).toString();
+  if (!controller.setPhotoLayerStyleParameters(
+          0, source_style_id, QVariantMap{{QStringLiteral("maskRef"), source_mask_set_id}})) {
+    return fail("duplicate policy setup should bind the layer style to the source mask");
+  }
+  auto parsed = photo_editor::desktop::parse_adjustment_patch_json(
+      controller.currentAssetBoundAdjustmentPatchJson());
+  if (!parsed.ok() || parsed.state->layers.isEmpty())
+    return fail("duplicate policy state should remain parseable after style editing");
+  auto source_layer = parsed.state->layers[0].toMap();
+  photo_editor::pipeline::PhotoEffectInstance effect;
+  effect.id = "duplicate-mask-effect";
+  effect.mask_ref = source_mask_set_id.toStdString();
+  const auto effects = photo_editor::desktop::encode_photo_layer_effects(std::vector{effect});
+  if (!effects) return fail("duplicate policy effect stack should encode");
+  source_layer.insert(QStringLiteral("effectStack"), *effects);
+  parsed.state->layers[0] = source_layer;
+  const auto serialized_recipe =
+      photo_editor::desktop::serialize_edit_recipe_json(*parsed.state);
+  const auto serialized_validation =
+      photo_editor::desktop::validate_edit_recipe_json(serialized_recipe);
+  const auto serialized_parse =
+      photo_editor::desktop::parse_adjustment_payload_or_legacy_recipe(serialized_recipe);
+  const auto dump_layer_row = [](const char* label, int index, const QVariantMap& row) {
+    const auto keys = row.keys().join(QLatin1Char(','));
+    auto compact_row = row;
+    const QStringList omitted_fields = {
+        QStringLiteral("thumbnailSource"), QStringLiteral("thumbnailImage"),
+        QStringLiteral("renderedThumbnail"), QStringLiteral("sourceImage"),
+        QStringLiteral("image"), QStringLiteral("raster"), QStringLiteral("rasterData"),
+        QStringLiteral("pixelData"), QStringLiteral("paintTiles"),
+        QStringLiteral("maskRaster"), QStringLiteral("copyBaseImage"),
+        QStringLiteral("copyBaseImageThroughAdjustments")};
+    for (const auto& field : omitted_fields) compact_row.remove(field);
+    const auto json = QJsonDocument::fromVariant(compact_row).toJson(QJsonDocument::Compact);
+    std::cerr << label << "[" << index << "] keys=" << keys.toStdString()
+              << " id=" << row.value(QStringLiteral("id")).toString().toStdString()
+              << " layerId=" << row.value(QStringLiteral("layerId")).toString().toStdString()
+              << " sourceLayerId="
+              << row.value(QStringLiteral("sourceLayerId")).toString().toStdString()
+              << " name=" << row.value(QStringLiteral("name")).toString().toStdString()
+              << " kind=" << row.value(QStringLiteral("kind")).toString().toStdString()
+              << " type=" << row.value(QStringLiteral("type")).toString().toStdString()
+              << " layerStyleStackLength="
+              << row.value(QStringLiteral("layerStyleStack")).toString().size()
+              << " effectStackLength="
+              << row.value(QStringLiteral("effectStack")).toString().size()
+              << " rowJson=" << json.toStdString() << '\n';
+  };
+  std::cerr << "duplicate-policy recipe length=" << serialized_recipe.size()
+            << " validationOk=" << serialized_validation.valid
+            << " validationErrors=" << serialized_validation.errors.join(QLatin1Char('|')).toStdString()
+            << " parseOk=" << serialized_parse.ok()
+            << " parseError=" << serialized_parse.error.toStdString()
+            << " serializedLayerCount="
+            << (serialized_parse.state ? serialized_parse.state->layers.size() : -1)
+            << '\n';
+  if (serialized_parse.state) {
+    for (int i = 0; i < serialized_parse.state->layers.size(); ++i) {
+      dump_layer_row("serializedLayer", i,
+                     serialized_parse.state->layers.at(i).toMap());
+    }
+  }
+  std::cerr << "duplicate-policy before-reopen activeSelectionSession="
+            << controller.selectionEditSessionActive()
+            << " dirtySelectionSession=" << controller.selectionEditSessionDirty()
+            << " status=" << controller.status().toStdString() << '\n';
+  if (controller.selectionEditSessionActive()) {
+    auto elapsed_ms = 0;
+    while (controller.selectionEditSessionActive() && elapsed_ms < 8000) {
+      if (controller.finishSelectionEditSession()) break;
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+      QThread::msleep(25);
+      elapsed_ms += 25;
+    }
+    if (controller.selectionEditSessionActive())
+      return fail("duplicate policy setup should finish the selection session before reopening");
+  }
+  std::cerr << "duplicate-policy ready-to-reopen activeSelectionSession="
+            << controller.selectionEditSessionActive()
+            << " dirtySelectionSession=" << controller.selectionEditSessionDirty()
+            << " status=" << controller.status().toStdString() << '\n';
+  controller.loadAsset(QStringLiteral("duplicate-mask-policy-asset"), source_path,
+      QString(), QString(), QString(), QString(),
+      serialized_recipe, true);
+  std::cerr << "duplicate-policy immediate-after-load status="
+            << controller.status().toStdString()
+            << " activeSelectionSession=" << controller.selectionEditSessionActive()
+            << " dirtySelectionSession=" << controller.selectionEditSessionDirty() << '\n';
+  if (!wait_for_preview_idle_bounded(controller))
+    return fail("duplicate policy controller should settle after reopening styled content");
+  const auto loaded_rows = controller.photoLayers();
+  const auto loaded_layer = loaded_rows.value(0).toMap();
+  const auto source_style_text = loaded_layer.value(QStringLiteral("layerStyleStack")).toString();
+  const auto source_effect_text = loaded_layer.value(QStringLiteral("effectStack")).toString();
+  if (source_style_text.isEmpty() || source_effect_text.isEmpty()) {
+    const auto current_recipe = controller.currentAssetBoundAdjustmentPatchJson();
+    const auto current_validation =
+        photo_editor::desktop::validate_edit_recipe_json(current_recipe);
+    const auto current_parse =
+        photo_editor::desktop::parse_adjustment_payload_or_legacy_recipe(current_recipe);
+    std::cerr << "duplicate-policy after-load status=" << controller.status().toStdString()
+              << " currentRecipeLength=" << current_recipe.size()
+              << " currentValidationOk=" << current_validation.valid
+              << " currentValidationErrors="
+              << current_validation.errors.join(QLatin1Char('|')).toStdString()
+              << " currentParseOk=" << current_parse.ok()
+              << " currentParseError=" << current_parse.error.toStdString()
+              << " currentLayerCount="
+              << (current_parse.state ? current_parse.state->layers.size() : -1)
+              << " controllerLayerCount=" << loaded_rows.size() << '\n';
+    if (current_parse.state) {
+      for (int i = 0; i < current_parse.state->layers.size(); ++i) {
+        dump_layer_row("currentRecipeLayer", i,
+                       current_parse.state->layers.at(i).toMap());
+      }
+    }
+    for (int i = 0; i < loaded_rows.size(); ++i) {
+      dump_layer_row("controllerLayer", i, loaded_rows.at(i).toMap());
+    }
+    return fail("duplicate policy source should retain both encoded operation stacks");
+  }
+  if (!controller.duplicatePhotoLayerWithMasks(0) || controller.photoLayerCount() != 2)
+    return fail("photo layers should duplicate with mask links on request");
+  if (controller.undoLabel() != QStringLiteral("Duplicate layer with masks"))
+    return fail("duplicate with masks should expose a policy-specific undo label");
+  controller.undo();
+  if (controller.photoLayerCount() != 1 ||
+      controller.redoLabel() != QStringLiteral("Duplicate layer with masks"))
+    return fail("undoing duplicate with masks should restore count and preserve redo label");
+  controller.redo();
+  if (controller.photoLayerCount() != 2 ||
+      controller.undoLabel() != QStringLiteral("Duplicate layer with masks"))
+    return fail("redoing duplicate with masks should restore count and undo label");
+  const auto copied_masked_layer = controller.photoLayers().at(1).toMap();
+  if (copied_masked_layer.value(QStringLiteral("selectionMaskSetId")).toString() != source_mask_set_id ||
+      copied_masked_layer.value(QStringLiteral("duplicateMaskPolicy")).toString() !=
+          QStringLiteral("with-masks") ||
+      copied_masked_layer.value(QStringLiteral("layerStyleStack")).toString() != source_style_text ||
+      copied_masked_layer.value(QStringLiteral("effectStack")).toString() != source_effect_text) {
+    return fail("duplicate with masks should preserve linked style/effect stacks");
+  }
+  if (!controller.duplicatePhotoLayerWithoutMasks(0) || controller.photoLayerCount() != 3)
+    return fail("photo layers should duplicate without mask links on request");
+  if (controller.undoLabel() != QStringLiteral("Duplicate layer without masks"))
+    return fail("duplicate without masks should expose a policy-specific undo label");
+  controller.undo();
+  if (controller.photoLayerCount() != 2 ||
+      controller.redoLabel() != QStringLiteral("Duplicate layer without masks"))
+    return fail("undoing duplicate without masks should restore count and preserve redo label");
+  controller.redo();
+  if (controller.photoLayerCount() != 3 ||
+      controller.undoLabel() != QStringLiteral("Duplicate layer without masks"))
+    return fail("redoing duplicate without masks should restore count and undo label");
+  const auto copied_unmasked_layer = controller.photoLayers().at(1).toMap();
+  std::string style_error;
+  const auto source_style_stack = photo_editor::pipeline::deserialize_layer_style_stack(
+      source_style_text.toStdString(), &style_error);
+  const auto copied_style_stack = photo_editor::pipeline::deserialize_layer_style_stack(
+      copied_unmasked_layer.value(QStringLiteral("layerStyleStack")).toString().toStdString(),
+      &style_error);
+  const auto copied_effect_stack = photo_editor::desktop::decode_photo_layer_effects(copied_unmasked_layer);
+  const auto source_effect_stack = photo_editor::desktop::decode_photo_layer_effects(loaded_layer);
+  auto expected_unmasked_styles = source_style_stack;
+  if (expected_unmasked_styles) {
+    for (auto& operation : expected_unmasked_styles->operations) operation.mask_ref.clear();
+  }
+  auto expected_unmasked_effects = source_effect_stack;
+  if (expected_unmasked_effects) {
+    for (auto& item : *expected_unmasked_effects) item.mask_ref.clear();
+  }
+  if (!copied_unmasked_layer.value(QStringLiteral("selectionMaskSetId")).toString().isEmpty() ||
+      copied_unmasked_layer.contains(QStringLiteral("selectionMaskSetIds")) ||
+      copied_unmasked_layer.value(QStringLiteral("selectionScoped")).toBool() ||
+      copied_unmasked_layer.value(QStringLiteral("hasLayerMask")).toBool() ||
+      copied_unmasked_layer.value(QStringLiteral("duplicateMaskPolicy")).toString() !=
+          QStringLiteral("without-masks") || !source_style_stack || !copied_style_stack ||
+      !expected_unmasked_styles || *copied_style_stack != *expected_unmasked_styles ||
+      !source_effect_stack || !copied_effect_stack || !expected_unmasked_effects ||
+      *copied_effect_stack != *expected_unmasked_effects) {
+    return fail("duplicate without masks should clear style/effect refs while retaining both stacks");
+  }
+  return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Heap-backed controllers keep this monolithic Debug harness below its
+  // main-thread stack budget; reference aliases preserve each original scope.
   QCoreApplication app(argc, argv);
   QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
   QCoreApplication::setApplicationName(QStringLiteral("EditorPreviewControllerTest"));
   qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
+
+  if (app.arguments().contains(QStringLiteral("--original-baseline-reopen"))) {
+    using namespace photo_editor::desktop;
+    const auto flag = app.arguments().indexOf(QStringLiteral("--original-baseline-reopen"));
+    if (flag + 1 >= app.arguments().size()) return fail("Original child reopen requires a parent-owned marker");
+    const auto marker_path = app.arguments().at(flag + 1);
+    QFile marker(marker_path);
+    if (!marker.open(QIODevice::ReadOnly)) return fail("Read parent original-baseline expectations");
+    const auto expected = QJsonDocument::fromJson(marker.readAll()).object();
+    const auto fixture_root = QDir(expected.value("fixtureRoot").toString()).canonicalPath();
+    const auto parent_pid = expected.value("parentPid").toVariant().toLongLong();
+    const auto source_path = expected.value("sourcePath").toString();
+    const auto anchor_path = expected.value("anchorPath").toString();
+    if (expected.value("schema").toString() != "looksy-original-baseline-child:v1" || fixture_root.isEmpty() ||
+        parent_pid <= 0 || parent_pid == QCoreApplication::applicationPid() ||
+        QFileInfo(marker_path).absoluteDir().canonicalPath() != fixture_root ||
+        QDir(qEnvironmentVariable("PHOTO_EDITOR_APP_DATA_DIR")).canonicalPath() != fixture_root ||
+        QDir(AppBootstrap::appDataLocation()).canonicalPath() != fixture_root ||
+        QFileInfo(source_path).absoluteDir().canonicalPath() != fixture_root ||
+        !QFileInfo(anchor_path).canonicalFilePath().startsWith(fixture_root + "/original-baselines/v1/"))
+      return fail("Original child must inherit only its parent-owned temporary runtime and distinct PID");
+    QFile anchor(anchor_path);
+    QFile source(source_path);
+    if (!anchor.open(QIODevice::ReadOnly) || !source.open(QIODevice::ReadOnly))
+      return fail("Read the parent's immutable source and original anchor in the child");
+    const auto anchor_bytes = anchor.readAll();
+    anchor.close();
+    const auto source_sha = QString::fromLatin1(QCryptographicHash::hash(source.readAll(), QCryptographicHash::Sha256).toHex());
+    source.close();
+    if (source_sha != expected.value("sourceSha256").toString() ||
+        QString::fromLatin1(QCryptographicHash::hash(anchor_bytes, QCryptographicHash::Sha256).toHex()) !=
+            expected.value("anchorSha256").toString())
+      return fail("The new process verifies the exact parent source bytes and pinned original recipe");
+    auto owner = std::make_unique<EditorPreviewController>();
+    auto& controller = *owner;
+    controller.loadAsset(expected.value("assetId").toString(), source_path, {}, {}, {}, {}, expected.value("editedRecipe").toString());
+    if (!controller.revertPhotoToOriginal() || controller.currentAssetBoundAdjustmentPatchJson() != expected.value("baselineRecipe").toString() ||
+        !anchor.open(QIODevice::ReadOnly) || anchor.readAll() != anchor_bytes)
+      return fail("A genuinely new process restores the complete pinned baseline without rewriting its anchor");
+    const QJsonObject receipt{{"schema", "looksy-original-baseline-child:v1"}, {"status", "passed"},
+        {"parentPid", parent_pid}, {"childPid", QCoreApplication::applicationPid()},
+        {"assetId", controller.assetId()}, {"sourceSha256", source_sha}};
+    std::cout << QJsonDocument(receipt).toJson(QJsonDocument::Compact).constData() << '\n';
+    return EXIT_SUCCESS;
+  }
 
   QTemporaryDir runtime_root;
   if (!runtime_root.isValid()) {
@@ -2156,6 +2561,140 @@ int main(int argc, char** argv) {
   qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
   if (!photo_editor::desktop::AppBootstrap::ensureRuntimeDirectories()) {
     return fail("editor preview test should configure durable runtime storage");
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_DUPLICATE_MASK_POLICY_ONLY")) {
+    QImage duplicate_policy_source(16, 16, QImage::Format_ARGB32);
+    duplicate_policy_source.fill(QColor::fromRgb(96, 104, 112));
+    const auto duplicate_policy_path = runtime_root.filePath(QStringLiteral("rapid-slider.png"));
+    if (!duplicate_policy_source.save(duplicate_policy_path))
+      return fail("duplicate policy source image should be writable");
+    return duplicate_mask_policy_regression(duplicate_policy_path);
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FULL_ORIGINAL_ONLY")) {
+    using namespace photo_editor::desktop;
+    QImage source(32, 20, QImage::Format_ARGB32);
+    source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+    source.fill(QColor("#b28266"));
+    const auto path = runtime_root.filePath(QStringLiteral("original-reset.png"));
+    if (!source.save(path)) return fail("Write original reset fixture");
+    auto owner = std::make_unique<EditorPreviewController>();
+    auto& controller = *owner;
+    controller.loadAsset("original-reset", path, {}, {}, {}, {}, {});
+    const auto baseline = parse_adjustment_patch_json(controller.currentAssetBoundAdjustmentPatchJson());
+    if (!baseline.ok()) return fail("Capture the developed source baseline");
+    auto changed = *baseline.state;
+    changed.raw_exposure = 1.25;
+    changed.raw_white_balance_override = true;
+    changed.raw_white_balance_temperature = 7100;
+    changed.raw_red_primary_hue = 18;
+    changed.raw_camera_matching_look = "Portrait";
+    changed.exposure = 0.7;
+    changed.temperature = 14;
+    changed.crop_rect_width = 0.7;
+    changed.preset_applications = {QVariantMap{{"id", "test-preset"}, {"name", "Test look"}, {"intensity", 1.0}}};
+    changed.layers = {QVariantMap{{"id", "test-text"}, {"kind", "text"}, {"enabled", true},
+        {"text", "Preserve through Undo"}, {"x", 1.0}, {"y", 2.0}, {"width", 20.0}, {"height", 10.0}}};
+    const auto changed_patch = serialize_adjustment_patch_json(changed, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+    controller.loadAsset("original-reset", path, {}, {}, {}, {}, changed_patch, true);
+    const auto before = controller.currentAssetBoundAdjustmentPatchJson();
+    int receipts = 0;
+    QObject::connect(&controller, &EditorPreviewController::historyEntryRecorded,
+        [&receipts](const QString&, const QString&) { ++receipts; });
+    if (!controller.revertPhotoToOriginal() || receipts != 1)
+      return fail("Whole-photo original restore creates exactly one native history receipt");
+    const auto after = parse_adjustment_patch_json(controller.currentAssetBoundAdjustmentPatchJson());
+    if (!after.ok() || !(*after.state == *baseline.state))
+      return fail("Original restore clears every persisted pixel-edit group including RAW and presets");
+    const QDir baseline_directory(QDir(AppBootstrap::appDataLocation()).filePath("original-baselines/v1"));
+    const auto baseline_files = baseline_directory.entryList({"*.json"}, QDir::Files);
+    if (baseline_files.size() != 1) return fail("First original reset atomically persists one versioned source baseline");
+    const auto baseline_path = baseline_directory.filePath(baseline_files.front());
+    QFile baseline_file(baseline_path);
+    if (!baseline_file.open(QIODevice::ReadOnly)) return fail("Read the persisted original baseline");
+    const auto baseline_bytes = baseline_file.readAll();
+    baseline_file.close();
+    const auto expected_pixels = render_output_image_with_backend(source, *baseline.state,
+        QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32, RenderBackendPreference::CpuOnly);
+    const auto actual_pixels = render_output_image_with_backend(source, *after.state,
+        QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32, RenderBackendPreference::CpuOnly);
+    if (expected_pixels.isNull() || expected_pixels != actual_pixels)
+      return fail("Restored original pixels match developed baseline pixels");
+    controller.undo();
+    if (controller.currentAssetBoundAdjustmentPatchJson() != before || receipts != 1)
+      return fail("One Undo restores all RAW/preset/crop/text state without creating another transaction");
+    controller.redo();
+    if (controller.currentAssetBoundAdjustmentPatchJson() != serialize_adjustment_patch_json(
+            *baseline.state, all_adjustment_groups(), AdjustmentPatchScope::AssetBound))
+      return fail("One Redo restores the original baseline");
+    auto reopened_owner = std::make_unique<EditorPreviewController>();
+    auto& reopened = *reopened_owner;
+    reopened.loadAsset("original-reset", path, {}, {}, {}, {}, changed_patch);
+    if (!reopened.revertPhotoToOriginal()) return fail("A fresh controller reuses the persisted source baseline");
+    const auto reopened_state = parse_adjustment_patch_json(reopened.currentAssetBoundAdjustmentPatchJson());
+    if (!reopened_state.ok() || !(*reopened_state.state == *baseline.state))
+      return fail("The complete restored recipe survives reopening");
+    if (!baseline_file.open(QIODevice::ReadOnly) || baseline_file.readAll() != baseline_bytes)
+      return fail("Reopening and reverting cannot replace the immutable baseline with current defaults or edits");
+    baseline_file.close();
+    const auto child_marker_path = runtime_root.filePath("original-child.json");
+    const auto anchor_envelope = QJsonDocument::fromJson(baseline_bytes).object();
+    const QJsonObject child_expected{{"schema", "looksy-original-baseline-child:v1"}, {"fixtureRoot", runtime_root.path()},
+        {"parentPid", QCoreApplication::applicationPid()}, {"assetId", "original-reset"}, {"sourcePath", path},
+        {"anchorPath", baseline_path}, {"sourceSha256", anchor_envelope.value("sourceSha256").toString()},
+        {"anchorSha256", QString::fromLatin1(QCryptographicHash::hash(baseline_bytes, QCryptographicHash::Sha256).toHex())},
+        {"editedRecipe", changed_patch}, {"baselineRecipe", controller.currentAssetBoundAdjustmentPatchJson()}};
+    QFile child_marker(child_marker_path);
+    const auto child_marker_bytes = QJsonDocument(child_expected).toJson(QJsonDocument::Compact);
+    if (!child_marker.open(QIODevice::WriteOnly) || child_marker.write(child_marker_bytes) != child_marker_bytes.size())
+      return fail("Write bounded parent-owned expectations for original-baseline process reopen");
+    child_marker.close();
+    QProcess child;
+    child.start(QCoreApplication::applicationFilePath(), {"--original-baseline-reopen", child_marker_path});
+    if (!child.waitForStarted(5000) || !child.waitForFinished(30000) ||
+        child.exitStatus() != QProcess::NormalExit || child.exitCode() != EXIT_SUCCESS) {
+      std::cerr << child.readAllStandardError().constData();
+      return fail("Original baseline persistence must pass in a genuinely new process");
+    }
+    const auto child_receipt = QJsonDocument::fromJson(child.readAllStandardOutput().trimmed()).object();
+    if (child_receipt.value("status").toString() != "passed" ||
+        child_receipt.value("parentPid").toVariant().toLongLong() != QCoreApplication::applicationPid() ||
+        child_receipt.value("childPid").toVariant().toLongLong() <= 0 ||
+        child_receipt.value("childPid").toVariant().toLongLong() == QCoreApplication::applicationPid())
+      return fail("Original baseline reopen receipt requires an independently verified child PID");
+    std::cout << QJsonDocument(child_receipt).toJson(QJsonDocument::Compact).constData() << '\n';
+    const auto copied_path = runtime_root.filePath("original-copy.png");
+    if (!QFile::copy(path, copied_path)) return fail("Copy source bytes for independent imported identity");
+    auto copied_owner = std::make_unique<EditorPreviewController>();
+    copied_owner->loadAsset("separately-imported-copy", copied_path, {}, {}, {}, {}, changed_patch);
+    if (!copied_owner->revertPhotoToOriginal() || baseline_directory.entryList({"*.json"}, QDir::Files).size() != 2)
+      return fail("Equal source bytes with different catalog identity retain distinct baseline anchors");
+    if (!baseline_file.open(QIODevice::WriteOnly | QIODevice::Truncate) || baseline_file.write("{}") != 2)
+      return fail("Prepare an invalid baseline recovery case");
+    baseline_file.close();
+    reopened.setExposure(0.42);
+    const auto invalid_before = reopened.currentAssetBoundAdjustmentPatchJson();
+    if (reopened.revertPhotoToOriginal() || reopened.currentAssetBoundAdjustmentPatchJson() != invalid_before)
+      return fail("An invalid original anchor fails explicitly without mutating the working recipe");
+    if (!baseline_file.open(QIODevice::WriteOnly | QIODevice::Truncate) || baseline_file.write(baseline_bytes) != baseline_bytes.size())
+      return fail("Restore the pinned source baseline after invalid-anchor proof");
+    baseline_file.close();
+    // Block the baseline store inside the valid isolated runtime. Replacing the
+    // app-data environment root would activate AppBootstrap's fallback root,
+    // testing fallback selection instead of baseline write failure.
+    QDir baseline_parent(QFileInfo(baseline_directory.absolutePath()).absolutePath());
+    if (!baseline_parent.rename("v1", "v1-stored")) return fail("Retain original anchors before blocking their directory");
+    QFile blocked_baseline_store(baseline_directory.absolutePath());
+    if (!blocked_baseline_store.open(QIODevice::WriteOnly)) return fail("Prepare an unavailable baseline storage fixture");
+    blocked_baseline_store.close();
+    const bool unavailable_storage_accepted = reopened.revertPhotoToOriginal();
+    if (!blocked_baseline_store.remove() || !baseline_parent.rename("v1-stored", "v1"))
+      return fail("Restore original anchors after unavailable-storage proof");
+    if (unavailable_storage_accepted || reopened.currentAssetBoundAdjustmentPatchJson() != invalid_before)
+      return fail("Unavailable baseline storage rejects reset without recipe or history mutation");
+    source.fill(QColor("#446699"));
+    if (!source.save(path) || reopened.revertPhotoToOriginal() || reopened.currentAssetBoundAdjustmentPatchJson() != invalid_before)
+      return fail("Source bytes changed after opening cannot silently become a new original");
+    return EXIT_SUCCESS;
   }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_CUTOUT_ADJUSTMENT_ONLY")) {
     using namespace photo_editor::desktop;
@@ -2167,7 +2706,8 @@ int main(int argc, char** argv) {
         source.setPixelColor(x, y, QColor(35 + x % 90, 40 + y % 70, 70 + (x + y) % 85));
     const auto source_path = runtime_root.filePath(QStringLiteral("cutout-adjustments.png"));
     if (!source.save(source_path)) return fail("write cutout fixture");
-    EditorPreviewController controller;
+    auto controller_owner = std::make_unique<EditorPreviewController>();
+    auto& controller = *controller_owner;
     controller.loadAsset(QStringLiteral("cutout-adjustment-proof"), source_path, {}, {}, {}, {}, {});
     auto initial = Access::current_state(controller);
     initial.exposure = 0.3;
@@ -2249,7 +2789,8 @@ int main(int argc, char** argv) {
           if (after_pixels.pixel(x, y) != before_pixels.pixel(x, y)) return false;
       const auto recipe = serialize_edit_recipe_json(after);
       if (render(parse_edit_recipe_json(recipe)) != after_pixels) return false;
-      EditorPreviewController reopened;
+      auto reopened_owner = std::make_unique<EditorPreviewController>();
+      auto& reopened = *reopened_owner;
       reopened.loadAsset("direct-cutout-reopened", source_path, {}, {}, {}, {}, recipe);
       if (render(Access::current_state(reopened)) != after_pixels || reopened.photoLayerCount() != count)
         return false;
@@ -2266,6 +2807,281 @@ int main(int argc, char** argv) {
       if (!controller.setPhotoLayerLocked(0, false)) return false;
       return settle();
     };
+    const auto assert_subject_cutout_preserves_composite = [&](bool independent,
+                                                                bool edited_selection_adjustment,
+                                                                bool renamed_selection_adjustment) {
+      const auto report_case_failure = [&](const QString& stage) {
+        std::cerr << "subject cutout case failed before comparison: independent=" << independent
+                  << " edited_selection_adjustment=" << edited_selection_adjustment
+                  << " renamed_selection_adjustment=" << renamed_selection_adjustment
+                  << " stage=" << stage.toStdString() << '\n';
+        return false;
+      };
+      auto subject_controller_owner = std::make_unique<EditorPreviewController>();
+      auto& subject_controller = *subject_controller_owner;
+      subject_controller.loadAsset(QStringLiteral("subject-cutout-proof"), source_path,
+          {}, {}, {}, {}, {});
+      const auto subject_settle = [&] {
+        QElapsedTimer timer;
+        timer.start();
+        do {
+          QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+          if (!subject_controller.processing() && !subject_controller.fullRenderRunning() &&
+              !subject_controller.photoPaintBusy() && Access::mask_work_idle(subject_controller)) {
+            return true;
+          }
+          QThread::msleep(5);
+        } while (timer.elapsed() < 20000);
+        return false;
+      };
+      auto subject_initial = Access::current_state(subject_controller);
+      subject_initial.exposure = 0.3;
+      subject_initial.temperature = 18;
+      Access::apply_state(subject_controller, subject_initial);
+      if (!subject_settle() || !subject_controller.addAdjustmentLayer(QStringLiteral("Existing grade")) ||
+          !subject_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("exposure"), 0.8) ||
+          !subject_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("temperature"), -35) ||
+          !subject_controller.setPhotoLayerOpacity(0, 0.65) ||
+          !subject_settle()) {
+        return report_case_failure(QStringLiteral("configure lower grade"));
+      }
+      if (!subject_controller.addAdjustmentLayer(QStringLiteral("Selection Adjustment User Layer")) ||
+          !subject_settle()) {
+        return report_case_failure(QStringLiteral("add neutral user adjustment"));
+      }
+      subject_controller.addAIMask(QStringLiteral("subject"));
+      if (!subject_settle() || subject_controller.maskStack().isEmpty() ||
+          subject_controller.activeMaskKind() != QStringLiteral("subject")) {
+        return report_case_failure(QStringLiteral("create subject mask"));
+      }
+      const auto mask = subject_controller.maskStack()
+          .at(subject_controller.activeMaskIndex()).toMap();
+      const auto mask_id = mask.value(QStringLiteral("maskSetId")).toString();
+      if (mask_id.isEmpty()) return report_case_failure(QStringLiteral("resolve subject mask id"));
+      auto state_before_cutout = Access::current_state(subject_controller);
+      auto selection_adjustment_index = -1;
+      for (int index = 0; index < state_before_cutout.layers.size(); ++index) {
+        const auto layer = state_before_cutout.layers.at(index).toMap();
+        if (layer.value(QStringLiteral("kind")).toString() == QStringLiteral("adjustment") &&
+            layer.value(QStringLiteral("selectionScoped")).toBool() &&
+            layer.value(QStringLiteral("selectionMaskSetId")).toString() == mask_id &&
+            layer.value(QStringLiteral("autoSelectionAdjustmentScaffold")).toBool()) {
+          selection_adjustment_index = index;
+          break;
+        }
+      }
+      if (selection_adjustment_index < 0) return report_case_failure(QStringLiteral("find auto scaffold"));
+      const auto scaffold_id = state_before_cutout.layers.at(selection_adjustment_index)
+          .toMap().value(QStringLiteral("id")).toString();
+      if (renamed_selection_adjustment &&
+          (!subject_controller.renamePhotoLayer(
+               selection_adjustment_index, QStringLiteral("Renamed subject adjustment")) ||
+           !subject_settle())) {
+        return report_case_failure(QStringLiteral("rename auto scaffold"));
+      }
+      QString user_neutral_layer_id;
+      for (const auto& value : state_before_cutout.layers) {
+        const auto layer = value.toMap();
+        if (layer.value(QStringLiteral("name")).toString() ==
+            QStringLiteral("Selection Adjustment User Layer")) {
+          user_neutral_layer_id = layer.value(QStringLiteral("id")).toString();
+          break;
+        }
+      }
+      if (user_neutral_layer_id.isEmpty()) return report_case_failure(QStringLiteral("find user neutral layer"));
+      if (!independent) {
+        auto existing_grade_index = -1;
+        for (int index = 0; index < state_before_cutout.layers.size(); ++index) {
+          if (state_before_cutout.layers.at(index).toMap()
+                  .value(QStringLiteral("name")).toString() == QStringLiteral("Existing grade")) {
+            existing_grade_index = index;
+            break;
+          }
+        }
+        if (existing_grade_index < 0) return report_case_failure(QStringLiteral("find lower grade"));
+        const QVariantMap linked_cutout_identity{
+            {QStringLiteral("kind"), QStringLiteral("pixel")},
+            {QStringLiteral("copyBaseImage"), true},
+            {QStringLiteral("copyBaseImageThroughAdjustments"), true},
+        };
+        const auto revision_before = Access::photo_layer_revision(subject_controller);
+        const auto hash_before = non_adjustment_photo_layer_thumbnail_recipe_hash(
+            linked_cutout_identity, revision_before);
+        if (!subject_controller.setPhotoLayerAdjustmentValue(
+                existing_grade_index, QStringLiteral("exposure"), 0.55) ||
+            !subject_settle()) {
+          return report_case_failure(QStringLiteral("edit lower grade"));
+        }
+        const auto revision_after = Access::photo_layer_revision(subject_controller);
+        if (revision_after == revision_before ||
+            hash_before == non_adjustment_photo_layer_thumbnail_recipe_hash(
+                linked_cutout_identity, revision_after)) {
+          return report_case_failure(QStringLiteral("thumbnail cache dependency on lower grade"));
+        }
+      }
+      if (edited_selection_adjustment &&
+          !subject_controller.setPhotoLayerAdjustmentValue(
+              selection_adjustment_index, QStringLiteral("saturation"), -55)) {
+        return report_case_failure(QStringLiteral("edit selection scaffold"));
+      }
+      if (!subject_settle()) return report_case_failure(QStringLiteral("settle pre-cutout edits"));
+      state_before_cutout = Access::current_state(subject_controller);
+      const auto before_pixels = render(state_before_cutout);
+      if (before_pixels.isNull()) return report_case_failure(QStringLiteral("render before pixels"));
+      const auto before_layers = state_before_cutout.layers;
+      const auto before_adjustment_count = std::count_if(
+          before_layers.cbegin(), before_layers.cend(), [](const QVariant& value) {
+            return value.toMap().value(QStringLiteral("kind")).toString() ==
+                QStringLiteral("adjustment");
+          });
+      if (!subject_controller.copyPixelsFromSelection(-1, independent) || !subject_settle() ||
+          !subject_controller.photoPaintError().isEmpty()) {
+        return report_case_failure(QStringLiteral("create cutout or materialize pixels"));
+      }
+      const auto after_state = Access::current_state(subject_controller);
+      const auto after_pixels = render(after_state);
+      const auto after_adjustment_count = std::count_if(
+          after_state.layers.cbegin(), after_state.layers.cend(), [](const QVariant& value) {
+            return value.toMap().value(QStringLiteral("kind")).toString() ==
+                QStringLiteral("adjustment");
+          });
+      const bool preserve_selection_adjustment =
+          edited_selection_adjustment || renamed_selection_adjustment;
+      const auto expected_adjustment_count = before_adjustment_count -
+          (preserve_selection_adjustment ? 0 : 1);
+      const auto expected_layer_count = before_layers.size() +
+          (preserve_selection_adjustment ? 1 : 0);
+      if (after_pixels.isNull() || after_pixels != before_pixels ||
+          after_state.layers.size() != expected_layer_count ||
+          after_adjustment_count != expected_adjustment_count) {
+        auto max_channel_error = 0;
+        QPoint max_error_position;
+        QColor before_at_max;
+        QColor after_at_max;
+        if (!before_pixels.isNull() && before_pixels.size() == after_pixels.size()) {
+          for (int y = 0; y < before_pixels.height(); ++y) {
+            for (int x = 0; x < before_pixels.width(); ++x) {
+              const auto before_color = before_pixels.pixelColor(x, y);
+              const auto after_color = after_pixels.pixelColor(x, y);
+              const auto error = std::max({
+                  std::abs(before_color.red() - after_color.red()),
+                  std::abs(before_color.green() - after_color.green()),
+                  std::abs(before_color.blue() - after_color.blue()),
+                  std::abs(before_color.alpha() - after_color.alpha())});
+              if (error > max_channel_error) {
+                max_channel_error = error;
+                max_error_position = QPoint(x, y);
+                before_at_max = before_color;
+                after_at_max = after_color;
+              }
+            }
+          }
+        }
+        std::cerr << "subject cutout changed the visible composite or retained a redundant "
+                  << "selection adjustment: independent=" << independent
+                  << " edited_selection_adjustment=" << edited_selection_adjustment
+                  << " renamed_selection_adjustment=" << renamed_selection_adjustment
+                  << " pixel_size=" << before_pixels.width() << 'x' << before_pixels.height()
+                  << "->" << after_pixels.width() << 'x' << after_pixels.height()
+                  << " max_channel_error=" << max_channel_error
+                  << " at=" << max_error_position.x() << ',' << max_error_position.y()
+                  << " before_rgba=" << before_at_max.red() << ',' << before_at_max.green() << ','
+                  << before_at_max.blue() << ',' << before_at_max.alpha()
+                  << " after_rgba=" << after_at_max.red() << ',' << after_at_max.green() << ','
+                  << after_at_max.blue() << ',' << after_at_max.alpha()
+                  << " layer_count=" << after_state.layers.size() << '/' << expected_layer_count
+                  << " adjustment_count=" << after_adjustment_count << '/'
+                  << expected_adjustment_count
+                  << " paint_error=" << subject_controller.photoPaintError().toStdString() << '\n';
+        return false;
+      }
+      if (std::none_of(after_state.layers.cbegin(), after_state.layers.cend(),
+              [&](const QVariant& value) {
+                return value.toMap().value(QStringLiteral("id")).toString() == user_neutral_layer_id;
+              })) {
+        return report_case_failure(QStringLiteral("preserve user neutral layer"));
+      }
+      const auto cutout = after_state.layers.front().toMap();
+      if (cutout.value(QStringLiteral("kind")).toString() != QStringLiteral("pixel") ||
+          (independent && cutout.value(QStringLiteral("paintTiles")).toMap().isEmpty()) ||
+          (independent && cutout.value(QStringLiteral("copyBaseImage")).toBool()) ||
+          (!independent && (!cutout.value(QStringLiteral("copyBaseImage")).toBool() ||
+              cutout.value(QStringLiteral("selectionMaskSetId")).toString() != mask_id))) {
+        const auto paint_tiles = cutout.value(QStringLiteral("paintTiles")).toMap();
+        std::cerr << "subject cutout layer state mismatch: kind="
+                  << cutout.value(QStringLiteral("kind")).toString().toStdString()
+                  << " independent=" << independent
+                  << " copy_base=" << cutout.value(QStringLiteral("copyBaseImage")).toBool()
+                  << " through_adjustments=" << cutout.value(QStringLiteral("copyBaseImageThroughAdjustments")).toBool()
+                  << " paint_tiles_empty=" << paint_tiles.isEmpty()
+                  << " tile_payload_count=" << paint_tiles.value(QStringLiteral("tiles")).toMap().size()
+                  << " pixel_size=" << cutout.value(QStringLiteral("pixelWidth")).toInt() << 'x'
+                  << cutout.value(QStringLiteral("pixelHeight")).toInt()
+                  << " linked_mask=" << cutout.value(QStringLiteral("selectionMaskSetId")).toString().toStdString()
+                  << " expected_mask=" << mask_id.toStdString()
+                  << " selection_scoped=" << cutout.value(QStringLiteral("selectionScoped")).toBool()
+                  << " photo_paint_error=" << subject_controller.photoPaintError().toStdString() << '\n';
+        return report_case_failure(QStringLiteral("validate cutout layer state"));
+      }
+      if (preserve_selection_adjustment) {
+        const auto helper_remains = std::any_of(after_state.layers.cbegin(),
+            after_state.layers.cend(), [&](const QVariant& value) {
+              const auto layer = value.toMap();
+              return layer.value(QStringLiteral("id")).toString() == scaffold_id;
+            });
+        if (!helper_remains) return report_case_failure(QStringLiteral("preserve edited or renamed scaffold"));
+      }
+      const auto serialized = serialize_edit_recipe_json(after_state);
+      const auto parsed = parse_edit_recipe_json(serialized);
+      if (render(parsed) != after_pixels ||
+          (!independent && !parsed.layers.front().toMap()
+              .value(QStringLiteral("copyBaseImageThroughAdjustments")).toBool())) {
+        return report_case_failure(QStringLiteral("recipe serialization round trip"));
+      }
+      auto reopened_subject_owner = std::make_unique<EditorPreviewController>();
+      auto& reopened_subject = *reopened_subject_owner;
+      reopened_subject.loadAsset(QStringLiteral("subject-cutout-reopened"), source_path,
+          {}, {}, {}, {}, serialized);
+      const auto reopened_state = Access::current_state(reopened_subject);
+      if (render(reopened_state) != after_pixels ||
+          (!independent && !reopened_state.layers.front().toMap()
+              .value(QStringLiteral("copyBaseImageThroughAdjustments")).toBool())) {
+        return report_case_failure(QStringLiteral("controller save and reopen"));
+      }
+      if (!independent) {
+        auto markerless_legacy_state = after_state;
+        auto legacy_cutout = markerless_legacy_state.layers.front().toMap();
+        legacy_cutout.remove(QStringLiteral("copyBaseImageThroughAdjustments"));
+        markerless_legacy_state.layers[0] = legacy_cutout;
+        if (render(markerless_legacy_state) == before_pixels) {
+          return report_case_failure(QStringLiteral("preserve markerless legacy rendering"));
+        }
+      }
+      subject_controller.undo();
+      if (!subject_settle() || Access::current_state(subject_controller).layers != before_layers ||
+          render(Access::current_state(subject_controller)) != before_pixels) {
+        return report_case_failure(QStringLiteral("undo restores original stack and pixels"));
+      }
+      subject_controller.redo();
+      if (!subject_settle() || render(Access::current_state(subject_controller)) != after_pixels)
+        return report_case_failure(QStringLiteral("redo restores cutout pixels"));
+      return true;
+    };
+    const auto run_subject_cutout_case = [&](bool independent, bool edited, bool renamed) {
+      if (assert_subject_cutout_preserves_composite(independent, edited, renamed)) return true;
+      std::cerr << "subject cutout case failed: independent=" << independent
+                << " edited_selection_adjustment=" << edited
+                << " renamed_selection_adjustment=" << renamed << '\n';
+      return false;
+    };
+    for (const auto independent : {false, true}) {
+      if (!run_subject_cutout_case(independent, false, false) ||
+          !run_subject_cutout_case(independent, true, false) ||
+          !run_subject_cutout_case(independent, false, true) ||
+          !run_subject_cutout_case(independent, true, true)) {
+        return fail("subject cutout must preserve edited pixels, remove only its untouched selection helper, and round-trip undo/redo");
+      }
+    }
     if (!assert_neutral_add()) return fail("first adjustment must start neutral and preserve global edits, undo and redo");
     if (!controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("exposure"), 0.4) ||
         !controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("temperature"), -12))
@@ -2299,7 +3115,8 @@ int main(int argc, char** argv) {
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_GRADING_RESET_ONLY"))
     return grading_panel_reset_regression();
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_PHOTO_LAYER_GROUP_ONLY")) {
-    photo_editor::desktop::EditorPreviewController group_controller;
+    auto group_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& group_controller = *group_controller_owner;
     group_controller.loadAsset(
         QStringLiteral("group-blend-asset"),
         QString(),
@@ -2324,7 +3141,8 @@ int main(int argc, char** argv) {
                 .toString() != QStringLiteral("multiply")) {
       return fail("layer groups should accept supported blend modes");
     }
-    photo_editor::desktop::EditorPreviewController hierarchy_controller;
+    auto hierarchy_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& hierarchy_controller = *hierarchy_controller_owner;
     hierarchy_controller.loadAsset(
         QStringLiteral("group-hierarchy-asset"),
         QString(),
@@ -2398,7 +3216,8 @@ int main(int argc, char** argv) {
     return verify_built_in_preset_thumbnail_parity();
   }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_BRUSH_AUTOMASK_IDEMPOTENCE_ONLY")) {
-    photo_editor::desktop::EditorPreviewController brush;
+    auto brush_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& brush = *brush_owner;
     brush.setEditAccessPolicy([] { return true; });
     brush.loadAsset(QStringLiteral("brush-auto-mask-idempotence"), QString(), QString(),
                     QString(), QString(), QString(), QString());
@@ -2496,7 +3315,8 @@ int main(int argc, char** argv) {
 
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_LIVE_BRUSH_ONLY")) {
     using Access = photo_editor::desktop::EditorPreviewControllerTestAccess;
-    photo_editor::desktop::EditorPreviewController brush;
+    auto brush_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& brush = *brush_owner;
     const auto wait_for_brush_preview = [&brush]() {
       QElapsedTimer deadline;
       deadline.start();
@@ -2587,7 +3407,8 @@ int main(int argc, char** argv) {
       return fail("crop workflow proof source should be writable");
     }
 
-    photo_editor::desktop::EditorPreviewController crop_controller;
+    auto crop_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& crop_controller = *crop_controller_owner;
     crop_controller.loadAsset(
         QStringLiteral("crop-workflow-proof"),
         crop_path,
@@ -2682,8 +3503,8 @@ int main(int argc, char** argv) {
   }
 
   {
-    photo_editor::desktop::EditorPreviewController
-        thumbnail_memory_controller;
+    auto thumbnail_memory_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& thumbnail_memory_controller = *thumbnail_memory_controller_owner;
     const auto payload =
         QString(4 * 1024 * 1024, QLatin1Char('x'));
     for (auto index = 0; index < 40; ++index) {
@@ -2822,7 +3643,8 @@ int main(int argc, char** argv) {
       };
 
   {
-    photo_editor::desktop::EditorPreviewController controller;
+    auto controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& controller = *controller_owner;
     if (!photo_editor::desktop::EditorPreviewControllerTestAccess::
              stranded_full_request_arms_dispatch(controller) ||
         controller.processing()) {
@@ -2832,8 +3654,8 @@ int main(int argc, char** argv) {
   }
 
   {
-    photo_editor::desktop::EditorPreviewController
-        switching_memory_controller;
+    auto switching_memory_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& switching_memory_controller = *switching_memory_controller_owner;
     QStringList switching_paths;
     for (auto index = 0; index < 4; ++index) {
       const auto path = runtime_root.filePath(
@@ -3307,7 +4129,8 @@ int main(int argc, char** argv) {
       return fail("ICC profile asset fixture should be writable");
     }
   }
-  photo_editor::desktop::EditorPreviewController profile_asset_controller;
+  auto profile_asset_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& profile_asset_controller = *profile_asset_controller_owner;
   const auto imported_proof_profile_result =
       profile_asset_controller.importIccProfileAsset(
           QStringLiteral("proof"),
@@ -3490,7 +4313,8 @@ int main(int argc, char** argv) {
       profile_asset_controller.inputColorProfile() != QStringLiteral("Camera Native")) {
     return fail("controller DCP clear should restore the explicit camera-native path");
   }
-  photo_editor::desktop::EditorPreviewController advanced_color_defaults_controller;
+  auto advanced_color_defaults_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& advanced_color_defaults_controller = *advanced_color_defaults_controller_owner;
   if (advanced_color_defaults_controller.colorMixerModel() != QStringLiteral("HSL")) {
     return fail("default color mix model should match the visible HSL controls");
   }
@@ -3619,7 +4443,8 @@ int main(int argc, char** argv) {
     return !sink.image(key).isNull();
   };
 
-  photo_editor::desktop::EditorPreviewController native_publish_controller;
+  auto native_publish_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& native_publish_controller = *native_publish_controller_owner;
   photo_editor::desktop::TestImageSink native_publish_sink;
   native_publish_controller.setImageProvider(&native_publish_sink);
   photo_editor::desktop::EditorPreviewControllerTestAccess::set_display_preview_texture(
@@ -3639,10 +4464,20 @@ int main(int argc, char** argv) {
       QString(),
       QString(),
       QString());
-  if (!wait_for_preview_idle(native_publish_controller) ||
+  const auto native_publish_idle = wait_for_preview_idle(native_publish_controller);
+  if (!native_publish_idle ||
       !native_publish_controller.displayPreviewNativeAvailable() ||
       native_publish_controller.displayPreviewNativeRevision() <= 0 ||
       native_publish_sink.image(QStringLiteral("edited")).isNull()) {
+    std::cerr << "native_publish idle=" << native_publish_idle
+              << " available=" << native_publish_controller.displayPreviewNativeAvailable()
+              << " revision=" << native_publish_controller.displayPreviewNativeRevision()
+              << " provider_null=" << native_publish_sink.image(QStringLiteral("edited")).isNull()
+              << " processing=" << native_publish_controller.processing()
+              << " full_running=" << native_publish_controller.fullRenderRunning()
+              << " status=" << native_publish_controller.status().toStdString()
+              << " failure_stage=" << native_publish_controller.previewFailureStage().toStdString()
+              << " failure_detail=" << native_publish_controller.previewFailureDetail().toStdString() << '\n';
     return fail("native preview upload should keep an edited image-provider publication for QML fallback paths");
   }
   if (photo_editor::io::openexr_backend_available()) {
@@ -3677,7 +4512,8 @@ int main(int argc, char** argv) {
             &exr_failure_reason)) {
       return fail("editor OpenEXR fixture should be writable");
     }
-    photo_editor::desktop::EditorPreviewController exr_controller;
+    auto exr_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& exr_controller = *exr_controller_owner;
     photo_editor::desktop::TestImageSink exr_sink;
     exr_controller.setImageProvider(&exr_sink);
     exr_controller.loadAsset(
@@ -3748,7 +4584,8 @@ int main(int argc, char** argv) {
     return fail("native publish controller should settle after viewport restore guard test");
   }
 
-  photo_editor::desktop::EditorPreviewController zoom_native_controller;
+  auto zoom_native_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& zoom_native_controller = *zoom_native_controller_owner;
   photo_editor::desktop::TestImageSink zoom_native_sink;
   zoom_native_controller.setImageProvider(&zoom_native_sink);
   auto zoom_native_texture =
@@ -3890,7 +4727,8 @@ int main(int argc, char** argv) {
     return fail("layer-composite edits should publish their lower-resolution preview instead of preserving stale full-resolution texture");
   }
 
-  photo_editor::desktop::EditorPreviewController raw_availability_controller;
+  auto raw_availability_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& raw_availability_controller = *raw_availability_controller_owner;
   raw_availability_controller.loadAsset(
       QStringLiteral("jpeg-asset"),
       QStringLiteral("/tmp/IMG_0001.jpg"),
@@ -3917,7 +4755,8 @@ int main(int argc, char** argv) {
     }
   }
 
-  photo_editor::desktop::EditorPreviewController histogram_async_controller;
+  auto histogram_async_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& histogram_async_controller = *histogram_async_controller_owner;
   QImage histogram_async_source(320, 240, QImage::Format_ARGB32);
   for (int y = 0; y < histogram_async_source.height(); ++y) {
     for (int x = 0; x < histogram_async_source.width(); ++x) {
@@ -4031,7 +4870,8 @@ int main(int argc, char** argv) {
       histogram_count_sum(histogram_async_controller.histogramLuminanceCounts()) != histogram_sample_count) {
     return fail("histogram raw bin counts should sum exactly to the sampled pixel count for every channel");
   }
-  photo_editor::desktop::EditorPreviewController high_precision_scope_controller;
+  auto high_precision_scope_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& high_precision_scope_controller = *high_precision_scope_controller_owner;
   QImage high_precision_scope_source(128, 1, QImage::Format_RGBA64);
   const auto sub_8bit_red = 1.0 / 4095.0;
   high_precision_scope_source.fill(QColor::fromRgbF(static_cast<float>(sub_8bit_red), 0.0F, 0.0F, 1.0F));
@@ -4045,7 +4885,8 @@ int main(int argc, char** argv) {
     return fail("histogram scopes should sample 16-bit image data before 8-bit display quantization");
   }
 
-  photo_editor::desktop::EditorPreviewController diagnostic_overlay_controller;
+  auto diagnostic_overlay_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& diagnostic_overlay_controller = *diagnostic_overlay_controller_owner;
   photo_editor::desktop::TestImageSink diagnostic_overlay_sink;
   diagnostic_overlay_controller.setImageProvider(&diagnostic_overlay_sink);
   QImage diagnostic_source(64, 64, QImage::Format_ARGB32);
@@ -4095,7 +4936,8 @@ int main(int argc, char** argv) {
     return fail("diagnostic overlays should clear their image-provider sources when preview pixels are unavailable");
   }
 
-  photo_editor::desktop::EditorPreviewController missing_preview_controller;
+  auto missing_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& missing_preview_controller = *missing_preview_controller_owner;
   missing_preview_controller.loadAsset(
       QStringLiteral("missing-preview-source"),
       runtime_root.filePath(QStringLiteral("missing-preview-source.jpg")),
@@ -4118,7 +4960,8 @@ int main(int argc, char** argv) {
     return fail("preview render retry should preserve source-decode failure metadata without opening a blocking state");
   }
 
-  photo_editor::desktop::EditorPreviewController rendered_scope_controller;
+  auto rendered_scope_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& rendered_scope_controller = *rendered_scope_controller_owner;
   photo_editor::desktop::TestImageSink rendered_scope_sink;
   rendered_scope_controller.setImageProvider(&rendered_scope_sink);
   QImage rendered_scope_source(960, 240, QImage::Format_ARGB32);
@@ -4684,7 +5527,8 @@ int main(int argc, char** argv) {
     return fail("fresh visible overlay viewport updates should not inherit stale render queue timing");
   }
 
-  photo_editor::desktop::EditorPreviewController retry_tool_controller;
+  auto retry_tool_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& retry_tool_controller = *retry_tool_controller_owner;
   // This fixture asserts image-provider pixels. Native-only delivery is covered
   // by initial_selection_native_retry_test, including actual texture readback.
   photo_editor::desktop::EditorPreviewControllerTestAccess::set_display_preview_texture(
@@ -4754,7 +5598,8 @@ int main(int argc, char** argv) {
   if (!rapid_slider_source.save(rapid_slider_path)) {
     return fail("rapid slider source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController working_profile_controller;
+  auto working_profile_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& working_profile_controller = *working_profile_controller_owner;
   working_profile_controller.loadAsset(
       QStringLiteral("working-profile"),
       rapid_slider_path,
@@ -4800,7 +5645,8 @@ int main(int argc, char** argv) {
     return fail("working-profile controller should settle after profile render");
   }
 
-  photo_editor::desktop::EditorPreviewController rapid_slider_controller;
+  auto rapid_slider_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& rapid_slider_controller = *rapid_slider_controller_owner;
   rapid_slider_controller.loadAsset(
       QStringLiteral("rapid-slider"),
       rapid_slider_path,
@@ -4924,7 +5770,8 @@ int main(int argc, char** argv) {
     return fail("no-op slider changes should not emit edit intents or schedule renders");
   }
 
-  photo_editor::desktop::EditorPreviewController masked_global_debounce_controller;
+  auto masked_global_debounce_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& masked_global_debounce_controller = *masked_global_debounce_controller_owner;
   masked_global_debounce_controller.loadAsset(
       QStringLiteral("masked-global-debounce"),
       rapid_slider_path,
@@ -4963,7 +5810,8 @@ int main(int argc, char** argv) {
     return fail("global exposure over masks must finish the current full-resolution generation");
   }
 
-  photo_editor::desktop::EditorPreviewController immediate_mask_feedback_controller;
+  auto immediate_mask_feedback_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& immediate_mask_feedback_controller = *immediate_mask_feedback_controller_owner;
   immediate_mask_feedback_controller.loadAsset(
       QStringLiteral("immediate-mask-feedback"),
       rapid_slider_path,
@@ -5004,7 +5852,8 @@ int main(int argc, char** argv) {
     return fail("active mask color edits must finish the current full-resolution generation");
   }
 
-  photo_editor::desktop::EditorPreviewController immediate_layer_feedback_controller;
+  auto immediate_layer_feedback_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& immediate_layer_feedback_controller = *immediate_layer_feedback_controller_owner;
   immediate_layer_feedback_controller.loadAsset(
       QStringLiteral("immediate-layer-feedback"),
       rapid_slider_path,
@@ -5017,7 +5866,8 @@ int main(int argc, char** argv) {
     return fail("immediate layer feedback controller should finish its initial preview");
   }
   immediate_layer_feedback_controller.addMask(QStringLiteral("linear"));
-  if (immediate_layer_feedback_controller.photoLayerCount() != 1 ||
+  if (immediate_layer_feedback_controller.photoLayerCount() != 0 ||
+      immediate_layer_feedback_controller.ensureActiveSelectionAdjustmentLayer() != 0 ||
       !immediate_layer_feedback_controller.setPhotoLayerAdjustmentValue(
           0,
           QStringLiteral("exposure"),
@@ -5039,7 +5889,8 @@ int main(int argc, char** argv) {
     return fail("immediate layer feedback controller should settle after layer-local preview");
   }
 
-  photo_editor::desktop::EditorPreviewController stale_full_preview_controller;
+  auto stale_full_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& stale_full_preview_controller = *stale_full_preview_controller_owner;
   stale_full_preview_controller.loadAsset(
       QStringLiteral("stale-full-preview"),
       rapid_slider_path,
@@ -5174,7 +6025,8 @@ int main(int argc, char** argv) {
     return fail("mixed dirty-stage burst should settle after deferred full render");
   }
 
-  photo_editor::desktop::EditorPreviewController advanced_tone_controller;
+  auto advanced_tone_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& advanced_tone_controller = *advanced_tone_controller_owner;
   advanced_tone_controller.loadAsset(
       QStringLiteral("advanced-tone-burst"),
       rapid_slider_path,
@@ -5339,7 +6191,8 @@ int main(int argc, char** argv) {
           final_rebuild_result.preview_image.pixelColor(0, 0).red() + 16) {
     return fail("full-resolution render requests should rebuild brush masks from editable points");
   }
-  photo_editor::desktop::EditorPreviewController localized_tile_controller;
+  auto localized_tile_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& localized_tile_controller = *localized_tile_controller_owner;
   localized_tile_controller.loadAsset(
       QStringLiteral("localized-tile-plan"),
       localized_tile_path,
@@ -5655,7 +6508,8 @@ int main(int argc, char** argv) {
           "PHOTO_EDITOR_TEST_ACES_BRUSH_PATCH_ONLY")) {
     return EXIT_SUCCESS;
   }
-  photo_editor::desktop::EditorPreviewController scheduled_patch_controller;
+  auto scheduled_patch_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& scheduled_patch_controller = *scheduled_patch_controller_owner;
   photo_editor::desktop::TestImageSink scheduled_patch_sink;
   scheduled_patch_controller.setImageProvider(&scheduled_patch_sink);
   auto scheduled_patch_texture =
@@ -6325,7 +7179,8 @@ int main(int argc, char** argv) {
   if (!non_square_tile_source.save(non_square_tile_path)) {
     return fail("non-square localized tile source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController non_square_tile_controller;
+  auto non_square_tile_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& non_square_tile_controller = *non_square_tile_controller_owner;
   non_square_tile_controller.loadAsset(
       QStringLiteral("non-square-tile-plan"),
       non_square_tile_path,
@@ -6383,7 +7238,8 @@ int main(int argc, char** argv) {
     return fail("non-uniform tile-local brush geometry should fall back to the full adjusted path");
   }
 
-  photo_editor::desktop::EditorPreviewController brush_tile_controller;
+  auto brush_tile_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& brush_tile_controller = *brush_tile_controller_owner;
   brush_tile_controller.loadAsset(
       QStringLiteral("brush-tile-plan"),
       localized_tile_path,
@@ -6538,10 +7394,39 @@ int main(int argc, char** argv) {
       photo_editor::desktop::EditorPreviewControllerTestAccess::
           thumbnail_refresh_queue_dispatched_count(brush_tile_controller);
   auto brush_tile_mask_sets = brush_tile_controller.maskSets();
-  if (!wait_for_thumbnail_queue_dispatch(
-          brush_tile_controller,
-          brush_tile_thumbnail_dispatch_before + 1,
-          7000)) {
+  // The worker may already have completed during the preceding replay checks.
+  // Require the current stroke's actual published entry rather than another
+  // completion after taking a counter snapshot.
+  const auto current_brush_thumbnail_ready = [&]() {
+    brush_tile_mask_sets = brush_tile_controller.maskSets();
+    if (brush_tile_mask_sets.size() != 1 ||
+        photo_editor::desktop::EditorPreviewControllerTestAccess::mask_thumbnail_cache_dirty(brush_tile_controller) ||
+        photo_editor::desktop::EditorPreviewControllerTestAccess::thumbnail_refresh_queue_pending(brush_tile_controller)) return false;
+    const auto set = brush_tile_mask_sets.first().toMap();
+    const auto sources = set.value(QStringLiteral("sources")).toList();
+    if (sources.size() != 1) return false;
+    const auto source = sources.first().toMap();
+    return !set.value(QStringLiteral("thumbnailSource")).toString().isEmpty() &&
+        !set.value(QStringLiteral("thumbnailStale")).toBool() &&
+        !set.value(QStringLiteral("thumbnailProgressive")).toBool() &&
+        source.value(QStringLiteral("thumbnailQueueWorkerRendered")).toBool() &&
+        source.value(QStringLiteral("brushAlphaSourceSignature")) ==
+            brush_tile_mask.value(QStringLiteral("brushAlphaSourceSignature"));
+  };
+  int brush_thumbnail_wait_ms = 0;
+  while (!current_brush_thumbnail_ready() && brush_thumbnail_wait_ms < 7000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    QThread::msleep(25);
+    brush_thumbnail_wait_ms += 25;
+  }
+  if (!current_brush_thumbnail_ready()) {
+    std::cerr << "brush thumbnail settle diagnostics before=" << brush_tile_thumbnail_dispatch_before
+              << " completed=" << photo_editor::desktop::EditorPreviewControllerTestAccess::thumbnail_refresh_queue_dispatched_count(brush_tile_controller)
+              << " workerRunning=" << photo_editor::desktop::EditorPreviewControllerTestAccess::thumbnail_refresh_queue_worker_running(brush_tile_controller)
+              << " dirty=" << photo_editor::desktop::EditorPreviewControllerTestAccess::mask_thumbnail_cache_dirty(brush_tile_controller)
+              << " processing=" << brush_tile_controller.processing()
+              << " queue=" << QJsonDocument::fromVariant(photo_editor::desktop::EditorPreviewControllerTestAccess::thumbnail_refresh_queue_fields(brush_tile_controller))
+                     .toJson(QJsonDocument::Compact).constData() << '\n';
     return fail("brush stroke thumbnail proof should wait for the asynchronous thumbnail worker");
   }
   brush_tile_mask_sets = brush_tile_controller.maskSets();
@@ -6554,18 +7439,23 @@ int main(int argc, char** argv) {
     return fail("brush stroke thumbnails should expose one grouped source");
   }
   const auto brush_tile_thumbnail_source = brush_tile_sources.at(0).toMap();
+  const auto brush_source_display = decode_png_data_url(
+      brush_tile_thumbnail_source.value(QStringLiteral("thumbnailSource")).toString());
+  const auto brush_set_display = decode_png_data_url(
+      brush_tile_mask_set.value(QStringLiteral("thumbnailSource")).toString());
   if (!brush_tile_mask_set.value(QStringLiteral("thumbnailSource")).toString().startsWith(
           QStringLiteral("data:image/png;base64,")) ||
       !brush_tile_thumbnail_source.value(QStringLiteral("thumbnailSource")).toString().startsWith(
           QStringLiteral("data:image/png;base64,")) ||
       brush_tile_thumbnail_source.value(QStringLiteral("scaledMattePurpose")).toString() !=
           QStringLiteral("thumbnail") ||
-      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteSourceWidth")).toInt() <=
-          brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteWidth")).toInt() ||
-      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteSourceHeight")).toInt() <=
-          brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteHeight")).toInt() ||
-      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteWidth")).toInt() > 96 ||
-      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteHeight")).toInt() > 96 ||
+      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteSourceWidth")).toInt() !=
+          brush_tile_mask.value(QStringLiteral("segmentationWidth")).toInt() ||
+      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteSourceHeight")).toInt() !=
+          brush_tile_mask.value(QStringLiteral("segmentationHeight")).toInt() ||
+      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteWidth")).toInt() != localized_tile_source.width() ||
+      brush_tile_thumbnail_source.value(QStringLiteral("scaledMatteHeight")).toInt() != localized_tile_source.height() ||
+      brush_source_display.size() != QSize(96, 96) || brush_set_display.size() != QSize(96, 96) ||
       brush_tile_thumbnail_source.value(QStringLiteral("brushAlphaSourceContract")).toString() !=
           QStringLiteral("brush-strokes-plus-alpha-tile-cache-v1") ||
       brush_tile_thumbnail_source.value(QStringLiteral("brushAlphaSourceOfTruth")).toString() !=
@@ -6583,7 +7473,7 @@ int main(int argc, char** argv) {
           brush_tile_mask.value(QStringLiteral("brushAlphaSourceSignature")).toString() ||
       brush_tile_mask_set.value(QStringLiteral("scaledMattePurpose")).toString() !=
           QStringLiteral("thumbnail")) {
-    return fail("brush stroke thumbnails should use scaled matte levels instead of full-resolution mattes");
+    return fail("brush stroke thumbnails should evaluate native coverage and publish bounded display mattes");
   }
   if (photo_editor::desktop::EditorPreviewControllerTestAccess::mask_tile_cache_entries() != 2 ||
       photo_editor::desktop::EditorPreviewControllerTestAccess::mask_tile_cache_bytes() !=
@@ -6609,6 +7499,17 @@ int main(int argc, char** argv) {
     cached_mask_tile_mask.insert(QStringLiteral("exposure"), 0.55);
     cached_mask_tile_request.state.mask_stack[0] = cached_mask_tile_mask;
   }
+  const auto source_coordinate_mask_tile_request = cached_mask_tile_request;
+  if (source_coordinate_mask_tile_request.state.mask_stack[0].toMap()
+          .value(QStringLiteral("coordinateSpace")).toString() != QStringLiteral("source")) {
+    return fail("new brush cache fallback fixture must retain its actual immutable source-coordinate recipe");
+  }
+  // This cache optimization supports historical crop-local masks. Preserve
+  // the actual source-coordinate recipe separately for the fallback proof.
+  auto legacy_cached_mask = cached_mask_tile_request.state.mask_stack[0].toMap();
+  legacy_cached_mask.remove(QStringLiteral("coordinateSpace"));
+  legacy_cached_mask.remove(QStringLiteral("coordinateArea"));
+  cached_mask_tile_request.state.mask_stack[0] = legacy_cached_mask;
   auto cached_mask_tile_base_request = cached_mask_tile_request;
   cached_mask_tile_base_request.use_in_memory_preview = true;
   cached_mask_tile_base_request.state.mask_stack.clear();
@@ -6636,7 +7537,45 @@ int main(int argc, char** argv) {
               << " maskTileHits=" << cached_mask_tile_result.mask_tile_cache_hit_count
               << " maskTileMisses=" << cached_mask_tile_result.mask_tile_cache_miss_count
               << '\n';
-    return fail("dirty brush renders should consume cached per-mask alpha tiles for covered chunks");
+    return fail("legacy crop-local dirty brush renders should consume cached per-mask alpha tiles for covered chunks");
+  }
+  auto source_coordinate_request = source_coordinate_mask_tile_request;
+  source_coordinate_request.require_cpu_preview_image = true;
+  source_coordinate_request.require_cpu_display_image = true;
+  source_coordinate_request.allow_native_srgb_surface = false;
+  source_coordinate_request.allow_native_device_surface = false;
+  const auto source_coordinate_result =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_preview_request_sync(source_coordinate_request);
+  auto source_coordinate_reference_request = source_coordinate_request;
+  source_coordinate_reference_request.full_invalidation = true;
+  source_coordinate_reference_request.dirty_region = {};
+  source_coordinate_reference_request.tile_size = 0;
+  source_coordinate_reference_request.tile_padding_px = 0;
+  source_coordinate_reference_request.tile_visible_region_active = false;
+  source_coordinate_reference_request.tile_visible_region = {};
+  source_coordinate_reference_request.visible_tile_only = false;
+  source_coordinate_reference_request.planned_tile_count = 0;
+  source_coordinate_reference_request.planned_visible_tile_count = 0;
+  source_coordinate_reference_request.planned_adjacent_tile_count = 0;
+  source_coordinate_reference_request.planned_background_tile_count = 0;
+  const auto source_coordinate_reference =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_preview_request_sync(source_coordinate_reference_request);
+  if (!source_coordinate_result.success || !source_coordinate_reference.success ||
+      source_coordinate_result.backend == QStringLiteral("adjusted_tile_cache") ||
+      source_coordinate_result.mask_tile_cache_hit_count != 0 ||
+      source_coordinate_result.adjusted_stage_tile_count != 0 ||
+      source_coordinate_result.preview_image.isNull() || source_coordinate_reference.preview_image.isNull() ||
+      source_coordinate_result.preview_image.convertToFormat(QImage::Format_RGBA8888) ==
+          cached_mask_tile_base_result.preview_image.convertToFormat(QImage::Format_RGBA8888) ||
+      source_coordinate_result.preview_image.convertToFormat(QImage::Format_RGBA8888) !=
+          source_coordinate_reference.preview_image.convertToFormat(QImage::Format_RGBA8888)) {
+    std::cerr << "source brush canonical fallback success=" << source_coordinate_result.success
+              << " reference=" << source_coordinate_reference.success
+              << " backend=" << source_coordinate_result.backend.toStdString()
+              << " maskTileHits=" << source_coordinate_result.mask_tile_cache_hit_count
+              << " maxRgbDelta=" << max_channel_delta(source_coordinate_result.preview_image,
+                                                       source_coordinate_reference.preview_image) << '\n';
+    return fail("source-coordinate dirty brush fallback must exactly match full canonical RGBA output");
   }
   if (brush_tile_intent.operation != QStringLiteral("brush_stroke") ||
       brush_tile_intent.dirty_domain != QStringLiteral("mask_rasterization") ||
@@ -6802,7 +7741,8 @@ int main(int argc, char** argv) {
     return fail("stress render should handle 100 mask components over a high-resolution source without failing");
   }
 
-  photo_editor::desktop::EditorPreviewController stress_undo_controller;
+  auto stress_undo_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& stress_undo_controller = *stress_undo_controller_owner;
   stress_undo_controller.loadAsset(
       QStringLiteral("stress-undo"),
       final_rebuild_source_path,
@@ -6883,11 +7823,17 @@ int main(int argc, char** argv) {
         << photo_editor::desktop::EditorPreviewControllerTestAccess::
                full_render_pending(stress_undo_controller)
         << '\n';
+    // Opt-in native crash report captures all worker stacks when task-port
+    // sampling is unavailable. Normal validation keeps the ordinary failure.
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_ABORT_ON_STRESS_TIMEOUT")) {
+      std::cerr.flush();
+      std::abort();
+    }
     return fail("stress undo controller should settle after repeated undo/redo renders");
   }
 
-  photo_editor::desktop::EditorPreviewController
-      deep_stack_controller;
+  auto deep_stack_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& deep_stack_controller = *deep_stack_controller_owner;
   deep_stack_controller.loadAsset(
       QStringLiteral("deep-stack-workflow"),
       final_rebuild_source_path,
@@ -7072,7 +8018,8 @@ int main(int argc, char** argv) {
         "100-command desktop stack should remain inside its resident-memory ceiling");
   }
 
-  photo_editor::desktop::EditorPreviewController pure_global_burst_controller;
+  auto pure_global_burst_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& pure_global_burst_controller = *pure_global_burst_controller_owner;
   pure_global_burst_controller.loadAsset(
       QStringLiteral("pure-global-burst"),
       rapid_slider_path,
@@ -7104,7 +8051,8 @@ int main(int argc, char** argv) {
     return fail("exact live preview should be promoted instead of rendering a duplicate settled preview");
   }
 
-  photo_editor::desktop::EditorPreviewController detail_slider_controller;
+  auto detail_slider_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& detail_slider_controller = *detail_slider_controller_owner;
   detail_slider_controller.loadAsset(
       QStringLiteral("detail-slider-burst"),
       rapid_slider_path,
@@ -7194,7 +8142,8 @@ int main(int argc, char** argv) {
     return fail("detail slider controller should settle after deferred full render");
   }
 
-  photo_editor::desktop::EditorPreviewController geometry_slider_controller;
+  auto geometry_slider_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& geometry_slider_controller = *geometry_slider_controller_owner;
   geometry_slider_controller.loadAsset(
       QStringLiteral("geometry-slider-burst"),
       rapid_slider_path,
@@ -7306,7 +8255,8 @@ int main(int argc, char** argv) {
     return fail("geometry slider controller should settle after deferred full render");
   }
 
-  photo_editor::desktop::EditorPreviewController crop_intent_controller;
+  auto crop_intent_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& crop_intent_controller = *crop_intent_controller_owner;
   crop_intent_controller.loadAsset(
       QStringLiteral("crop-intent-burst"),
       rapid_slider_path,
@@ -7390,7 +8340,8 @@ int main(int argc, char** argv) {
     return fail("crop intent controller should settle after preview-only crop render");
   }
 
-  photo_editor::desktop::EditorPreviewController color_intent_controller;
+  auto color_intent_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& color_intent_controller = *color_intent_controller_owner;
   color_intent_controller.loadAsset(
       QStringLiteral("color-intent-burst"),
       rapid_slider_path,
@@ -7506,7 +8457,8 @@ int main(int argc, char** argv) {
     return fail("color intent controller should settle after deferred full render");
   }
 
-  photo_editor::desktop::EditorPreviewController input_profile_intent_controller;
+  auto input_profile_intent_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& input_profile_intent_controller = *input_profile_intent_controller_owner;
   input_profile_intent_controller.loadAsset(
       QStringLiteral("input-profile-intent"),
       rapid_slider_path,
@@ -7543,7 +8495,8 @@ int main(int argc, char** argv) {
     return fail("input profile intent controller should settle after input profile render");
   }
 
-  photo_editor::desktop::EditorPreviewController raw_intent_controller;
+  auto raw_intent_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& raw_intent_controller = *raw_intent_controller_owner;
   raw_intent_controller.loadAsset(
       QStringLiteral("raw-intent-burst"),
       rapid_slider_path,
@@ -7659,7 +8612,8 @@ int main(int argc, char** argv) {
     return fail("raw intent controller should settle after deferred full render");
   }
 
-  photo_editor::desktop::EditorPreviewController curve_preset_intent_controller;
+  auto curve_preset_intent_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& curve_preset_intent_controller = *curve_preset_intent_controller_owner;
   curve_preset_intent_controller.loadAsset(
       QStringLiteral("curve-preset-intent"),
       rapid_slider_path,
@@ -7698,7 +8652,8 @@ int main(int argc, char** argv) {
     return fail("curve preset intent controller should settle after preset render");
   }
 
-  photo_editor::desktop::EditorPreviewController layer_intent_controller;
+  auto layer_intent_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_intent_controller = *layer_intent_controller_owner;
   layer_intent_controller.loadAsset(
       QStringLiteral("layer-intent"),
       rapid_slider_path,
@@ -7866,7 +8821,8 @@ int main(int argc, char** argv) {
     return fail("layer intent controller should settle after opacity render");
   }
 
-  photo_editor::desktop::EditorPreviewController layer_trace_controller;
+  auto layer_trace_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_trace_controller = *layer_trace_controller_owner;
   layer_trace_controller.loadAsset(
       QStringLiteral("layer-composite-trace"),
       rapid_slider_path,
@@ -7876,8 +8832,12 @@ int main(int argc, char** argv) {
       QString(),
       QString());
   layer_trace_controller.addMask(QStringLiteral("linear"));
+  if (layer_trace_controller.photoLayerCount() != 0 ||
+      layer_trace_controller.ensureActiveSelectionAdjustmentLayer() != 0) {
+    return fail("layer composite trace should request its masked adjustment layer explicitly");
+  }
   if (!wait_for_preview_idle(layer_trace_controller)) {
-    return fail("layer composite trace controller should settle after initial mask creation");
+    return fail("layer composite trace controller should settle after explicit layer creation");
   }
   if (layer_trace_controller.photoLayerCount() != 1 ||
       !layer_trace_controller.setPhotoLayerOpacity(0, 0.73)) {
@@ -7927,7 +8887,8 @@ int main(int argc, char** argv) {
     return fail("layer-composite render workers should publish exact masked-layer alpha trace metadata");
   }
 
-  photo_editor::desktop::EditorPreviewController control_intent_controller;
+  auto control_intent_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& control_intent_controller = *control_intent_controller_owner;
   control_intent_controller.loadAsset(
       QStringLiteral("control-intent"),
       rapid_slider_path,
@@ -8045,7 +9006,8 @@ int main(int argc, char** argv) {
     return fail("control intent controller should settle after compare exit restore render");
   }
 
-  photo_editor::desktop::EditorPreviewController base_cache_controller;
+  auto base_cache_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& base_cache_controller = *base_cache_controller_owner;
   photo_editor::desktop::TestImageSink base_cache_sink;
   base_cache_controller.setImageProvider(&base_cache_sink);
   base_cache_controller.setScopesVisible(false);
@@ -8100,7 +9062,8 @@ int main(int argc, char** argv) {
     return fail("deferring diagnostic overlays for cached full preview should not drop visible overlay generation");
   }
 
-  photo_editor::desktop::EditorPreviewController display_cache_controller;
+  auto display_cache_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& display_cache_controller = *display_cache_controller_owner;
   photo_editor::desktop::TestImageSink display_cache_sink;
   display_cache_controller.setImageProvider(&display_cache_sink);
   display_cache_controller.setScopesVisible(false);
@@ -8382,7 +9345,8 @@ int main(int argc, char** argv) {
     return fail("edit-driven rendered-cache full previews with an image provider should not write a hot-path disk JPEG");
   }
 
-  photo_editor::desktop::EditorPreviewController full_cache_controller;
+  auto full_cache_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& full_cache_controller = *full_cache_controller_owner;
   full_cache_controller.loadAsset(
       QStringLiteral("full-cache-hit"),
       rapid_slider_path,
@@ -8402,7 +9366,8 @@ int main(int argc, char** argv) {
   if (!QFileInfo::exists(full_cache_path)) {
     return fail("initial full-resolution preview should create a disk preview cache entry");
   }
-  photo_editor::desktop::EditorPreviewController warm_asset_select_controller;
+  auto warm_asset_select_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& warm_asset_select_controller = *warm_asset_select_controller_owner;
   warm_asset_select_controller.loadAsset(
       QStringLiteral("warm-cache-hit"),
       rapid_slider_path,
@@ -8490,7 +9455,8 @@ int main(int argc, char** argv) {
   if (!undersized_full_cache.save(full_cache_path, "JPG")) {
     return fail("undersized full-preview cache fixture should be writable");
   }
-  photo_editor::desktop::EditorPreviewController mismatched_full_cache_controller;
+  auto mismatched_full_cache_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& mismatched_full_cache_controller = *mismatched_full_cache_controller_owner;
   mismatched_full_cache_controller.loadAsset(
       QStringLiteral("mismatched-full-cache"),
       rapid_slider_path,
@@ -8512,7 +9478,8 @@ int main(int argc, char** argv) {
     return fail("full-preview cache repair should restore exact source dimensions");
   }
 
-  photo_editor::desktop::EditorPreviewController mask_preview_controller;
+  auto mask_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& mask_preview_controller = *mask_preview_controller_owner;
   mask_preview_controller.loadAsset(
       QStringLiteral("mask-preview-draft"),
       rapid_slider_path,
@@ -8524,61 +9491,14 @@ int main(int argc, char** argv) {
   if (!wait_for_preview_idle(mask_preview_controller)) {
     return fail("mask preview controller should finish its initial preview");
   }
+  const auto mask_creation_intents =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(mask_preview_controller);
+  const auto mask_creation_source = mask_preview_controller.displayPreviewSource();
   mask_preview_controller.addMask(QStringLiteral("linear"));
-  const auto add_mask_request =
-      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_request(
-          mask_preview_controller);
-  const auto add_mask_intent =
-      photo_editor::desktop::EditorPreviewControllerTestAccess::last_edit_intent(
-          mask_preview_controller);
-  const auto mask_creation_preview_empty =
-      photo_editor::desktop::EditorPreviewControllerTestAccess::settled_mask_preview_source(mask_preview_controller).isEmpty();
-  if (!mask_creation_preview_empty ||
-      !photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_draft(
-          mask_preview_controller) ||
-      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
-          mask_preview_controller) ||
-      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
-          mask_preview_controller) ||
-      add_mask_request.render_mode != QStringLiteral("live_preview") ||
-      add_mask_request.render_priority != 0 ||
-      add_mask_request.dirty_domain != QStringLiteral("mask_rasterization") ||
-      add_mask_request.dirty_stages.isEmpty() ||
-      add_mask_request.dirty_stages.first() != QStringLiteral("mask_rasterization") ||
-      add_mask_request.dirty_stages.contains(QStringLiteral("source_decode")) ||
-      !add_mask_request.dirty_stages.contains(QStringLiteral("mask_composition")) ||
-      !add_mask_request.dirty_stages.contains(QStringLiteral("local_adjustments")) ||
-      !add_mask_request.dirty_stages.contains(QStringLiteral("overlay_composite")) ||
-      add_mask_intent.operation != QStringLiteral("mask_stack") ||
-      add_mask_intent.dirty_domain != QStringLiteral("mask_rasterization") ||
-      add_mask_intent.render_reason != QStringLiteral("mask_preview_change") ||
-      add_mask_intent.schedule_full_resolution) {
-    const auto failure_detail =
-        QStringLiteral(
-            "mask creation should stay source-free in normal overlay mode without queueing a full-resolution preview render "
-            "(previewEmpty=%1 draft=%2 fullTimer=%3 fullPending=%4 mode=%5 priority=%6 domain=%7 firstStage=%8 hasSourceDecode=%9 hasComposition=%10 hasLocal=%11 hasOverlay=%12 op=%13 intentDomain=%14 reason=%15 fullIntent=%16)")
-            .arg(mask_creation_preview_empty)
-            .arg(photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_draft(
-                mask_preview_controller))
-            .arg(photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
-                mask_preview_controller))
-            .arg(photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
-                mask_preview_controller))
-            .arg(add_mask_request.render_mode)
-            .arg(add_mask_request.render_priority)
-            .arg(add_mask_request.dirty_domain)
-            .arg(add_mask_request.dirty_stages.isEmpty() ? QStringLiteral("<empty>")
-                                                         : add_mask_request.dirty_stages.first())
-            .arg(add_mask_request.dirty_stages.contains(QStringLiteral("source_decode")))
-            .arg(add_mask_request.dirty_stages.contains(QStringLiteral("mask_composition")))
-            .arg(add_mask_request.dirty_stages.contains(QStringLiteral("local_adjustments")))
-            .arg(add_mask_request.dirty_stages.contains(QStringLiteral("overlay_composite")))
-            .arg(add_mask_intent.operation)
-            .arg(add_mask_intent.dirty_domain)
-            .arg(add_mask_intent.render_reason)
-            .arg(add_mask_intent.schedule_full_resolution)
-            .toUtf8();
-    return fail(failure_detail.constData());
+  if (photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(mask_preview_controller) != mask_creation_intents ||
+      mask_preview_controller.displayPreviewSource() != mask_creation_source ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::settled_mask_preview_source(mask_preview_controller).isEmpty()) {
+    return fail("free selection creation must retain the photograph and update only selection feedback");
   }
   if (!wait_for_preview_idle(mask_preview_controller)) {
     return fail("mask preview controller should settle after deferred mask render");
@@ -8728,7 +9648,8 @@ int main(int argc, char** argv) {
     return fail("mask preview controller should settle after active mask control render");
   }
 
-  photo_editor::desktop::EditorPreviewController lens_profile_controller;
+  auto lens_profile_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& lens_profile_controller = *lens_profile_controller_owner;
   lens_profile_controller.loadAsset(
       QStringLiteral("lens-profile-auto"),
       QString(),
@@ -8765,7 +9686,8 @@ int main(int argc, char** argv) {
   if (!live_preview_source.save(live_preview_path)) {
     return fail("live brush preview source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController live_preview_controller;
+  auto live_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& live_preview_controller = *live_preview_controller_owner;
   live_preview_controller.loadAsset(
       QStringLiteral("brush-live-preview"),
       live_preview_path,
@@ -8844,7 +9766,8 @@ int main(int argc, char** argv) {
     return fail("freshly loaded assets should start with empty undo history");
   }
 
-  photo_editor::desktop::EditorPreviewController liquify_controller;
+  auto liquify_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& liquify_controller = *liquify_controller_owner;
   liquify_controller.loadAsset(
       QStringLiteral("liquify-controls"),
       QString(),
@@ -8884,7 +9807,8 @@ int main(int argc, char** argv) {
   if (!reference_image.save(reference_image_path)) {
     return fail("reference image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController reference_controller;
+  auto reference_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& reference_controller = *reference_controller_owner;
   reference_controller.loadAsset(
       QStringLiteral("reference-compare"),
       compare_source_path,
@@ -8973,7 +9897,8 @@ int main(int argc, char** argv) {
       !pixel_map_reference.save(pixel_map_reference_path)) {
     return fail("pixel inspector mapping source images should be writable");
   }
-  photo_editor::desktop::EditorPreviewController pixel_map_controller;
+  auto pixel_map_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& pixel_map_controller = *pixel_map_controller_owner;
   pixel_map_controller.loadAsset(
       QStringLiteral("pixel-map"),
       pixel_map_source_path,
@@ -9022,7 +9947,8 @@ int main(int argc, char** argv) {
     return fail("pixel inspector normalized coordinates should map to the same before/after preview pixel");
   }
 
-  photo_editor::desktop::EditorPreviewController adjustment_layer_controller;
+  auto adjustment_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& adjustment_layer_controller = *adjustment_layer_controller_owner;
   adjustment_layer_controller.loadAsset(
       QStringLiteral("adjustment-layer-asset"),
       QString(),
@@ -9098,7 +10024,8 @@ int main(int argc, char** argv) {
     return fail("redo should reapply baked layer edits to the Base Image");
   }
 
-  photo_editor::desktop::EditorPreviewController fill_layer_controller;
+  auto fill_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& fill_layer_controller = *fill_layer_controller_owner;
   fill_layer_controller.loadAsset(
       QStringLiteral("fill-layer-asset"),
       QString(),
@@ -9131,7 +10058,8 @@ int main(int argc, char** argv) {
     return fail("undo should remove a newly added fill layer");
   }
 
-  photo_editor::desktop::EditorPreviewController text_layer_controller;
+  auto text_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& text_layer_controller = *text_layer_controller_owner;
   text_layer_controller.loadAsset(
       QStringLiteral("text-layer-asset"),
       QString(),
@@ -9249,7 +10177,8 @@ int main(int argc, char** argv) {
   if (!source_layer_image.save(source_layer_path)) {
     return fail("source layer fixture image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController source_layer_controller;
+  auto source_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& source_layer_controller = *source_layer_controller_owner;
   source_layer_controller.loadAsset(
       QStringLiteral("source-layer-asset"),
       QString(),
@@ -9283,7 +10212,8 @@ int main(int argc, char** argv) {
     return fail("undo should remove a newly added source layer");
   }
 
-  photo_editor::desktop::EditorPreviewController group_layer_controller;
+  auto group_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& group_layer_controller = *group_layer_controller_owner;
   group_layer_controller.loadAsset(
       QStringLiteral("group-layer-asset"),
       QString(),
@@ -9308,7 +10238,8 @@ int main(int argc, char** argv) {
     return fail("undo should remove a newly added layer group");
   }
 
-  photo_editor::desktop::EditorPreviewController layer_ops_controller;
+  auto layer_ops_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_ops_controller = *layer_ops_controller_owner;
   layer_ops_controller.loadAsset(
       QStringLiteral("layer-ops-asset"),
       QString(),
@@ -9363,7 +10294,8 @@ int main(int argc, char** argv) {
   if (layer_ops_controller.undoLabel() != QStringLiteral("Layer mask density change")) {
     return fail("layer mask density edits should expose a clear undo label");
   }
-  photo_editor::desktop::EditorPreviewController layer_undo_label_controller;
+  auto layer_undo_label_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_undo_label_controller = *layer_undo_label_controller_owner;
   layer_undo_label_controller.loadAsset(
       QStringLiteral("layer-undo-label-asset"),
       QString(),
@@ -9385,7 +10317,8 @@ int main(int argc, char** argv) {
   if (layer_undo_label_controller.undoLabel() != QStringLiteral("Layer opacity change")) {
     return fail("redoing layer opacity should restore the same undo action label");
   }
-  photo_editor::desktop::EditorPreviewController layer_adjustment_controller;
+  auto layer_adjustment_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_adjustment_controller = *layer_adjustment_controller_owner;
   layer_adjustment_controller.loadAsset(
       QStringLiteral("layer-adjustment-asset"),
       QString(),
@@ -9395,6 +10328,10 @@ int main(int argc, char** argv) {
       QString(),
       QString());
   layer_adjustment_controller.addMask(QStringLiteral("linear"));
+  if (layer_adjustment_controller.photoLayerCount() != 0 ||
+      layer_adjustment_controller.ensureActiveSelectionAdjustmentLayer() != 0) {
+    return fail("layer-local adjustment rendering should create its selection layer explicitly");
+  }
   const auto layer_adjustment_intent_count_before =
       photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
           layer_adjustment_controller);
@@ -9882,84 +10819,10 @@ int main(int argc, char** argv) {
   if (!duplicated_name.endsWith(QStringLiteral("Copy"))) {
     return fail("duplicated photo layers should receive copy metadata");
   }
-  photo_editor::desktop::EditorPreviewController duplicate_mask_policy_controller;
-  duplicate_mask_policy_controller.loadAsset(
-      QStringLiteral("duplicate-mask-policy-asset"),
-      QString(),
-      QString(),
-      QString(),
-      QString(),
-      QString(),
-      QString());
-  duplicate_mask_policy_controller.addMask(QStringLiteral("linear"));
-  if (duplicate_mask_policy_controller.photoLayerCount() != 1) {
-    return fail("mask creation should create one linked layer for duplicate policy tests");
-  }
-  const auto source_masked_layer =
-      duplicate_mask_policy_controller.photoLayers().at(0).toMap();
-  if (source_masked_layer.value(QStringLiteral("selectionMaskSetId")).toString().isEmpty()) {
-    return fail("duplicate policy source layer should have a mask link");
-  }
-  if (!duplicate_mask_policy_controller.duplicatePhotoLayerWithMasks(0) ||
-      duplicate_mask_policy_controller.photoLayerCount() != 2) {
-    return fail("photo layers should duplicate with mask links on request");
-  }
-  if (duplicate_mask_policy_controller.undoLabel() !=
-      QStringLiteral("Duplicate layer with masks")) {
-    return fail("duplicate with masks should expose a policy-specific undo label");
-  }
-  duplicate_mask_policy_controller.undo();
-  if (duplicate_mask_policy_controller.photoLayerCount() != 1 ||
-      duplicate_mask_policy_controller.redoLabel() !=
-          QStringLiteral("Duplicate layer with masks")) {
-    return fail("undoing duplicate with masks should restore count and preserve redo label");
-  }
-  duplicate_mask_policy_controller.redo();
-  if (duplicate_mask_policy_controller.photoLayerCount() != 2 ||
-      duplicate_mask_policy_controller.undoLabel() !=
-          QStringLiteral("Duplicate layer with masks")) {
-    return fail("redoing duplicate with masks should restore count and undo label");
-  }
-  const auto copied_masked_layer =
-      duplicate_mask_policy_controller.photoLayers().at(1).toMap();
-  if (copied_masked_layer.value(QStringLiteral("selectionMaskSetId")).toString() !=
-          source_masked_layer.value(QStringLiteral("selectionMaskSetId")).toString() ||
-      copied_masked_layer.value(QStringLiteral("duplicateMaskPolicy")).toString() !=
-          QStringLiteral("with-masks")) {
-    return fail("duplicate with masks should preserve mask link metadata");
-  }
-  if (!duplicate_mask_policy_controller.duplicatePhotoLayerWithoutMasks(0) ||
-      duplicate_mask_policy_controller.photoLayerCount() != 3) {
-    return fail("photo layers should duplicate without mask links on request");
-  }
-  if (duplicate_mask_policy_controller.undoLabel() !=
-      QStringLiteral("Duplicate layer without masks")) {
-    return fail("duplicate without masks should expose a policy-specific undo label");
-  }
-  duplicate_mask_policy_controller.undo();
-  if (duplicate_mask_policy_controller.photoLayerCount() != 2 ||
-      duplicate_mask_policy_controller.redoLabel() !=
-          QStringLiteral("Duplicate layer without masks")) {
-    return fail("undoing duplicate without masks should restore count and preserve redo label");
-  }
-  duplicate_mask_policy_controller.redo();
-  if (duplicate_mask_policy_controller.photoLayerCount() != 3 ||
-      duplicate_mask_policy_controller.undoLabel() !=
-          QStringLiteral("Duplicate layer without masks")) {
-    return fail("redoing duplicate without masks should restore count and undo label");
-  }
-  const auto copied_unmasked_layer =
-      duplicate_mask_policy_controller.photoLayers().at(1).toMap();
-  if (!copied_unmasked_layer.value(QStringLiteral("selectionMaskSetId")).toString().isEmpty() ||
-      copied_unmasked_layer.contains(QStringLiteral("selectionMaskSetIds")) ||
-      copied_unmasked_layer.value(QStringLiteral("selectionScoped")).toBool() ||
-      copied_unmasked_layer.value(QStringLiteral("hasLayerMask")).toBool() ||
-      copied_unmasked_layer.value(QStringLiteral("duplicateMaskPolicy")).toString() !=
-          QStringLiteral("without-masks")) {
-    return fail("duplicate without masks should remove layer mask link metadata");
-  }
+  if (duplicate_mask_policy_regression(rapid_slider_path) != EXIT_SUCCESS) return EXIT_FAILURE;
 
-  photo_editor::desktop::EditorPreviewController layer_eraser_controller;
+  auto layer_eraser_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_eraser_controller = *layer_eraser_controller_owner;
   layer_eraser_controller.loadAsset(
       QStringLiteral("layer-eraser-asset"),
       QString(),
@@ -9996,7 +10859,7 @@ int main(int argc, char** argv) {
                 << " setId=" << layer.value(QStringLiteral("selectionMaskSetId")).toString().toStdString()
                 << '\n';
     }
-    return fail("using a selection as a layer mask should remove the unused neutral adjustment layer");
+    return fail("using a selection as a layer mask should link the existing content layer without adding a photo layer");
   }
   const auto eraser_layer = layer_eraser_controller.photoLayers().at(0).toMap();
   if (!eraser_layer.value(QStringLiteral("selectionScoped")).toBool() ||
@@ -10025,7 +10888,8 @@ int main(int argc, char** argv) {
     return fail("photo layers should support delete operations");
   }
 
-  photo_editor::desktop::EditorPreviewController layer_mask_history_controller;
+  auto layer_mask_history_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_mask_history_controller = *layer_mask_history_controller_owner;
   layer_mask_history_controller.loadAsset(
       QStringLiteral("layer-mask-history-asset"),
       QString(),
@@ -10036,20 +10900,35 @@ int main(int argc, char** argv) {
       QString());
   layer_mask_history_controller.addMask(QStringLiteral("linear"));
   if (layer_mask_history_controller.maskCount() != 1 ||
-      layer_mask_history_controller.photoLayerCount() != 1 ||
+      layer_mask_history_controller.photoLayerCount() != 0 ||
       !layer_mask_history_controller.canUndo()) {
-    return fail("mask creation should create a linked layer and enter undo history");
+    return fail("mask creation should enter undo history without creating a photo layer");
   }
   layer_mask_history_controller.undo();
   if (layer_mask_history_controller.maskCount() != 0 ||
       layer_mask_history_controller.photoLayerCount() != 0 ||
       !layer_mask_history_controller.canRedo()) {
-    return fail("undo should remove a newly created mask and linked adjustment layer");
+    return fail("undo should remove a newly created mask without changing photo layers");
+  }
+  layer_mask_history_controller.redo();
+  if (layer_mask_history_controller.maskCount() != 1 ||
+      layer_mask_history_controller.photoLayerCount() != 0) {
+    return fail("redo should restore a newly created selection without adding a photo layer");
+  }
+  if (layer_mask_history_controller.ensureActiveSelectionAdjustmentLayer() != 0 ||
+      layer_mask_history_controller.photoLayerCount() != 1) {
+    return fail("explicit adjustment creation should add one linked layer after selection redo");
+  }
+  layer_mask_history_controller.undo();
+  if (layer_mask_history_controller.maskCount() != 1 ||
+      layer_mask_history_controller.photoLayerCount() != 0 ||
+      !layer_mask_history_controller.canRedo()) {
+    return fail("undo should remove the explicitly created layer while preserving its selection");
   }
   layer_mask_history_controller.redo();
   if (layer_mask_history_controller.maskCount() != 1 ||
       layer_mask_history_controller.photoLayerCount() != 1) {
-    return fail("redo should restore a newly created mask and linked adjustment layer");
+    return fail("redo should restore the explicitly created layer without changing selection history");
   }
   layer_mask_history_controller.setActiveMaskExposure(0.46);
   if (!almost_equal(layer_mask_history_controller.activeMaskExposure(), 0.46)) {
@@ -10127,7 +11006,8 @@ int main(int argc, char** argv) {
     return fail("redo should delete the same layer again");
   }
 
-  photo_editor::desktop::EditorPreviewController layer_geometry_controller;
+  auto layer_geometry_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_geometry_controller = *layer_geometry_controller_owner;
   layer_geometry_controller.loadAsset(
       QStringLiteral("layer-geometry-asset"),
       QString(),
@@ -10186,7 +11066,8 @@ int main(int argc, char** argv) {
   if (!flattened_source.save(flattened_source_path)) {
     return fail("flattened export source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController flattened_export_controller;
+  auto flattened_export_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& flattened_export_controller = *flattened_export_controller_owner;
   flattened_export_controller.loadAsset(
       QStringLiteral("flattened-export-asset"),
       flattened_source_path,
@@ -10225,7 +11106,8 @@ int main(int argc, char** argv) {
     return fail("flattened photo export should composite visible photo layers into the output image");
   }
 
-  photo_editor::desktop::EditorPreviewController layer_order_composite_controller;
+  auto layer_order_composite_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_order_composite_controller = *layer_order_composite_controller_owner;
   layer_order_composite_controller.loadAsset(
       QStringLiteral("layer-order-composite-asset"),
       flattened_source_path,
@@ -10294,7 +11176,8 @@ int main(int argc, char** argv) {
   if (!adjustment_blend_source.save(adjustment_blend_source_path)) {
     return fail("adjustment blend source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController adjustment_blend_controller;
+  auto adjustment_blend_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& adjustment_blend_controller = *adjustment_blend_controller_owner;
   adjustment_blend_controller.loadAsset(
       QStringLiteral("adjustment-blend-asset"),
       adjustment_blend_source_path,
@@ -10343,7 +11226,8 @@ int main(int argc, char** argv) {
               .toString() != QStringLiteral("soft-light")) {
     return fail("adjustment layer blend mode normalization should match renderer blend names");
   }
-  photo_editor::desktop::EditorPreviewController group_blend_controller;
+  auto group_blend_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& group_blend_controller = *group_blend_controller_owner;
   group_blend_controller.loadAsset(
       QStringLiteral("group-blend-asset"),
       QString(),
@@ -10362,7 +11246,8 @@ int main(int argc, char** argv) {
     return fail("layer groups should accept supported blend modes");
   }
 
-  photo_editor::desktop::EditorPreviewController panel_reset_controller;
+  auto panel_reset_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& panel_reset_controller = *panel_reset_controller_owner;
   panel_reset_controller.loadAsset(
       QStringLiteral("panel-reset-asset"),
       QString(),
@@ -10412,7 +11297,8 @@ int main(int argc, char** argv) {
     return fail("unknown panel reset groups should be rejected");
   }
 
-  photo_editor::desktop::EditorPreviewController wb_residual_controller;
+  auto wb_residual_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& wb_residual_controller = *wb_residual_controller_owner;
   wb_residual_controller.loadAsset(
       QStringLiteral("wb-residual-reset-asset"),
       QString(),
@@ -10431,7 +11317,8 @@ int main(int argc, char** argv) {
     return fail("white balance reset should serialize back to the exact neutral recipe without residual tint");
   }
 
-  photo_editor::desktop::EditorPreviewController global_reset_controller;
+  auto global_reset_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& global_reset_controller = *global_reset_controller_owner;
   global_reset_controller.loadAsset(
       QStringLiteral("global-reset-asset"),
       QString(),
@@ -10470,7 +11357,8 @@ int main(int argc, char** argv) {
     return fail("reset all should return affected global adjustments, masks, layers, and serialized patch fields to neutral state");
   }
 
-  photo_editor::desktop::EditorPreviewController order_a_controller;
+  auto order_a_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& order_a_controller = *order_a_controller_owner;
   order_a_controller.loadAsset(
       QStringLiteral("adjustment-order-a"),
       QString(),
@@ -10482,7 +11370,8 @@ int main(int argc, char** argv) {
   order_a_controller.setTemperature(12.0);
   order_a_controller.setExposure(0.42);
   order_a_controller.setVibrance(18.0);
-  photo_editor::desktop::EditorPreviewController order_b_controller;
+  auto order_b_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& order_b_controller = *order_b_controller_owner;
   order_b_controller.loadAsset(
       QStringLiteral("adjustment-order-b"),
       QString(),
@@ -10517,7 +11406,8 @@ int main(int argc, char** argv) {
   if (!reset_visual_source.save(reset_visual_path)) {
     return fail("reset visual source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController reset_visual_controller;
+  auto reset_visual_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& reset_visual_controller = *reset_visual_controller_owner;
   photo_editor::desktop::TestImageSink reset_visual_sink;
   reset_visual_controller.setImageProvider(&reset_visual_sink);
   reset_visual_controller.loadAsset(
@@ -10570,7 +11460,8 @@ int main(int argc, char** argv) {
     return fail("reset preview pixels should return to the original visual state after neutral reset");
   }
 
-  photo_editor::desktop::EditorPreviewController transaction_controller;
+  auto transaction_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& transaction_controller = *transaction_controller_owner;
   transaction_controller.loadAsset(
       QStringLiteral("transaction-asset"),
       reset_visual_path,
@@ -10706,7 +11597,8 @@ int main(int argc, char** argv) {
     return fail("switching back to a previously edited asset should restore its undo history");
   }
 
-  photo_editor::desktop::EditorPreviewController curve_controller;
+  auto curve_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& curve_controller = *curve_controller_owner;
   curve_controller.loadAsset(
       QStringLiteral("curve-asset"),
       QString(),
@@ -11012,7 +11904,8 @@ int main(int argc, char** argv) {
   if (curve_controller.deletePreset(QStringLiteral("Landscape Pop"))) {
     return fail("built-in preset packs should not be deleted as user presets");
   }
-  photo_editor::desktop::EditorPreviewController layer_preset_controller;
+  auto layer_preset_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& layer_preset_controller = *layer_preset_controller_owner;
   layer_preset_controller.loadAsset(
       QStringLiteral("layer-local-preset-asset"),
       QString(),
@@ -11044,7 +11937,8 @@ int main(int argc, char** argv) {
       !layer_preset_controller.status().contains(QStringLiteral("Applied preset 'Landscape Pop' to layer"))) {
     return fail("layer-local preset application should update only the layer recipe and leave Base Image/global recipe unchanged");
   }
-  photo_editor::desktop::EditorPreviewController adaptive_controller;
+  auto adaptive_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& adaptive_controller = *adaptive_controller_owner;
   adaptive_controller.loadAsset(
       QStringLiteral("adaptive-preset-asset"),
       QString(),
@@ -11064,7 +11958,8 @@ int main(int argc, char** argv) {
       !almost_equal(adaptive_controller.clarity(), -4.0)) {
     return fail("adaptive presets should vary by camera and lens metadata");
   }
-  photo_editor::desktop::EditorPreviewController changed_controls_controller;
+  auto changed_controls_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& changed_controls_controller = *changed_controls_controller_owner;
   changed_controls_controller.loadAsset(
       QStringLiteral("changed-controls-asset"),
       QString(),
@@ -11095,7 +11990,8 @@ int main(int argc, char** argv) {
       selected_compare_edits.contains(QStringLiteral("unsupported"))) {
     return fail("compare selected edits should carry normalized adjustment groups into render requests");
   }
-  photo_editor::desktop::EditorPreviewController local_compare_controller;
+  auto local_compare_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& local_compare_controller = *local_compare_controller_owner;
   local_compare_controller.loadAsset(
       QStringLiteral("local-compare-asset"),
       QString(),
@@ -11140,7 +12036,8 @@ int main(int argc, char** argv) {
       !almost_equal(local_compare_mask.value(QStringLiteral("removeStrength")).toDouble(), 63.0)) {
     return fail("local mask before/after groups should not mutate active mask adjustment values");
   }
-  photo_editor::desktop::EditorPreviewController intensity_controller;
+  auto intensity_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& intensity_controller = *intensity_controller_owner;
   intensity_controller.loadAsset(
       QStringLiteral("preset-intensity-asset"),
       QString(),
@@ -11191,7 +12088,8 @@ int main(int argc, char** argv) {
       !almost_equal(intensity_controller.clarity(), 0.0)) {
     return fail("preset preview recipe should honor intensity and groups without mutating the current recipe");
   }
-  photo_editor::desktop::EditorPreviewController partial_preset_controller;
+  auto partial_preset_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& partial_preset_controller = *partial_preset_controller_owner;
   partial_preset_controller.loadAsset(
       QStringLiteral("partial-preset-asset"),
       QString(),
@@ -11218,7 +12116,8 @@ int main(int argc, char** argv) {
       !almost_equal(partial_preset_controller.temperature(), 18.0)) {
     return fail("preset declarations should be the default scope when applying presets");
   }
-  photo_editor::desktop::EditorPreviewController safety_controller;
+  auto safety_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& safety_controller = *safety_controller_owner;
   safety_controller.loadAsset(
       QStringLiteral("preset-safety-asset"),
       QString(),
@@ -11374,39 +12273,47 @@ int main(int argc, char** argv) {
       created_linear_mask.value(QStringLiteral("sourceSchemaVersion")).toInt() != 1) {
     return fail("new mask sources should carry stable identity, set, operation, role, and version fields");
   }
-  if (controller.photoLayerCount() != 1) {
-    return fail("creating a selection source should automatically create an adjustment layer");
-  }
-  const auto auto_selection_layer = controller.photoLayers().at(0).toMap();
-  if (auto_selection_layer.value(QStringLiteral("kind")).toString() != QStringLiteral("adjustment") ||
-      !auto_selection_layer.value(QStringLiteral("selectionScoped")).toBool() ||
-      auto_selection_layer.value(QStringLiteral("selectionMaskSetId")).toString() !=
-          created_linear_mask.value(QStringLiteral("maskSetId")).toString() ||
-      auto_selection_layer.value(QStringLiteral("displayName")).toString() !=
-          QStringLiteral("Adjustment Layer 1") ||
-      !auto_selection_layer.value(QStringLiteral("displaySubtitle"))
-           .toString()
-           .contains(created_linear_mask.value(QStringLiteral("maskSetName")).toString()) ||
-      !almost_equal(auto_selection_layer.value(QStringLiteral("exposure")).toDouble(), 0.0) ||
-      !almost_equal(auto_selection_layer.value(QStringLiteral("temperature")).toDouble(), 0.0) ||
-      !almost_equal(auto_selection_layer.value(QStringLiteral("tint")).toDouble(), 0.0)) {
-    return fail("auto-created selection adjustment layer should be neutral and linked to the mask set");
+  if (controller.photoLayerCount() != 0) {
+    return fail("creating a selection source alone should not create a photo layer");
   }
   controller.undo();
   if (controller.maskCount() != 0 || controller.photoLayerCount() != 0) {
-    return fail("undo should remove the auto-created adjustment layer with its selection source");
+    return fail("undo should remove a newly created selection source without changing photo layers");
   }
   controller.redo();
-  if (controller.maskCount() != 1 || controller.photoLayerCount() != 1 ||
+  if (controller.maskCount() != 1 || controller.photoLayerCount() != 0 ||
       !controller.hasActiveMask()) {
-    return fail("redo should restore the selection source and auto-created adjustment layer together");
+    return fail("redo should restore the selection source without adding a photo layer");
   }
-  photo_editor::desktop::EditorPreviewController independent_selection_layer_controller;
+  if (controller.ensureActiveSelectionAdjustmentLayer() != 0 || controller.photoLayerCount() != 1) {
+    return fail("explicitly requesting a selection adjustment should create its linked layer");
+  }
+  const auto explicit_selection_layer = controller.photoLayers().at(0).toMap();
+  if (explicit_selection_layer.value(QStringLiteral("kind")).toString() != QStringLiteral("adjustment") ||
+      !explicit_selection_layer.value(QStringLiteral("selectionScoped")).toBool() ||
+      explicit_selection_layer.value(QStringLiteral("selectionMaskSetId")).toString() !=
+          created_linear_mask.value(QStringLiteral("maskSetId")).toString() ||
+      explicit_selection_layer.value(QStringLiteral("displayName")).toString() !=
+          QStringLiteral("Adjustment Layer 1") ||
+      !explicit_selection_layer.value(QStringLiteral("displaySubtitle"))
+           .toString()
+           .contains(created_linear_mask.value(QStringLiteral("maskSetName")).toString()) ||
+      !almost_equal(explicit_selection_layer.value(QStringLiteral("exposure")).toDouble(), 0.0) ||
+      !almost_equal(explicit_selection_layer.value(QStringLiteral("temperature")).toDouble(), 0.0) ||
+      !almost_equal(explicit_selection_layer.value(QStringLiteral("tint")).toDouble(), 0.0)) {
+    return fail("explicitly created selection adjustment layer should be neutral and linked to its mask set");
+  }
+  auto independent_selection_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& independent_selection_layer_controller = *independent_selection_layer_controller_owner;
   independent_selection_layer_controller.addMask(QStringLiteral("linear"));
   independent_selection_layer_controller.addMask(QStringLiteral("radial"));
   if (independent_selection_layer_controller.maskCount() != 2 ||
+      independent_selection_layer_controller.photoLayerCount() != 0) {
+    return fail("adding sources to a selection set should not create a photo layer");
+  }
+  if (independent_selection_layer_controller.ensureActiveSelectionAdjustmentLayer() != 0 ||
       independent_selection_layer_controller.photoLayerCount() != 1) {
-    return fail("adding a source to an active selection set should reuse the existing adjustment layer");
+    return fail("explicitly requesting a selection adjustment should create one layer for its set");
   }
   auto second_selection_mask =
       independent_selection_layer_controller.maskStack()
@@ -11418,8 +12325,12 @@ int main(int argc, char** argv) {
           independent_selection_layer_controller,
           second_selection_mask) ||
       independent_selection_layer_controller.maskCount() != 2 ||
+      independent_selection_layer_controller.photoLayerCount() != 1) {
+    return fail("editing a selection into an independent set should not create a photo layer");
+  }
+  if (independent_selection_layer_controller.ensureActiveSelectionAdjustmentLayer() != 0 ||
       independent_selection_layer_controller.photoLayerCount() != 2) {
-    return fail("creating an independent selection set should create its own adjustment layer");
+    return fail("an explicit request should create an adjustment layer for the independent set");
   }
   second_selection_mask =
       independent_selection_layer_controller.maskStack()
@@ -11433,7 +12344,7 @@ int main(int argc, char** argv) {
           second_selection_mask.value(QStringLiteral("maskSetId")).toString() ||
       second_selection_layer.value(QStringLiteral("selectionMaskSetId")).toString() ==
           first_selection_layer.value(QStringLiteral("selectionMaskSetId")).toString()) {
-    return fail("auto-created adjustment layers should be linked per mask set, not globally shared");
+    return fail("explicitly created adjustment layers should be linked per mask set, not globally shared");
   }
   second_selection_mask.insert(QStringLiteral("operation"), QStringLiteral("subtract"));
   second_selection_mask.insert(QStringLiteral("invert"), true);
@@ -11548,7 +12459,8 @@ int main(int argc, char** argv) {
     return fail("reordering a layer mask to its current position should be a no-op");
   }
 
-  photo_editor::desktop::EditorPreviewController selection_brush_layer_controller;
+  auto selection_brush_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& selection_brush_layer_controller = *selection_brush_layer_controller_owner;
   selection_brush_layer_controller.loadAsset(
       QStringLiteral("selection-brush-layer-asset"),
       QString(),
@@ -11559,13 +12471,12 @@ int main(int argc, char** argv) {
       QString());
   selection_brush_layer_controller.startSelectionBrush(false);
   if (selection_brush_layer_controller.maskCount() != 1 ||
-      selection_brush_layer_controller.photoLayerCount() != 1 ||
-      selection_brush_layer_controller.photoLayers()
-              .at(0)
-              .toMap()
-              .value(QStringLiteral("kind"))
-              .toString() != QStringLiteral("adjustment")) {
-    return fail("starting a selection brush should also create the adjustment layer");
+      selection_brush_layer_controller.photoLayerCount() != 0) {
+    return fail("starting a selection brush should not create a photo layer");
+  }
+  if (selection_brush_layer_controller.ensureActiveSelectionAdjustmentLayer() != 0 ||
+      selection_brush_layer_controller.photoLayerCount() != 1) {
+    return fail("selection brush adjustments should be created only after an explicit request");
   }
   selection_brush_layer_controller.deletePhotoLayer(0);
   if (selection_brush_layer_controller.photoLayerCount() != 0 ||
@@ -11574,7 +12485,8 @@ int main(int argc, char** argv) {
     return fail("legacy selection masks should be able to create a missing linked adjustment layer on demand");
   }
 
-  photo_editor::desktop::EditorPreviewController retouch_brush_layer_controller;
+  auto retouch_brush_layer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& retouch_brush_layer_controller = *retouch_brush_layer_controller_owner;
   retouch_brush_layer_controller.loadAsset(
       QStringLiteral("retouch-brush-layer-asset"),
       QString(),
@@ -11891,7 +12803,8 @@ int main(int argc, char** argv) {
     return fail("removing a duplicate-and-invert mask should restore the stack size");
   }
 
-  photo_editor::desktop::EditorPreviewController shape_mask_controller;
+  auto shape_mask_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& shape_mask_controller = *shape_mask_controller_owner;
   shape_mask_controller.addMask(QStringLiteral("rectangle"));
   shape_mask_controller.setActiveMaskCenterX(0.41);
   shape_mask_controller.setActiveMaskCenterY(0.62);
@@ -12001,7 +12914,8 @@ int main(int argc, char** argv) {
     return fail("mask-set solo should be clearable at the set level");
   }
 
-  photo_editor::desktop::EditorPreviewController reorder_controller;
+  auto reorder_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& reorder_controller = *reorder_controller_owner;
   reorder_controller.addMask(QStringLiteral("linear"));
   reorder_controller.setActiveMaskName(QStringLiteral("Set A Linear"));
   reorder_controller.setActiveMaskExposure(0.42);
@@ -12570,7 +13484,8 @@ int main(int argc, char** argv) {
   if (!auto_mask_source.save(auto_mask_path)) {
     return fail("auto-mask source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController auto_mask_controller;
+  auto auto_mask_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& auto_mask_controller = *auto_mask_controller_owner;
   auto_mask_controller.loadAsset(
       QStringLiteral("brush-auto-mask"),
       auto_mask_path,
@@ -12641,7 +13556,8 @@ int main(int argc, char** argv) {
   if (!bounded_auto_mask_source.save(bounded_auto_mask_path)) {
     return fail("bounded auto-mask source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController bounded_auto_mask_controller;
+  auto bounded_auto_mask_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& bounded_auto_mask_controller = *bounded_auto_mask_controller_owner;
   bounded_auto_mask_controller.loadAsset(
       QStringLiteral("brush-auto-mask-bounded-decode"),
       bounded_auto_mask_path,
@@ -12676,9 +13592,10 @@ int main(int argc, char** argv) {
   const auto bounded_auto_mask_telemetry =
       photo_editor::desktop::EditorPreviewControllerTestAccess::last_mask_work_telemetry(
           bounded_auto_mask_controller);
-  if (bounded_auto_mask_telemetry.value(QStringLiteral("source_decode_edge")).toInt() >= 1024 ||
-      !bounded_auto_mask_telemetry.value(QStringLiteral("source_decode_bounded")).toBool() ||
-      std::max(bounded_auto_mask_width, bounded_auto_mask_height) >= 1024 ||
+  if (bounded_auto_mask_telemetry.value(QStringLiteral("source_decode_edge")).toInt() != 0 ||
+      bounded_auto_mask_telemetry.value(QStringLiteral("source_decode_bounded")).toBool() ||
+      bounded_auto_mask_width != bounded_auto_mask_source.width() ||
+      bounded_auto_mask_height != bounded_auto_mask_source.height() ||
       mask_value_at(
           bounded_auto_mask_data,
           bounded_auto_mask_width,
@@ -12691,7 +13608,7 @@ int main(int argc, char** argv) {
           bounded_auto_mask_height,
           0.75,
           0.50) > 24) {
-    return fail("small brush auto-mask commits should use a bounded source decode without losing edge-aware mask coverage");
+    return fail("source-aware brush commits should use the native pixel grid without losing edge-aware mask coverage");
   }
   bounded_auto_mask_controller.beginActiveBrushStroke();
   bounded_auto_mask_controller.addBrushPoint(0.34, 0.50);
@@ -12702,9 +13619,8 @@ int main(int argc, char** argv) {
       photo_editor::desktop::EditorPreviewControllerTestAccess::last_mask_work_telemetry(
           bounded_auto_mask_controller);
   if (!bounded_incremental_telemetry.value(QStringLiteral("incremental")).toBool() ||
-      bounded_incremental_telemetry.value(QStringLiteral("source_decode_edge")).toInt() !=
-          std::max(bounded_auto_mask_width, bounded_auto_mask_height)) {
-    return fail("bounded auto-mask follow-up strokes should keep the established raster size and stay incremental");
+      bounded_incremental_telemetry.value(QStringLiteral("source_decode_edge")).toInt() != 0) {
+    return fail("source-aware follow-up strokes should keep the established native raster and stay incremental");
   }
 
   auto_mask_controller.clearActiveBrushPoints();
@@ -12749,7 +13665,8 @@ int main(int argc, char** argv) {
   if (!subtle_edge_source.save(subtle_edge_path)) {
     return fail("subtle auto-mask source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController subtle_edge_controller;
+  auto subtle_edge_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& subtle_edge_controller = *subtle_edge_controller_owner;
   subtle_edge_controller.loadAsset(
       QStringLiteral("brush-auto-mask-subtle-edge"),
       subtle_edge_path,
@@ -12838,7 +13755,8 @@ int main(int argc, char** argv) {
   if (!weak_edge_source.save(weak_edge_path)) {
     return fail("weak-edge auto-mask source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController weak_edge_controller;
+  auto weak_edge_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& weak_edge_controller = *weak_edge_controller_owner;
   weak_edge_controller.loadAsset(
       QStringLiteral("brush-protect-edges-weak-edge"),
       weak_edge_path,
@@ -12906,7 +13824,8 @@ int main(int argc, char** argv) {
   if (!luminance_range_source.save(luminance_range_path)) {
     return fail("luminance range source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController luminance_range_controller;
+  auto luminance_range_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& luminance_range_controller = *luminance_range_controller_owner;
   luminance_range_controller.loadAsset(
       QStringLiteral("luminance-range-source"),
       luminance_range_path,
@@ -12931,11 +13850,16 @@ int main(int argc, char** argv) {
     return fail("luminance range sampling should commit and clear the transient preview");
   }
   auto luminance_samples = luminance_range_controller.activeMaskLuminanceSamples();
+  const auto measured_luminance = luminance_samples.value(0).toMap();
   if (luminance_samples.size() != 1 ||
-      luminance_range_controller.activeMaskLuminanceMin() > 0.20 ||
-      luminance_range_controller.activeMaskLuminanceMax() < 0.42 ||
+      measured_luminance.value(QStringLiteral("luminanceMin")).toDouble() >=
+          measured_luminance.value(QStringLiteral("luminanceMax")).toDouble() ||
+      luminance_range_controller.activeMaskLuminanceMin() >
+          measured_luminance.value(QStringLiteral("luminanceMin")).toDouble() + 1e-6 ||
+      luminance_range_controller.activeMaskLuminanceMax() <
+          measured_luminance.value(QStringLiteral("luminanceMax")).toDouble() - 1e-6 ||
       luminance_samples.first().toMap().value(QStringLiteral("pixelCount")).toInt() <= 0) {
-    return fail("luminance range sampling should measure and store the dragged patch constraints");
+    return fail("luminance sampling should enclose the measured renderer-domain patch values");
   }
   for (int index = 0; index < 5; ++index) {
     const auto start = 0.04 * static_cast<double>(index);
@@ -13006,7 +13930,8 @@ int main(int argc, char** argv) {
   sampled_depth_mask.insert(QStringLiteral("depthHeight"), 2);
   depth_recipe_state.mask_stack = {sampled_depth_mask};
   depth_recipe_state.active_mask_index = 0;
-  photo_editor::desktop::EditorPreviewController depth_range_controller;
+  auto depth_range_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& depth_range_controller = *depth_range_controller_owner;
   depth_range_controller.loadAsset(
       QStringLiteral("depth-range-source"),
       luminance_range_path,
@@ -13133,7 +14058,8 @@ int main(int argc, char** argv) {
       QStringLiteral("full-resolution-object"));
   full_resolution_alpha_state.mask_stack = full_resolution_alpha_stack;
   full_resolution_alpha_state.active_mask_index = 0;
-  photo_editor::desktop::EditorPreviewController full_resolution_alpha_controller;
+  auto full_resolution_alpha_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& full_resolution_alpha_controller = *full_resolution_alpha_controller_owner;
   full_resolution_alpha_controller.loadAsset(
       QStringLiteral("full-resolution-alpha-contract"),
       QString(),
@@ -13314,7 +14240,8 @@ int main(int argc, char** argv) {
   if (!ai_mask_source.save(ai_mask_second_path)) {
     return fail("second AI mask source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController ai_mask_controller;
+  auto ai_mask_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& ai_mask_controller = *ai_mask_controller_owner;
   ai_mask_controller.loadAsset(
       QStringLiteral("ai-mask-source"),
       ai_mask_path,
@@ -13344,7 +14271,8 @@ int main(int argc, char** argv) {
   const auto smart_select_instance_cache_size =
       photo_editor::desktop::EditorPreviewControllerTestAccess::smart_select_instance_map_size(
           ai_mask_controller);
-  photo_editor::desktop::EditorPreviewController cached_instance_map_controller;
+  auto cached_instance_map_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& cached_instance_map_controller = *cached_instance_map_controller_owner;
   cached_instance_map_controller.loadAsset(
       QStringLiteral("ai-mask-source-cached"),
       ai_mask_path,
@@ -13382,7 +14310,8 @@ int main(int argc, char** argv) {
           cached_instance_map_controller) == smart_select_crop_cache_key) {
     return fail("smart selection instance map cache keys should include rotation state");
   }
-  photo_editor::desktop::EditorPreviewController second_source_instance_map_controller;
+  auto second_source_instance_map_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& second_source_instance_map_controller = *second_source_instance_map_controller_owner;
   second_source_instance_map_controller.loadAsset(
       QStringLiteral("ai-mask-source-second"),
       ai_mask_second_path,
@@ -13553,7 +14482,8 @@ int main(int argc, char** argv) {
   known_alpha_mask.insert(QStringLiteral("segmentationData"), known_alpha_data);
   known_alpha_mask.insert(QStringLiteral("segmentationWidth"), known_alpha_width);
   known_alpha_mask.insert(QStringLiteral("segmentationHeight"), known_alpha_height);
-  photo_editor::desktop::EditorPreviewController known_alpha_outline_controller;
+  auto known_alpha_outline_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& known_alpha_outline_controller = *known_alpha_outline_controller_owner;
   known_alpha_outline_controller.loadAsset(
       QStringLiteral("known-alpha-outline"),
       QString(),
@@ -13606,7 +14536,8 @@ int main(int argc, char** argv) {
     return fail("known alpha outline tracing should publish raster alpha trace metadata publicly");
   }
   const auto assert_generated_semantic_outline_bounds = [&](const QString& kind) -> QString {
-    photo_editor::desktop::EditorPreviewController semantic_outline_controller;
+    auto semantic_outline_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+    auto& semantic_outline_controller = *semantic_outline_controller_owner;
     semantic_outline_controller.loadAsset(
         QStringLiteral("semantic-outline-") + kind,
         ai_mask_path,
@@ -13702,7 +14633,8 @@ int main(int argc, char** argv) {
   empty_generated_mask.insert(QStringLiteral("segmentationHeight"), 4);
   generated_quality_state.mask_stack = {huge_low_confidence_mask, empty_generated_mask};
   generated_quality_state.active_mask_index = 0;
-  photo_editor::desktop::EditorPreviewController generated_quality_controller;
+  auto generated_quality_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& generated_quality_controller = *generated_quality_controller_owner;
   generated_quality_controller.loadAsset(
       QStringLiteral("generated-quality-source"),
       ai_mask_path,
@@ -13749,7 +14681,8 @@ int main(int argc, char** argv) {
   sampling_parity_mask.insert(QStringLiteral("segmentationHeight"), 8);
   sampling_parity_state.mask_stack = {sampling_parity_mask};
   sampling_parity_state.active_mask_index = 0;
-  photo_editor::desktop::EditorPreviewController sampling_parity_controller;
+  auto sampling_parity_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& sampling_parity_controller = *sampling_parity_controller_owner;
   sampling_parity_controller.loadAsset(
       QStringLiteral("mask-sampling-parity"),
       sampling_parity_path,
@@ -13868,7 +14801,8 @@ int main(int argc, char** argv) {
   cleanup_mask.insert(QStringLiteral("generatedMaskIslandRemovalThreshold"), 0.0);
   generated_cleanup_state.mask_stack = {cleanup_mask};
   generated_cleanup_state.active_mask_index = 0;
-  photo_editor::desktop::EditorPreviewController generated_cleanup_controller;
+  auto generated_cleanup_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& generated_cleanup_controller = *generated_cleanup_controller_owner;
   generated_cleanup_controller.loadAsset(
       QStringLiteral("generated-cleanup-source"),
       ai_mask_path,
@@ -14009,7 +14943,8 @@ int main(int argc, char** argv) {
   }
 
   qunsetenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION");
-  photo_editor::desktop::EditorPreviewController unavailable_mask_controller;
+  auto unavailable_mask_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& unavailable_mask_controller = *unavailable_mask_controller_owner;
   unavailable_mask_controller.loadAsset(
       QStringLiteral("ai-mask-unavailable"),
       ai_mask_path,
@@ -14046,7 +14981,8 @@ int main(int argc, char** argv) {
       active_mask.value(QStringLiteral("alphaSourcePath")).toString() != alpha_mask_path) {
     return fail("alpha image masks should store imported matte dimensions and source path");
   }
-  photo_editor::desktop::EditorPreviewController alpha_import_controller;
+  auto alpha_import_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& alpha_import_controller = *alpha_import_controller_owner;
   alpha_import_controller.loadAsset(
       QStringLiteral("alpha-import-source"),
       ai_mask_path,
@@ -14152,7 +15088,8 @@ int main(int argc, char** argv) {
   if (!crop_precision_source.save(crop_precision_path)) {
     return fail("crop precision source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController crop_precision_controller;
+  auto crop_precision_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& crop_precision_controller = *crop_precision_controller_owner;
   crop_precision_controller.loadAsset(
       QStringLiteral("crop-transform-precision"),
       crop_precision_path,
@@ -14673,12 +15610,14 @@ int main(int argc, char** argv) {
   if (!controller.exportCustomCropAspectPresets(crop_preset_bundle_path)) {
     return fail("custom crop aspect presets should export to a reusable preset bundle");
   }
-  photo_editor::desktop::EditorPreviewController persisted_crop_controller;
+  auto persisted_crop_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& persisted_crop_controller = *persisted_crop_controller_owner;
   if (!persisted_crop_controller.customCropAspectPresets().contains(QStringLiteral("2.39:1")) ||
       !persisted_crop_controller.removeCustomCropAspectPreset(QStringLiteral("2.39x1"))) {
     return fail("custom crop aspect presets should persist and be removable by ratio alias");
   }
-  photo_editor::desktop::EditorPreviewController removed_crop_controller;
+  auto removed_crop_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& removed_crop_controller = *removed_crop_controller_owner;
   if (removed_crop_controller.customCropAspectPresets().contains(QStringLiteral("2.39:1"))) {
     return fail("removed custom crop aspect presets should not reload from disk");
   }
@@ -14693,7 +15632,8 @@ int main(int argc, char** argv) {
       removed_crop_controller.customCropAspectPresets().contains(QStringLiteral("7:5"))) {
     return fail("custom crop aspect preset imports should optionally replace existing custom presets");
   }
-  photo_editor::desktop::EditorPreviewController horizon_controller;
+  auto horizon_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& horizon_controller = *horizon_controller_owner;
   horizon_controller.loadAsset(
       QStringLiteral("horizon-asset"),
       QString(),
@@ -15687,7 +16627,8 @@ int main(int argc, char** argv) {
     return fail("soft-proof disable render should finish before HDR parity fixture");
   }
 
-  photo_editor::desktop::EditorPreviewController hdr_controller;
+  auto hdr_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& hdr_controller = *hdr_controller_owner;
   photo_editor::desktop::TestImageSink hdr_image_sink;
   const auto hdr_fixture_metal_disabled =
       qEnvironmentVariableIsSet("PHOTO_EDITOR_DISABLE_METAL_PREVIEW");
@@ -16033,7 +16974,8 @@ int main(int argc, char** argv) {
     return !preview_controller.processing() &&
            preview_controller.maskCount() >= expected_mask_count;
   };
-  photo_editor::desktop::EditorPreviewController superseded_smart_commit_controller;
+  auto superseded_smart_commit_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& superseded_smart_commit_controller = *superseded_smart_commit_controller_owner;
   superseded_smart_commit_controller.loadAsset(
       QStringLiteral("asset-superseded-smart-commit"),
       smart_select_path,
@@ -16113,7 +17055,8 @@ int main(int argc, char** argv) {
     return fail("superseded smart selection commits should cancel stale results and publish only the newest async job target");
   }
 
-  photo_editor::desktop::EditorPreviewController stale_mask_change_smart_commit_controller;
+  auto stale_mask_change_smart_commit_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& stale_mask_change_smart_commit_controller = *stale_mask_change_smart_commit_controller_owner;
   stale_mask_change_smart_commit_controller.loadAsset(
       QStringLiteral("asset-stale-mask-change-smart-commit"),
       smart_select_path,
@@ -16347,13 +17290,8 @@ int main(int argc, char** argv) {
             .toUtf8();
     return fail(detail.constData());
   }
-  if (controller.photoLayerCount() != 1 ||
-      controller.photoLayers().at(0).toMap().value(QStringLiteral("kind")).toString() !=
-          QStringLiteral("adjustment") ||
-      !controller.photoLayers().at(0).toMap().value(QStringLiteral("selectionScoped")).toBool() ||
-      controller.photoLayers().at(0).toMap().value(QStringLiteral("displayName")).toString() !=
-          QStringLiteral("Adjustment Layer 1")) {
-    return fail("smart select should create a selection-scoped adjustment layer with the object mask");
+  if (controller.photoLayerCount() != 0) {
+    return fail("smart select should create an object selection without implicitly adding a photo layer");
   }
   const auto smart_select_telemetry =
       photo_editor::desktop::EditorPreviewControllerTestAccess::last_mask_work_telemetry(
@@ -16744,7 +17682,8 @@ int main(int argc, char** argv) {
   if (!QFile::copy(smart_select_path, stale_smart_select_path)) {
     return fail("stale smart preview source image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController stale_preview_state_controller;
+  auto stale_preview_state_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& stale_preview_state_controller = *stale_preview_state_controller_owner;
   stale_preview_state_controller.loadAsset(
       QStringLiteral("asset-stale-smart-preview-state"),
       stale_smart_select_path,
@@ -16810,7 +17749,8 @@ int main(int argc, char** argv) {
   }
 
   qunsetenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION");
-  photo_editor::desktop::EditorPreviewController scheduled_preview_controller;
+  auto scheduled_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& scheduled_preview_controller = *scheduled_preview_controller_owner;
   scheduled_preview_controller.loadAsset(
       QStringLiteral("asset-scheduled-preview"),
       smart_select_path,
@@ -16826,7 +17766,8 @@ int main(int argc, char** argv) {
     return fail("pending smart hover preview should keep thumbnail refresh below selection preview priority");
   }
 
-  photo_editor::desktop::EditorPreviewController thumbnail_smart_hover_controller;
+  auto thumbnail_smart_hover_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& thumbnail_smart_hover_controller = *thumbnail_smart_hover_controller_owner;
   thumbnail_smart_hover_controller.loadAsset(
       QStringLiteral("asset-thumbnail-smart-hover-queue"),
       smart_select_path,
@@ -17058,7 +17999,7 @@ int main(int argc, char** argv) {
           QStringLiteral("selection-ai") ||
       scheduled_preview_controller.smartSelectPreviewActive() ||
       scheduled_preview_controller.maskCount() != 1 ||
-      scheduled_preview_controller.photoLayerCount() != 1 ||
+      scheduled_preview_controller.photoLayerCount() != 0 ||
       !scheduled_preview_controller.selectionFailureReason().isEmpty()) {
     qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
     return fail("smart select previews should refine with prompts and accept into a committed selection");
@@ -17072,7 +18013,8 @@ int main(int argc, char** argv) {
     qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
     return fail("accepted smart select previews should preserve refine prompt metadata");
   }
-  photo_editor::desktop::EditorPreviewController preserved_refine_controller;
+  auto preserved_refine_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& preserved_refine_controller = *preserved_refine_controller_owner;
   preserved_refine_controller.loadAsset(
       QStringLiteral("asset-preserved-smart-refine"),
       smart_select_path,
@@ -17102,7 +18044,8 @@ int main(int argc, char** argv) {
     qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
     return fail("a rejected Smart Select refinement should preserve the last valid preview without committing it");
   }
-  photo_editor::desktop::EditorPreviewController pending_commit_controller;
+  auto pending_commit_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& pending_commit_controller = *pending_commit_controller_owner;
   pending_commit_controller.loadAsset(
       QStringLiteral("asset-pending-smart-commit"),
       smart_select_path,
@@ -17132,7 +18075,8 @@ int main(int argc, char** argv) {
     qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
     return fail("pending smart selection commit should apply automatically after the async preview resolves");
   }
-  photo_editor::desktop::EditorPreviewController rejected_preview_controller;
+  auto rejected_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& rejected_preview_controller = *rejected_preview_controller_owner;
   rejected_preview_controller.loadAsset(
       QStringLiteral("asset-rejected-preview"),
       smart_select_path,
@@ -17151,7 +18095,8 @@ int main(int argc, char** argv) {
     qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
     return fail("smart select previews should reject without committing a selection");
   }
-  photo_editor::desktop::EditorPreviewController pending_reject_controller;
+  auto pending_reject_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& pending_reject_controller = *pending_reject_controller_owner;
   pending_reject_controller.loadAsset(
       QStringLiteral("asset-pending-rejected-preview"),
       smart_select_path,
@@ -17175,7 +18120,8 @@ int main(int argc, char** argv) {
     qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
     return fail("smart select preview rejection should cancel pending debounced requests");
   }
-  photo_editor::desktop::EditorPreviewController smart_refine_controller;
+  auto smart_refine_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& smart_refine_controller = *smart_refine_controller_owner;
   smart_refine_controller.loadAsset(
       QStringLiteral("asset-smart-refine"),
       smart_select_path,
@@ -17215,7 +18161,8 @@ int main(int argc, char** argv) {
     return fail("accepted Smart Refine source should stay in the active selection set with one object seed point");
   }
 
-  photo_editor::desktop::EditorPreviewController fallback_tiny_object_controller;
+  auto fallback_tiny_object_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& fallback_tiny_object_controller = *fallback_tiny_object_controller_owner;
   fallback_tiny_object_controller.loadAsset(
       QStringLiteral("asset-fallback-tiny-object"),
       tiny_object_path,
@@ -17277,7 +18224,8 @@ int main(int argc, char** argv) {
     return fail("single-click object fallback should prefer the tighter localized object mask");
   }
 
-  photo_editor::desktop::EditorPreviewController mixed_prompt_controller;
+  auto mixed_prompt_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& mixed_prompt_controller = *mixed_prompt_controller_owner;
   mixed_prompt_controller.loadAsset(
       QStringLiteral("asset-mixed-smart-prompts"),
       smart_select_path,
@@ -17341,7 +18289,8 @@ int main(int argc, char** argv) {
   }
   qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
 
-  photo_editor::desktop::EditorPreviewController controller_backed_stroke_controller;
+  auto controller_backed_stroke_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& controller_backed_stroke_controller = *controller_backed_stroke_controller_owner;
   controller_backed_stroke_controller.loadAsset(
       QStringLiteral("asset-controller-backed-stroke"),
       smart_select_path,
@@ -17387,7 +18336,8 @@ int main(int argc, char** argv) {
     return fail("controller-backed smart select stroke commit should create one object source and clear transient stroke state");
   }
 
-  photo_editor::desktop::EditorPreviewController stroke_controller;
+  auto stroke_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& stroke_controller = *stroke_controller_owner;
   stroke_controller.loadAsset(
       QStringLiteral("asset-stroke"),
       smart_select_path,
@@ -17441,7 +18391,8 @@ int main(int argc, char** argv) {
     return fail("smart select strokes should union every object candidate touched by the drag path");
   }
 
-  photo_editor::desktop::EditorPreviewController no_prompt_controller;
+  auto no_prompt_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& no_prompt_controller = *no_prompt_controller_owner;
   no_prompt_controller.loadAsset(
       QStringLiteral("asset-no-prompt"),
       smart_select_path,
@@ -17463,7 +18414,8 @@ int main(int argc, char** argv) {
     return fail("empty smart selection prompts should produce an actionable no-object status");
   }
 
-  photo_editor::desktop::EditorPreviewController sparse_stroke_controller;
+  auto sparse_stroke_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& sparse_stroke_controller = *sparse_stroke_controller_owner;
   sparse_stroke_controller.loadAsset(
       QStringLiteral("asset-sparse-stroke"),
       smart_select_path,
@@ -17521,7 +18473,8 @@ int main(int argc, char** argv) {
     return fail("smart select preview should clear when the hover state is reset");
   }
 
-  photo_editor::desktop::EditorPreviewController subtract_controller;
+  auto subtract_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& subtract_controller = *subtract_controller_owner;
   subtract_controller.loadAsset(
       QStringLiteral("asset-subtract"),
       smart_select_path,
@@ -17565,7 +18518,8 @@ int main(int argc, char** argv) {
     return fail("active mask preview should show the full set result, not the selected source only");
   }
 
-  photo_editor::desktop::EditorPreviewController tiny_object_controller;
+  auto tiny_object_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& tiny_object_controller = *tiny_object_controller_owner;
   tiny_object_controller.loadAsset(
       QStringLiteral("asset-tiny-object"),
       tiny_object_path,
@@ -17599,7 +18553,8 @@ int main(int argc, char** argv) {
     return fail("single-click object picks should prefer the tighter prompt-refined mask for tiny objects");
   }
 
-  photo_editor::desktop::EditorPreviewController range_controller;
+  auto range_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& range_controller = *range_controller_owner;
   range_controller.loadAsset(
       QStringLiteral("asset-range"),
       smart_select_path,
@@ -17637,7 +18592,8 @@ int main(int argc, char** argv) {
     return fail("range mask previews should support the dedicated neutral preview modes");
   }
 
-  photo_editor::desktop::EditorPreviewController missed_pick_controller;
+  auto missed_pick_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& missed_pick_controller = *missed_pick_controller_owner;
   missed_pick_controller.loadAsset(
       QStringLiteral("asset-missed-pick"),
       smart_select_path,
@@ -17649,34 +18605,21 @@ int main(int argc, char** argv) {
   const auto missed_selection =
       missed_pick_controller.pickMaskAt(0.02, 0.02, QStringLiteral("selection"), false);
   if (missed_selection != QStringLiteral("pending") ||
-      !wait_for_smart_commit(missed_pick_controller, 1) ||
-      missed_pick_controller.maskCount() != 1 ||
-      !missed_pick_controller.hasActiveMask() ||
-      missed_pick_controller.activeMaskKind() != QStringLiteral("ellipse")) {
-    return fail("missed smart selection should create an editable rough fallback mask");
+      !wait_for_preview_idle(missed_pick_controller, 4000) ||
+      missed_pick_controller.maskCount() != 0 || missed_pick_controller.hasActiveMask() ||
+      !missed_pick_controller.maskActionRetryAvailable()) {
+    return fail("missed smart selection should preserve coverage and offer a retry without inventing a shape");
   }
-  const auto missed_fallback_mask = missed_pick_controller.maskStack().at(0).toMap();
-  const auto missed_fallback_metadata =
-      missed_fallback_mask.value(QStringLiteral("generatedMaskMetadata")).toMap();
-  if (!missed_fallback_metadata.value(QStringLiteral("smartFallback")).toBool() ||
-      missed_fallback_metadata.value(QStringLiteral("smartFallbackRuntime")).toString().isEmpty() ||
-      missed_fallback_metadata.value(QStringLiteral("smartFallbackReason")).toString().isEmpty() ||
-      missed_fallback_mask.value(QStringLiteral("centerX")).toDouble() <= 0.0 ||
-      missed_fallback_mask.value(QStringLiteral("radiusX")).toDouble() < 0.05 ||
-      missed_fallback_metadata.value(QStringLiteral("smartSelectionPrompts")).toList().isEmpty()) {
-    return fail("rough smart selection fallback should be editable and preserve miss provenance");
-  }
-
   const auto missed_remove =
       missed_pick_controller.pickMaskAt(0.02, 0.02, QStringLiteral("remove"), false);
   if (missed_remove != QStringLiteral("pending") ||
       !wait_for_preview_idle(missed_pick_controller, 4000) ||
-      missed_pick_controller.maskCount() != 1 ||
-      !missed_pick_controller.hasActiveMask()) {
+      missed_pick_controller.maskCount() != 0 || missed_pick_controller.hasActiveMask()) {
     return fail("missed object remove should not create an implicit remove brush fallback");
   }
 
-  photo_editor::desktop::EditorPreviewController remove_controller;
+  auto remove_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& remove_controller = *remove_controller_owner;
   remove_controller.loadAsset(
       QStringLiteral("asset-remove"),
       smart_select_path,
@@ -17846,7 +18789,8 @@ int main(int argc, char** argv) {
     return fail("CPU inpaint texture test image should be writable");
   }
 
-  photo_editor::desktop::EditorPreviewController remove_refine_controller;
+  auto remove_refine_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& remove_refine_controller = *remove_refine_controller_owner;
   remove_refine_controller.loadAsset(
       QStringLiteral("asset-remove-refine"),
       inpaint_texture_path,
@@ -17902,7 +18846,8 @@ int main(int argc, char** argv) {
     return fail("remove apply should generate the inpaint patch from the add/subtract refined matte");
   }
 
-  photo_editor::desktop::EditorPreviewController fallback_inpaint_controller;
+  auto fallback_inpaint_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& fallback_inpaint_controller = *fallback_inpaint_controller_owner;
   fallback_inpaint_controller.loadAsset(
       QStringLiteral("asset-cpu-inpaint"),
       inpaint_texture_path,
@@ -18018,7 +18963,8 @@ int main(int argc, char** argv) {
     return fail("successful fallback inpaint status should clearly say Local CPU Fill, not LaMa or generic CPU inpaint");
   }
 
-  photo_editor::desktop::EditorPreviewController missing_inpaint_controller;
+  auto missing_inpaint_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& missing_inpaint_controller = *missing_inpaint_controller_owner;
   missing_inpaint_controller.loadAsset(
       QStringLiteral("asset-missing-inpaint"),
       runtime_root.filePath(QStringLiteral("missing-inpaint-source.png")),
@@ -18348,7 +19294,8 @@ int main(int argc, char** argv) {
     return fail("reset retouch selection should clear matte and patch payload while preserving the active mode");
   }
 
-  photo_editor::desktop::EditorPreviewController delete_patch_controller;
+  auto delete_patch_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& delete_patch_controller = *delete_patch_controller_owner;
   delete_patch_controller.loadAsset(
       QStringLiteral("asset-delete-inpaint"),
       inpaint_texture_path,
@@ -18382,7 +19329,7 @@ int main(int argc, char** argv) {
       remove_controller.activeMaskCommitted()) {
     return fail("starting another object remove should stage a fresh pending retouch");
   }
-  remove_controller.cancelActiveRetouch();
+  remove_controller.discardActiveRetouch();
   if (remove_controller.maskCount() != committed_count) {
     return fail("cancel should drop pending retouch masks without removing committed edits");
   }
@@ -18402,7 +19349,8 @@ int main(int argc, char** argv) {
   if (!dust_source.save(dust_path)) {
     return fail("dust removal test image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController dust_controller;
+  auto dust_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& dust_controller = *dust_controller_owner;
   const auto dust_camera = QStringLiteral("DustCam 1");
   const auto dust_lens = QStringLiteral("Dust 50mm");
   dust_controller.loadAsset(
@@ -18461,7 +19409,8 @@ int main(int argc, char** argv) {
   if (!dust_controller.activeMaskCommitted()) {
     return fail("dust removal should commit only after the review apply action");
   }
-  photo_editor::desktop::EditorPreviewController dust_cancel_controller;
+  auto dust_cancel_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& dust_cancel_controller = *dust_cancel_controller_owner;
   dust_cancel_controller.loadAsset(
       QStringLiteral("dust-removal-cancel"),
       dust_path,
@@ -18471,7 +19420,7 @@ int main(int argc, char** argv) {
       dust_lens,
       QString());
   dust_cancel_controller.removeDustSpots();
-  dust_cancel_controller.cancelActiveRetouch();
+  dust_cancel_controller.discardActiveRetouch();
   if (dust_cancel_controller.maskCount() != 0 || dust_cancel_controller.hasActiveMask()) {
     return fail("dust removal review should discard the staged retouch before commit");
   }
@@ -18482,7 +19431,8 @@ int main(int argc, char** argv) {
   if (!clean_sensor_source.save(clean_sensor_path)) {
     return fail("sensor dust map target image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController sensor_map_controller;
+  auto sensor_map_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& sensor_map_controller = *sensor_map_controller_owner;
   sensor_map_controller.loadAsset(
       QStringLiteral("sensor-dust-map"),
       clean_sensor_path,
@@ -18530,7 +19480,8 @@ int main(int argc, char** argv) {
   if (!red_eye_source.save(red_eye_path)) {
     return fail("red-eye removal test image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController red_eye_controller;
+  auto red_eye_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& red_eye_controller = *red_eye_controller_owner;
   red_eye_controller.loadAsset(
       QStringLiteral("red-eye-removal"),
       red_eye_path,
@@ -18564,7 +19515,8 @@ int main(int argc, char** argv) {
   if (!red_eye_controller.activeMaskCommitted()) {
     return fail("red-eye removal should commit only after the review apply action");
   }
-  photo_editor::desktop::EditorPreviewController red_eye_cancel_controller;
+  auto red_eye_cancel_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& red_eye_cancel_controller = *red_eye_cancel_controller_owner;
   red_eye_cancel_controller.loadAsset(
       QStringLiteral("red-eye-removal-cancel"),
       red_eye_path,
@@ -18574,7 +19526,7 @@ int main(int argc, char** argv) {
       QString(),
       QString());
   red_eye_cancel_controller.removeRedEye();
-  red_eye_cancel_controller.cancelActiveRetouch();
+  red_eye_cancel_controller.discardActiveRetouch();
   if (red_eye_cancel_controller.maskCount() != 0 || red_eye_cancel_controller.hasActiveMask()) {
     return fail("red-eye removal review should discard the staged retouch before commit");
   }
@@ -18591,7 +19543,8 @@ int main(int argc, char** argv) {
   if (!skin_source.save(skin_path)) {
     return fail("skin cleanup test image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController skin_controller;
+  auto skin_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& skin_controller = *skin_controller_owner;
   skin_controller.loadAsset(
       QStringLiteral("skin-cleanup"),
       skin_path,
@@ -18617,7 +19570,8 @@ int main(int argc, char** argv) {
     return fail("skin cleanup should mask skin-toned regions without selecting neutral background");
   }
 
-  photo_editor::desktop::EditorPreviewController frequency_controller;
+  auto frequency_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& frequency_controller = *frequency_controller_owner;
   frequency_controller.loadAsset(
       QStringLiteral("frequency-smoothing"),
       skin_path,
@@ -18635,7 +19589,8 @@ int main(int argc, char** argv) {
     return fail("frequency smoothing should create a committed skin smoothing retouch mask");
   }
 
-  photo_editor::desktop::EditorPreviewController retouch_list_controller;
+  auto retouch_list_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& retouch_list_controller = *retouch_list_controller_owner;
   retouch_list_controller.loadAsset(
       QStringLiteral("retouch-operation-list"),
       smart_select_path,
@@ -18729,7 +19684,8 @@ int main(int argc, char** argv) {
             .toUtf8();
     return fail(detail.constData());
   }
-  photo_editor::desktop::EditorPreviewController outline_quality_controller;
+  auto outline_quality_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& outline_quality_controller = *outline_quality_controller_owner;
   outline_quality_controller.loadAsset(
       QStringLiteral("outline-quality-ladder-proof"),
       smart_select_path,
@@ -18765,7 +19721,8 @@ int main(int argc, char** argv) {
   if (outline_quality_controller.activeMaskOutlineQualityTier() != QStringLiteral("hidden")) {
     return fail("outline quality ladder should report hidden when mask preview is disabled");
   }
-  photo_editor::desktop::EditorPreviewController stale_outline_controller;
+  auto stale_outline_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& stale_outline_controller = *stale_outline_controller_owner;
   stale_outline_controller.loadAsset(
       QStringLiteral("stale-outline-proof"),
       smart_select_path,
@@ -18797,7 +19754,8 @@ int main(int argc, char** argv) {
       stale_outline_controller.activeMaskOutlinePaths() != stroke_replayed_outline) {
     return fail("brush outlines should replay committed stroke geometry instead of trusting stale stored segmentation data");
   }
-  photo_editor::desktop::EditorPreviewController empty_alpha_outline_controller;
+  auto empty_alpha_outline_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& empty_alpha_outline_controller = *empty_alpha_outline_controller_owner;
   empty_alpha_outline_controller.loadAsset(
       QStringLiteral("empty-alpha-outline-proof"),
       smart_select_path,
@@ -18824,7 +19782,8 @@ int main(int argc, char** argv) {
       !empty_alpha_outline_controller.activeMaskOutlinePaths().isEmpty()) {
     return fail("empty raster alpha should not fall back to a fake convex hull or bounding-box outline");
   }
-  photo_editor::desktop::EditorPreviewController composite_outline_controller;
+  auto composite_outline_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& composite_outline_controller = *composite_outline_controller_owner;
   composite_outline_controller.loadAsset(
       QStringLiteral("composite-outline-proof"),
       smart_select_path,
@@ -18946,7 +19905,8 @@ int main(int argc, char** argv) {
           composite_outline_paths.size()) {
     return fail("composite outline tracing should carry exact mask alpha/source trace hashes and signatures");
   }
-  photo_editor::desktop::EditorPreviewController outline_cache_controller;
+  auto outline_cache_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& outline_cache_controller = *outline_cache_controller_owner;
   outline_cache_controller.loadAsset(
       QStringLiteral("outline-cache-proof"),
       smart_select_path,
@@ -19187,7 +20147,8 @@ int main(int argc, char** argv) {
           outline_cache_controller) <= matte_lru_evictions_before) {
     return fail("active matte preview LRU should stay bounded and evict old inspection sources");
   }
-  photo_editor::desktop::EditorPreviewController thumbnail_defer_controller;
+  auto thumbnail_defer_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& thumbnail_defer_controller = *thumbnail_defer_controller_owner;
   thumbnail_defer_controller.loadAsset(
       QStringLiteral("thumbnail-defer-proof"),
       smart_select_path,
@@ -19198,6 +20159,10 @@ int main(int argc, char** argv) {
       QString());
   thumbnail_defer_controller.setMaskPreviewMode(QStringLiteral("overlay"));
   thumbnail_defer_controller.startSelectionBrush(false);
+  if (thumbnail_defer_controller.photoLayerCount() != 0 ||
+      thumbnail_defer_controller.ensureActiveSelectionAdjustmentLayer() != 0) {
+    return fail("thumbnail defer proof should create its target adjustment layer explicitly");
+  }
   const auto initial_selection_thumbnail_dispatch_before =
       photo_editor::desktop::EditorPreviewControllerTestAccess::
           thumbnail_refresh_queue_dispatched_count(thumbnail_defer_controller);
@@ -19636,7 +20601,8 @@ int main(int argc, char** argv) {
           thumbnail_set_after_brush.value(QStringLiteral("async_job_id")).toString()) {
     return fail("mask thumbnails should refresh once after deferred brush rasterization settles with current thumbnail job metadata");
   }
-  photo_editor::desktop::EditorPreviewController thumbnail_worker_fill_controller;
+  auto thumbnail_worker_fill_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& thumbnail_worker_fill_controller = *thumbnail_worker_fill_controller_owner;
   thumbnail_worker_fill_controller.loadAsset(
       QStringLiteral("thumbnail-worker-fill-proof"),
       smart_select_path,
@@ -20265,7 +21231,8 @@ int main(int argc, char** argv) {
   dependent_mask.insert(QStringLiteral("parentId"), QStringLiteral("linear-base"));
   dependent_mask.insert(QStringLiteral("operation"), QStringLiteral("subtract"));
   dependency_state.mask_stack = {reusable_mask, dependent_mask};
-  photo_editor::desktop::EditorPreviewController dependency_controller;
+  auto dependency_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& dependency_controller = *dependency_controller_owner;
   dependency_controller.loadAsset(
       QStringLiteral("mask-dependency-asset"),
       QString(),
@@ -20585,7 +21552,8 @@ int main(int argc, char** argv) {
     return fail("non-aligned clone stamp should restart source offset from the current stroke target");
   }
 
-  photo_editor::desktop::EditorPreviewController generated_retouch_controller;
+  auto generated_retouch_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& generated_retouch_controller = *generated_retouch_controller_owner;
   generated_retouch_controller.startRemoveBrush();
   auto generated_retouch_mask =
       generated_retouch_controller.maskStack().at(generated_retouch_controller.activeMaskIndex()).toMap();
@@ -20641,7 +21609,8 @@ int main(int argc, char** argv) {
   if (!preset_thumbnail_fixture_source_image().save(refinement_preview_source_path)) {
     return fail("refinement preview fixture image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController refinement_preview_controller;
+  auto refinement_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& refinement_preview_controller = *refinement_preview_controller_owner;
   refinement_preview_controller.loadAsset(
       QStringLiteral("asset-refinement-preview"),
       refinement_preview_source_path,
@@ -20719,7 +21688,8 @@ int main(int argc, char** argv) {
     return fail("selection refinement edge preview requests should normalize to source-free clean overlay rendering with standard refine-edge timing telemetry");
   }
 
-  photo_editor::desktop::EditorPreviewController no_refinement_delta_controller;
+  auto no_refinement_delta_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& no_refinement_delta_controller = *no_refinement_delta_controller_owner;
   no_refinement_delta_controller.loadAsset(
       QStringLiteral("asset-no-refinement-delta-preview"),
       refinement_preview_source_path,
@@ -20753,7 +21723,8 @@ int main(int argc, char** argv) {
   if (!high_quality_refinement_source.save(high_quality_refinement_source_path)) {
     return fail("high-quality refinement preview fixture image should be writable");
   }
-  photo_editor::desktop::EditorPreviewController high_quality_preview_controller;
+  auto high_quality_preview_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& high_quality_preview_controller = *high_quality_preview_controller_owner;
   high_quality_preview_controller.loadAsset(
       QStringLiteral("asset-high-quality-refinement-preview"),
       high_quality_refinement_source_path,
@@ -20811,7 +21782,8 @@ int main(int argc, char** argv) {
     return fail(failure_detail.constData());
   }
 
-  photo_editor::desktop::EditorPreviewController raster_outline_controller;
+  auto raster_outline_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& raster_outline_controller = *raster_outline_controller_owner;
   raster_outline_controller.loadAsset(
       QStringLiteral("asset-raster-backed-outline-preview"),
       refinement_preview_source_path,
@@ -20833,7 +21805,8 @@ int main(int argc, char** argv) {
       raster_outline_before_expand == raster_outline_after_expand) {
     return fail("asset-backed active selection outlines should be traced from the raster matte even for a single source");
   }
-  photo_editor::desktop::EditorPreviewController stale_low_res_outline_controller;
+  auto stale_low_res_outline_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& stale_low_res_outline_controller = *stale_low_res_outline_controller_owner;
   stale_low_res_outline_controller.loadAsset(
       QStringLiteral("asset-stale-low-res-brush-outline"),
       high_quality_refinement_source_path,
@@ -21175,7 +22148,8 @@ int main(int argc, char** argv) {
     return fail("inserting a polygon edge point should update editable path cache identity");
   }
 
-  photo_editor::desktop::EditorPreviewController empty_mask_controller;
+  auto empty_mask_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& empty_mask_controller = *empty_mask_controller_owner;
   empty_mask_controller.addMask(QStringLiteral("linear"));
   if (empty_mask_controller.emptyMaskCount() != 0) {
     return fail("linear selection sources should not be treated as empty masks");
@@ -21203,7 +22177,8 @@ int main(int argc, char** argv) {
     return fail("generated/object selection sources without a valid matte should be counted as empty masks");
   }
 
-  photo_editor::desktop::EditorPreviewController validation_controller;
+  auto validation_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& validation_controller = *validation_controller_owner;
   validation_controller.addMask(QStringLiteral("linear"));
   auto impossible_selection = validation_controller.maskStack().at(0).toMap();
   impossible_selection.insert(QStringLiteral("retouchMode"), QStringLiteral("remove"));
@@ -21230,7 +22205,8 @@ int main(int argc, char** argv) {
     return fail("mask validation should continue accepting valid retouch brush sources");
   }
 
-  photo_editor::desktop::EditorPreviewController camera_default_controller;
+  auto camera_default_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& camera_default_controller = *camera_default_controller_owner;
   camera_default_controller.loadAsset(
       QStringLiteral("camera-default-source"),
       QString(),
@@ -21304,7 +22280,8 @@ int main(int argc, char** argv) {
     return fail("camera defaults should not bleed into other camera models");
   }
 
-  photo_editor::desktop::EditorPreviewController reloaded_controller;
+  auto reloaded_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& reloaded_controller = *reloaded_controller_owner;
   if (!reloaded_controller.presetNames().contains(QStringLiteral("Portrait Base"))) {
     return fail("saved presets should reload from app data");
   }
@@ -21338,7 +22315,8 @@ int main(int argc, char** argv) {
     return fail("camera defaults should be clearable for the active camera");
   }
 
-  photo_editor::desktop::EditorPreviewController history_controller;
+  auto history_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& history_controller = *history_controller_owner;
   history_controller.loadAsset(
       QStringLiteral("human-history-25-action-asset"),
       QString(),
@@ -21474,7 +22452,8 @@ int main(int argc, char** argv) {
       history_controller.editHistoryEntries().size() < 2) {
     return fail("switching back to an edited asset should retain its session history and named snapshots");
   }
-  photo_editor::desktop::EditorPreviewController reloaded_history_controller;
+  auto reloaded_history_controller_owner = std::make_unique<photo_editor::desktop::EditorPreviewController>();
+  auto& reloaded_history_controller = *reloaded_history_controller_owner;
   reloaded_history_controller.loadAsset(
       QStringLiteral("human-history-25-action-asset"),
       QString(),

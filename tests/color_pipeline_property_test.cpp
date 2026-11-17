@@ -1707,14 +1707,14 @@ int main() {
 
   auto detail_range_state = modern_scene_adjustment_state(0.0);
   detail_range_state.color_pipeline.output_headroom = 16.0;
-  std::vector<ColorPixel> detail_range_output;
-  detail_range_output.reserve(25U);
+  std::vector<ColorPixel> detail_range_source;
+  detail_range_source.reserve(25U);
   for (int y = 0; y < 5; ++y) {
     for (int x = 0; x < 5; ++x) {
-      detail_range_output.push_back(
+      detail_range_source.push_back(
           x < 2
               ? ColorPixel{
-                    .red = 0.02F,
+                    .red = -0.25F,
                     .green = 0.90F,
                     .blue = 2.00F,
                     .alpha = 0.61F,
@@ -1730,14 +1730,21 @@ int main() {
   detail_range_state.sharpening = 75.0;
   detail_range_state.sharpen_radius = 2.0;
   detail_range_state.sharpen_detail = 80.0;
-  photo_editor::pipeline::apply_color_adjustments(
-      &detail_range_output,
-      5,
-      5,
-      detail_range_state);
+  // Signed/HDR preservation must start with signed/HDR input. Requiring an
+  // initially positive edge to develop negative sharpening overshoot instead
+  // couples this range guard to the chosen anti-ringing response.
+  auto detail_range_output = detail_range_source;
+  if (!photo_editor::pipeline::apply_color_detail_stage(
+          &detail_range_output, 5, 5, detail_range_state)) {
+    return fail("detail-preserves-working-range", "Detail rejected valid signed/HDR working pixels");
+  }
   auto detail_has_signed_excursion = false;
   auto detail_preserves_over_range = false;
-  for (const auto& detailed : detail_range_output) {
+  auto detail_range_delta = 0.0;
+  for (std::size_t index = 0; index < detail_range_output.size(); ++index) {
+    const auto& detailed = detail_range_output[index];
+    detail_range_delta = std::max(detail_range_delta,
+        maximum_pixel_channel_error(detailed, detail_range_source[index]));
     detail_has_signed_excursion =
         detail_has_signed_excursion ||
         detailed.red < -1.0e-4F ||
@@ -1748,17 +1755,20 @@ int main() {
         detailed.red > 1.0F ||
         detailed.green > 1.0F ||
         detailed.blue > 1.0F;
+    const auto maximum_magnitude = std::max({
+        std::abs(detailed.red), std::abs(detailed.green), std::abs(detailed.blue)});
     if (!finite_pixel(detailed) ||
-        std::abs(detailed.alpha - 0.61F) > 1.0e-7F) {
+        std::abs(detailed.alpha - detail_range_source[index].alpha) > 1.0e-7F ||
+        maximum_magnitude > detail_range_state.color_pipeline.output_headroom) {
       return fail(
           "detail-preserves-working-range",
-          "detail produced a non-finite sample or changed alpha");
+          "detail produced a non-finite sample, changed alpha, or exceeded the fixture's headroom budget");
     }
   }
-  if (!detail_has_signed_excursion || !detail_preserves_over_range) {
+  if (!detail_has_signed_excursion || !detail_preserves_over_range || detail_range_delta <= 1.0e-5) {
     return fail(
         "detail-preserves-working-range",
-        "detail clipped signed or over-range working excursions before output");
+        "active Detail clipped signed/HDR working pixels or failed to perform real sharpening");
   }
 
   // Geometry is a real stage after Detail, not a label on an early optical

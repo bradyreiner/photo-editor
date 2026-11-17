@@ -1,3 +1,4 @@
+#include "qml_style_policy.h"
 #include "agent_edit_controller.h"
 
 #include "catalog_asset_model.h"
@@ -19,6 +20,7 @@
 #include <QQmlContext>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -44,12 +46,11 @@ Window {
     width: 1366
     height: 768
     visible: true
-    color: "#111820"
+    color: "#181818"
     title: "Agent production motion test"
 
     property var controllerObject: productionMotionController
     property var catalogObject: productionMotionCatalog
-    property var characterObject: null
     property string observedActStage: ""
     property string observedActStatus: ""
     property string observedActAtUtc: ""
@@ -68,15 +69,6 @@ Window {
     property int inspectorSelectionChangeCount: 0
     property int inspectorFocusChangeCount: 0
 
-    function toolContactError() {
-        if (!host.characterObject)
-            return -1
-        const tip = host.characterObject.toolContactPoint
-        const mapped = host.characterObject.mapToItem(overlay, tip.x, tip.y)
-        const target = overlay.currentTouchTarget || ({})
-        return Math.hypot(mapped.x - Number(target.x || 0), mapped.y - Number(target.y || 0))
-    }
-
     Item {
         id: workspacePage
         objectName: "productionMotionWorkspacePage"
@@ -89,9 +81,9 @@ Window {
             y: 56
             width: 360
             height: workspacePage.height - 112
-            color: "#1b242e"
-            border.color: "#52616f"
-            border.width: 1
+            color: "#202020"
+            border.color: "#404040"
+            border.width: 0
             clip: true
 
             EditInspectorTabButton {
@@ -197,23 +189,14 @@ Window {
         repeat: true
         running: true
         onTriggered: {
-            if (String(overlay.motionEvent.stage || "") !== "act")
-                return
             host.motionTrace = host.motionTrace.concat([{
-                atUtc: String(overlay.motionEvent.atUtc || ""),
-                key: String(overlay.activeParameterKey || ""),
-                controlName: String(overlay.currentTouchTarget.controlName || ""),
-                robotX: Number(overlay.robotX),
-                robotY: Number(overlay.robotY),
-                toolContactError: host.toolContactError(),
-                locomotion: String(overlay.locomotion || ""),
-                touchingControl: Boolean(overlay.touchingControl),
-                targetX: Number(overlay.currentTouchTarget.x || 0),
-                targetY: Number(overlay.currentTouchTarget.y || 0),
-                tool: String(overlay.deployedTool || ""),
+                atUtc: String(overlay.activeEvent.atUtc || ""),
+                stage: String(overlay.activeEvent.stage || ""),
+                status: String(overlay.activeEvent.status || ""),
+                running: Boolean(overlay.running),
+                draftReady: Boolean(overlay.draftReady),
                 reducedMotion: Boolean(overlay.reducedMotion)
             }]).slice(-2048)
-            host.observedToolContactError = host.toolContactError()
         }
     }
 
@@ -397,10 +380,11 @@ class AgentProductionMotionUiTest final : public QObject {
   Q_OBJECT
 
  private slots:
-  void productionReceiptRoutesToMappedInspectorAndTracksResize() {
-    const auto isolated_root = qEnvironmentVariable(kFixtureEnvironment);
-    if (isolated_root.trimmed().isEmpty())
-      QSKIP("Set PHOTO_EDITOR_AGENT_PRODUCTION_MOTION_FIXTURE to an isolated writable fixture directory.");
+  void productionReceiptUpdatesStatusWithoutTouchingInspector() {
+    QTemporaryDir automatic_fixture;
+    const auto requested_root = qEnvironmentVariable(kFixtureEnvironment).trimmed();
+    QVERIFY2(!requested_root.isEmpty() || automatic_fixture.isValid(), "Could not allocate an isolated status fixture.");
+    const auto isolated_root = requested_root.isEmpty() ? automatic_fixture.path() : requested_root;
     if (!QDir::isAbsolutePath(isolated_root))
       QFAIL("PHOTO_EDITOR_AGENT_PRODUCTION_MOTION_FIXTURE must be an absolute caller-owned evidence directory.");
     if (source_root().isEmpty())
@@ -468,8 +452,10 @@ class AgentProductionMotionUiTest final : public QObject {
     QVERIFY(inspector_tab);
     QVERIFY(reset_button);
     QVERIFY(overlay);
-    QVERIFY(character);
-    host_object->setProperty("characterObject", QVariant::fromValue(character));
+    QVERIFY2(!character, "The editor must not instantiate the Agent character.");
+    auto* rig = qobject_cast<QQuickItem*>(host_object->findChild<QObject*>(QStringLiteral("agentWorkspaceRoamingRobot")));
+    QVERIFY(rig);
+    QVERIFY(!rig->isVisible());
     QVERIFY(close_action);
     const auto original_slider_value = mapped_control->property("value");
     const auto original_slider_focus = mapped_control->property("activeFocus");
@@ -530,267 +516,73 @@ class AgentProductionMotionUiTest final : public QObject {
     for (const auto& event_key : event_keys)
       QVERIFY2(authored_keys.contains(event_key), "The act receipt key must come from the accepted recipe patch.");
 
-    const auto active_key_matches_receipt = [&]() {
-      const auto key = overlay->property("activeParameterKey").toString();
-      const auto motion_event = overlay->property("motionEvent").toMap();
-      return event_keys.contains(key) &&
-             motion_event.value(QStringLiteral("stage")).toString() == QStringLiteral("act") &&
-             motion_event.value(QStringLiteral("status")).toString() == QStringLiteral("complete") &&
-             motion_event.value(QStringLiteral("atUtc")).toString() ==
-                 receipt.value(QStringLiteral("atUtc")).toString() &&
-             overlay->property("currentTouchTarget").toMap()
-                 .value(QStringLiteral("controlName")).toString() ==
-                 QStringLiteral("exposureSlider");
-    };
-    QElapsedTimer mapping_wait;
-    mapping_wait.start();
-    while (!active_key_matches_receipt() &&
-           mapping_wait.elapsed() < 20000) {
-      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-      QTest::qWait(20);
-    }
-    if (!active_key_matches_receipt()) {
-      const auto failure_image_path = QStringLiteral("production-mapping-timeout-1366x768.png");
-      QJsonArray failure_frames;
-      const auto failure_capture = capture_window_frame(
-          window, isolated_root, failure_image_path, receipt,
-          start.value(QStringLiteral("requestId")).toString(), &failure_frames);
-      const auto controller_event_list = controller_events(controller);
-      const auto resolver_trace = host_object->property("resolverTrace").toList();
-      const auto act_resolver_trace = host_object->property("actResolverTrace").toList();
-      const auto event_list_json = QJsonValue::fromVariant(controller_event_list);
-      const auto resolver_trace_json = QJsonValue::fromVariant(resolver_trace);
-      const QVariantMap control_state{
-          {QStringLiteral("sliderVisible"), mapped_control->property("visible")},
-          {QStringLiteral("sliderEnabled"), mapped_control->property("enabled")},
-          {QStringLiteral("sliderWidth"), mapped_control->property("width")},
-          {QStringLiteral("sliderHeight"), mapped_control->property("height")},
-          {QStringLiteral("sliderActiveFocus"), mapped_control->property("activeFocus")},
-          {QStringLiteral("inspectorSelected"), inspector_tab->property("selected")},
-      };
-      const QVariantMap overlay_state{
-          {QStringLiteral("visible"), overlay->property("visible")},
-          {QStringLiteral("dismissed"), overlay->property("dismissed")},
-          {QStringLiteral("activeEvent"), overlay->property("activeEvent")},
-          {QStringLiteral("motionEvent"), overlay->property("motionEvent")},
-          {QStringLiteral("activeParameterKey"), overlay->property("activeParameterKey")},
-          {QStringLiteral("currentTouchTarget"), overlay->property("currentTouchTarget")},
-          {QStringLiteral("motionTargets"), overlay->property("motionTargets")},
-          {QStringLiteral("traveling"), overlay->property("traveling")},
-          {QStringLiteral("locomotion"), overlay->property("locomotion")},
-      };
-      const QJsonObject diagnostics{
-          {QStringLiteral("fixtureReceipt"), true},
-          {QStringLiteral("source"), QStringLiteral("AgentEditController.runEvents")},
-          {QStringLiteral("modelFixture"), QStringLiteral("rulebook-deterministic")},
-          {QStringLiteral("qpaPlatform"), QGuiApplication::platformName()},
-          {QStringLiteral("requestId"), start.value(QStringLiteral("requestId")).toString()},
-          {QStringLiteral("terminalActReceipt"), QJsonObject::fromVariantMap(receipt)},
-          {QStringLiteral("expectedControl"), QStringLiteral("exposureSlider")},
-          {QStringLiteral("observedActStage"), host_object->property("observedActStage").toString()},
-          {QStringLiteral("observedActStatus"), host_object->property("observedActStatus").toString()},
-          {QStringLiteral("observedActKey"), host_object->property("observedActKey").toString()},
-          {QStringLiteral("observedActControl"), host_object->property("observedActControl").toString()},
-          {QStringLiteral("controllerEvents"), event_list_json},
-          {QStringLiteral("resolverTrace"), resolver_trace_json},
-          {QStringLiteral("actResolverTrace"), QJsonValue::fromVariant(act_resolver_trace)},
-          {QStringLiteral("overlayState"), QJsonObject::fromVariantMap(overlay_state)},
-          {QStringLiteral("controlState"), QJsonObject::fromVariantMap(control_state)},
-          {QStringLiteral("capturedScreenshot"), failure_capture},
-          {QStringLiteral("screenshotPath"), QDir(isolated_root).filePath(failure_image_path)},
-      };
-      const auto diagnostic_path = QDir(isolated_root).filePath(
-          QStringLiteral("production-mapping-timeout.json"));
-      QFile diagnostic_file(diagnostic_path);
-      const auto diagnostic_bytes = QJsonDocument(diagnostics).toJson(QJsonDocument::Indented);
-      const auto diagnostic_saved = diagnostic_file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
-                                   diagnostic_file.write(diagnostic_bytes) == diagnostic_bytes.size() &&
-                                   diagnostic_file.flush();
-      const auto timeout_trace_path = QDir(isolated_root).filePath(
-          QStringLiteral("production-motion-timeout.jsonl"));
-      const auto timeout_trace_saved = write_motion_trace(
-          timeout_trace_path, receipt, host_object->property("motionTrace").toList(),
-          start.value(QStringLiteral("requestId")).toString(), failure_frames);
-      QFAIL(qPrintable(QStringLiteral(
-          "Act receipt did not enter the exposureSlider route within %1 ms; resolver calls=%2, key=%3, screenshot=%4, diagnostics=%5 (saved=%6), trace=%7 (saved=%8)")
-              .arg(mapping_wait.elapsed())
-              .arg(resolver_trace.size())
-              .arg(host_object->property("observedActKey").toString())
-              .arg(QDir(isolated_root).filePath(failure_image_path))
-              .arg(diagnostic_path)
-              .arg(diagnostic_saved)
-              .arg(timeout_trace_path)
-              .arg(timeout_trace_saved)));
-    }
-    const auto observed_key = overlay->property("activeParameterKey").toString();
-    QVERIFY2(event_keys.contains(observed_key), "The resolver must consume a key present in the real controller receipt.");
-    QVERIFY2(authored_keys.contains(observed_key), "The mapped parameter must be authored in the accepted recipe.");
-    QTRY_VERIFY_WITH_TIMEOUT(overlay->property("touchingControl").toBool(), 20000);
-    QTRY_VERIFY_WITH_TIMEOUT(
-        host_object->property("observedToolContactError").toDouble() <= 0.75,
-        20000);
-
+    QTRY_VERIFY_WITH_TIMEOUT(overlay->property("draftReady").toBool(), 5000);
+    QVERIFY(controller.draftActive());
+    QVERIFY(!controller.running());
+    QVERIFY(catalog.assetAt(0).value(QStringLiteral("adjustmentPatchJson")).toString() != original_recipe_patch);
+    const auto event_count = controller_events(controller).size();
     QJsonArray frame_manifest;
-    QVERIFY2(capture_window_frame(window, isolated_root,
-                                  QStringLiteral("production-contact-1366x768.png"),
-                                  receipt, start.value(QStringLiteral("requestId")).toString(),
-                                  &frame_manifest),
-             "The native real-receipt contact frame must be saved under the caller fixture directory.");
-    const auto host_size_before = window->size();
-    const auto target_before = overlay->property("currentTouchTarget").toMap();
-    const auto event_count_before_resize = controller_events(controller).size();
-    window->resize(1440, 900);
-    QTRY_COMPARE_WITH_TIMEOUT(window->size(), QSize(1440, 900), 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(
-        std::abs(overlay->property("currentTouchTarget").toMap()
-                     .value(QStringLiteral("x")).toDouble() -
-                 host_object->property("observedActX").toDouble()) < 0.75 &&
-        std::abs(overlay->property("currentTouchTarget").toMap()
-                     .value(QStringLiteral("y")).toDouble() -
-                 host_object->property("observedActY").toDouble()) < 0.75,
-        5000);
-    QTRY_VERIFY_WITH_TIMEOUT(overlay->property("touchingControl").toBool(), 20000);
-    QTRY_VERIFY_WITH_TIMEOUT(
-        host_object->property("observedToolContactError").toDouble() <= 0.75,
-        20000);
-    QVERIFY(window->size() != host_size_before);
-    QVERIFY(target_before.value(QStringLiteral("x")).toDouble() !=
-            overlay->property("currentTouchTarget").toMap().value(QStringLiteral("x")).toDouble());
-    const auto resized_event_count = controller_events(controller).size();
-    QCOMPARE(resized_event_count, event_count_before_resize);
-    const auto resized_receipt = terminal_act_event(controller_events(controller));
-    QCOMPARE(resized_receipt.value(QStringLiteral("atUtc")).toString(),
-             receipt.value(QStringLiteral("atUtc")).toString());
-    QCOMPARE(overlay->property("motionEvent").toMap().value(QStringLiteral("atUtc")).toString(),
-             receipt.value(QStringLiteral("atUtc")).toString());
-    QCOMPARE(controller_events(controller).size(), resized_event_count);
-    QCOMPARE(mapped_control->property("value"), original_slider_value);
-    QCOMPARE(mapped_control->property("pressed").toBool(), false);
-    QCOMPARE(mapped_control->property("activeFocus"), original_slider_focus);
-    QCOMPARE(inspector_tab->property("selected"), original_tab_selected);
-    QCOMPARE(inspector_tab->property("activeFocus"), original_tab_focus);
-    QCOMPARE(reset_button->property("enabled"), original_reset_enabled);
-    QCOMPARE(host_object->property("exposureValueDragCount").toInt(), 0);
-    QCOMPARE(host_object->property("exposureResetCount").toInt(), 0);
-    QCOMPARE(host_object->property("inspectorSelectionCount").toInt(), 0);
-    QCOMPARE(host_object->property("sliderValueChangeCount"),
-             original_interaction_counts.value(QStringLiteral("sliderValue")));
-    QCOMPARE(host_object->property("sliderPressedChangeCount"),
-             original_interaction_counts.value(QStringLiteral("sliderPressed")));
-    QCOMPARE(host_object->property("sliderFocusChangeCount"),
-             original_interaction_counts.value(QStringLiteral("sliderFocus")));
-    QCOMPARE(host_object->property("inspectorSelectionChangeCount"),
-             original_interaction_counts.value(QStringLiteral("tabSelection")));
-    QCOMPARE(host_object->property("inspectorFocusChangeCount"),
-             original_interaction_counts.value(QStringLiteral("tabFocus")));
-    QVERIFY(!window->mouseGrabberItem());
-    QCOMPARE(window->activeFocusItem(), original_window_focus);
-    QVERIFY2(capture_window_frame(window, isolated_root,
-                                  QStringLiteral("production-reanchored-contact-1440x900.png"),
-                                  receipt, start.value(QStringLiteral("requestId")).toString(),
-                                  &frame_manifest),
-             "The resized real-receipt contact frame must be saved under the caller fixture directory.");
-
-    overlay->setProperty("reducedMotion", true);
-    QTRY_VERIFY_WITH_TIMEOUT(!character->property("motionEnabled").toBool() &&
-                             !overlay->property("traveling").toBool(), 5000);
-    QVERIFY(controller.draftActive());
-    QVERIFY(close_action->property("visible").toBool());
-    QCOMPARE(overlay->property("touchingControl").toBool(), false);
-    QCOMPARE(overlay->property("reachProgress").toDouble(), 0.0);
-    const auto reduced_size_before = window->size();
-    const auto reduced_target_before = overlay->property("currentTouchTarget").toMap();
-    host_object->setProperty("reducedMotionCoordinateChanges", 0);
-    window->resize(1540, 960);
-    QTRY_COMPARE_WITH_TIMEOUT(window->size(), QSize(1540, 960), 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(
-        std::abs(overlay->property("currentTouchTarget").toMap()
-                     .value(QStringLiteral("x")).toDouble() -
-                 host_object->property("observedActX").toDouble()) < 0.75 &&
-        std::abs(overlay->property("currentTouchTarget").toMap()
-                     .value(QStringLiteral("y")).toDouble() -
-                 host_object->property("observedActY").toDouble()) < 0.75,
-        5000);
-    QTRY_VERIFY_WITH_TIMEOUT(
-        host_object->property("reducedMotionCoordinateChanges").toInt() > 0,
-        5000);
-    QTRY_VERIFY_WITH_TIMEOUT(
-        host_object->property("observedToolContactError").toDouble() <= 0.75,
-        5000);
-    QVERIFY(window->size() != reduced_size_before);
-    QVERIFY(reduced_target_before.value(QStringLiteral("x")).toDouble() !=
-            overlay->property("currentTouchTarget").toMap().value(QStringLiteral("x")).toDouble());
-    QCOMPARE(overlay->property("motionEvent").toMap().value(QStringLiteral("atUtc")).toString(),
-             receipt.value(QStringLiteral("atUtc")).toString());
-    QCOMPARE(controller_events(controller).size(), resized_event_count);
-    QTRY_VERIFY_WITH_TIMEOUT(!overlay->property("traveling").toBool() &&
-                             overlay->property("locomotion").toString() == QStringLiteral("idle"), 5000);
-    const auto quiet_robot_x = overlay->property("robotX");
-    const auto quiet_robot_y = overlay->property("robotY");
-    const auto quiet_coordinate_change_count =
-        host_object->property("reducedMotionCoordinateChanges").toInt();
-    QTest::qWait(260);
-    QCOMPARE(overlay->property("robotX"), quiet_robot_x);
-    QCOMPARE(overlay->property("robotY"), quiet_robot_y);
-    QCOMPARE(host_object->property("reducedMotionCoordinateChanges").toInt(),
-             quiet_coordinate_change_count);
-    QVERIFY(!overlay->property("traveling").toBool());
-    QVERIFY(!character->property("motionEnabled").toBool());
-    QVERIFY(close_action->property("visible").toBool());
-    QVERIFY(controller.draftActive());
-    QCOMPARE(mapped_control->property("value"), original_slider_value);
-    QCOMPARE(mapped_control->property("pressed").toBool(), false);
-    QCOMPARE(mapped_control->property("activeFocus"), original_slider_focus);
-    QCOMPARE(inspector_tab->property("selected"), original_tab_selected);
-    QCOMPARE(inspector_tab->property("activeFocus"), original_tab_focus);
-    QCOMPARE(reset_button->property("enabled"), original_reset_enabled);
-    QCOMPARE(host_object->property("exposureValueDragCount").toInt(), 0);
-    QCOMPARE(host_object->property("exposureResetCount").toInt(), 0);
-    QCOMPARE(host_object->property("inspectorSelectionCount").toInt(), 0);
-    QCOMPARE(host_object->property("sliderValueChangeCount"),
-             original_interaction_counts.value(QStringLiteral("sliderValue")));
-    QCOMPARE(host_object->property("sliderPressedChangeCount"),
-             original_interaction_counts.value(QStringLiteral("sliderPressed")));
-    QCOMPARE(host_object->property("sliderFocusChangeCount"),
-             original_interaction_counts.value(QStringLiteral("sliderFocus")));
-    QCOMPARE(host_object->property("inspectorSelectionChangeCount"),
-             original_interaction_counts.value(QStringLiteral("tabSelection")));
-    QCOMPARE(host_object->property("inspectorFocusChangeCount"),
-             original_interaction_counts.value(QStringLiteral("tabFocus")));
-    QVERIFY(!window->mouseGrabberItem());
-    QCOMPARE(window->activeFocusItem(), original_window_focus);
-    QVERIFY2(capture_window_frame(window, isolated_root,
-                                  QStringLiteral("production-reduced-motion-resized-1540x960.png"),
-                                  receipt, start.value(QStringLiteral("requestId")).toString(),
-                                  &frame_manifest),
-             "The reduced-motion reanchor frame must be saved under the caller fixture directory.");
-
-    const auto trace = host_object->property("motionTrace").toList();
-    QVERIFY2(!trace.isEmpty(), "The native overlay should expose sampled motion from the real act receipt.");
-    bool saw_climb = false;
-    bool saw_touch = false;
-    bool saw_exact_contact = false;
-    for (const auto& trace_value : trace) {
-      const auto row = trace_value.toMap();
-      if (row.value(QStringLiteral("atUtc")).toString() != receipt.value(QStringLiteral("atUtc")).toString())
-        continue;
-      saw_climb = saw_climb || row.value(QStringLiteral("locomotion")).toString() == QStringLiteral("climb");
-      saw_touch = saw_touch || row.value(QStringLiteral("touchingControl")).toBool();
-      saw_exact_contact = saw_exact_contact ||
-                          (row.value(QStringLiteral("touchingControl")).toBool() &&
-                           row.value(QStringLiteral("toolContactError")).toDouble() <= 0.75);
+    for (const auto size : {QSize(1366, 768), QSize(1440, 900), QSize(1540, 960)}) {
+      const auto frame = window->frameMargins();
+      const auto available = window->screen()->availableGeometry().size()
+          - QSize(frame.left() + frame.right(), frame.top() + frame.bottom());
+      const auto fitted_size = QGuiApplication::platformName() == QStringLiteral("offscreen")
+          ? size : size.boundedTo(available);
+      window->resize(fitted_size);
+      QTRY_COMPARE_WITH_TIMEOUT(window->size(), fitted_size, 5000);
+      QTest::qWait(100);
+      QVERIFY(!rig->isVisible());
+      const auto issues = qml_popup_style_violations(host_object);
+      QVERIFY2(issues.isEmpty(), qPrintable(issues.join('\n')));
+      QCOMPARE(controller_events(controller).size(), event_count);
+      QCOMPARE(terminal_act_event(controller_events(controller)), receipt);
+      QVERIFY2(capture_window_frame(window, isolated_root,
+          QStringLiteral("production-optical-%1x%2.png").arg(window->width()).arg(window->height()),
+          receipt, start.value(QStringLiteral("requestId")).toString(), &frame_manifest),
+          "The actual controller's draft status must render at every supported size.");
     }
-    QVERIFY2(saw_climb, "The act event must drive a real climb along the mapped inspector panel.");
-    QVERIFY2(saw_touch, "The act event must reach contact at the mapped inspector control.");
-    QVERIFY2(saw_exact_contact, "The deployed tool must meet the mapped inspector control anchor.");
-
+    QCOMPARE(mapped_control->property("value"), original_slider_value);
+    QCOMPARE(mapped_control->property("pressed").toBool(), false);
+    QCOMPARE(mapped_control->property("activeFocus"), original_slider_focus);
+    QCOMPARE(inspector_tab->property("selected"), original_tab_selected);
+    QCOMPARE(inspector_tab->property("activeFocus"), original_tab_focus);
+    QCOMPARE(reset_button->property("enabled"), original_reset_enabled);
+    QCOMPARE(host_object->property("exposureValueDragCount").toInt(), 0);
+    QCOMPARE(host_object->property("exposureResetCount").toInt(), 0);
+    QCOMPARE(host_object->property("inspectorSelectionCount").toInt(), 0);
+    QCOMPARE(host_object->property("sliderValueChangeCount"),
+             original_interaction_counts.value(QStringLiteral("sliderValue")));
+    QCOMPARE(host_object->property("sliderPressedChangeCount"),
+             original_interaction_counts.value(QStringLiteral("sliderPressed")));
+    QCOMPARE(host_object->property("sliderFocusChangeCount"),
+             original_interaction_counts.value(QStringLiteral("sliderFocus")));
+    QCOMPARE(host_object->property("inspectorSelectionChangeCount"),
+             original_interaction_counts.value(QStringLiteral("tabSelection")));
+    QCOMPARE(host_object->property("inspectorFocusChangeCount"),
+             original_interaction_counts.value(QStringLiteral("tabFocus")));
+    QVERIFY(!window->mouseGrabberItem());
+    QCOMPARE(window->activeFocusItem(), original_window_focus);
+    overlay->setProperty("reducedMotion", true);
+    QTest::qWait(300);
+    for (auto* object : overlay->findChildren<QObject*>())
+      if (object->property("motionEnabled").isValid())
+        QVERIFY2(!object->property("motionEnabled").toBool(), "Editor optical motion must stop in reduced-motion mode.");
+    QVERIFY(!rig->isVisible());
+    QVERIFY(controller.draftActive());
+    auto* draft_close = host_object->findChild<QObject*>(QStringLiteral("agentWorkspaceCloseButton"));
+    QVERIFY(draft_close);
+    QVERIFY(QMetaObject::invokeMethod(draft_close, "click"));
+    QVERIFY(overlay->property("dismissed").toBool());
+    QVERIFY(controller.draftActive());
+    const auto trace = host_object->property("motionTrace").toList();
+    QVERIFY2(!trace.isEmpty(), "The overlay must sample status from the real controller receipts.");
     auto trace_path = qEnvironmentVariable(kTraceEnvironment).trimmed();
     if (trace_path.isEmpty())
       trace_path = QDir(isolated_root).filePath(QStringLiteral("production-motion.jsonl"));
     QVERIFY2(write_motion_trace(trace_path, receipt, trace,
                                 start.value(QStringLiteral("requestId")).toString(),
                                 frame_manifest),
-             "The real-receipt motion trace must be flushed to the requested evidence path.");
+             "The real-receipt optical status trace must be flushed to the requested evidence path.");
     window->close();
     delete host_object;
 

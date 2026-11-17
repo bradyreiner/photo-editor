@@ -110,7 +110,7 @@ inline constexpr int kLayerThumbnailEdge =
     static_cast<int>(kLayerThumbnailDisplayEdge * kLayerThumbnailDevicePixelRatio);
 inline constexpr int kMaskSetThumbnailDisplayEdge = 34;
 inline constexpr int kMaskThumbnailBackingEdge = 96;
-inline constexpr auto kThumbnailColorPipelineVersion = "thumbnail-color-pipeline-v9";
+inline constexpr auto kThumbnailColorPipelineVersion = "thumbnail-color-pipeline-v14-persisted-colors";
 
 struct ThumbnailRefreshQueueAdjustmentLayerDependencies final {
   std::function<QString(const QVariantMap& layer)> recipe_hash;
@@ -299,6 +299,10 @@ void clear_thumbnail_transient_fields(QVariantMap* target);
 QImage scaled_square_thumbnail_image(QImage image, int edge);
 QImage scaled_layer_thumbnail_image(QImage image);
 QString rendered_photo_layer_thumbnail_source(const QVariantMap& layer);
+QString thumbnail_content_output_policy_identity(
+    const QString& working_profile, const QString& rendering_model);
+QString photo_layer_thumbnail_output_version(
+    const QVariantMap& layer, const QString& content_output_policy_identity);
 QString photo_layer_thumbnail_kind(const QVariantMap& layer);
 QString non_adjustment_photo_layer_thumbnail_recipe_hash(
     const QVariantMap& layer,

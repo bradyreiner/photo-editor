@@ -30,6 +30,17 @@ struct CatalogSnapshotContractAccess {
   static bool parsing(const CatalogAssetModel& model) { return model.snapshot_parse_active_; }
   static auto future(const CatalogAssetModel& model) { return model.snapshot_parse_watcher_.future(); }
   static auto items(const CatalogAssetModel& model) { return model.all_assets_; }
+  static bool selectedCanonicalFor(CatalogAssetModel& model, const QString& asset_id) {
+    const auto original = model.selected_index_;
+    for (int index = 0; index < model.assets_.size(); ++index) {
+      if (model.assets_.at(index).asset_id != asset_id) continue;
+      model.selected_index_ = index;
+      const auto canonical = model.selectedCanonicalRecipePresent();
+      model.selected_index_ = original;
+      return canonical;
+    }
+    return false;
+  }
 };
 }
 using namespace photo_editor::desktop;
@@ -124,7 +135,11 @@ int main(int argc, char** argv) {
     const auto items = CatalogSnapshotContractAccess::items(*model);
     if (items.size() != expected.size()) return false;
     for (qsizetype i = 0; i < items.size(); ++i)
-      if (items.at(i).asset_id != "current-" + QString::number(i) || items.at(i).adjustment_patch_json != expected.at(i))
+      if (items.at(i).asset_id != "current-" + QString::number(i) ||
+          items.at(i).adjustment_patch_json != expected.at(i) ||
+          items.at(i).canonical_recipe_present != (i % 2 == 1) ||
+          model->assetById(items.at(i).asset_id).value("canonicalRecipePresent").toBool() != (i % 2 == 1) ||
+          CatalogSnapshotContractAccess::selectedCanonicalFor(*model, items.at(i).asset_id) != (i % 2 == 1))
         return false;
     return true;
   };

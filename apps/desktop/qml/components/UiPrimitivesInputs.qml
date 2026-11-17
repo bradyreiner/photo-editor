@@ -266,7 +266,8 @@ ColumnLayout {
                       + sampleFrameRate.value + " fps · camera metadata "
                       + (sampleMetadataCheck.checked ? "on" : "off")
                 color: theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeCaption
                 wrapMode: Text.Wrap
             }
@@ -383,7 +384,8 @@ ColumnLayout {
                       ? "Editing " + root.activeSliderInteraction + "…"
                       : "Last committed slider value · " + Number(root.lastSliderValue).toFixed(2)
                 color: theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeCaption
                 wrapMode: Text.Wrap
             }
@@ -523,7 +525,8 @@ ColumnLayout {
                       + "    /    Collapsible · " + (root.collapsibleExpanded ? "open" : "closed")
                       + " · comparison " + (root.collapsibleCompareHeld ? "held" : root.collapsibleCompareActive ? "on" : "off")
                 color: theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeCaption
                 wrapMode: Text.Wrap
             }

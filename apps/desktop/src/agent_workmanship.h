@@ -2,11 +2,27 @@
 
 #include <QString>
 
+#include "agent_creative_guidance.h"
+
 namespace photo_editor::desktop {
+
+// Photo intent turns have no construction tools. Keep typography mechanics out
+// of their context so image evidence and output still fit a small local model.
+inline QString agent_photo_workmanship_guidance() {
+  return agent_creative_guidance() + QStringLiteral(
+      "Workmanship contract (looksy-workmanship-v1): produce an image-grounded photographic edit intent "
+      "for the app to validate and compile into a reversible draft. Preserve framing, skin, highlight "
+      "detail, texture and unaffected regions when protected by the brief or style. Use current "
+      "adjustments and visible evidence; never invent observations or claim unseen proof. "
+      "Tool calls are disabled for this turn. If the brief requires unavailable construction tools, "
+      "return cannot_complete_safely instead of substituting tone changes. "
+      "Current user constraints win over project taste and examples. Do not claim completion, "
+      "durable save, reopen and export without actual confirming receipts. ");
+}
 
 // Orientation for discovered tools, never an authorization or outcome receipt.
 inline QString agent_workmanship_guidance() {
-  return QStringLiteral(
+  return agent_creative_guidance() + QStringLiteral(
       "Workmanship contract (looksy-workmanship-v1): carry the approved brief from inspection to an editable, visually reviewed deliverable. "
       "Keep a checklist of requested copy, dimensions/aspect ratio, protected content, layout relationships and outputs. "
       "Choose a coherent visual direction with a clear focal point, deliberate type hierarchy, consistent spacing/alignment and restrained effects. "

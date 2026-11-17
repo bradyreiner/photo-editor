@@ -2252,7 +2252,6 @@
   process_layout_events();
   const QStringList compact_named_buttons{
       QStringLiteral("fitToViewButton"),
-      QStringLiteral("fillViewButton"),
       QStringLiteral("zoomStepButton"),
       QStringLiteral("zoomOutButton"),
       QStringLiteral("zoomInButton"),
@@ -2273,8 +2272,7 @@
       QStringLiteral("scopesInspectorTabButton"),
       QStringLiteral("detailInspectorTabButton"),
       QStringLiteral("infoInspectorTabButton"),
-      QStringLiteral("editInspectorResetButton"),
-      QStringLiteral("editInspectorSavePresetButton"),
+      QStringLiteral("editInspectorActionsButtonPrimaryAction"),
   };
   const QStringList compact_named_labels{
       QStringLiteral("editAdjustmentFilterStatusLabel"),
@@ -2354,16 +2352,16 @@
       find_named_object(root, QStringLiteral("floatingActivityIndicator"));
   auto* preview_retry_button =
       find_named_object(root, QStringLiteral("activityCancelButton"));
-  auto* mask_activity_status_chip =
-      find_named_object(edit_workspace, QStringLiteral("editImageViewportMaskActivityStatusChip"));
-  auto* mask_activity_status_dot =
-      find_named_object(edit_workspace, QStringLiteral("editImageViewportMaskActivityStatusDot"));
+  auto* mask_activity_spinner =
+      find_named_object(edit_workspace, QStringLiteral("editImageViewportLoadingSpinner"));
+  auto* mask_activity_ring = mask_activity_spinner
+      ? find_named_object(mask_activity_spinner, QStringLiteral("activityInterferenceRing")) : nullptr;
   if (edit_image_viewport == nullptr || edit_zoom_toolbar == nullptr || edit_action_toolbar == nullptr ||
       undo_edit_shortcut == nullptr || redo_edit_shortcut == nullptr ||
       diagnostics_overlay_button == nullptr || diagnostics_overlay_panel == nullptr ||
       loupe_overlay_button == nullptr || gamut_overlay_button == nullptr ||
       preview_update_badge == nullptr || preview_retry_button == nullptr ||
-      mask_activity_status_chip == nullptr || mask_activity_status_dot == nullptr) {
+      mask_activity_spinner == nullptr || mask_activity_ring == nullptr) {
     return fail("edit canvas should expose responsive viewport toolbar controls");
   }
   if (edit_image_viewport->property("mediaSurfaceContract").toString() !=
@@ -2500,8 +2498,8 @@
           Q_ARG(QVariant, QStringLiteral("masks"))) ||
       mask_activity_analyzing_signature.toString() !=
           QStringLiteral("analyzing|visible:true|blocking:false|chip:persistent") ||
-      mask_activity_status_chip->property("activityAnimationContract").toString() !=
-          QStringLiteral("nonblocking|persistent|animated-dot:v1") ||
+      mask_activity_spinner->property("width").toDouble() <= 0 ||
+      mask_activity_spinner->property("width") != mask_activity_spinner->property("height") ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "maskActivityPresentationSignature",
@@ -2526,7 +2524,6 @@
   }
   const QStringList zoom_toolbar_items{
       QStringLiteral("fitToViewButton"),
-      QStringLiteral("fillViewButton"),
       QStringLiteral("zoomStepButton"),
       QStringLiteral("zoomOutButton"),
       QStringLiteral("zoomInButton"),
@@ -3982,6 +3979,34 @@
               << library_workflow_polish_signature.toString().toStdString() << '\n';
     return fail("library toolbar import and inspector should use readable labels and expose live workflow-polish completion state");
   }
+  // Exercise the action on the routed Library, not only on the legacy screen
+  // or the isolated control. Opening/canceling must never delete fixture data.
+  library_workspace->setProperty("libraryInspectorPanelVisible", true);
+  auto* library_selection_actions =
+      find_named_object(library_inspector_panel, QStringLiteral("studioLibrarySelectionActions"));
+  auto* library_delete_button =
+      find_named_object(library_inspector_panel, QStringLiteral("libraryDeleteSelectedButton"));
+  const auto library_asset_count_before_delete_dialog = catalog_assets.assetCount();
+  catalog_assets.selectIndexWithModifiers(1, 0, false);
+  QCoreApplication::processEvents();
+  if (!library_selection_actions || !library_delete_button ||
+      !library_selection_actions->property("visible").toBool() ||
+      !library_delete_button->property("enabled").toBool() ||
+      !QMetaObject::invokeMethod(library_delete_button, "clicked") ||
+      !wait_for_condition([&] {
+        return library_selection_actions->property("confirmationVisible").toBool();
+      }, 2000))
+    return fail("the routed Library sidebar must expose a working Delete Image confirmation for selected photos");
+  auto* library_delete_cancel = find_named_object(root, QStringLiteral("libraryDeleteCancelButton"));
+  if (!library_delete_cancel || !QMetaObject::invokeMethod(library_delete_cancel, "clicked") ||
+      !wait_for_condition([&] {
+        return !library_selection_actions->property("confirmationVisible").toBool();
+      }, 2000) || catalog_assets.deleting() ||
+      catalog_assets.assetCount() != library_asset_count_before_delete_dialog)
+    return fail("canceling Library deletion must preserve all catalog assets");
+  catalog_assets.clearSelection();
+  QCoreApplication::processEvents();
+
   auto* studio_library_gallery_grid =
       find_named_object(library_workspace, QStringLiteral("studioLibraryGalleryGrid"));
   QVariant library_gallery_layout_signature;
@@ -4029,14 +4054,11 @@
       find_named_object(library_workspace, QStringLiteral("studioLibrarySearchInput"));
   auto* studio_library_search_clear_button =
       find_named_object(library_workspace, QStringLiteral("studioLibrarySearchClearButton"));
-  auto* studio_library_search_chip =
-      find_named_object(library_workspace, QStringLiteral("studioLibraryActiveSearchChip"));
   QVariant library_search_signature;
   if (studio_library_search_input == nullptr ||
       studio_library_search_clear_button == nullptr ||
-      studio_library_search_chip == nullptr ||
       library_workspace->property("librarySearchBehaviorContract").toString() !=
-          QStringLiteral("library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved") ||
+          QStringLiteral("library-search:v1|draft-state:true|debounce-ms:180|active-state:field|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved") ||
       !QMetaObject::invokeMethod(
           library_workspace,
           "librarySearchBehaviorSignature",
@@ -4061,7 +4083,6 @@
       !library_search_signature.toString().contains(
           QStringLiteral("library-search:v1|draft:true|active:false|pending:true|clear-visible:true|debounce:180")) ||
       !studio_library_search_clear_button->property("visible").toBool() ||
-      !studio_library_search_chip->property("visible").toBool() ||
       !catalog_assets.searchFilter().isEmpty()) {
     std::cerr << "Library search pending signature: "
               << library_search_signature.toString().toStdString() << '\n';
@@ -4078,8 +4099,7 @@
           Q_RETURN_ARG(QVariant, library_search_signature)) ||
       !library_search_signature.toString().contains(
           QStringLiteral("library-search:v1|draft:true|active:true|pending:false|clear-visible:true|debounce:180")) ||
-      !studio_library_search_clear_button->property("visible").toBool() ||
-      !studio_library_search_chip->property("visible").toBool()) {
+      !studio_library_search_clear_button->property("visible").toBool()) {
     std::cerr << "Library search applied signature: "
               << library_search_signature.toString().toStdString() << '\n';
     return fail("Library search apply should update the catalog filter while keeping explicit clear and active search affordances visible");
@@ -4089,8 +4109,7 @@
   }
   process_layout_events(2);
   if (!catalog_assets.searchFilter().isEmpty() ||
-      studio_library_search_clear_button->property("visible").toBool() ||
-      studio_library_search_chip->property("visible").toBool()) {
+      studio_library_search_clear_button->property("visible").toBool()) {
     return fail("Library search clear should remove the filter and hide search-only clear/status affordances");
   }
   library_workspace->setProperty("catalogViewMode", QStringLiteral("survey"));
@@ -4134,15 +4153,15 @@
       library_workspace->property("importPageCompletionContract").toString() !=
           QStringLiteral("page-completion:v1|import-in-library|sidebar:quiet-hidden-during-import|content:ImportView|toolbar:back-title|states:no-source-empty-selected-importing-failed-complete|return:back-to-library") ||
       routed_import_workspace->property("importWorkflowPolishContract").toString() !=
-          QStringLiteral("import-workflow-polish:v1|first-glance:sources-current-folder-media-grid-primary-import|close-inspection:source-confirmation-filter-counts-selection-destination-progress|clutter:single-progress-place-split-import-options|interaction:choose-source-select-visible-clear-import-retry-refresh|text:no-elide-no-overlap-paths-wrap|functionality:preserved") ||
+          QStringLiteral("import-workflow-polish:v2|flow:choose-source-review-destination-copy-readiness-import|review-first-viewport:photo-collection-copy-ready-blockers|advanced:progressive-disclosure|interaction:choose-source-select-visible-clear-review-confirm-retry-refresh|text:no-elide-no-overlap-paths-wrap|functionality:preserved") ||
       routed_import_workspace->property("importPageCompletionContract").toString() !=
-          QStringLiteral("page-completion:v1|import|sidebar:sources-folders-refresh|content:header-filter-media-grid-empty|destination:project-picker-create-confirm-cancel|toolbar:select-visible-clear-primary-import|states:no-source-empty-filtered-selected-importing-failed-complete") ||
+          QStringLiteral("page-completion:v2|import|source:rail-folder-navigation|content:media-grid-filter-selection-empty|review:photo-target-copy-readiness-issues|actions:selection-import-review-confirm-cancel|states:no-source-empty-filtered-selected-importing-failed-complete") ||
       !QMetaObject::invokeMethod(
           routed_import_workspace,
           "importWorkflowPolishSignature",
           Q_RETURN_ARG(QVariant, routed_import_workflow_signature)) ||
       !routed_import_workflow_signature.toString().startsWith(
-          QStringLiteral("import-workflow-polish:v1|source:")) ||
+          QStringLiteral("import-workflow-polish:v2|source:")) ||
       !routed_import_workflow_signature.toString().contains(QStringLiteral("|selected:0|")) ||
       !routed_import_workflow_signature.toString().contains(QStringLiteral("|selected-photos:0|selected-videos:0|")) ||
       !routed_import_workflow_signature.toString().contains(QStringLiteral("|filter:all|")) ||

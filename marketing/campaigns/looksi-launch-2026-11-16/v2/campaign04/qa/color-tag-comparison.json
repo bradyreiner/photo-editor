@@ -1,0 +1,16 @@
+{
+  "current": {
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": null,
+    "color_primaries": null,
+    "pix_fmt": "yuv420p"
+  },
+  "setparams": {
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "pix_fmt": "yuv420p"
+  }
+}

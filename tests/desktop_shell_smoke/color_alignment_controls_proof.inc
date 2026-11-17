@@ -35,6 +35,11 @@
     color_alignment_root->setProperty("height", 900);
     color_alignment_root->setProperty("visible", true);
     color_alignment_window->show();
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
+      activate_native_test_application();
+      color_alignment_window->raise();
+      color_alignment_window->requestActivate();
+    }
 
     const auto native_window_required = qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER");
     if (native_window_required &&
@@ -101,7 +106,7 @@
         QStringLiteral("colorMixActiveChannelLabel"));
     auto* color_mix_values = find_named_item(
         color_alignment_workspace,
-        QStringLiteral("colorMixActiveChannelValues"));
+        QStringLiteral("colorMixHueSlider"));
     auto* color_mix_swatch = find_named_item(
         color_alignment_workspace,
         QStringLiteral("colorMixActiveChannelSwatch"));
@@ -112,14 +117,14 @@
             "colorMixActiveChannelSignature",
             Q_RETURN_ARG(QVariant, color_mix_signature)) ||
         color_mix_signature.toString() != QStringLiteral("HSL|Blues|h:22|s:-14|l:9") ||
-        color_mix_label->property("text").toString() != QStringLiteral("Blues / Standard") ||
-        color_mix_values->property("text").toString() != QStringLiteral("H +22%   S -14%   L +9%") ||
+        color_mix_label->property("text").toString() != QStringLiteral("Blues") ||
+        color_mix_values->property("valueText").toString() != QStringLiteral("+22%") ||
         editor_preview.colorMixerModel() != QStringLiteral("HSL") ||
         editor_preview.hslChannel() != QStringLiteral("Blues") ||
         std::abs(editor_preview.hueAdjustment() - 22.0) > 1e-6 ||
         std::abs(editor_preview.saturationAdjustment() + 14.0) > 1e-6 ||
         std::abs(editor_preview.luminanceAdjustment() - 9.0) > 1e-6) {
-      return fail("Color alignment should display Standard while preserving the complete legacy HSL channel state");
+      return fail("Color mixer should show the selected color and its labeled slider value while preserving legacy HSL");
     }
 
     const struct {
@@ -208,6 +213,34 @@
         !grading_hue_slider->isEnabled() || !grading_saturation_slider->isEnabled()) {
       return fail("Color alignment should expose the real grading wheel sliders on the base-image edit target");
     }
+    auto* mixer_panel = find_named_item(color_alignment_workspace, QStringLiteral("colorMixInspectorGroup"));
+    auto* grading_panel = find_named_item(color_alignment_workspace, QStringLiteral("colorGradingInspectorGroup"));
+    auto* wheel = find_named_item(color_alignment_workspace, QStringLiteral("splitToningFocusedWheel"));
+    if (!mixer_panel || !grading_panel || !wheel || mixer_panel->property("expandable").toBool() ||
+        grading_panel->property("expandable").toBool() || wheel->property("wheelSize").toDouble() > 180 ||
+        find_named_item(color_alignment_workspace, QStringLiteral("colorMixChannelPad"))) {
+      return fail("Main mixer and grading controls must be open, without an XY pad, with a compact wheel");
+    }
+    if (color_mix_values->height() > 44 || !color_mix_values->property("forceCompact").toBool())
+      return fail("Edit slider rows must share compact aligned controls");
+    auto* palette = color_alignment_workspace->property("studioTheme").value<QObject*>();
+    if (!palette) return fail("Edit should use the shared application theme");
+    for (const auto* name : {"ink950", "ink900", "ink850", "ink800", "popupFill", "fieldFill", "editorSelectionFill", "textMain", "textMuted"}) {
+      const auto color = palette->property(name).value<QColor>();
+      if (!color.isValid() || color.red() != color.green() || color.green() != color.blue())
+        return fail("Dark application surfaces and text must use neutral RGB values");
+    }
+    auto* curve_panel = find_named_item(color_alignment_workspace, QStringLiteral("toneCurveInspectorGroup"));
+    auto* levels_panel = find_named_item(color_alignment_workspace, QStringLiteral("levelsInspectorGroup"));
+    if (!curve_panel || !levels_panel || curve_panel->y() >= levels_panel->y())
+      return fail("Tone Curve must precede Levels in the actual adjustment layout");
+    QVariant reset_channel;
+    if (!QMetaObject::invokeMethod(color_alignment_workspace, "resetColorMixActiveChannel", Q_RETURN_ARG(QVariant, reset_channel)))
+      return fail("Reset selected mixer channel");
+    editor_preview.undo();
+    if (std::abs(editor_preview.hueAdjustment() - 22) > 1e-6 || std::abs(editor_preview.saturationAdjustment() + 14) > 1e-6 ||
+        std::abs(editor_preview.luminanceAdjustment() - 9) > 1e-6)
+      return fail("A single undo must restore all three channel values after Reset");
     QVariant modern_grading_help_result;
     if (editor_preview.currentPhotographicRenderingModel() !=
             QStringLiteral("aces2-ocio-v1") ||
@@ -316,6 +349,12 @@
         return false;
       }
 
+      const auto style_errors = qml_popup_style_violations(color_alignment_root);
+      if (!style_errors.isEmpty()) {
+        std::cerr << style_errors.join('\n').toStdString() << '\n';
+        restore_scroll();
+        return false;
+      }
       QImage frame;
       double captured_photo_mean = 0.0;
       double captured_photo_range = 0.0;
@@ -388,9 +427,12 @@
             QSize(1440, 900),
             QStringLiteral("colorMixInspectorGroup"),
             {QStringLiteral("colorMixActiveChannelLabel"),
-             QStringLiteral("colorMixActiveChannelValues"),
+             QStringLiteral("colorMixHueSlider"),
              QStringLiteral("colorMixActiveChannelSwatch"),
-             QStringLiteral("hslChannelButtonRow")})) {
+             QStringLiteral("hslChannelButtonRow"),
+             QStringLiteral("colorMixSaturationSlider"),
+             QStringLiteral("colorMixLuminanceSlider"),
+             QStringLiteral("colorMixResponsePicker")})) {
       return fail("Color alignment should capture mixer response and HSL controls fitted within the inspector at 1440x900");
     }
     // This inspector is scrollable. Verify every control at the same ordinary
@@ -403,7 +445,10 @@
             {QStringLiteral("splitToningRangeTabs"),
              QStringLiteral("splitToningFocusedWheel"),
              QStringLiteral("selectedToneWheelHueSlider"),
-             QStringLiteral("selectedToneWheelSaturationSlider")})) {
+             QStringLiteral("selectedToneWheelSaturationSlider"),
+             QStringLiteral("selectedToneWheelLuminanceSlider"),
+             QStringLiteral("colorGradingAmountSlider"),
+             QStringLiteral("colorGradingBalanceSlider")})) {
       return fail("Color alignment should capture the complete grading wheel and hue/saturation controls at 1280x850");
     }
     if (!capture_fit(
@@ -418,6 +463,19 @@
       return fail("Color alignment should make all grading numeric controls accessible by scrolling at 1280x850");
     }
 
+    if (!capture_fit(QStringLiteral("grading-complete-1280x760"), QSize(1280, 760),
+            QStringLiteral("colorGradingInspectorGroup"),
+            {QStringLiteral("splitToningRangeTabs"), QStringLiteral("splitToningFocusedWheel"),
+             QStringLiteral("selectedToneWheelHueSlider"), QStringLiteral("selectedToneWheelSaturationSlider"),
+             QStringLiteral("selectedToneWheelLuminanceSlider"), QStringLiteral("colorGradingAmountSlider"),
+             QStringLiteral("colorGradingBalanceSlider")}))
+      return fail("The complete grading control set must fit together at 1280x760");
+    if (!capture_fit(QStringLiteral("tone-curve-1440x900"), QSize(1440, 900),
+            QStringLiteral("toneCurveInspectorGroup"), {QStringLiteral("studioToneCurveEditor")}))
+      return fail("Capture the complete Tone Curve editor in the reordered adjustment stack");
+    if (!capture_fit(QStringLiteral("levels-1440x900"), QSize(1440, 900),
+            QStringLiteral("levelsInspectorGroup"), {QStringLiteral("toneCurveInputLevelsStrip")}))
+      return fail("Capture Levels below Tone Curve");
     QFile manifest_file(QDir(proof_dir).filePath(QStringLiteral("manifest.json")));
     if (!manifest_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
         manifest_file.write(QJsonDocument(QJsonObject{
@@ -442,7 +500,6 @@
           std::abs(color.greenF() - color.blueF()) <= 1e-6;
     };
     QColor negative_saturation_preview;
-    QColor negative_saturation_ui_color;
     const auto negative_preview_and_ui_are_neutral = wait_for_condition([&]() {
       QVariant negative_saturation_preview_result;
       const auto preview_helper_invoked = QMetaObject::invokeMethod(
@@ -453,17 +510,16 @@
           Q_ARG(QVariant, -100.0),
           Q_ARG(QVariant, 0.0));
       negative_saturation_preview = negative_saturation_preview_result.value<QColor>();
-      negative_saturation_ui_color = grading_amount->property("centerColor").value<QColor>();
       return preview_helper_invoked && neutral_color(negative_saturation_preview) &&
-          neutral_color(negative_saturation_ui_color) &&
-          std::abs(negative_saturation_ui_color.alphaF() - 0.45) <= 1e-3;
+          std::abs(grading_saturation_slider->property("value").toDouble() + 100.0) <= 1e-6 &&
+          std::abs(wheel->property("saturation").toDouble() + 100.0) <= 1e-6;
     }, 3000);
     editor_preview.setGradingMidtonesHue(original_midtones_hue);
     editor_preview.setGradingMidtonesSaturation(original_midtones_saturation);
     editor_preview.setGradingMidtonesLuminance(original_midtones_luminance);
     process_layout_events(4);
     if (!negative_preview_and_ui_are_neutral) {
-      return fail("Negative grading saturation should be neutral in the QML preview helper and actual UI QColor");
+      return fail("Negative grading saturation should keep its neutral preview and signed numeric/wheel values");
     }
 
     const auto is_selected_hue_tint = [](const QColor& color, double alpha) {
@@ -531,10 +587,9 @@
         return fail("Legacy grading proof should query the existing preview helper and grading help copy");
       }
       const auto legacy_preview_color = legacy_preview_color_result.value<QColor>();
-      const auto legacy_ui_color = grading_amount->property("centerColor").value<QColor>();
       const auto legacy_help = legacy_grading_help_result.toString();
       if (!is_selected_hue_tint(legacy_preview_color, 1.0) ||
-          !is_selected_hue_tint(legacy_ui_color, 0.45) ||
+          std::abs(grading_saturation_slider->property("value").toDouble() + 100.0) > 1e-6 ||
           !legacy_help.contains(
               QStringLiteral("historical tint response for both saturation signs")) ||
           !legacy_help.contains(QStringLiteral("Info > Rendering"))) {

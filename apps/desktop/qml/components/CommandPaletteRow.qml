@@ -84,7 +84,8 @@ Rectangle {
             Layout.maximumWidth: 112
             text: root.shortcutHint
             color: theme.textFaint
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 11
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 8

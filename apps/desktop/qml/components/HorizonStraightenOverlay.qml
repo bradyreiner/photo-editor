@@ -119,8 +119,11 @@ Item {
         cursorShape: Qt.CrossCursor
 
         onPressed: function(mouse) {
-            if (!root.pointInImage(mouse.x, mouse.y))
+            root.hasGuide = false
+            if (!root.pointInImage(mouse.x, mouse.y)) {
+                mouse.accepted = false
                 return
+            }
             root.setGuideFromScreen(mouse.x, mouse.y, mouse.x, mouse.y)
         }
 
@@ -130,10 +133,16 @@ Item {
             root.setGuideFromScreen(root.startScreenX, root.startScreenY, mouse.x, mouse.y)
         }
 
+        onCanceled: root.hasGuide = false
+
         onReleased: function(mouse) {
             if (!root.hasGuide)
                 return
             root.setGuideFromScreen(root.startScreenX, root.startScreenY, mouse.x, mouse.y)
+            if (root.lineLength < 3) {
+                root.hasGuide = false
+                return
+            }
             const startPoint = root.normalizeScreenPoint(root.startScreenX, root.startScreenY)
             const endPoint = root.normalizeScreenPoint(root.endScreenX, root.endScreenY)
             root.applyNormalizedGuide(startPoint.x, startPoint.y, endPoint.x, endPoint.y)

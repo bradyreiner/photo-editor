@@ -137,14 +137,14 @@ Item {
             Layout.preferredHeight: root.implicitHeight
             showText: false
             iconName: "chevron-right"
-            tone: root.tone
+            tone: "quiet"
             accent: root.accent
             compact: root.compact
             accessibleName: root.menuTooltipText
             active: menuPopup.visible
             enabled: root.enabled && root.menuEnabled
             tooltipText: root.menuTooltipText
-            onClicked: menuPopup.open()
+            onClicked: menuPopup.toggleFrom(chevronButton)
 
             contentItem.rotation: 90
         }

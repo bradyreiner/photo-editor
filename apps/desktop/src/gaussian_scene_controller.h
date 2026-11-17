@@ -17,6 +17,7 @@ struct GaussianProcessLog;
 class GaussianSceneController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantMap snapshot READ snapshot NOTIFY changed)
+  Q_PROPERTY(QVariantList exampleScenes READ exampleScenes CONSTANT)
  public:
   void setEditAccessPolicy(std::function<bool()> policy) { customer_edit_access_.setPolicy(std::move(policy)); }
 
@@ -24,7 +25,7 @@ class GaussianSceneController final : public QObject {
                                                    const std::shared_ptr<std::atomic_bool>&)>;
   using VideoPreparer = std::function<QVariantMap(const QString&, const QString&, int, int,
       const QString&, const QString&, const std::shared_ptr<std::atomic_bool>&,
-      const std::shared_ptr<GaussianProcessLog>&)>;
+      const std::shared_ptr<GaussianProcessLog>&, bool)>;
   using TimedCapturePreparer = std::function<QVariantMap(const QString&, const QString&, int,
                                                         const std::shared_ptr<std::atomic_bool>&)>;
   using TimedCaptureValidator = std::function<QVariantMap(const QString&, const std::shared_ptr<std::atomic_bool>&)>;
@@ -36,17 +37,22 @@ class GaussianSceneController final : public QObject {
   Q_INVOKABLE QString suggestedProjectPath(const QString& source) const;
   Q_INVOKABLE QVariantMap setTrainerExecutable(const QString& path);
   Q_INVOKABLE QVariantMap startVideo(const QString& video, const QString& new_project_folder,
-      int training_steps = 5000, int maximum_edge = 1600, int max_splats = 500000, int frame_count = 160);
+      int training_steps = 5000, int maximum_edge = 1600, int max_splats = 500000, int frame_count = 160,
+      bool prefer_sharp_frames = false);
   void setTimedCaptureHandlers(TimedCapturePreparer prepare, TimedCaptureValidator validate);
   void setSpacetimeValidator(SpacetimeValidator validate);
   QVariantMap snapshot() const;
+  QVariantList exampleScenes() const;
   Q_INVOKABLE QVariantMap startCapture(const QString& source_folder, const QString& new_project_folder,
                                       int training_steps = 3000, int maximum_edge = 1600,
                                       int max_splats = 1000000);
+  Q_INVOKABLE QVariantMap startPhotoCapture(const QString& source_folder, const QString& new_project_folder,
+      int training_steps, int maximum_edge, int max_splats, bool same_camera_and_zoom, bool strict_matching);
   Q_INVOKABLE void cancel();
   Q_INVOKABLE QVariantMap startTimedCapture(const QString& manifest, const QString& new_project_folder,
                                            int maximum_edge = 1600);
   Q_INVOKABLE QVariantMap openProject(const QString& folder);
+  Q_INVOKABLE QVariantMap importPly(const QString& artifact, const QString& new_project_folder);
   Q_INVOKABLE QVariantMap buildPartialScene();
  signals:
   void changed();
@@ -59,7 +65,8 @@ class GaussianSceneController final : public QObject {
   void finishStage(int code, QProcess::ExitStatus status);
   void updateProcessLog();
   QVariantMap beginCapture(const QString& source, const QString& target, const QStringList& inputs,
-      int training_steps, int maximum_edge, int max_splats, int video_frames = 0);
+      int training_steps, int maximum_edge, int max_splats, int video_frames = 0, bool prefer_sharp_frames = false,
+      bool same_camera_and_zoom = false, bool strict_matching = false);
   CapturePreparer prepare_;
   VideoPreparer prepare_video_;
   TimedCapturePreparer prepare_timed_;

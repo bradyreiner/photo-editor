@@ -1,5 +1,7 @@
 # Looksy UI primitives
 
+Application chrome follows the [enforced style contract](ui-style-contract.md). Its current palette, geometry, borders, and spacing take precedence over historical examples in this document.
+
 Open **Help → UI Primitives**, or search for **UI Primitives** in the command palette. This is the central live reference and planning surface for shared UI. It opens in its own desktop window and leaves the current document and workspace available.
 
 ## Design direction

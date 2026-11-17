@@ -5,10 +5,19 @@ import QtQuick.Controls.Basic
 
 AppMenu {
     id: root
+    transientMenu: true
     Theme { id: theme }
     property var menuItems: []
+    // Large layer rows update during transforms. Build menu state only when
+    // the popup is shown so closed menus do not recreate every delegate.
+    property var menuItemsProvider: null
     signal menuItemTriggered(string key)
     width: theme.scaled(264)
+
+    onAboutToShow: {
+        if (typeof root.menuItemsProvider === "function")
+            root.menuItems = root.menuItemsProvider()
+    }
 
     function matching(keys, prefix) {
         return menuItems.filter(function(item) {
@@ -17,10 +26,11 @@ AppMenu {
         })
     }
     readonly property var primaryItems: matching([
-        "properties", "copy-layers", "paste-layers", "paste-layers-in-place",
-        "duplicate-with-masks", "relink-source", "toggle-lock"
+        "edit", "properties", "copy-layers", "paste-layers", "paste-layers-in-place",
+        "duplicate-with-masks", "relink-source", "toggle-lock", "lock-transparency"
     ])
     readonly property var groupedItems: [
+        { key: "content", label: qsTr("Contents"), items: matching(["edit-vector-path", "component-create", "component-edit", "component-duplicate", "component-independent", "smart-object-convert", "smart-object-duplicate", "smart-object-independent", "toggle-text-controls"]) },
         { key: "arrange", label: qsTr("Arrange"), items: matching(["transform", "move-up", "move-down", "move-out-of-group"], "move-into-group:") },
         { key: "selections", label: qsTr("Selections and masks"), items: matching(["toggle-mask", "toggle-clip", "erase-selection-pixels", "copy-selection-pixels", "copy-selection-pixels-independent", "use-selection-mask", "erase-background", "duplicate-without-masks"]) },
         { key: "visibility", label: qsTr("Visibility"), items: matching(["toggle-visible", "toggle-solo"]) },

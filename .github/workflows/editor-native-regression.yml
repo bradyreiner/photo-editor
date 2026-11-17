@@ -1,0 +1,93 @@
+name: Native editor qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_visible:
+        description: "Permit native UI tests on the idle dedicated Mac"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: looksy-native-editor-qualification
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require explicit visible run on main
+        env:
+          ALLOW_VISIBLE: ${{ inputs.allow_visible }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$ALLOW_VISIBLE" = true
+
+  capture:
+    needs: preflight
+    # Never run pull-request code on the persistent hardware runner.
+    runs-on: [self-hosted, macOS, ARM64, looksy-m4-pro]
+    timeout-minutes: 90
+    env:
+      LOOKSY_REAL_SHOOT_SOURCE_DIR: ${{ vars.LOOKSY_REAL_SHOOT_SOURCE_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Rust helpers
+        run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release --locked
+      - name: Configure Release
+        run: |
+          looksy_pg_runtime="$(brew --prefix postgresql@16)"
+          cmake --preset release-macos -DPHOTO_EDITOR_STRICT_PACKAGING=OFF \
+            "-DPHOTO_EDITOR_RUST_BINARY_DIR=$GITHUB_WORKSPACE/rust/target/release" \
+            "-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=$looksy_pg_runtime"
+      - name: Build required regression targets
+        run: |
+          python3 - <<'PY'
+          import json, re, subprocess
+          targets = json.load(open('tests/fixtures/editor-regression/contract.json'))['build_targets']
+          assert targets and all(re.fullmatch('[a-z0-9_]+', t) for t in targets)
+          subprocess.run(['cmake', '--build', '--preset', 'build-release-macos',
+                          '--parallel', '4', '--target', *targets], check=True)
+          PY
+      - name: Run strict correctness, performance, and visible qualification
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --build-dir build/release-macos
+          --tier native --allow-visible
+          --output "$RUNNER_TEMP/editor-native-proof"
+      - name: Upload capture even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: looksy-editor-native-capture
+          path: |
+            ${{ runner.temp }}/editor-native-proof
+            !${{ runner.temp }}/editor-native-proof/**/runtime/**
+          if-no-files-found: error
+          retention-days: 30
+
+  qualification:
+    needs: capture
+    runs-on: ubuntu-24.04
+    # Configure required reviewers for this environment before enabling releases.
+    environment: looksy-native-review
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: looksy-editor-native-capture
+          path: ${{ runner.temp }}/editor-native-proof
+      - name: Revalidate the reviewed proof
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --validate "$RUNNER_TEMP/editor-native-proof" --commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: looksy-editor-native-qualified
+          path: ${{ runner.temp }}/editor-native-proof
+          if-no-files-found: error
+          retention-days: 30

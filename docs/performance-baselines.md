@@ -1,5 +1,13 @@
 # Performance Baselines
 
+- November 4, further pass: [Sorting, Board selections, removal, and mask counts](performance-optimizations-round2-2026-11-04.md): another 35.12% improvement for 100k-asset filtering, 97.86% for dense Board selection details, 97.83% for distributed selection admission, and 46.62–50.52% for tested final-removal workloads. Count-only mask reads no longer process thumbnails. Fourteen focused tests and the Release build check pass; whole-app UI qualification remains open.
+
+- November 4: [Library, Timeline, and CPU geometry](performance-optimizations-2026-11-04.md): matched Release probes improve unchanged filtering at 100,000 assets by 38.95%, compact multicam projection by 69.11%, and rotation/skew/scale geometry by 38.55%. Unchanged-result Library searches preserve delegates and scroll; four focused regression tests pass. Evidence covers synthetic controller/CPU workloads.
+
+- October 25: [Combined Gaussian lens and shadowed haze](gaussian-optical-haze-performance-2026-10-25.md): the unchanged 960×639, 64-aperture/128-lighting-sample composition improves 76,621→32,364 ms with byte-identical PNGs. Bounded submission scheduling preserves sampling and memory layout; renderer/export checks and native workflows pass. Sustained foreground interaction remains open.
+
+- October 25: [Dense Gaussian reflections](gaussian-reflection-performance-2026-10-25.md): unchanged 2700×1799, 16-sample warm rendering improves 35,174→16,816 ms with exact pixels and 0.55% higher peak RSS. The native dense workflow passes its original 20-second action wait; scoped user-initiated activity accompanies passing packaged Main 30-second checks in active and inactive windows. Full photographic parity and sustained interaction remain open.
+
 - September 10: [Live draft feedback and hidden scopes](live-draft-feedback-2026-09-10.md): synthetic first-frame median 560→205 ms; nine presented updates during a drag that previously published none. RAW also presents intermediate frames with unchanged final pixels. GUI stalls and longer total burst work remain explicit limitations.
 
 - September 10: [UI identity reuse and prepared advanced layer tone](ui-advanced-tone-performance-2026-09-10.md): advanced-layer median 38.86→9.94 ms with exact pixels; repeated native QML first-frame latency 3960→966 ms and worst drag setter 206→20 ms. Large-mask UI stalls improve, while 490–525 ms heartbeat gaps remain.

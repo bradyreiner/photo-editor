@@ -101,7 +101,8 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.timecode
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeCaption
                 fontSizeMode: Text.HorizontalFit
                 minimumPixelSize: 7

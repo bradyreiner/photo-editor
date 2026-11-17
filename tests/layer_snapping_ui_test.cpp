@@ -7,6 +7,8 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
+#include <QEventLoop>
+#include <QTimer>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -113,8 +115,8 @@ int main(int argc, char** argv) {
   overlay->setProperty("textBoxResize", true);
   settle();
   transformed.clear();
-  QSignalSpy textBoxEdited(overlay, SIGNAL(textBoxEdited(int,int,int,int)));
-  if (!textBoxEdited.isValid()) return fail("Text box resize signal must be observable");
+  QSignalSpy textGestureBoxEdited(overlay, SIGNAL(textGestureBoxEdited(int,int,int,int,bool)));
+  if (!textGestureBoxEdited.isValid()) return fail("Paced text box resize signal must be observable");
   auto* rightHandle = findQuickItem(overlay, QStringLiteral("photoLayerTransformRightHandle"));
   auto* bottomRightHandle = findQuickItem(overlay, QStringLiteral("photoLayerTransformBottomRightHandle"));
   if (!rightHandle || !bottomRightHandle)
@@ -128,6 +130,21 @@ int main(int argc, char** argv) {
     return QPointF(localX * std::cos(radians) - localY * std::sin(radians),
                    localX * std::sin(radians) + localY * std::cos(radians));
   };
+  const auto waitForTextGestureCommit = [] {
+    QEventLoop loop;
+    QTimer::singleShot(24, &loop, &QEventLoop::quit);
+    loop.exec();
+    settle();
+  };
+  const auto acknowledgeTextGestureBox = [&] {
+    const auto values = textGestureBoxEdited.last();
+    overlay->setProperty("layerX", values.at(0));
+    overlay->setProperty("layerY", values.at(1));
+    overlay->setProperty("layerWidth", values.at(2));
+    overlay->setProperty("layerHeight", values.at(3));
+    QMetaObject::invokeMethod(overlay, "acknowledgeTextGestureCommit",
+        Q_ARG(QVariant, QVariant(true)), Q_ARG(QVariant, values.at(4)));
+  };
 
   // The right edge grows only the paragraph width, even when the text is
   // rotated and its editor scale is not 1.0. The opposite edge stays anchored.
@@ -139,14 +156,12 @@ int main(int argc, char** argv) {
   timestamp += 500;
   pointer(QEvent::MouseButtonPress, start);
   pointer(QEvent::MouseMove, end);
-  if (textBoxEdited.size() != 1 || textBoxEdited.last().at(2).toInt() != 250 ||
-      textBoxEdited.last().at(3).toInt() != 100 || !transformed.isEmpty())
+  waitForTextGestureCommit();
+  if (textGestureBoxEdited.size() != 1 || textGestureBoxEdited.last().at(2).toInt() != 250 ||
+      textGestureBoxEdited.last().at(3).toInt() != 100 || !transformed.isEmpty())
     return fail("Text edge drag must resize only its box dimension without scaling text");
+  acknowledgeTextGestureBox();
   pointer(QEvent::MouseButtonRelease, end);
-  overlay->setProperty("layerX", textBoxEdited.last().at(0));
-  overlay->setProperty("layerY", textBoxEdited.last().at(1));
-  overlay->setProperty("layerWidth", textBoxEdited.last().at(2));
-  overlay->setProperty("layerHeight", textBoxEdited.last().at(3));
   settle();
   frame = findQuickItem(overlay, QStringLiteral("photoLayerTransformFrame"));
   const QPointF resizedLeftCenter = frame->mapToScene(QPointF(0, frame->height() / 2));
@@ -159,13 +174,15 @@ int main(int argc, char** argv) {
   bottomRightHandle = findQuickItem(overlay, QStringLiteral("photoLayerTransformBottomRightHandle"));
   start = handleCenter(bottomRightHandle);
   end = start + rotatedDelta(40, 16, 37);
-  textBoxEdited.clear();
+  textGestureBoxEdited.clear();
   timestamp += 500;
   pointer(QEvent::MouseButtonPress, start);
   pointer(QEvent::MouseMove, end);
-  if (textBoxEdited.size() != 1 || textBoxEdited.last().at(2).toInt() != 300 ||
-      textBoxEdited.last().at(3).toInt() != 120 || !transformed.isEmpty())
+  waitForTextGestureCommit();
+  if (textGestureBoxEdited.size() != 1 || textGestureBoxEdited.last().at(2).toInt() != 300 ||
+      textGestureBoxEdited.last().at(3).toInt() != 120 || !transformed.isEmpty())
     return fail("Text corner drag must resize width and height independently");
+  acknowledgeTextGestureBox();
   pointer(QEvent::MouseButtonRelease, end);
 
   // The compatibility scale helper is explicitly unavailable in text mode.

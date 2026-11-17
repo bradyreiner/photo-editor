@@ -104,7 +104,8 @@ ColumnLayout {
                     Layout.fillWidth: true
                     text: "Before · " + String(batchPreviewRow.modelData.before || "")
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 9
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone
@@ -113,7 +114,8 @@ ColumnLayout {
                     Layout.fillWidth: true
                     text: "Result · " + String(batchPreviewRow.modelData.result || "")
                     color: Boolean(batchPreviewRow.modelData.compatible) ? theme.textMain : theme.warning
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: 9
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone

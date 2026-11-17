@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -16,6 +17,8 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace photo_editor::desktop {
@@ -25,9 +28,44 @@ namespace photo_editor::desktop {
 // it through their resource journal. QObject lifecycle/signals are never tools.
 class AgentAppCommandRegistry final {
  public:
-  using Invocation = std::function<QVariantMap()>;
+  class Invocation final {
+   public:
+    Invocation() = default;
+    template <typename Callable,
+        std::enable_if_t<!std::is_same_v<std::decay_t<Callable>, Invocation> &&
+                             std::is_invocable_r_v<QVariantMap, Callable>, int> = 0>
+    Invocation(Callable&& callback) : call_(std::forward<Callable>(callback)) {}
+    template <typename Callable,
+        std::enable_if_t<!std::is_same_v<std::decay_t<Callable>, Invocation> &&
+                             std::is_invocable_r_v<QVariantMap, Callable>, int> = 0>
+    Invocation& operator=(Callable&& callback) {
+      call_ = std::forward<Callable>(callback);
+      call_with_preimage_ = {};
+      return *this;
+    }
+    Invocation(std::function<QVariantMap()> callback,
+        std::function<QVariantMap(const QByteArray&)> callback_with_preimage)
+        : call_(std::move(callback)), call_with_preimage_(std::move(callback_with_preimage)) {}
+
+    explicit operator bool() const noexcept {
+      return static_cast<bool>(call_) || static_cast<bool>(call_with_preimage_);
+    }
+    QVariantMap operator()() const {
+      if (call_) return call_();
+      return {{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), QStringLiteral("The native action is unavailable.")}};
+    }
+    QVariantMap withPreimage(const QByteArray& preimage) const {
+      return call_with_preimage_ ? call_with_preimage_(preimage) : operator()();
+    }
+
+   private:
+    std::function<QVariantMap()> call_;
+    std::function<QVariantMap(const QByteArray&)> call_with_preimage_;
+  };
   using MutationOwner = std::function<QVariantMap(const QString&, const QVariantMap&, const Invocation&)>;
   using ActionHandler = std::function<QVariantMap(const QVariantMap&)>;
+  using PreimageActionHandler = std::function<QVariantMap(const QVariantMap&, const QByteArray&)>;
   struct Argument final {
     QString name;
     QVariantMap schema;
@@ -42,6 +80,9 @@ class AgentAppCommandRegistry final {
     QHash<QString, Argument> arguments;
     std::function<bool(const QVariantMap&)> confirm_satisfied;
     std::function<QVariantMap()> authorize;
+    // Input-dependent authorization/preflight checks run after schema
+    // validation and before task-owned actions or reflected methods mutate.
+    std::function<QVariantMap(const QVariantMap&)> authorize_values;
   };
   using Classifier = std::function<Policy(const QString&, bool, bool)>;
 
@@ -62,6 +103,36 @@ class AgentAppCommandRegistry final {
     entry.name = name;
     entry.id = domain + QStringLiteral(".action.") + name;
     entry.action = action;
+    entry.input_schema = input_schema;
+    entry.policy = policy;
+    entry.policy.available = policy.available && static_cast<bool>(action) &&
+        static_cast<bool>(mutate) && !policy.resource.trimmed().isEmpty() &&
+        !policy.reversal.trimmed().isEmpty();
+    if (policy.available && !entry.policy.available)
+      entry.policy.reason = QStringLiteral("A task-owned action requires a handler, resource owner and reversal contract.");
+    entry.mutate = mutate;
+    if (entries_.contains(entry.id)) return false;
+    entries_.insert(entry.id, entry);
+    return true;
+  }
+
+  // The exact task preimage is supplied only after the owning task journal has
+  // prepared the mutation. A no-preimage fallback preserves direct registry
+  // callers that need to capture their own fresh state.
+  bool registerActionWithPreimage(const QString& domain, const QString& name,
+      QObject* owner, const QVariantMap& input_schema, const Policy& policy,
+      const MutationOwner& mutate, const PreimageActionHandler& action) {
+    if (domain.trimmed().isEmpty() || name.trimmed().isEmpty() || !owner || !action ||
+        !isStrictObjectSchema(input_schema)) return false;
+    Entry entry;
+    entry.object = owner;
+    entry.domain = domain;
+    entry.name = name;
+    entry.id = domain + QStringLiteral(".action.") + name;
+    entry.action_with_preimage = action;
+    entry.action = [action](const QVariantMap& values) {
+      return action(values, QByteArray{});
+    };
     entry.input_schema = input_schema;
     entry.policy = policy;
     entry.policy.available = policy.available && static_cast<bool>(action) &&
@@ -171,6 +242,50 @@ class AgentAppCommandRegistry final {
     return result;
   }
 
+  // Expose the validated action schema to a parent action that composes a
+  // bounded set of registered mutations into one task journal/Undo unit.
+  QVariantMap actionInputSchema(const QString& id) const {
+    const auto entry = entries_.value(id);
+    if (!entries_.contains(id) || !entry.action || !entry.policy.available || !entry.object)
+      return correctableFailure(QStringLiteral("The composed native action is unavailable."));
+    return {{QStringLiteral("ok"), true},
+            {QStringLiteral("inputSchema"), entry.input_schema}};
+  }
+
+  // Execute a typed registered action as part of an already-owned parent
+  // mutation. The parent is responsible for the single journal transaction;
+  // this method still checks the child schema and native authorization gates
+  // immediately before invoking its handler.
+  QVariantMap invokeActionWithinMutation(const QString& id, const QVariantMap& values) const {
+    if (!entries_.contains(id)) return correctableFailure(QStringLiteral("Unknown native command ID."));
+    const auto entry = entries_.value(id);
+    if (!entry.action)
+      return correctableFailure(QStringLiteral("Only registered typed actions can be composed."));
+    if (!entry.object || entry.object->thread() != QThread::currentThread())
+      return failure(QStringLiteral("The native action owner is unavailable on this workspace thread."));
+    if (!entry.policy.available)
+      return correctableFailure(entry.policy.reason);
+    if (!validValue(values, entry.input_schema))
+      return correctableFailure(QStringLiteral("Supply values that match the command's typed input schema."));
+    if (entry.policy.authorize) {
+      const auto admission = entry.policy.authorize();
+      if (!admission.value(QStringLiteral("ok")).toBool()) return admission;
+    }
+    if (entry.policy.authorize_values) {
+      const auto admission = entry.policy.authorize_values(values);
+      if (!admission.value(QStringLiteral("ok")).toBool()) return admission;
+    }
+    auto result = entry.action(values);
+    if (!result.contains(QStringLiteral("ok"))) {
+      result = {{QStringLiteral("ok"), false},
+          {QStringLiteral("error"), QStringLiteral("The native action returned no outcome receipt.")},
+          {QStringLiteral("recoveryRequired"), true},
+          {QStringLiteral("receiptInvalid"), true}};
+    }
+    result.insert(QStringLiteral("commandId"), id);
+    return result;
+  }
+
   // Composition tools share the registry's strict partial-update validation.
   static bool valueMatchesSchema(const QVariant& value, const QVariantMap& schema) {
     return validValue(value, schema);
@@ -189,9 +304,15 @@ class AgentAppCommandRegistry final {
     if (entry.action) {
       if (!validValue(values, entry.input_schema))
         return correctableFailure(QStringLiteral("Supply values that match the command's typed input schema."));
-      const Invocation action = [entry, values]() {
+      if (entry.policy.authorize_values) {
+        const auto admission = entry.policy.authorize_values(values);
+        if (!admission.value("ok").toBool()) return admission;
+      }
+      const auto invoke_action = [entry, values](const QByteArray* preimage) {
         if (!entry.object) return failure(QStringLiteral("The native action owner closed before invocation."));
-        auto receipt = entry.action(values);
+        auto receipt = preimage != nullptr && entry.action_with_preimage
+                           ? entry.action_with_preimage(values, *preimage)
+                           : entry.action(values);
         if (!receipt.contains(QStringLiteral("ok"))) {
           return QVariantMap{{QStringLiteral("ok"), false},
               {QStringLiteral("error"), QStringLiteral("The native action returned no outcome receipt.")},
@@ -200,6 +321,9 @@ class AgentAppCommandRegistry final {
         }
         return receipt;
       };
+      const Invocation action(
+          [invoke_action]() { return invoke_action(nullptr); },
+          [invoke_action](const QByteArray& preimage) { return invoke_action(&preimage); });
       auto result = entry.mutate(id, values, action);
       if (!result.contains(QStringLiteral("ok"))) {
         result = {{QStringLiteral("ok"), false},
@@ -266,6 +390,15 @@ class AgentAppCommandRegistry final {
     }
     const Invocation native = [entry, method, arguments, values]() mutable -> QVariantMap {
       if (!entry.object) return failure(QStringLiteral("The native owner closed before invocation."));
+      // Reflected native methods can have input-dependent preconditions that a
+      // Qt type signature cannot express (for example, a void creator that
+      // rejects an empty transcript). Settle that rejection inside the owned
+      // invocation step, but before QMetaMethod dispatch, so the task retains
+      // an auditable no-mutation receipt and can still be reverted exactly.
+      if (!entry.read_only && entry.policy.authorize_values) {
+        const auto admission = entry.policy.authorize_values(values);
+        if (!admission.value(QStringLiteral("ok")).toBool()) return admission;
+      }
       if (entry.property >= 0) {
         const auto property = entry.object->metaObject()->property(entry.property);
         const auto before = property.read(entry.object);
@@ -310,6 +443,7 @@ class AgentAppCommandRegistry final {
     QVariantList argument_schemas;
     QVariantMap input_schema;
     ActionHandler action;
+    PreimageActionHandler action_with_preimage;
     Policy policy;
     MutationOwner mutate;
   };
@@ -433,7 +567,7 @@ class AgentAppCommandRegistry final {
   }
   static QVariantMap describe(const Entry& entry, bool include_schema) {
     QVariantMap result{{"commandId", entry.id}, {"domain", entry.domain}, {"name", entry.name},
-        {"kind", entry.action ? "action" : entry.property >= 0 ? "property" : "method"}, {"readOnly", entry.read_only},
+        {"kind", entry.action || entry.action_with_preimage ? "action" : entry.property >= 0 ? "property" : "method"}, {"readOnly", entry.read_only},
         {"capability", entry.read_only ? "read" : "draft"},
         {"invokeTool", entry.read_only ? "app.inspect_command" : "app.invoke_command"},
         {"available", entry.policy.available && !entry.object.isNull()},

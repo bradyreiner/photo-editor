@@ -177,8 +177,6 @@ Item {
     }
 
     function hitMode(mouseX, mouseY) {
-        if (!pointInImage(mouseX, mouseY))
-            return "";
         if (pointInRect(mouseX, mouseY, handleRect("topLeft")))
             return "topLeft";
         if (pointInRect(mouseX, mouseY, handleRect("topRight")))
@@ -195,6 +193,8 @@ Item {
             return "left";
         if (pointInRect(mouseX, mouseY, edgeHitRect("right")))
             return "right";
+        if (!pointInImage(mouseX, mouseY))
+            return "";
         if (pointInRect(mouseX, mouseY, cropScreenRect))
             return rectNearlyFullImage(normalizedRect) ? "draw" : "move";
         return "draw";
@@ -668,7 +668,7 @@ Item {
         cursorShape: cursorForMode(dragState.mode !== "" ? dragState.mode : hitMode(mouseX, mouseY))
 
         onPressed: function(mouse) {
-            if (!pointInImage(mouse.x, mouse.y)) {
+            if (hitMode(mouse.x, mouse.y) === "") {
                 mouse.accepted = false
                 return;
             }

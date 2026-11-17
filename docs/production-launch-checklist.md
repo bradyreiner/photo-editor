@@ -1,10 +1,10 @@
 # Looksy Production Launch Checklist
 
-The first paid release targets **Apple silicon Macs**, with a one-time license
-for the purchased major version through Lemon Squeezy. See
-[commercial-launch.md](commercial-launch.md). Intel and Windows items below
-apply when those platforms are added to `release/product.json`; they are deferred
-for the first paid release.
+The release targets **Apple silicon Macs and Windows x64**, distributed directly
+from the website as a signed/notarized DMG and a signed MSIX/App Installer. The
+configured offer includes subscriptions and one-time licenses through Lemon Squeezy.
+See [commercial-launch.md](commercial-launch.md). Intel Mac items apply only when
+`mac-intel` is added to `release/product.json`.
 
 
 This is the release contract for turning a tagged commit into public,

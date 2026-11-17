@@ -1,10 +1,16 @@
 #include "app_bootstrap.h"
+#include "canonical_native_preview_suffix.h"
 #include "editor_preview_controller.h"
 #include "editor_preview_image_provider.h"
 #include "editor_preview_texture_item.h"
 #include "editor_preview_texture.h"
 #include "photo_fragment_brush_preset_store.h"
+#include "photo_layer_adjustment_recipe.h"
+#include "photo_paint_surface.h"
 #include "observability.h"
+#if defined(__APPLE__)
+#include "native_window_test_input.h"
+#endif
 #include <QGuiApplication>
 #include <QScreen>
 #include <QSysInfo>
@@ -20,6 +26,7 @@
 #include <QJsonArray>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QPainter>
 #include <QCryptographicHash>
 #include <QBuffer>
@@ -78,7 +85,270 @@ struct EditorPreviewControllerTestAccess {
       {"edit_ms",r.edit_elapsed_ms},{"encode_ms",r.encode_elapsed_ms},
       {"pipeline_ms",r.adjustment_pipeline_elapsed_ms},{"queue_ms",r.queue_wait_ms},
       {"output_ms",r.output_stage_elapsed_ms},{"max_edge",r.max_edge},
-      {"output_width",r.output_width},{"output_height",r.output_height}};
+      {"output_width",r.output_width},{"output_height",r.output_height},
+      {"paint_region_fallback_reason",r.paint_region_fallback_reason}};
+  }
+  static int paintTileCount(const QVariantMap& payload) {
+    return static_cast<int>(payload.value(QStringLiteral("tiles")).toMap().size());
+  }
+  static int draftTileCount(const QVariantMap& draft_tiles) {
+    // Draft coverage is stored as a direct tile-key map; committed paintTiles
+    // wraps that same map in its versioned payload envelope.
+    return static_cast<int>(draft_tiles.size());
+  }
+  static double cropAspectRatio(QString preset) {
+    preset = preset.trimmed().toLower();
+    preset.replace(QLatin1Char(':'), QLatin1Char('x'));
+    preset.remove(QLatin1Char(' '));
+    if (preset == QStringLiteral("square") || preset == QStringLiteral("1x1")) return 1.0;
+    if (preset == QStringLiteral("a3") || preset == QStringLiteral("a4") ||
+        preset == QStringLiteral("a5")) return 210.0 / 297.0;
+    if (preset == QStringLiteral("a3landscape") || preset == QStringLiteral("a4landscape") ||
+        preset == QStringLiteral("a5landscape")) return 297.0 / 210.0;
+    const auto parts = preset.split(QLatin1Char('x'), Qt::SkipEmptyParts);
+    if (parts.size() != 2) return 0.0;
+    auto width_label = parts.at(0);
+    auto height_label = parts.at(1);
+    for (const auto& unit : {QStringLiteral("inches"), QStringLiteral("inch"), QStringLiteral("in"),
+                             QStringLiteral("cm"), QStringLiteral("mm")}) {
+      width_label.remove(unit);
+      height_label.remove(unit);
+    }
+    bool width_ok = false;
+    bool height_ok = false;
+    const auto width = width_label.toDouble(&width_ok);
+    const auto height = height_label.toDouble(&height_ok);
+    return width_ok && height_ok && width > 0.0 && height > 0.0 ? width / height : 0.0;
+  }
+  static QSize expectedPreviewSize(QSize source_size, const RenderRequest& request) {
+    if (!source_size.isValid()) return {};
+    if (request.max_edge > 0 && std::max(source_size.width(), source_size.height()) > request.max_edge)
+      source_size = source_size.scaled(request.max_edge, request.max_edge, Qt::KeepAspectRatio);
+    if (request.bypass_crop) return source_size;
+
+    const auto& state = request.state;
+    QRect crop;
+    if (state.crop_rect_width > 0.0 && state.crop_rect_height > 0.0) {
+      const auto width = qBound(0.0, state.crop_rect_width, 1.0);
+      const auto height = qBound(0.0, state.crop_rect_height, 1.0);
+      const auto x = std::min(qBound(0.0, state.crop_rect_x, 1.0), std::max(0.0, 1.0 - width));
+      const auto y = std::min(qBound(0.0, state.crop_rect_y, 1.0), std::max(0.0, 1.0 - height));
+      const auto px = qBound(0, qRound(x * source_size.width()), source_size.width() - 1);
+      const auto py = qBound(0, qRound(y * source_size.height()), source_size.height() - 1);
+      crop = QRect(px, py,
+          qBound(1, qRound(width * source_size.width()), source_size.width() - px),
+          qBound(1, qRound(height * source_size.height()), source_size.height() - py));
+    } else {
+      auto crop_width = source_size.width();
+      auto crop_height = source_size.height();
+      auto ratio = cropAspectRatio(state.crop_preset);
+      if (ratio <= 0.0 && state.crop_preset.trimmed().compare(QStringLiteral("Original"), Qt::CaseInsensitive) == 0)
+        ratio = double(source_size.width()) / double(source_size.height());
+      if (ratio > 0.0) {
+        const auto source_ratio = double(source_size.width()) / double(source_size.height());
+        if (source_ratio > ratio) crop_width = qRound(double(source_size.height()) * ratio);
+        else crop_height = qRound(double(source_size.width()) / ratio);
+      }
+      crop_width = qMax(1, qRound(double(crop_width) / state.crop_zoom));
+      crop_height = qMax(1, qRound(double(crop_height) / state.crop_zoom));
+      const auto x = qMax(0, (source_size.width() - crop_width) / 2);
+      const auto y = qMax(0, (source_size.height() - crop_height) / 2);
+      const auto nx = double(x) / double(source_size.width());
+      const auto ny = double(y) / double(source_size.height());
+      const auto nw = double(crop_width) / double(source_size.width());
+      const auto nh = double(crop_height) / double(source_size.height());
+      const auto px = qBound(0, qRound(nx * source_size.width()), source_size.width() - 1);
+      const auto py = qBound(0, qRound(ny * source_size.height()), source_size.height() - 1);
+      crop = QRect(px, py,
+          qBound(1, qRound(nw * source_size.width()), source_size.width() - px),
+          qBound(1, qRound(nh * source_size.height()), source_size.height() - py));
+    }
+    return crop.size();
+  }
+  static QJsonObject imageAdmissionInfo(const QImage& image) {
+    const auto color_space = image.colorSpace();
+    return {{"is_null", image.isNull()}, {"width", image.width()}, {"height", image.height()},
+        {"format", static_cast<int>(image.format())}, {"is_premultiplied", image.format() == QImage::Format_ARGB32_Premultiplied ||
+            image.format() == QImage::Format_RGBA8888_Premultiplied || image.format() == QImage::Format_RGBA64_Premultiplied ||
+            image.format() == QImage::Format_RGBA16FPx4_Premultiplied},
+        {"backend_tag", image.text(QStringLiteral("looksy-preview-output-backend"))},
+        {"color_space_valid", color_space.isValid()}, {"color_space_description", color_space.description()}};
+  }
+  static QJsonObject paintRegionAdmissionSnapshot(EditorPreviewController& c, QSize source_size) {
+    const auto request = c.currentRenderRequest(false);
+    std::shared_ptr<PhotoPaintSession> job;
+    if (!c.photo_paint_jobs_.empty()) job = c.photo_paint_jobs_.front();
+    else if (c.photo_paint_running_job_) job = c.photo_paint_running_job_;
+    else job = c.photo_paint_input_;
+    const auto expected_size = expectedPreviewSize(source_size, request);
+    const auto job_base = job ? job->preview_base : QImage{};
+
+    QJsonArray layers;
+    QJsonArray regional_layer_failures;
+    QRect region;
+    int pixel_layers = 0;
+    int paint_tile_layers = 0;
+    int draft_tile_layers = 0;
+    int draft_tiles_total = 0;
+    for (const auto& value : request.state.layers) {
+      const auto layer = value.toMap();
+      const auto kind = layer.value(QStringLiteral("kind")).toString();
+      const auto paint_tiles = layer.value(QStringLiteral("paintTiles")).toMap();
+      const auto draft_tiles = layer.value(QStringLiteral("paintDraftTiles")).toMap();
+      const auto draft_count = draftTileCount(draft_tiles);
+      const auto adjustment_recipe = photo_layer_adjustment_recipe(layer);
+      QJsonArray failures;
+      if (kind != QStringLiteral("pixel")) failures.append(QStringLiteral("kind_not_pixel"));
+      if (!layer.contains(QStringLiteral("paintTiles"))) failures.append(QStringLiteral("missing_paintTiles"));
+      if (layer.value(QStringLiteral("x")).toInt() != 0 || layer.value(QStringLiteral("y")).toInt() != 0)
+        failures.append(QStringLiteral("offset_transform"));
+      if (layer.value(QStringLiteral("scale"), 1.0).toDouble() != 1.0 ||
+          layer.value(QStringLiteral("rotation")).toDouble() != 0.0) failures.append(QStringLiteral("scale_or_rotation"));
+      if (layer.value(QStringLiteral("selectionScoped")).toBool()) failures.append(QStringLiteral("selection_scoped"));
+      if (layer.value(QStringLiteral("clippingMask")).toBool()) failures.append(QStringLiteral("clipping_mask"));
+      if (!layer.value(QStringLiteral("maskData")).toByteArray().isEmpty()) failures.append(QStringLiteral("mask_data"));
+      if (!layer.value(QStringLiteral("effects")).toList().isEmpty()) failures.append(QStringLiteral("effects"));
+      if (!adjustment_recipe.isEmpty()) failures.append(QStringLiteral("adjustment_recipe"));
+      if (!failures.isEmpty()) regional_layer_failures.append(QJsonObject{{"layer_id", layer.value(QStringLiteral("id")).toString()},
+          {"failures", failures}});
+      if (kind == QStringLiteral("pixel")) ++pixel_layers;
+      if (layer.contains(QStringLiteral("paintTiles"))) ++paint_tile_layers;
+      if (draft_count > 0) ++draft_tile_layers;
+      draft_tiles_total += draft_count;
+      if (layer.value(QStringLiteral("pixelWidth")).toInt() > 0 && layer.value(QStringLiteral("pixelHeight")).toInt() > 0) {
+        const auto sx = double(request.paint_preview_base.width()) / layer.value(QStringLiteral("pixelWidth")).toInt();
+        const auto sy = double(request.paint_preview_base.height()) / layer.value(QStringLiteral("pixelHeight")).toInt();
+        for (auto it = draft_tiles.cbegin(); it != draft_tiles.cend(); ++it) {
+          const auto parts = it.key().split(QLatin1Char(','));
+          if (parts.size() != 2) continue;
+          bool x_ok = false;
+          bool y_ok = false;
+          const auto tile_x = parts.at(0).toInt(&x_ok);
+          const auto tile_y = parts.at(1).toInt(&y_ok);
+          if (!x_ok || !y_ok) continue;
+          region |= QRectF(tile_x * kPhotoPaintTileEdge * sx, tile_y * kPhotoPaintTileEdge * sy,
+              kPhotoPaintTileEdge * sx, kPhotoPaintTileEdge * sy).adjusted(-2, -2, 2, 2).toAlignedRect();
+        }
+      }
+      layers.append(QJsonObject{{"id", layer.value(QStringLiteral("id")).toString()},
+          {"kind", kind}, {"base_image_edit", layer.value(QStringLiteral("baseImageEdit")).toBool()},
+          {"copy_base_image", layer.value(QStringLiteral("copyBaseImage")).toBool()},
+          {"has_paintTiles", layer.contains(QStringLiteral("paintTiles"))},
+          {"paint_tile_count", paintTileCount(paint_tiles)}, {"draft_tile_count", draft_count},
+          {"pixel_width", layer.value(QStringLiteral("pixelWidth")).toInt()},
+          {"pixel_height", layer.value(QStringLiteral("pixelHeight")).toInt()},
+          {"x", layer.value(QStringLiteral("x")).toInt()}, {"y", layer.value(QStringLiteral("y")).toInt()},
+          {"scale", layer.value(QStringLiteral("scale"), 1.0).toDouble()},
+          {"rotation", layer.value(QStringLiteral("rotation")).toDouble()},
+          {"selection_scoped", layer.value(QStringLiteral("selectionScoped")).toBool()},
+          {"clipping_mask", layer.value(QStringLiteral("clippingMask")).toBool()},
+          {"mask_bytes", layer.value(QStringLiteral("maskData")).toByteArray().size()},
+          {"effect_count", layer.value(QStringLiteral("effects")).toList().size()},
+          {"adjustment_recipe_keys", QJsonArray::fromStringList(adjustment_recipe.keys())},
+          {"regional_gate_failures", failures}});
+    }
+    region &= QRect(QPoint(), request.paint_preview_base.size());
+
+    const auto backend = request.paint_preview_base.text(QStringLiteral("looksy-preview-output-backend"));
+    const bool native_backend = backend == QStringLiteral("canonical-metal-srgb8") ||
+        backend == QStringLiteral("canonical-metal-device8");
+    const auto suffix = QFileInfo(request.file_path).suffix().toLower();
+    const bool raw_candidate = QStringList{QStringLiteral("3fr"), QStringLiteral("ari"), QStringLiteral("arw"),
+        QStringLiteral("cr2"), QStringLiteral("cr3"), QStringLiteral("dng"), QStringLiteral("nef"),
+        QStringLiteral("nrw"), QStringLiteral("orf"), QStringLiteral("pef"), QStringLiteral("raf"),
+        QStringLiteral("rw2"), QStringLiteral("srw")}.contains(suffix);
+    const bool native_suffix_backend_available = canonical_native_suffix_backend_available();
+    auto neutral_state = request.state;
+    neutral_state.layers.clear();
+    neutral_state.exposure = 0.0;
+    neutral_state.temperature = 0.0;
+    neutral_state.tint = 0.0;
+
+    QJsonArray request_rejections;
+    if (request.paint_preview_base.isNull()) request_rejections.append(QStringLiteral("paint_preview_base_null"));
+    if (!request.use_in_memory_preview) request_rejections.append(QStringLiteral("preview_not_in_memory"));
+    if (request.full_resolution) request_rejections.append(QStringLiteral("full_resolution"));
+    if (request.compare_mode) request_rejections.append(QStringLiteral("compare_mode"));
+    if (request.overlay_only) request_rejections.append(QStringLiteral("overlay_only"));
+    if (raw_candidate) request_rejections.append(QStringLiteral("raw_source_candidate"));
+    if (request.state.soft_proof_enabled) request_rejections.append(QStringLiteral("soft_proof_enabled"));
+    if (!request.state.mask_stack.isEmpty()) request_rejections.append(QStringLiteral("mask_stack_nonempty"));
+    if (request.state.sharpening != 0.0 || request.state.luminance_nr != 0.0 || request.state.color_nr != 0.0 ||
+        request.state.perspective_vertical != 0.0 || request.state.perspective_horizontal != 0.0 ||
+        request.state.transform_rotation != 0.0 || request.state.transform_scale != 1.0 ||
+        request.state.transform_skew_x != 0.0 || request.state.transform_skew_y != 0.0 ||
+        request.state.liquify_strength != 0.0 || request.state.content_aware_crop_fill)
+      request_rejections.append(QStringLiteral("non_neutral_geometry_or_detail"));
+    if (!expected_size.isValid()) request_rejections.append(QStringLiteral("expected_size_invalid"));
+    if (!request.paint_preview_base.isNull() && expected_size != request.paint_preview_base.size())
+      request_rejections.append(QStringLiteral("preview_size_mismatch"));
+    if (native_backend && request.require_cpu_preview_image)
+      request_rejections.append(QStringLiteral("native_backend_requires_cpu_preview"));
+    if (backend == QStringLiteral("canonical-metal-srgb8") && !request.allow_native_srgb_surface)
+      request_rejections.append(QStringLiteral("native_srgb_surface_unavailable"));
+    if (backend == QStringLiteral("canonical-metal-device8") && !request.allow_native_device_surface)
+      request_rejections.append(QStringLiteral("native_device_surface_unavailable"));
+    if (native_backend && !request.require_cpu_preview_image && !native_suffix_backend_available)
+      request_rejections.append(QStringLiteral("native_suffix_backend_unavailable"));
+    if (!regional_layer_failures.isEmpty()) request_rejections.append(QStringLiteral("layer_guard_failed"));
+    if (region.isEmpty()) request_rejections.append(QStringLiteral("draft_region_empty"));
+    const auto total_pixels = qint64(request.paint_preview_base.width()) * request.paint_preview_base.height();
+    const auto region_pixels = qint64(region.width()) * region.height();
+    if (total_pixels > 0 && region_pixels > total_pixels / 2) request_rejections.append(QStringLiteral("draft_region_over_half"));
+
+    const auto output_base = imageAdmissionInfo(request.paint_preview_base);
+    const auto queued_base = imageAdmissionInfo(job_base);
+    bool captured_state_matches = false;
+    if (job) {
+      auto current = c.currentState();
+      auto captured = job->selection_state;
+      for (auto* state : {&current, &captured})
+        for (int i = 0; i < state->layers.size(); ++i)
+          state->layers[i] = photo_paint_target_identity(state->layers[i].toMap());
+      captured_state_matches = current == captured;
+    }
+    const auto& state = request.state;
+    const QJsonObject global_inputs{{"exposure", state.exposure}, {"temperature", state.temperature},
+        {"tint", state.tint}, {"sharpening", state.sharpening}, {"luminance_nr", state.luminance_nr},
+        {"color_nr", state.color_nr}, {"perspective_vertical", state.perspective_vertical},
+        {"perspective_horizontal", state.perspective_horizontal}, {"transform_rotation", state.transform_rotation},
+        {"transform_scale", state.transform_scale}, {"transform_skew_x", state.transform_skew_x},
+        {"transform_skew_y", state.transform_skew_y}, {"liquify_strength", state.liquify_strength},
+        {"content_aware_crop_fill", state.content_aware_crop_fill}, {"crop_preset", state.crop_preset},
+        {"crop_zoom", state.crop_zoom}, {"crop_rect_x", state.crop_rect_x}, {"crop_rect_y", state.crop_rect_y},
+        {"crop_rect_width", state.crop_rect_width}, {"crop_rect_height", state.crop_rect_height}};
+    return {{"job_found", bool(job)}, {"job_asset_id", job ? job->asset_id : QString{}},
+        {"job_layer_id", job ? job->layer_id : QString{}}, {"job_is_base_image_erase", job && job->base_image_erase},
+        {"job_has_draft_tiles", job && !job->draft_tiles.isEmpty()},
+        {"job_draft_tile_count", job ? draftTileCount(job->draft_tiles) : 0},
+        {"job_preview_base", queued_base}, {"request_preview_base", output_base},
+        {"captured_state_matches_current", captured_state_matches},
+        {"request", QJsonObject{{"max_edge", request.max_edge}, {"use_in_memory_preview", request.use_in_memory_preview},
+            {"full_resolution", request.full_resolution}, {"compare_mode", request.compare_mode},
+            {"overlay_only", request.overlay_only}, {"bypass_crop", request.bypass_crop},
+            {"soft_proof_enabled", request.state.soft_proof_enabled}, {"mask_stack_count", request.state.mask_stack.size()},
+            {"source_suffix", suffix}, {"raw_source_candidate", raw_candidate},
+            {"neutral_state_equals_edit_state_default_after_layer_and_allowed_controls_removed", neutral_state == EditState{}},
+            {"compare_adjustment_group_count", request.compare_adjustment_groups.size()},
+            {"draft_interactive", request.draft_interactive}, {"require_cpu_preview_image", request.require_cpu_preview_image},
+            {"require_cpu_display_image", request.require_cpu_display_image},
+            {"allow_native_srgb_surface", request.allow_native_srgb_surface},
+            {"allow_native_device_surface", request.allow_native_device_surface},
+            {"source_size", QJsonArray{source_size.width(), source_size.height()}},
+            {"paint_preview_base_size", QSize(request.paint_preview_base.size()).isValid()
+                ? QJsonArray{request.paint_preview_base.width(), request.paint_preview_base.height()} : QJsonArray{}},
+            {"expected_size", expected_size.isValid() ? QJsonArray{expected_size.width(), expected_size.height()} : QJsonArray{}},
+            {"size_matches", request.paint_preview_base.size() == expected_size}, {"backend", backend},
+            {"native_backend", native_backend}, {"native_suffix_backend_available", native_suffix_backend_available},
+            {"global_gate_inputs", global_inputs}}},
+        {"layer_count", request.state.layers.size()}, {"pixel_layer_count", pixel_layers},
+        {"paint_tile_layer_count", paint_tile_layers}, {"draft_tile_layer_count", draft_tile_layers},
+        {"draft_tile_count", draft_tiles_total}, {"layers", layers},
+        {"regional_layer_failures", regional_layer_failures},
+        {"draft_region", QJsonArray{region.x(), region.y(), region.width(), region.height()}},
+        {"draft_region_pixels", region_pixels}, {"base_pixels", total_pixels},
+        {"draft_region_fraction", total_pixels > 0 ? double(region_pixels) / double(total_pixels) : 0.0},
+        {"request_rejections", request_rejections}};
   }
   static void collectPhotoPaintWorkerTimings(EditorPreviewController& c) {
     QObject::disconnect(&c.photo_paint_watcher_, nullptr, &c, nullptr);
@@ -335,6 +605,14 @@ int main(int argc,char** argv) {
     return 30;
   }
   if (qEnvironmentVariableIsSet("PHOTO_PAINT_VERIFY_LAYER_TIP_CACHE")) return 0;
+  const bool brush_size_override_set = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_BRUSH_SIZE");
+  const int brush_size = brush_size_override_set
+      ? qEnvironmentVariableIntValue("PHOTO_PAINT_BENCH_BRUSH_SIZE")
+      : 96;
+  if (brush_size < 1 || brush_size > 4096) {
+    std::cerr << "PHOTO_PAINT_BENCH_BRUSH_SIZE must be an integer from 1 through 4096.\n";
+    return 43;
+  }
   QTemporaryDir dir; qputenv("PHOTO_EDITOR_APP_DATA_DIR",dir.path().toUtf8());
   AppBootstrap::ensureRuntimeDirectories();
   observability::initialize();
@@ -380,6 +658,14 @@ int main(int argc,char** argv) {
   QQmlEngine engine;
   EditorPreviewController c; c.setPreviewTargetEdge(1024);
   const bool native_texture = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_NATIVE_TEXTURE");
+  const bool base_eraser_bench = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_BASE_ERASER");
+  const bool layer_eraser_bench = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_LAYER_ERASER");
+  const bool eraser_bench = base_eraser_bench || layer_eraser_bench;
+  if ((base_eraser_bench && layer_eraser_bench) ||
+      (eraser_bench && (fragment_bench || layer_tip_bench))) {
+    std::cerr << "Choose one paint operation; eraser runs cannot combine with Photo Fragment benchmarks.\n";
+    return 35;
+  }
   if (native_texture && !EditorPreviewControllerTestAccess::enableNativeTexture(c)) {
     std::cerr << "Native preview Metal texture could not be created.\n";
     return 17;
@@ -410,11 +696,29 @@ int main(int argc,char** argv) {
     item->setSize(QSizeF(900,600));
     item->setController(&c);
   }
-  window.show(); window.requestActivate();
+  const bool skip_native_activation = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_SKIP_NATIVE_ACTIVATION");
+  window.show();
+  if (!skip_native_activation) window.requestActivate();
   if(!spin([&]{return window.isExposed();})) return 4;
+#if defined(__APPLE__)
+  QVariantMap native_window_sample_before;
+  if (native_texture) {
+    if (!skip_native_activation) activate_native_test_window(&window);
+    native_window_sample_before = native_window_foreground_sample(&window);
+  }
+#endif
   QElapsedTimer timer; timer.start(); if(!c.addPaintLayer()) return 5;
   const auto create_ms=timer.nsecsElapsed()/1e6;
   if(!spin([&]{return !c.processing() && !c.fullRenderRunning();})) return 6;
+  if (base_eraser_bench) {
+    if (!c.setBaseImageLocked(false)) return 36;
+    auto base_index = -1;
+    const auto layers = EditorPreviewControllerTestAccess::state(c).layers;
+    for (int index = 0; index < static_cast<int>(layers.size()); ++index)
+      if (layers.at(index).toMap().value(QStringLiteral("baseImageEdit")).toBool()) base_index = index;
+    if (base_index < 0 || (base_index > 0 && !c.movePhotoLayer(base_index, -base_index))) return 37;
+    if (!spin([&] { return !c.processing() && !c.fullRenderRunning(); })) return 38;
+  }
   const auto baseline_state = EditorPreviewControllerTestAccess::state(c);
   const auto baseline_tiles = baseline_state.layers.isEmpty() ? QVariantMap{} :
       baseline_state.layers[0].toMap().value(QStringLiteral("paintTiles")).toMap();
@@ -449,9 +753,13 @@ int main(int argc,char** argv) {
   }
   const int requested_trials = qEnvironmentVariableIntValue("PHOTO_PAINT_BENCH_TRIALS");
   const bool cancel_stress = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_CANCEL_STRESS");
+  if (cancel_stress && eraser_bench) {
+    std::cerr << "Cancellation stress currently measures paint strokes only.\n";
+    return 39;
+  }
   const int trial_count = cancel_stress
       ? qBound(1, requested_trials > 0 ? requested_trials : 100, 600)
-      : requested_trials > 0 ? qBound(1, requested_trials, 600) : 3;
+      : requested_trials > 0 ? qBound(1, requested_trials, 600) : base_eraser_bench ? 1 : 3;
   const int cancel_warmup_cycles = cancel_stress
       ? (qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_CANCEL_WARMUP_CYCLES")
           ? qBound(0, qEnvironmentVariableIntValue("PHOTO_PAINT_BENCH_CANCEL_WARMUP_CYCLES"), 200) : 50)
@@ -462,7 +770,8 @@ int main(int argc,char** argv) {
     return 25;
   }
   const bool spread_rows = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_SPREAD_ROWS");
-  const bool repeat_identical = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_REPEAT_IDENTICAL");
+  const bool repeat_identical = qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_REPEAT_IDENTICAL") &&
+      !base_eraser_bench;
   const bool measure_layer_thumbnails = spread_rows && !fragment_bench;
   QJsonArray rows;
   int frames=0; QObject::connect(&window,&QQuickWindow::frameSwapped,&app,[&]{++frames;});
@@ -631,6 +940,19 @@ int main(int argc,char** argv) {
           {"worker_settled", true}, {"resident_rss_bytes", cycle_rss}});
       continue;
     }
+    double eraser_seed_ms = 0.0;
+    if (layer_eraser_bench) {
+      QElapsedTimer seed_timer;
+      seed_timer.start();
+      const QVariantMap seed_settings{{"color", "#ff5020"}, {"size", brush_size}, {"pressureSize", false}};
+      if (!c.beginPhotoPaintStroke(0, seed_settings)) return 40;
+      c.addPhotoPaintPoint(width * 0.25, row_y);
+      c.addPhotoPaintPoint(width * 0.65, row_y);
+      if (!c.finishPhotoPaintStroke() || !spin([&] {
+            return !c.photoPaintBusy() && EditorPreviewControllerTestAccess::settled(c);
+          })) return 41;
+      eraser_seed_ms = seed_timer.nsecsElapsed() / 1e6;
+    }
     EditorPreviewControllerTestAccess::resetPhotoPaintWorkerTimings();
     const int tiles_before = committedPaintTileCount(c);
     const auto thumbnail_before = measure_layer_thumbnails
@@ -652,7 +974,8 @@ int main(int argc,char** argv) {
     timer.restart();
     const bool use_fragment = layer_tip_bench || (fragment_bench && trial % 2 == 1);
     QVariantMap stroke_settings{{"color",trial%2?"#20e0a0":"#ff5020"},
-        {"size",96},{"pressureSize",false}};
+        {"size",brush_size},{"pressureSize",false}};
+    if (eraser_bench) stroke_settings.insert(QStringLiteral("erase"), true);
     if (use_fragment) {
       stroke_settings.insert("textureMaterial", QStringLiteral("photo_fragment"));
       if (layer_tip_bench) stroke_settings.insert("tipLayerId", layer_tip_id);
@@ -660,7 +983,7 @@ int main(int argc,char** argv) {
       stroke_settings.insert("spacing", 0.15);
     }
     const bool cold_fragment_first_use = cold_fragment_cache && use_fragment && trial == 1;
-    if(!c.beginPhotoPaintStroke(0,stroke_settings)) return 7;
+    if(!c.beginPhotoPaintStroke(base_eraser_bench ? -1 : 0,stroke_settings)) return 7;
     const auto begin_ms=timer.nsecsElapsed()/1e6;
     QElapsedTimer input; input.start();
     c.addPhotoPaintPoint(spread_rows && fragment_bench ? spread_x : width * 0.25, row_y);
@@ -695,6 +1018,10 @@ int main(int argc,char** argv) {
       visible_stroke_ms = timer.nsecsElapsed()/1e6;
     }
     const auto stages=EditorPreviewControllerTestAccess::timings(c);
+    const auto paint_region_admission = (eraser_bench ||
+        qEnvironmentVariableIsSet("PHOTO_PAINT_BENCH_REGION_ADMISSION"))
+        ? EditorPreviewControllerTestAccess::paintRegionAdmissionSnapshot(c, QSize(width, width * 2 / 3))
+        : QJsonObject{};
     if(!spin([&]{return EditorPreviewControllerTestAccess::settled(c);})) return 15;
     const auto complete_frame=frames; window.requestUpdate();
     bool completion_frame_swapped = false;
@@ -737,11 +1064,34 @@ int main(int argc,char** argv) {
       photo_layer_snapshot_after_ms = EditorPreviewControllerTestAccess::last_photo_layer_snapshot_ms;
     }
     const auto recipe=serialize_edit_recipe_json(EditorPreviewControllerTestAccess::state(c));
-    auto row = QJsonObject{{"material", use_fragment ? QStringLiteral("photo_fragment") : QStringLiteral("solid")},
+    bool base_source_copy_preserved = false;
+    int base_coverage_tiles = 0;
+    if (base_eraser_bench) {
+      for (const auto& value : EditorPreviewControllerTestAccess::state(c).layers) {
+        const auto layer = value.toMap();
+        if (!layer.value(QStringLiteral("baseImageEdit")).toBool()) continue;
+        base_source_copy_preserved = layer.value(QStringLiteral("copyBaseImage")).toBool();
+        const auto paint_tiles = layer.value(QStringLiteral("paintTiles")).toMap();
+        base_coverage_tiles = static_cast<int>(paint_tiles.value(QStringLiteral("tiles")).toMap().size());
+        break;
+      }
+      const auto columns = (width + kPhotoPaintTileEdge - 1) / kPhotoPaintTileEdge;
+      const auto rows_count = (width * 2 / 3 + kPhotoPaintTileEdge - 1) / kPhotoPaintTileEdge;
+      if (!base_source_copy_preserved || base_coverage_tiles <= 0 ||
+          base_coverage_tiles >= columns * rows_count) return 42;
+    }
+    auto row = QJsonObject{{"operation", base_eraser_bench ? QStringLiteral("base_eraser") :
+            layer_eraser_bench ? QStringLiteral("paint_layer_eraser") : QStringLiteral("paint")},
+        {"brush_size_px", brush_size},
+        {"eraser_seed_ms", eraser_seed_ms},
+        {"base_source_copy_preserved", base_source_copy_preserved},
+        {"base_coverage_tiles", base_coverage_tiles},
+        {"material", use_fragment ? QStringLiteral("photo_fragment") : QStringLiteral("solid")},
         {"tip_width", use_fragment ? (layer_tip_bench ? layer_tip_edge : fragment_tip_edge) : 0},
         {"tip_height", use_fragment ? (layer_tip_bench ? layer_tip_edge : fragment_tip_edge) : 0},
         {"stroke_complete_presented_ms",complete_presented_ms},{"completion_frame_swapped",completion_frame_swapped},
         {"completion_capture_valid",completion_capture_valid},{"stages",stages},
+        {"paint_region_admission", paint_region_admission},
         {"worker_stages",EditorPreviewControllerTestAccess::workerTimings()},
         {"layer_stack_stages",EditorPreviewControllerTestAccess::layerStackTimings(c)},
         {"begin_ms",begin_ms},{"input_batch_ms",input_ms},{"first_presented_ms",presented_ms},
@@ -799,7 +1149,9 @@ int main(int argc,char** argv) {
   const auto rss_warm_growth = cancel_warm_rss > 0
       ? cancel_peak_after_warm_rss - cancel_warm_rss : 0;
   QJsonObject result{{"native_texture_item",native_texture},{"in_memory_preview",memory_preview},
+      {"brush_size_px",brush_size},{"brush_size_override_set",brush_size_override_set},
       {"photographic_fixture",!photo_path.isEmpty()},{"spread_rows",spread_rows},
+      {"base_eraser_bench",base_eraser_bench},{"layer_eraser_bench",layer_eraser_bench},
       {"repeat_identical_strokes",repeat_identical},
       {"photo_fragment_bench",fragment_bench || layer_tip_bench},{"photo_fragment_layer_tip_bench",layer_tip_bench},{"photo_fragment_tip_width",fragment_bench ? fragment_tip_edge : layer_tip_edge},
       {"photo_fragment_tip_height",fragment_bench ? fragment_tip_edge : layer_tip_edge},
@@ -814,6 +1166,22 @@ int main(int argc,char** argv) {
       {"create_layer_ms",create_ms},{"peak_rss_bytes",double(usage.ru_maxrss)},
       {"resident_rss_before_trials_bytes",resident_rss_before_trials},
       {"resident_rss_after_trials_bytes",resident_rss_after_trials},{"trials",rows}};
+#if defined(__APPLE__)
+  if (native_texture) {
+    bool visible_pixels_verified = !rows.isEmpty();
+    for (const auto& trial : rows)
+      visible_pixels_verified = visible_pixels_verified &&
+          trial.toObject().value(QStringLiteral("visible_pixels_verified")).toBool();
+    const auto native_window_sample_after = native_window_foreground_sample(&window);
+    result.insert(QStringLiteral("native_window_before"), QJsonObject::fromVariantMap(native_window_sample_before));
+    result.insert(QStringLiteral("native_window_after"), QJsonObject::fromVariantMap(
+        native_window_sample_after));
+    result.insert(QStringLiteral("native_window_qualified"),
+        native_window_sample_after.value(QStringLiteral("qualified")).toBool());
+    result.insert(QStringLiteral("visible_pixels_and_window_qualified"),
+        visible_pixels_verified && native_window_sample_after.value(QStringLiteral("qualified")).toBool());
+  }
+#endif
   if (layer_tip_bench) {
     result.insert("layer_tip_export_ms", export_ms);
     result.insert("layer_tip_export_width", layer_tip_export_size.width());

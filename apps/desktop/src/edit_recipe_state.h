@@ -2,6 +2,7 @@
 
 #include "edit_recipe_content_validation.h"
 #include "edit_recipe_profile_validation.h"
+#include "photo_text_dimension.h"
 
 #include <algorithm>
 #include <array>
@@ -29,6 +30,21 @@ inline constexpr int kCurrentEditRecipeVersion = 12;
 inline constexpr int kPhotoEffectsEditRecipeVersion = 14;
 inline constexpr int kPhotoTypographyEditRecipeVersion = 15;
 inline constexpr int kPhotoPaintEditRecipeVersion = 16;
+inline constexpr int kPhotoComponentEditRecipeVersion = 17;
+inline constexpr int kPhotoComponentObjectTableEditRecipeVersion = 18;
+inline constexpr int kPhotoLayerStyleEditRecipeVersion = 19;
+inline constexpr int kPhotoDocumentLayerStyleLightEditRecipeVersion = 20;
+inline constexpr int kPhotoTextDimensionEditRecipeVersion = 21;
+inline constexpr int kLatestSupportedEditRecipeVersion = kPhotoTextDimensionEditRecipeVersion;
+
+inline constexpr bool is_supported_structured_edit_recipe_version(int version) {
+  return version == kCurrentEditRecipeVersion || version == kPhotoEffectsEditRecipeVersion ||
+      version == kPhotoTypographyEditRecipeVersion || version == kPhotoPaintEditRecipeVersion ||
+      version == kPhotoComponentEditRecipeVersion || version == kPhotoComponentObjectTableEditRecipeVersion ||
+      version == kPhotoLayerStyleEditRecipeVersion ||
+      version == kPhotoDocumentLayerStyleLightEditRecipeVersion ||
+      version == kPhotoTextDimensionEditRecipeVersion;
+}
 
 QString normalized_photographic_rendering_model_name(const QString& value);
 QString normalized_renderer_transition_look_name(const QString& value);
@@ -292,8 +308,10 @@ struct EditRecipeState final {
   double radial_mask_rotation = 0.0;
   QVariantList mask_stack;
   int active_mask_index = -1;
+  QVariantMap selection_state;  // Working selection identity, independent of inspected layer masks.
   QVariantList preset_applications;
   QVariantList layers;
+  double document_layer_style_light_angle = -45.0;
   QString active_history_branch = QStringLiteral("main");
   QVariantList recipe_snapshots;
 
@@ -487,8 +505,11 @@ struct EditRecipeState final {
             feq(radial_mask_rotation, other.radial_mask_rotation) &&
              mask_stack == other.mask_stack &&
              active_mask_index == other.active_mask_index &&
+             selection_state == other.selection_state &&
              preset_applications == other.preset_applications &&
             layers == other.layers &&
+            std::abs(document_layer_style_light_angle -
+                     other.document_layer_style_light_angle) < 1e-9 &&
             active_history_branch == other.active_history_branch &&
             recipe_snapshots == other.recipe_snapshots;
   }
@@ -532,7 +553,13 @@ QVariantList parse_photo_layers(const QJsonArray& layers);
 QVariantList serialize_photo_layers(const QVariantList& layers);
 bool photo_layers_have_effect_stacks(const QVariantList& layers);
 bool photo_layers_have_typography(const QVariantList& layers);
+bool photo_layers_have_text_dimensions(const QVariantList& layers);
 bool photo_layers_have_paint_tiles(const QVariantList& layers);
+bool photo_layers_have_components(const QVariantList& layers);
+bool photo_layers_have_component_objects(const QVariantList& layers);
+bool photo_layers_have_styles(const QVariantList& layers);
+bool photo_layers_have_linked_style_lighting(const QVariantList& layers);
+bool recipe_requires_document_layer_style_light(const EditRecipeState& state);
 
 }  // namespace detail
 

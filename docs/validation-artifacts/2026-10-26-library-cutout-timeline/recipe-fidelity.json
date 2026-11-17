@@ -1,0 +1,12 @@
+{
+  "schema": "looksy-live-recipe-fidelity-v1",
+  "assets": 171,
+  "assetsWithSavedRecipe": 16,
+  "allRecipeHashesEqual": true,
+  "fieldsCompared": [
+    "edit_recipe",
+    "canonical_edit_recipe_v13"
+  ],
+  "elapsedSeconds": 20.685358292015735,
+  "catalogWriteOperations": 0
+}

@@ -25,6 +25,8 @@ struct InputStageParameters final {
   bool execute_camera_linear_highlight_reconstruction = false;
   HighlightReconstructionAnalysis highlight_reconstruction;
   double highlight_reconstruction_strength = 0.0;
+  std::array<double, 3> camera_neutral = {};
+  double camera_neutral_reconstruction_strength = 0.0;
   double raw_black_level = 0.0;
   double raw_white_level = 1.0;
   bool clamp_camera_raw_black_floor = false;
@@ -45,7 +47,9 @@ struct InputStageParameters final {
 [[nodiscard]] ColorPixel apply_normalize_raw_stage(
     const ColorPixel& input,
     const InputStageParameters& parameters,
-    const PipelineColorContext& context);
+    const PipelineColorContext& context,
+    double normalized_x = -1.0,
+    double normalized_y = -1.0);
 [[nodiscard]] ColorPixel apply_camera_characterization_stage(
     const ColorPixel& input,
     const InputStageParameters& parameters,

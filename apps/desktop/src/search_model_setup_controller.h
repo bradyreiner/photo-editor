@@ -23,6 +23,7 @@ class SearchModelSetupController final : public QObject {
                             QObject* parent = nullptr, Verify verify = {}, Install install = {});
   ~SearchModelSetupController() override;
   void setRuntime(const QString& trusted_executable);
+  void setRuntimeStatus(const QString& status);
   bool available() const { return !executable_.isEmpty(); }
   bool running() const { return running_; }
   bool ready() const { return ready_; }

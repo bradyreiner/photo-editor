@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "reference": "creative-launch/FilmPolish.tsx FilmChapter (184\u2013252); BuyerScenes.tsx BuyerClosing (280\u2013298)",
+  "fps": 30,
+  "canvas": {
+    "width": 1920,
+    "height": 1080
+  },
+  "sources": [
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/audio/creative-polish-v4-master.wav",
+      "bytes": 57216044,
+      "sha256": "ff52ed7e472c99f2dac8ef1b5a553200bd968a2b29896c12f0042e507740945a",
+      "presentInSourceManifest": true,
+      "usedFor": "global score, full 0\u2013298 second reference mix"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/arrival-12.mp4",
+      "bytes": 35364494,
+      "sha256": "8c40397a24bdba05f8cdc8a87cd5e10bc030d0e7e575359bf4204acc3a09ac2e",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter phase 0 arrival and phase 7 landscape/social delivery"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/MVI_5051-2.3-5.9.mp4",
+      "bytes": 202306,
+      "sha256": "7d1e8a9285e725b877d26c7e380102347ff33ba05e0a8f2619feb31b185cc24f",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter phase 0 ridgeline footage (dynamic filmShots source)"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/city-10.mp4",
+      "bytes": 35971545,
+      "sha256": "2cd86e83c922dce29d30662e77de114454730abc73ef958a188774e4244e6b03",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter phase 0 montage and phases 1\u20134 city source"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/refine/night.mp4",
+      "bytes": 15064427,
+      "sha256": "e2014c95c8e4a191973768af37c53b2b268253774ca8b708bfd38bf950d112c7",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter phase 0 night footage (dynamic filmShots source)"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/city-grade-10.mp4",
+      "bytes": 32534133,
+      "sha256": "f55ca65e9479d1d0fcc5f2117fb942886c7906018dbcc0109069fd81c53a9363",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter native grade comparison and delivery example"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/city-mono-10.mp4",
+      "bytes": 30373359,
+      "sha256": "c5104f55caeffe6f4a62db278c87640ccb5ff1bc45a78fe4e8d25e6a79c92dd8",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter monochrome comparison"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/creative-polish-v2/timeline-native.png",
+      "bytes": 494454,
+      "sha256": "73cd285a518a25281df9023f1a35ffa9036648a2fa0ecc846d1ecf21c1fc54d1",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter SyncedTimeline panel crops"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/arrival-first.jpg",
+      "bytes": 238520,
+      "sha256": "67f3169893542b884c4ae8eec4281737e431e58806d9ec9aef67b11607fbc134",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter SyncedTimeline arrival thumbnail"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/ridge-thumb.jpg",
+      "bytes": 9383,
+      "sha256": "764964d617fef3761b41b25a8f709813a76cebb98f1dc5c52c359e2c68cf8cf3",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter SyncedTimeline ridgeline thumbnail"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/city-delivery.jpg",
+      "bytes": 249779,
+      "sha256": "6a1f657e4c5e49d9c5a8e5b09483e5dff28b3502e3aef868f154d83d7de12829",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter SyncedTimeline city thumbnail and Rec.709 delivery still"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/night-thumb.jpg",
+      "bytes": 36879,
+      "sha256": "821679d8746249c4c060ef4d66f1bb0cea0153430ed46aba38831801608cc265",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter SyncedTimeline night thumbnail"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/studio/gaussian-camera.mp4",
+      "bytes": 1274965,
+      "sha256": "6eb12d18ed9b349f3d4656e912cd5ce73b1705840ddcd84ace7996028f4bac66",
+      "presentInSourceManifest": true,
+      "usedFor": "FilmChapter Gaussian camera motion"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/desktop-launch/raw-editor.png",
+      "bytes": 476865,
+      "sha256": "8ebb266571865d16535c0c0e2b9bb5ca5cb272293bd73206d3e1c8a09c3e3398",
+      "presentInSourceManifest": true,
+      "usedFor": "BuyerClosing actual desktop panel"
+    },
+    {
+      "path": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/looksy-logo-dark.png",
+      "bytes": 414973,
+      "sha256": "17199f363f1168d68bd9ac1f1c9a7a8d3401ab04982175021be3c8dedda811b9",
+      "presentInSourceManifest": false,
+      "usedFor": "BuyerClosing native-wordmark source"
+    }
+  ],
+  "missingFromSourceManifest": [
+    "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/animated-trailer/public/media/looksy-logo-dark.png"
+  ]
+}

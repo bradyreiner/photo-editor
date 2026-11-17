@@ -10,16 +10,30 @@
 #include "edit_adjustment_patch.h"
 #include "edit_recipe_state.h"
 #include "export_job_controller.h"
+#include "job_queue_model.h"
+#include "job_runner.h"
+#include "job_store.h"
 #include "photo_mcp_server.h"
+#include "agent_mcp_discovery_contract.h"
 #include "automation_capability_policy.h"
 #include "photo_point_text.h"
 #include "photo_text_style.h"
+#include "timeline_document_controller.h"
+#include "timeline_playback_controller.h"
+#include "timeline_asset_store.h"
+#include "timeline_mcp_export.h"
+#include "timeline_visible_proof_cache.h"
+#include "timeline_draft_lifecycle.h"
+#include "agent_draft_batch_contract.h"
+#include "agent_timeline_commands.h"
+#include "agent_task_coordinator.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <memory>
 
 #include <QColor>
 #include <QBuffer>
@@ -44,7 +58,47 @@
 #include <QThread>
 #include <QTime>
 #include <QTimer>
+#include <QQuickWindow>
+#include <QQuickItem>
+#include <QQmlComponent>
+#include <QQmlEngine>
 #include <QUrl>
+#include <QWheelEvent>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QUuid>
+
+namespace photo_editor::desktop {
+
+struct JobQueueModelTestAccess {
+  static void publish(
+      JobQueueModel& model,
+      const QVector<PersistentJobRecord>& records) {
+    model.publishJobs(records);
+  }
+};
+
+class PhotoAutomationBridgeTestAccess {
+ public:
+  static QVariantMap lastNativeWheelEvent(const PhotoAutomationBridge& bridge) {
+    return bridge.last_native_wheel_event_;
+  }
+};
+
+struct TimelineDraftLifecycleTestAccess {
+  static void queueWaveformAndProxyWork(TimelineDocumentController& controller) {
+    controller.waveform_request_queue_.push_back({
+        QStringLiteral("queued-waveform"), {}, {}, QStringLiteral("queued-waveform-request")});
+    controller.proxy_generation_queue_.push_back(QStringLiteral("queued-proxy"));
+  }
+
+  static void clearDerivedWork(TimelineDocumentController& controller) {
+    controller.waveform_request_queue_.clear();
+    controller.proxy_generation_queue_.clear();
+  }
+};
+
+}  // namespace photo_editor::desktop
 
 namespace {
 
@@ -70,6 +124,10 @@ bool wait_for_condition(
   }
   QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
   return condition();
+}
+
+void settle_events() {
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 }
 
 photo_editor::desktop::EditRecipeState
@@ -135,6 +193,39 @@ bool write_fixture_image(
     return false;
   }
   return image.save(file_path, "PNG");
+}
+
+bool write_fixture_pcm_wav(const QString& file_path) {
+  constexpr quint32 sample_rate = 48000;
+  constexpr quint32 sample_count = sample_rate;
+  constexpr quint32 data_bytes = sample_count * 2;
+  QByteArray bytes(static_cast<qsizetype>(44 + data_bytes), '\0');
+  bytes.replace(0, 4, QByteArrayLiteral("RIFF"));
+  bytes.replace(8, 4, QByteArrayLiteral("WAVE"));
+  bytes.replace(12, 4, QByteArrayLiteral("fmt "));
+  bytes.replace(36, 4, QByteArrayLiteral("data"));
+  const auto put_u16 = [&bytes](qsizetype offset, quint16 value) {
+    bytes[offset] = static_cast<char>(value & 0xffU);
+    bytes[offset + 1] = static_cast<char>((value >> 8U) & 0xffU);
+  };
+  const auto put_u32 = [&bytes](qsizetype offset, quint32 value) {
+    bytes[offset] = static_cast<char>(value & 0xffU);
+    bytes[offset + 1] = static_cast<char>((value >> 8U) & 0xffU);
+    bytes[offset + 2] = static_cast<char>((value >> 16U) & 0xffU);
+    bytes[offset + 3] = static_cast<char>((value >> 24U) & 0xffU);
+  };
+  put_u32(4, 36 + data_bytes);
+  put_u32(16, 16);
+  put_u16(20, 1);
+  put_u16(22, 1);
+  put_u32(24, sample_rate);
+  put_u32(28, sample_rate * 2);
+  put_u16(32, 2);
+  put_u16(34, 16);
+  put_u32(40, data_bytes);
+  QFile file(file_path);
+  return file.open(QIODevice::WriteOnly | QIODevice::NewOnly) &&
+         file.write(bytes) == bytes.size() && file.flush();
 }
 
 QVariantMap fixture_image_pixel_diagnostics(const QString& file_path) {
@@ -474,6 +565,4431 @@ bool is_proof_critique_request(const QJsonObject& request) {
       required_fields(QStringLiteral("repairHints"));
 }
 
+int run_timeline_render_jobs_inspection() {
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Render Job Inspection")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  const auto resource_id = timeline.agentTaskDocumentId();
+  if (resource_id.isEmpty()) return fail("render job inspection fixture should create a stable Timeline id");
+  const auto timeline_id = resource_id.mid(QStringLiteral("timeline:").size());
+
+  photo_editor::desktop::PersistentJobRecord current;
+  current.job_id = QStringLiteral("current-timeline-render");
+  current.job_kind = QStringLiteral("timeline_render");
+  current.asset_id = resource_id;
+  current.media_type = QStringLiteral("timeline");
+  current.status = QStringLiteral("Failed");
+  current.progress = 37;
+  current.error_message = QStringLiteral("Render verification failed.");
+  current.source_path = QStringLiteral("/private/tmp/snapshot.json");
+  current.output_path = QStringLiteral("/private/tmp/unrelated-render.mp4");
+  current.metadata_json.insert(QStringLiteral("timelineId"), timeline_id);
+  current.metadata_json.insert(QStringLiteral("stage"), QStringLiteral("mux"));
+
+  auto other = current;
+  other.job_id = QStringLiteral("other-timeline-render");
+  other.asset_id = QStringLiteral("timeline:other-timeline");
+  other.error_message = QStringLiteral("Must not be visible.");
+  other.metadata_json.insert(QStringLiteral("timelineId"), QStringLiteral("other-timeline"));
+
+  photo_editor::desktop::JobQueueModel jobs;
+  photo_editor::desktop::JobQueueModelTestAccess::publish(jobs, {current, other});
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  bridge.setTimelineJobQueueModel(&jobs);
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+  const auto read_result = server.callTool(
+      QStringLiteral("timeline.inspect_render_jobs"), QJsonObject{},
+      {QStringLiteral("read")});
+  const auto response = read_result.value(QStringLiteral("structuredContent")).toObject();
+  const auto visible_jobs = response.value(QStringLiteral("jobs")).toArray();
+  if (read_result.value(QStringLiteral("isError")).toBool() ||
+      response.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      response.value(QStringLiteral("jobCount")).toInt() != 1 ||
+      visible_jobs.size() != 1 ||
+      visible_jobs.first().toObject().value(QStringLiteral("jobId")).toString() != current.job_id ||
+      visible_jobs.first().toObject().value(QStringLiteral("errorMessage")).toString() != current.error_message ||
+      response.value(QStringLiteral("latestRenderFailure")).toObject()
+              .value(QStringLiteral("jobId")).toString() != current.job_id ||
+      QJsonDocument(response).toJson(QJsonDocument::Compact)
+          .contains(QByteArrayLiteral("unrelated-render"))) {
+    return fail("render job inspection should report only bounded status for the active Timeline and suppress unrelated paths");
+  }
+  const auto denied = server.callTool(
+      QStringLiteral("timeline.inspect_render_jobs"), QJsonObject{},
+      {QStringLiteral("draft")});
+  if (!denied.value(QStringLiteral("isError")).toBool() ||
+      denied.value(QStringLiteral("structuredContent")).toObject()
+              .value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read")) {
+    return fail("render job inspection should remain available through read capability only");
+  }
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_used_media_inspection() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("used-media inspection fixture needs isolated app data");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+
+  const auto first_path = runtime_root.filePath(QStringLiteral("first-source.png"));
+  const auto second_path = runtime_root.filePath(QStringLiteral("second-source.png"));
+  if (!write_fixture_image(first_path) || !write_fixture_image(second_path)) {
+    return fail("used-media inspection fixture should create readable source images");
+  }
+
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Used Media Inspection")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+  const auto find_tool = [](const QJsonArray& tools, const QString& name) {
+    for (const auto& value : tools) {
+      const auto tool = value.toObject();
+      if (tool.value(QStringLiteral("name")).toString() == name) {
+        return tool;
+      }
+    }
+    return QJsonObject{};
+  };
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  const auto media_tool = find_tool(
+      read_tools, QStringLiteral("timeline.inspect_used_media"));
+  const auto media_schema = media_tool.value(QStringLiteral("inputSchema")).toObject();
+  const auto media_properties =
+      media_schema.value(QStringLiteral("properties")).toObject();
+  if (media_tool.isEmpty() ||
+      !media_tool.value(QStringLiteral("annotations")).toObject()
+           .value(QStringLiteral("readOnlyHint")).toBool() ||
+      media_tool.value(QStringLiteral("requiredCapability")).toString() !=
+          QStringLiteral("read") ||
+      !media_schema.value(QStringLiteral("required")).toArray().isEmpty() ||
+      media_schema.value(QStringLiteral("additionalProperties")).toBool() ||
+      media_properties.value(QStringLiteral("maxItems")).toObject()
+              .value(QStringLiteral("maximum")).toInt() != 256 ||
+      media_properties.value(QStringLiteral("offset")).toObject()
+              .value(QStringLiteral("minimum")).toInt() != 0) {
+    return fail("used-media inspection should expose an optional, strict, paginated read-only schema");
+  }
+
+  const auto empty_response = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"), QJsonObject{},
+      {QStringLiteral("read")});
+  const auto empty_body = empty_response.value(QStringLiteral("structuredContent")).toObject();
+  if (empty_response.value(QStringLiteral("isError")).toBool() ||
+      empty_body.value(QStringLiteral("totalCount")).toInt() != 0 ||
+      empty_body.value(QStringLiteral("returnedCount")).toInt() != 0 ||
+      !empty_body.value(QStringLiteral("items")).toArray().isEmpty() ||
+      empty_body.value(QStringLiteral("resourceId")).toString() !=
+          timeline.agentTaskDocumentId()) {
+    return fail("used-media inspection should return a valid empty snapshot for an active empty Timeline");
+  }
+
+  const auto denied = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"), QJsonObject{},
+      {QStringLiteral("draft")});
+  if (!denied.value(QStringLiteral("isError")).toBool() ||
+      denied.value(QStringLiteral("structuredContent")).toObject()
+              .value(QStringLiteral("requiredCapability")).toString() !=
+          QStringLiteral("read")) {
+    return fail("used-media inspection should require only the read capability");
+  }
+  const auto unknown_field = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("arbitraryPath"), first_path}},
+      {QStringLiteral("read")});
+  const auto invalid_limit = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("maxItems"), 257}},
+      {QStringLiteral("read")});
+  const auto invalid_offset = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("offset"), -1}},
+      {QStringLiteral("read")});
+  if (!unknown_field.value(QStringLiteral("isError")).toBool() ||
+      !invalid_limit.value(QStringLiteral("isError")).toBool() ||
+      !invalid_offset.value(QStringLiteral("isError")).toBool()) {
+    return fail("used-media inspection should reject unknown fields and out-of-range pagination");
+  }
+
+  QString first_video_track;
+  for (const auto& value : timeline.sequenceTracks()) {
+    const auto track = value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() ==
+            QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      first_video_track = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (first_video_track.isEmpty()) {
+    return fail("used-media inspection fixture should have a video track");
+  }
+  const auto second_track_result = timeline.createTimelineTrackForAutomation(
+      QStringLiteral("video"), QStringLiteral("Used Media Overlay"));
+  const auto second_video_track =
+      second_track_result.value(QStringLiteral("trackId")).toString();
+  if (!second_track_result.value(QStringLiteral("ok")).toBool() ||
+      second_video_track.isEmpty()) {
+    return fail("used-media inspection fixture should create a second video track");
+  }
+  const auto first_clip = timeline.createTimelineClipForAutomation(
+      first_video_track, QStringLiteral("used-media-a"), first_path,
+      QStringLiteral("First Source"), 1.0, 0.0, 1.0, 0.0, first_path);
+  const auto duplicate_clip = timeline.createTimelineClipForAutomation(
+      second_video_track, QStringLiteral("used-media-a"), first_path,
+      QStringLiteral("First Source Duplicate"), 1.0, 0.0, 1.0, 0.0,
+      first_path);
+  const auto second_clip = timeline.createTimelineClipForAutomation(
+      first_video_track, QStringLiteral("used-media-b"), second_path,
+      QStringLiteral("Second Source"), 1.0, 0.0, 1.0, 1.0, second_path);
+  if (!first_clip.value(QStringLiteral("ok")).toBool() ||
+      !duplicate_clip.value(QStringLiteral("ok")).toBool() ||
+      !second_clip.value(QStringLiteral("ok")).toBool()) {
+    return fail("used-media inspection fixture should add unique and duplicated source clips");
+  }
+
+  const auto resource_id = timeline.agentTaskDocumentId();
+  const auto document_hash = timeline.deterministicDocumentHash();
+  const auto dirty_before = timeline.dirty();
+  const auto catalog_count_before = catalog_model.assetCount();
+  const auto stale_resource = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("resourceId"), QStringLiteral("timeline:stale")},
+                  {QStringLiteral("documentHash"), document_hash}},
+      {QStringLiteral("read")});
+  const auto stale_hash = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), QString(64, QLatin1Char('0'))}},
+      {QStringLiteral("read")});
+  const auto half_guard = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id}},
+      {QStringLiteral("read")});
+  if (!stale_resource.value(QStringLiteral("isError")).toBool() ||
+      !stale_hash.value(QStringLiteral("isError")).toBool() ||
+      !half_guard.value(QStringLiteral("isError")).toBool()) {
+    return fail("used-media inspection should reject stale or incomplete resource/hash guards");
+  }
+
+  const auto first_page = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("offset"), 0},
+                  {QStringLiteral("maxItems"), 1}},
+      {QStringLiteral("read")});
+  const auto first_page_body =
+      first_page.value(QStringLiteral("structuredContent")).toObject();
+  const auto first_page_items = first_page_body.value(QStringLiteral("items")).toArray();
+  const auto first_item = first_page_items.isEmpty() ? QJsonObject{} : first_page_items.at(0).toObject();
+  const auto second_page = server.callTool(
+      QStringLiteral("timeline.inspect_used_media"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("offset"), 1},
+                  {QStringLiteral("maxItems"), 1}},
+      {QStringLiteral("read")});
+  const auto second_page_body =
+      second_page.value(QStringLiteral("structuredContent")).toObject();
+  const auto second_page_items = second_page_body.value(QStringLiteral("items")).toArray();
+  const auto second_item = second_page_items.isEmpty() ? QJsonObject{} : second_page_items.at(0).toObject();
+  const bool duplicate_source_page =
+      first_item.value(QStringLiteral("assetId")).toString() ==
+          QStringLiteral("used-media-a") ||
+      second_item.value(QStringLiteral("assetId")).toString() ==
+          QStringLiteral("used-media-a");
+  const auto& duplicate_item = first_item.value(QStringLiteral("assetId")).toString() ==
+                                       QStringLiteral("used-media-a")
+                                   ? first_item
+                                   : second_item;
+  if (first_page.value(QStringLiteral("isError")).toBool() ||
+      second_page.value(QStringLiteral("isError")).toBool() ||
+      first_page_body.value(QStringLiteral("totalCount")).toInt() != 2 ||
+      second_page_body.value(QStringLiteral("totalCount")).toInt() != 2 ||
+      first_page_body.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      first_page_body.value(QStringLiteral("documentHash")).toString() != document_hash ||
+      !first_page_body.value(QStringLiteral("guardApplied")).toBool() ||
+      first_page_items.size() != 1 || second_page_items.size() != 1 ||
+      first_page_body.value(QStringLiteral("returnedCount")).toInt() != 1 ||
+      second_page_body.value(QStringLiteral("returnedCount")).toInt() != 1 ||
+      !first_page_body.value(QStringLiteral("hasMore")).toBool() ||
+      second_page_body.value(QStringLiteral("hasMore")).toBool() ||
+      first_item.value(QStringLiteral("filePath")).toString().isEmpty() ||
+      first_item.value(QStringLiteral("mediaType")).toString() != QStringLiteral("photo") ||
+      !first_item.value(QStringLiteral("online")).toBool() ||
+      !duplicate_source_page ||
+      duplicate_item.value(QStringLiteral("trackIds")).toArray().size() != 2 ||
+      first_item.value(QStringLiteral("catalogAssetIndex")).toInt() != -1 ||
+      first_item.value(QStringLiteral("timelineReferenced")).toBool() != true ||
+      first_item.value(QStringLiteral("mediaId")).toString().isEmpty()) {
+    return fail("used-media inspection should paginate stable media IDs and merge duplicate clip references");
+  }
+
+  if (timeline.deterministicDocumentHash() != document_hash ||
+      timeline.agentTaskDocumentId() != resource_id ||
+      timeline.dirty() != dirty_before ||
+      catalog_model.assetCount() != catalog_count_before) {
+    return fail("used-media inspection should leave document hash, dirty state, identity and catalog unchanged");
+  }
+  std::cout << "timeline_used_media_inspection=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_source_replacement_contract() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) return fail("source replacement fixture needs isolated app data");
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  const auto original_path = runtime_root.filePath(QStringLiteral("source-original.png"));
+  const auto replacement_path = runtime_root.filePath(QStringLiteral("source-replacement.png"));
+  const auto pending_video_path = runtime_root.filePath(QStringLiteral("source-pending.mp4"));
+  if (!write_fixture_image(original_path, QSize(20, 20)) ||
+      !write_fixture_image(replacement_path, QSize(47, 31))) {
+    return fail("source replacement fixture should create distinct still sources");
+  }
+  QFile pending_video_file(pending_video_path);
+  const auto pending_video_bytes = QByteArrayLiteral("unprobed-video-fixture");
+  if (!pending_video_file.open(QIODevice::WriteOnly) ||
+      pending_video_file.write(pending_video_bytes) != pending_video_bytes.size()) {
+    return fail("source replacement fixture should create an unanalysed video path");
+  }
+  pending_video_file.close();
+  const auto canonical_replacement_path = QFileInfo(replacement_path).canonicalFilePath();
+  const auto canonical_pending_video_path = QFileInfo(pending_video_path).canonicalFilePath();
+  if (canonical_replacement_path.isEmpty() || canonical_pending_video_path.isEmpty())
+    return fail("source replacement fixture should resolve its admitted source paths");
+
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Source Replacement Contract")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 180},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  QString video_track_id;
+  for (const auto& track_value : timeline.sequenceTracks()) {
+    const auto track = track_value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      video_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (video_track_id.isEmpty()) return fail("source replacement fixture should have an unlocked picture track");
+  const auto created = timeline.createTimelineClipForAutomation(
+      video_track_id, QStringLiteral("asset-original"), original_path,
+      QStringLiteral("Original Still"), 9.0, 0.0, 9.0, 0.0, original_path);
+  const auto clip_id = created.value(QStringLiteral("createdClipId")).toString();
+  if (!created.value(QStringLiteral("ok")).toBool() || clip_id.isEmpty())
+    return fail("source replacement fixture should create a nine-second still clip");
+
+  const QVariantMap authored_shadow{
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("color"), QStringLiteral("#99000000")},
+      {QStringLiteral("offsetX"), 12.0},
+      {QStringLiteral("offsetY"), 7.0},
+      {QStringLiteral("blurRadius"), 18.0},
+      {QStringLiteral("spread"), 2.0},
+  };
+  const auto frame_result = timeline.setTimelineClipFrameForAutomation(
+      clip_id, 0.12, -0.08, 1.2, 5.0, 0.02, -0.03, 0.73,
+      QStringLiteral("fill"), 0.72, 0.63, 0.14, 0.05, 0.10, 0.95, 0.90,
+      authored_shadow);
+  const auto keyframe_result = timeline.editClipKeyframeForAutomation(
+      clip_id, QStringLiteral("set"), QStringLiteral("opacity"), 0.5, 0.84,
+      QStringLiteral("linear"));
+  if (!frame_result.value(QStringLiteral("ok")).toBool() ||
+      !keyframe_result.value(QStringLiteral("ok")).toBool()) {
+    return fail("source replacement fixture should author frame geometry, shadow, and opacity keyframes");
+  }
+  const auto original_clip = timeline.clips().first().toMap();
+  const auto original_hash = timeline.deterministicDocumentHash();
+  const auto original_source_signature =
+      original_clip.value(QStringLiteral("sourceIdentitySignature")).toString();
+  if (original_clip.value(QStringLiteral("keyframes")).toList().isEmpty() ||
+      original_source_signature.isEmpty()) {
+    return fail("source replacement fixture should retain an authored keyframe and source identity");
+  }
+
+  photo_editor::desktop::AgentTaskCoordinator tasks;
+  photo_editor::desktop::AgentAppCommandRegistry commands;
+  auto source_path_authorized = false;
+  const QString task_id = QStringLiteral("source-replacement-contract");
+  photo_editor::desktop::register_agent_timeline_commands(
+      commands, &timeline, tasks, [&task_id] { return task_id; },
+      [](const QString&) { return QVariantMap{{QStringLiteral("ok"), true}}; },
+      [&source_path_authorized, canonical_replacement_path,
+       canonical_pending_video_path](
+          const QString& operation, const QString& path) {
+        if (operation != QStringLiteral("import_media") ||
+            (path != canonical_replacement_path &&
+             path != canonical_pending_video_path) || !source_path_authorized) {
+          return QVariantMap{{QStringLiteral("ok"), false},
+                             {QStringLiteral("error"), QStringLiteral("Source path is not admitted.")}};
+        }
+        return QVariantMap{{QStringLiteral("ok"), true},
+                           {QStringLiteral("canonicalPath"), path}};
+      });
+  const auto command_id = QStringLiteral("timeline.action.replaceTimelineClipSource");
+  const auto command_schema = commands.schema(command_id);
+  const auto input_schema = command_schema.value(QStringLiteral("inputSchema")).toMap();
+  const auto schema_properties = input_schema.value(QStringLiteral("properties")).toMap();
+  const QVariantMap valid_values{
+      {QStringLiteral("clipId"), clip_id},
+      {QStringLiteral("assetId"), QStringLiteral("asset-replacement")},
+      {QStringLiteral("filePath"), canonical_replacement_path},
+      {QStringLiteral("displayLabel"), QStringLiteral("Replacement Still")},
+  };
+  if (!command_schema.value(QStringLiteral("available")).toBool() ||
+      !input_schema.value(QStringLiteral("required")).toStringList().contains(QStringLiteral("clipId")) ||
+      !schema_properties.contains(QStringLiteral("sourceInSeconds")) ||
+      !schema_properties.contains(QStringLiteral("fitToFill")) ||
+      schema_properties.contains(QStringLiteral("durationSeconds"))) {
+    return fail("source replacement should be discoverable by stable ID with source-time fields and no caller-supplied duration");
+  }
+
+  const auto unauthenticated = commands.invoke(command_id, valid_values);
+  if (unauthenticated.value(QStringLiteral("ok")).toBool() ||
+      !unauthenticated.value(QStringLiteral("mutationNotApplied")).toBool() ||
+      timeline.deterministicDocumentHash() != original_hash) {
+    return fail("source replacement should reject an unadmitted file before changing the document");
+  }
+
+  source_path_authorized = true;
+  const auto unowned = commands.invoke(command_id, valid_values);
+  if (unowned.value(QStringLiteral("ok")).toBool() ||
+      timeline.deterministicDocumentHash() != original_hash) {
+    return fail("source replacement should reject writes without an owned task");
+  }
+  if (!tasks.begin(runtime_root.path(), task_id).value(QStringLiteral("ok")).toBool())
+    return fail("source replacement fixture should begin an owned task journal");
+
+  auto wrong_target_values = valid_values;
+  wrong_target_values.insert(QStringLiteral("clipId"), QStringLiteral("missing-stable-clip"));
+  const auto wrong_target = commands.invoke(command_id, wrong_target_values);
+  if (wrong_target.value(QStringLiteral("ok")).toBool() ||
+      !wrong_target.value(QStringLiteral("mutationNotApplied")).toBool() ||
+      timeline.deterministicDocumentHash() != original_hash) {
+    return fail("source replacement should reject a stale clip ID without mutating the Timeline");
+  }
+
+  const auto replaced = commands.invoke(command_id, valid_values);
+  const auto after_clip = timeline.clips().first().toMap();
+  const auto replacement_hash = timeline.deterministicDocumentHash();
+  if (!replaced.value(QStringLiteral("ok")).toBool() ||
+      replaced.value(QStringLiteral("clipId")).toString() != clip_id ||
+      replaced.value(QStringLiteral("sourcePath")).toString() != canonical_replacement_path ||
+      replaced.value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-replacement") ||
+      after_clip.value(QStringLiteral("clipId")).toString() != clip_id ||
+      after_clip.value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-replacement") ||
+      after_clip.value(QStringLiteral("filePath")).toString() != canonical_replacement_path ||
+      after_clip.value(QStringLiteral("sourceIdentitySignature")).toString() == original_source_signature ||
+      after_clip.value(QStringLiteral("sourceWidth")).toInt() != 47 ||
+      after_clip.value(QStringLiteral("sourceHeight")).toInt() != 31 ||
+      after_clip.value(QStringLiteral("startSeconds")).toDouble() != original_clip.value(QStringLiteral("startSeconds")).toDouble() ||
+      after_clip.value(QStringLiteral("durationSeconds")).toDouble() != original_clip.value(QStringLiteral("durationSeconds")).toDouble() ||
+      after_clip.value(QStringLiteral("frameWidth")).toDouble() != original_clip.value(QStringLiteral("frameWidth")).toDouble() ||
+      after_clip.value(QStringLiteral("frameHeight")).toDouble() != original_clip.value(QStringLiteral("frameHeight")).toDouble() ||
+      after_clip.value(QStringLiteral("frameCornerRadius")).toDouble() != original_clip.value(QStringLiteral("frameCornerRadius")).toDouble() ||
+      after_clip.value(QStringLiteral("frameShadow")).toMap() != original_clip.value(QStringLiteral("frameShadow")).toMap() ||
+      after_clip.value(QStringLiteral("keyframes")).toList() != original_clip.value(QStringLiteral("keyframes")).toList() ||
+      qAbs(after_clip.value(QStringLiteral("trimmedDurationSeconds")).toDouble() - 9.0) > 1.0e-9 ||
+      replacement_hash.isEmpty() || replacement_hash == original_hash) {
+    return fail("source replacement should preserve the target identity, nine-second still duration, source metadata, frame styling and keyframes");
+  }
+
+  timeline.undo();
+  if (timeline.deterministicDocumentHash() != original_hash ||
+      timeline.clips().first().toMap().value(QStringLiteral("filePath")).toString() !=
+          original_clip.value(QStringLiteral("filePath")).toString()) {
+    return fail("source replacement undo should restore the exact prior source and authored edit");
+  }
+  timeline.redo();
+  if (timeline.deterministicDocumentHash() != replacement_hash ||
+      timeline.clips().first().toMap().value(QStringLiteral("filePath")).toString() != canonical_replacement_path) {
+    return fail("source replacement redo should restore the new admitted source and preserved edit");
+  }
+  auto pending_video_values = valid_values;
+  pending_video_values.insert(QStringLiteral("assetId"), QStringLiteral("asset-pending-video"));
+  pending_video_values.insert(QStringLiteral("filePath"), canonical_pending_video_path);
+  pending_video_values.insert(QStringLiteral("displayLabel"), QStringLiteral("Unanalysed Video"));
+  const auto pending_video = commands.invoke(command_id, pending_video_values);
+  if (pending_video.value(QStringLiteral("ok")).toBool() ||
+      !pending_video.value(QStringLiteral("analysisPending")).toBool() ||
+      !pending_video.value(QStringLiteral("mutationNotApplied")).toBool() ||
+      pending_video.value(QStringLiteral("errorCode")).toString() !=
+          QStringLiteral("media_analysis_pending") ||
+      timeline.deterministicDocumentHash() != replacement_hash ||
+      timeline.clips().first().toMap().value(QStringLiteral("filePath")).toString() !=
+          canonical_replacement_path) {
+    return fail("source replacement should return explicit not-ready for unanalyzed video without guessing its duration or changing the clip");
+  }
+  std::cout << "timeline_source_replacement_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_grade_effect_command_scan_bypass() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("grade/effect command fixture needs an isolated task directory");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  const auto source_path = runtime_root.filePath(QStringLiteral("grade-effect-source.png"));
+  if (!write_fixture_image(source_path, QSize(24, 24))) {
+    return fail("grade/effect command fixture should create a still source");
+  }
+  const auto canonical_source_path = QFileInfo(source_path).canonicalFilePath();
+  if (canonical_source_path.isEmpty()) {
+    return fail("grade/effect command fixture should resolve its still source");
+  }
+
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Grade Effect Command Scan")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 180},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  QString picture_track_id;
+  for (const auto& track_value : timeline.sequenceTracks()) {
+    const auto track = track_value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      picture_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (picture_track_id.isEmpty()) {
+    return fail("grade/effect command fixture should have an unlocked picture track");
+  }
+  const auto source_clip = timeline.createTimelineClipForAutomation(
+      picture_track_id, QStringLiteral("grade-effect-source"), canonical_source_path,
+      QStringLiteral("Grade Effect Source"), 2.0, 0.0, 2.0, 0.0, canonical_source_path);
+  const auto source_clip_id = source_clip.value(QStringLiteral("createdClipId")).toString();
+  if (!source_clip.value(QStringLiteral("ok")).toBool() || source_clip_id.isEmpty()) {
+    return fail("grade/effect command fixture should create picture media so an adjustment clip is valid");
+  }
+  const auto preparation = timeline.prepareAgentTaskDocumentForAutomation();
+  if (!preparation.value(QStringLiteral("ok")).toBool() ||
+      !preparation.value(QStringLiteral("ready")).toBool() ||
+      !timeline.acceptAgentTaskDocumentPreparationForAutomation()
+           .value(QStringLiteral("ok")).toBool()) {
+    return fail("grade/effect command fixture should pause a ready Timeline for task ownership");
+  }
+  const auto baseline_state = timeline.agentTaskDocumentState();
+  const auto baseline_hash = timeline.deterministicDocumentHash();
+  const auto canonical_task_root = QDir(runtime_root.path()).canonicalPath();
+  const QString task_id = QStringLiteral("timeline-grade-effect-command-scan");
+  photo_editor::desktop::AgentTaskCoordinator tasks;
+  photo_editor::desktop::AgentAppCommandRegistry commands;
+  photo_editor::desktop::register_agent_timeline_commands(
+      commands, &timeline, tasks, [&task_id] { return task_id; },
+      [](const QString&) { return QVariantMap{{QStringLiteral("ok"), true}}; });
+
+  const QString grade_command = QStringLiteral(
+      "timeline.method.setClipColorGradeParameterForAutomation(QString,QString,double)");
+  const QString effect_command = QStringLiteral(
+      "timeline.method.editClipEffectStackForAutomation(QString,QString,QString,double,bool)");
+  const QString retime_command = QStringLiteral("timeline.action.setTimelineClipRetime");
+  QString creator_command;
+  const auto creator_rows = commands.commands(
+      QStringLiteral("timeline"), QStringLiteral("addAdjustmentClipForAutomation"), 0, 8)
+                                 .value(QStringLiteral("commands")).toList();
+  for (const auto& value : creator_rows) {
+    const auto row = value.toMap();
+    if (row.value(QStringLiteral("name")).toString() ==
+        QStringLiteral("addAdjustmentClipForAutomation")) {
+      creator_command = row.value(QStringLiteral("commandId")).toString();
+      break;
+    }
+  }
+  if (creator_command.isEmpty() ||
+      !commands.schema(grade_command).value(QStringLiteral("available")).toBool() ||
+      !commands.schema(effect_command).value(QStringLiteral("available")).toBool() ||
+      photo_editor::desktop::agent_timeline_command_detail::
+          requires_created_clip_id_discovery(grade_command) ||
+      photo_editor::desktop::agent_timeline_command_detail::
+          requires_created_clip_id_discovery(effect_command) ||
+      photo_editor::desktop::agent_timeline_command_detail::
+          requires_created_clip_id_discovery(retime_command) ||
+      !photo_editor::desktop::agent_timeline_command_detail::
+           requires_created_clip_id_discovery(creator_command) ||
+      !photo_editor::desktop::agent_timeline_command_detail::
+           requires_created_clip_id_discovery(QStringLiteral("timeline.method.futureUnknown()"))) {
+    return fail("only exact non-creators and typed ID-returning creators should bypass discovery");
+  }
+  for (const auto& typed_creator : {
+           QStringLiteral("timeline.action.createTimelineClip"),
+           QStringLiteral("timeline.action.createTimelineTitle"),
+           QStringLiteral("timeline.action.createTimelineGraphic"),
+           QStringLiteral("timeline.action.createTimelineGenerator")}) {
+    if (photo_editor::desktop::agent_timeline_command_detail::
+            requires_created_clip_id_discovery(typed_creator) ||
+        !photo_editor::desktop::agent_timeline_command_detail::
+             returns_created_clip_id_from_typed_action(typed_creator)) {
+      return fail("only typed creators with authoritative returned IDs should bypass discovery");
+    }
+  }
+
+  const QVariantMap create_values{
+      {QStringLiteral("start_seconds"), 0.0},
+      {QStringLiteral("duration_seconds"), 2.0},
+  };
+  const auto unowned_create = commands.invoke(creator_command, create_values);
+  if (unowned_create.value(QStringLiteral("ok")).toBool() ||
+      timeline.agentTaskDocumentState() != baseline_state) {
+    return fail("the no-task resource guard should reject creation without changing the baseline");
+  }
+  if (!tasks.begin(canonical_task_root, task_id).value(QStringLiteral("ok")).toBool() ||
+      !tasks.journal()->recordNativeTimelineScope(
+           {timeline.agentTaskDocumentId()}, {}, canonical_task_root)
+           .value(QStringLiteral("ok")).toBool()) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail("the fixture should admit an exact owned Timeline resource before commands");
+  }
+
+  const auto created = commands.invoke(creator_command, create_values);
+  const auto clip_id = created.value(QStringLiteral("createdClipId")).toString();
+  const auto created_ids = created.value(QStringLiteral("createdClipIds")).toStringList();
+  if (!created.value(QStringLiteral("ok")).toBool() || clip_id.isEmpty() ||
+      created_ids != QStringList{clip_id} ||
+      created.value(QStringLiteral("taskStateHash")).toString().isEmpty()) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    std::cerr << "a non-exempt creator should retain rich before/after clip-ID discovery and task journaling: "
+              << QJsonDocument::fromVariant(created).toJson(QJsonDocument::Compact).toStdString() << '\n';
+    return EXIT_FAILURE;
+  }
+
+  const auto before_bad_target = timeline.agentTaskDocumentState();
+  auto wrong_grade_values = QVariantMap{
+      {QStringLiteral("clip_id"), QStringLiteral("stale-clip-id")},
+      {QStringLiteral("parameter"), QStringLiteral("exposure")},
+      {QStringLiteral("value"), 0.25},
+  };
+  const auto wrong_grade = commands.invoke(grade_command, wrong_grade_values);
+  if (wrong_grade.value(QStringLiteral("ok")).toBool() ||
+      timeline.agentTaskDocumentState() != before_bad_target) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail("the optimized grade path should preserve stable-clip target rejection");
+  }
+
+  const auto grade = commands.invoke(grade_command, {
+      {QStringLiteral("clip_id"), clip_id},
+      {QStringLiteral("parameter"), QStringLiteral("exposure")},
+      {QStringLiteral("value"), 0.25},
+  });
+  const auto grade_state = timeline.inspectClipColorGradeForAutomation(clip_id);
+  const auto grade_recipe = grade_state.value(QStringLiteral("recipe")).toMap();
+  const auto grade_adjustments = grade_recipe.value(QStringLiteral("globalAdjustments")).toMap();
+  const auto grade_hash = timeline.deterministicDocumentHash();
+  if (!grade.value(QStringLiteral("ok")).toBool() ||
+      !grade.value(QStringLiteral("changed")).toBool() ||
+      !grade.value(QStringLiteral("createdClipId")).toString().isEmpty() ||
+      !grade.value(QStringLiteral("createdClipIds")).toStringList().isEmpty() ||
+      grade.value(QStringLiteral("taskStateHash")).toString().isEmpty() ||
+      !grade_state.value(QStringLiteral("ok")).toBool() ||
+      !grade_state.value(QStringLiteral("enabled")).toBool() ||
+      qAbs(grade_adjustments.value(QStringLiteral("exposure")).toDouble() - 0.25) > 1.0e-9) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail("the grade setter should journal its exact change without scanning or inventing created IDs");
+  }
+
+  const auto effect = commands.invoke(effect_command, {
+      {QStringLiteral("clip_id"), clip_id},
+      {QStringLiteral("operation"), QStringLiteral("add")},
+      {QStringLiteral("effect_name"), QStringLiteral("Black & White")},
+      {QStringLiteral("amount"), 1.0},
+      {QStringLiteral("enabled"), true},
+  });
+  const auto effect_state = timeline.inspectClipEffectsForAutomation(clip_id);
+  const auto effect_stack = effect_state.value(QStringLiteral("effectStack")).toList();
+  const auto effect_hash = timeline.deterministicDocumentHash();
+  if (!effect.value(QStringLiteral("ok")).toBool() ||
+      !effect.value(QStringLiteral("changed")).toBool() ||
+      !effect.value(QStringLiteral("createdClipId")).toString().isEmpty() ||
+      !effect.value(QStringLiteral("createdClipIds")).toStringList().isEmpty() ||
+      effect.value(QStringLiteral("taskStateHash")).toString().isEmpty() ||
+      !effect_state.value(QStringLiteral("ok")).toBool() ||
+      effect_stack.size() != 1 ||
+      effect_stack.first().toString() != QStringLiteral("Black & White")) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail("the effect setter should journal its exact change without scanning or inventing created IDs");
+  }
+
+  timeline.undo();
+  if (timeline.deterministicDocumentHash() != grade_hash) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail("native Undo should restore the grade-only preimage after an effect edit");
+  }
+  timeline.redo();
+  if (timeline.deterministicDocumentHash() != effect_hash) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail("native Redo should restore the journaled grade/effect document exactly");
+  }
+
+  const auto reverted = tasks.revert();
+  const auto reverted_state = timeline.agentTaskDocumentState();
+  timeline.releaseAgentTaskDocumentForAutomation();
+  if (!reverted.value(QStringLiteral("ok")).toBool() ||
+      reverted_state != baseline_state ||
+      timeline.deterministicDocumentHash() != baseline_hash ||
+      timeline.clips().size() != 1 ||
+      timeline.clips().first().toMap().value(QStringLiteral("clipId")).toString() != source_clip_id) {
+    return fail("task revert should restore the exact original resource after the optimized grade/effect calls");
+  }
+  std::cout << "timeline_grade_effect_command_scan_bypass=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_typed_mutation_projection_bypass() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("typed mutation projection fixture needs isolated app data");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  const auto still_path = runtime_root.filePath(QStringLiteral("projection-still.png"));
+  const auto video_path = runtime_root.filePath(QStringLiteral("projection-video.mp4"));
+  if (!write_fixture_image(still_path, QSize(24, 24))) {
+    return fail("typed mutation fixture should create a still source");
+  }
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) return fail("typed mutation fixture needs FFmpeg for its retime target");
+  QProcess video_writer;
+  video_writer.setProcessChannelMode(QProcess::SeparateChannels);
+  video_writer.start(ffmpeg, {
+      QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"),
+      QStringLiteral("-y"), QStringLiteral("-f"), QStringLiteral("lavfi"),
+      QStringLiteral("-i"), QStringLiteral("color=c=blue:s=160x90:r=24:d=2"),
+      QStringLiteral("-an"), QStringLiteral("-c:v"), QStringLiteral("libx264"),
+      QStringLiteral("-preset"), QStringLiteral("ultrafast"),
+      QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"), video_path});
+  if (!video_writer.waitForStarted(5000) || !video_writer.waitForFinished(30000) ||
+      video_writer.exitStatus() != QProcess::NormalExit || video_writer.exitCode() != 0) {
+    return fail("typed mutation fixture should create a short local video source");
+  }
+  const auto canonical_still_path = QFileInfo(still_path).canonicalFilePath();
+  const auto canonical_video_path = QFileInfo(video_path).canonicalFilePath();
+  if (canonical_still_path.isEmpty() || canonical_video_path.isEmpty()) {
+    return fail("typed mutation fixture should resolve both source paths");
+  }
+
+  constexpr int kExpectedLargeClipCount = 1277;
+  constexpr int kDuplicateTitleCount = kExpectedLargeClipCount - 2;
+  photo_editor::desktop::TimelineDocumentController seed;
+  seed.setEditAccessPolicy([] { return true; });
+  seed.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Typed Mutation Projection Fixture")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 180},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  QString picture_track_id;
+  for (const auto& track_value : seed.sequenceTracks()) {
+    const auto track = track_value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      picture_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (picture_track_id.isEmpty()) {
+    return fail("typed mutation fixture should have an unlocked video track");
+  }
+  const auto video_clip = seed.createTimelineClipForAutomation(
+      picture_track_id, QStringLiteral("typed-projection-video"), canonical_video_path,
+      QStringLiteral("Retime Target"), 2.0, 0.0, 2.0, 0.0, canonical_video_path);
+  const auto video_clip_id = video_clip.value(QStringLiteral("createdClipId")).toString();
+  if (!video_clip.value(QStringLiteral("ok")).toBool() || video_clip_id.isEmpty() ||
+      !wait_for_condition([&seed] { return seed.agentTaskDocumentReady(); }, 60000)) {
+    return fail("typed mutation fixture should settle its video source before snapshotting");
+  }
+  const auto title = seed.createTimelineTitleForAutomation(
+      picture_track_id, QStringLiteral("basic"), 10.0, 1.0,
+      {{QStringLiteral("text"), QStringLiteral("Projection Fixture")}});
+  const auto seed_title_id = title.value(QStringLiteral("createdClipId")).toString();
+  if (!title.value(QStringLiteral("ok")).toBool() || seed_title_id.isEmpty()) {
+    return fail("typed mutation fixture should create a native animated title seed");
+  }
+  QVariantList keyframes;
+  for (int frame = 0; frame <= 6; ++frame) {
+    const auto local_seconds = static_cast<double>(frame) / 6.0;
+    keyframes.push_back(QVariantMap{
+        {QStringLiteral("localSeconds"), local_seconds},
+        {QStringLiteral("value"), 1.0},
+        {QStringLiteral("interpolation"), QStringLiteral("linear")}});
+  }
+  QVariantList channels;
+  for (const auto& parameter : {
+           QStringLiteral("opacity"), QStringLiteral("frameScale"),
+           QStringLiteral("frameOffsetX"), QStringLiteral("frameOffsetY"),
+           QStringLiteral("frameRotationDegrees"), QStringLiteral("framePerspectiveX"),
+           QStringLiteral("framePerspectiveY"), QStringLiteral("frameCornerRadius"),
+           QStringLiteral("titlePositionX"), QStringLiteral("titlePositionY")}) {
+    QVariantList channel_keyframes = keyframes;
+    if (parameter == QStringLiteral("frameOffsetX") ||
+        parameter == QStringLiteral("frameOffsetY") ||
+        parameter == QStringLiteral("frameRotationDegrees") ||
+        parameter == QStringLiteral("framePerspectiveX") ||
+        parameter == QStringLiteral("framePerspectiveY") ||
+        parameter == QStringLiteral("frameCornerRadius")) {
+      for (auto& keyframe : channel_keyframes) {
+        auto map = keyframe.toMap();
+        map.insert(QStringLiteral("value"), 0.0);
+        keyframe = map;
+      }
+    } else if (parameter == QStringLiteral("titlePositionX") ||
+               parameter == QStringLiteral("titlePositionY")) {
+      for (auto& keyframe : channel_keyframes) {
+        auto map = keyframe.toMap();
+        map.insert(QStringLiteral("value"), 0.5);
+        keyframe = map;
+      }
+    }
+    channels.push_back(QVariantMap{
+        {QStringLiteral("parameter"), parameter},
+        {QStringLiteral("keyframes"), channel_keyframes}});
+  }
+  const auto animated_seed = seed.setTimelineClipAnimationForAutomation(seed_title_id, channels);
+  if (!animated_seed.value(QStringLiteral("ok")).toBool() ||
+      animated_seed.value(QStringLiteral("keyframeCount")).toInt() != 70 ||
+      !wait_for_condition([&seed] { return seed.agentTaskDocumentReady(); }, 60000)) {
+    return fail("typed mutation fixture should author a dense but valid title keyframe payload");
+  }
+  const auto seed_state = seed.agentTaskDocumentState();
+  QJsonParseError json_error;
+  const auto seed_document = QJsonDocument::fromJson(seed_state, &json_error);
+  if (seed_state.isEmpty() || json_error.error != QJsonParseError::NoError ||
+      !seed_document.isObject()) {
+    return fail("typed mutation fixture should serialize its small native seed document");
+  }
+  auto large_document = seed_document.object();
+  auto large_tracks = large_document.value(QStringLiteral("tracks")).toArray();
+  auto augmented = false;
+  auto keyframe_total = 70;
+  for (int track_index = 0; track_index < large_tracks.size(); ++track_index) {
+    auto track = large_tracks.at(track_index).toObject();
+    if (track.value(QStringLiteral("trackId")).toString() != picture_track_id) continue;
+    auto clips = track.value(QStringLiteral("clips")).toArray();
+    QJsonObject seed_clip;
+    for (const auto& value : clips) {
+      const auto clip = value.toObject();
+      if (clip.value(QStringLiteral("clipId")).toString() == seed_title_id) {
+        seed_clip = clip;
+        break;
+      }
+    }
+    if (seed_clip.isEmpty() || seed_clip.value(QStringLiteral("keyframes")).toArray().size() != 70) {
+      return fail("typed mutation fixture should find the animated seed in the primary track snapshot");
+    }
+    for (int index = 0; index < kDuplicateTitleCount; ++index) {
+      auto duplicate = seed_clip;
+      const auto duplicate_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+      duplicate.insert(QStringLiteral("clipId"), duplicate_id);
+      duplicate.insert(QStringLiteral("assetId"), QStringLiteral("generated:title:%1").arg(duplicate_id));
+      duplicate.insert(QStringLiteral("linkedGroupId"),
+                       QUuid::createUuid().toString(QUuid::WithoutBraces));
+      duplicate.insert(QStringLiteral("displayLabel"), QStringLiteral("Animated title fixture"));
+      duplicate.insert(QStringLiteral("titleText"), QStringLiteral("Animated title fixture"));
+      duplicate.insert(QStringLiteral("startSeconds"), 100.0 + static_cast<double>(index) * 1.1);
+      duplicate.insert(QStringLiteral("durationSeconds"), 1.0);
+      duplicate.insert(QStringLiteral("trimStartSeconds"), 0.0);
+      duplicate.insert(QStringLiteral("trimEndSeconds"), 1.0);
+      clips.push_back(duplicate);
+      keyframe_total += duplicate.value(QStringLiteral("keyframes")).toArray().size();
+    }
+    track.insert(QStringLiteral("clips"), clips);
+    large_tracks.replace(track_index, track);
+    large_document.insert(QStringLiteral("clips"), clips);
+    augmented = true;
+    break;
+  }
+  if (!augmented) return fail("typed mutation fixture should find its primary picture track");
+  large_document.insert(QStringLiteral("tracks"), large_tracks);
+  const auto large_project_path = runtime_root.filePath(QStringLiteral("large-native-timeline.json"));
+  QFile large_project(large_project_path);
+  const auto large_bytes = QJsonDocument(large_document).toJson(QJsonDocument::Compact);
+  if (!large_project.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      large_project.write(large_bytes) != large_bytes.size()) {
+    return fail("typed mutation fixture should write the expanded native project snapshot");
+  }
+  large_project.close();
+
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  if (!timeline.loadTimeline(large_project_path) ||
+      !wait_for_condition([&timeline] { return timeline.agentTaskDocumentReady(); }, 60000) ||
+      timeline.clipCount() != kExpectedLargeClipCount) {
+    return fail("typed mutation fixture should load a 1,277-clip native project before task admission");
+  }
+  const auto loaded_clip_maps = timeline.clips();
+  auto loaded_keyframe_total = 0;
+  for (const auto& clip_value : loaded_clip_maps) {
+    loaded_keyframe_total += clip_value.toMap().value(QStringLiteral("keyframes")).toList().size();
+  }
+  if (loaded_clip_maps.size() != kExpectedLargeClipCount ||
+      loaded_keyframe_total != keyframe_total) {
+    return fail("typed mutation fixture should retain its complete 89,320-keyframe clip projection after native load");
+  }
+  const auto preparation = timeline.prepareAgentTaskDocumentForAutomation();
+  if (!preparation.value(QStringLiteral("ok")).toBool() ||
+      !preparation.value(QStringLiteral("ready")).toBool() ||
+      !timeline.acceptAgentTaskDocumentPreparationForAutomation()
+           .value(QStringLiteral("ok")).toBool()) {
+    return fail("typed mutation fixture should pause a ready large Timeline for task ownership");
+  }
+  const auto baseline_state = timeline.agentTaskDocumentState();
+  const auto baseline_hash = timeline.deterministicDocumentHash();
+  const auto canonical_task_root = QDir(runtime_root.path()).canonicalPath();
+  const QString task_id = QStringLiteral("timeline-typed-mutation-projection-bypass");
+  photo_editor::desktop::AgentTaskCoordinator tasks;
+  photo_editor::desktop::AgentAppCommandRegistry commands;
+  const auto authorize_path = [](const QString&, const QString& path) {
+    const auto canonical_path = QFileInfo(path).canonicalFilePath();
+    return canonical_path.isEmpty()
+        ? QVariantMap{{QStringLiteral("ok"), false},
+                      {QStringLiteral("error"), QStringLiteral("The local source path is unavailable.")}}
+        : QVariantMap{{QStringLiteral("ok"), true},
+                      {QStringLiteral("canonicalPath"), canonical_path}};
+  };
+  photo_editor::desktop::register_agent_timeline_commands(
+      commands, &timeline, tasks, [&task_id] { return task_id; },
+      [](const QString&) { return QVariantMap{{QStringLiteral("ok"), true}}; },
+      authorize_path);
+  if (!tasks.begin(canonical_task_root, task_id).value(QStringLiteral("ok")).toBool() ||
+      !tasks.journal()->recordNativeTimelineScope(
+           {timeline.agentTaskDocumentId()}, {}, canonical_task_root)
+           .value(QStringLiteral("ok")).toBool()) {
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail("typed mutation fixture should enroll the exact large Timeline baseline");
+  }
+  const auto fail_owned = [&tasks, &timeline](const char* message) {
+    (void)tasks.revert();
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return fail(message);
+  };
+
+  struct ProjectionSample {
+    double before_ms = 0.0;
+    double action_ms = 0.0;
+    double after_ms = 0.0;
+  };
+  const auto project_clip_ids = [&timeline](double* elapsed_ms) {
+    QElapsedTimer timer;
+    timer.start();
+    const auto projected = timeline.clips();
+    QSet<QString> ids;
+    for (const auto& item : projected) {
+      const auto id = item.toMap().value(QStringLiteral("clipId")).toString();
+      if (!id.isEmpty()) ids.insert(id);
+    }
+    if (elapsed_ms != nullptr) {
+      *elapsed_ms = static_cast<double>(timer.nsecsElapsed()) / 1000000.0;
+    }
+    return ids;
+  };
+  const auto timed_typed_creator = [&](const QString& command_id,
+                                       const QVariantMap& values,
+                                       const QString& expected_track_id,
+                                       ProjectionSample* sample) {
+    if (sample == nullptr) return QVariantMap{};
+    QSet<QString> before_ids;
+    sample->before_ms = 0.0;
+    before_ids = project_clip_ids(&sample->before_ms);
+    QElapsedTimer action_timer;
+    action_timer.start();
+    const auto result = commands.invoke(command_id, values);
+    sample->action_ms = static_cast<double>(action_timer.nsecsElapsed()) / 1000000.0;
+    const auto after_ids = project_clip_ids(&sample->after_ms);
+    QSet<QString> created_ids = after_ids;
+    for (const auto& id : before_ids) created_ids.remove(id);
+    const auto returned_id = result.value(QStringLiteral("createdClipId")).toString();
+    if (!result.value(QStringLiteral("ok")).toBool() || returned_id.isEmpty() ||
+        result.value(QStringLiteral("createdClipIds")).toStringList() != QStringList{returned_id} ||
+        created_ids != QSet<QString>{returned_id} ||
+        result.value(QStringLiteral("trackId")).toString() != expected_track_id ||
+        result.value(QStringLiteral("taskStateHash")).toString().isEmpty() ||
+        result.value(QStringLiteral("taskStateHash")).toString() !=
+            tasks.journal()->checkpointHash(timeline.agentTaskDocumentId()) ||
+        !timeline.inspectTimelineClipById(returned_id).value(QStringLiteral("ok")).toBool()) {
+      return QVariantMap{{QStringLiteral("ok"), false}};
+    }
+    return QVariantMap{{QStringLiteral("ok"), true},
+                       {QStringLiteral("createdClipId"), returned_id}};
+  };
+
+  QVector<ProjectionSample> creator_samples;
+  for (const auto& command_id : {
+           QStringLiteral("timeline.action.createTimelineClip"),
+           QStringLiteral("timeline.action.createTimelineTitle"),
+           QStringLiteral("timeline.action.createTimelineGraphic"),
+           QStringLiteral("timeline.action.createTimelineGenerator")}) {
+    if (photo_editor::desktop::agent_timeline_command_detail::
+            requires_created_clip_id_discovery(command_id) ||
+        !photo_editor::desktop::agent_timeline_command_detail::
+             returns_created_clip_id_from_typed_action(command_id)) {
+      return fail_owned("large-project creator workflow should use only exact typed actions with authoritative IDs");
+    }
+  }
+  const auto run_creator = [&](const QString& command_id,
+                               const QVariantMap& values) {
+    ProjectionSample sample;
+    const auto result = timed_typed_creator(command_id, values, picture_track_id, &sample);
+    creator_samples.push_back(sample);
+    return result.value(QStringLiteral("ok")).toBool();
+  };
+  if (!run_creator(QStringLiteral("timeline.action.createTimelineTitle"), {
+          {QStringLiteral("trackId"), picture_track_id},
+          {QStringLiteral("templateKey"), QStringLiteral("basic")},
+          {QStringLiteral("startSeconds"), 2002.0},
+          {QStringLiteral("durationSeconds"), 1.0},
+          {QStringLiteral("values"), QVariantMap{
+               {QStringLiteral("text"), QStringLiteral("Typed title result")}}}}) ||
+      !run_creator(QStringLiteral("timeline.action.createTimelineGraphic"), {
+          {QStringLiteral("trackId"), picture_track_id},
+          {QStringLiteral("shapeType"), QStringLiteral("ellipse")},
+          {QStringLiteral("startSeconds"), 2004.0},
+          {QStringLiteral("durationSeconds"), 1.0},
+          {QStringLiteral("values"), QVariantMap{
+               {QStringLiteral("shapeWidth"), 0.12},
+               {QStringLiteral("shapeHeight"), 0.08}}}}) ||
+      !run_creator(QStringLiteral("timeline.action.createTimelineGenerator"), {
+          {QStringLiteral("trackId"), picture_track_id},
+          {QStringLiteral("generatorKind"), QStringLiteral("transition-veil")},
+          {QStringLiteral("startSeconds"), 2006.0},
+          {QStringLiteral("durationSeconds"), 1.0},
+          {QStringLiteral("parameters"), QVariantMap{
+               {QStringLiteral("opacity"), 0.35}}}})) {
+    return fail_owned("typed creator actions should return the exact created clip IDs and journal them without discovery maps");
+  }
+
+  const auto video_clip_inspection = timeline.inspectTimelineClipById(video_clip_id);
+  const auto video_clip_detail = video_clip_inspection.value(QStringLiteral("clip")).toMap();
+  const auto source_in = video_clip_detail.value(QStringLiteral("trimStartSeconds")).toDouble();
+  const auto source_out = video_clip_detail.value(QStringLiteral("trimEndSeconds")).toDouble();
+  const auto play_duration = video_clip_detail.value(QStringLiteral("trimmedDurationSeconds")).toDouble();
+  if (!video_clip_inspection.value(QStringLiteral("ok")).toBool() ||
+      !(source_out > source_in) || !(play_duration > 0.0)) {
+    return fail_owned("typed retime fixture should inspect the native source window and play duration before use");
+  }
+  const auto retime_points = QVariantList{
+      QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                  {QStringLiteral("sourceSeconds"), source_in},
+                  {QStringLiteral("interpolation"), QStringLiteral("linear")}},
+      QVariantMap{{QStringLiteral("localSeconds"), play_duration * 0.5},
+                  {QStringLiteral("sourceSeconds"), (source_in + source_out) * 0.5},
+                  {QStringLiteral("interpolation"), QStringLiteral("linear")}},
+      QVariantMap{{QStringLiteral("localSeconds"), play_duration},
+                  {QStringLiteral("sourceSeconds"), source_out},
+                  {QStringLiteral("interpolation"), QStringLiteral("linear")}},
+  };
+  const auto retime_command = QStringLiteral("timeline.action.setTimelineClipRetime");
+  const auto before_stale_retime = timeline.agentTaskDocumentState();
+  const auto stale_retime = commands.invoke(retime_command, {
+      {QStringLiteral("clipId"), video_clip_id},
+      {QStringLiteral("expectedSourceInSeconds"), source_in},
+      {QStringLiteral("expectedSourceOutSeconds"), source_out},
+      {QStringLiteral("expectedPlayDurationSeconds"), play_duration + 0.5},
+      {QStringLiteral("points"), retime_points},
+  });
+  if (stale_retime.value(QStringLiteral("ok")).toBool() ||
+      !stale_retime.value(QStringLiteral("mutationNotApplied")).toBool() ||
+      !stale_retime.value(QStringLiteral("createdClipId")).toString().isEmpty() ||
+      !stale_retime.value(QStringLiteral("createdClipIds")).toStringList().isEmpty() ||
+      timeline.agentTaskDocumentState() != before_stale_retime) {
+    return fail_owned("the retime fast path should preserve stale-window rejection and avoid invented creator IDs");
+  }
+
+  ProjectionSample retime_sample;
+  const auto before_retime_ids = project_clip_ids(&retime_sample.before_ms);
+  const auto before_retime_hash = timeline.deterministicDocumentHash();
+  QElapsedTimer retime_timer;
+  retime_timer.start();
+  const auto retime_result = commands.invoke(retime_command, {
+      {QStringLiteral("clipId"), video_clip_id},
+      {QStringLiteral("expectedSourceInSeconds"), source_in},
+      {QStringLiteral("expectedSourceOutSeconds"), source_out},
+      {QStringLiteral("expectedPlayDurationSeconds"), play_duration},
+      {QStringLiteral("points"), retime_points},
+  });
+  retime_sample.action_ms = static_cast<double>(retime_timer.nsecsElapsed()) / 1000000.0;
+  const auto after_retime_ids = project_clip_ids(&retime_sample.after_ms);
+  const auto after_retime_hash = timeline.deterministicDocumentHash();
+  if (!retime_result.value(QStringLiteral("ok")).toBool() ||
+      !retime_result.value(QStringLiteral("changed")).toBool() ||
+      retime_result.value(QStringLiteral("taskStateHash")).toString().isEmpty() ||
+      retime_result.value(QStringLiteral("taskStateHash")).toString() !=
+          tasks.journal()->checkpointHash(timeline.agentTaskDocumentId()) ||
+      !retime_result.value(QStringLiteral("createdClipId")).toString().isEmpty() ||
+      !retime_result.value(QStringLiteral("createdClipIds")).toStringList().isEmpty() ||
+      before_retime_ids != after_retime_ids || before_retime_hash == after_retime_hash) {
+    return fail_owned("typed video retime should journal its edit without scanning for created IDs or changing the clip set");
+  }
+
+  double creator_scan_ms = 0.0;
+  double creator_action_ms = 0.0;
+  for (const auto& sample : creator_samples) {
+    creator_scan_ms += sample.before_ms + sample.after_ms;
+    creator_action_ms += sample.action_ms;
+  }
+  const auto retime_scan_ms = retime_sample.before_ms + retime_sample.after_ms;
+  timeline.undo();
+  if (timeline.deterministicDocumentHash() != before_retime_hash) {
+    return fail_owned("native Undo should restore the exact retime preimage");
+  }
+  timeline.redo();
+  if (timeline.deterministicDocumentHash() != after_retime_hash) {
+    return fail_owned("native Undo and Redo should preserve the exact retime preimage and postimage");
+  }
+
+  if (!run_creator(QStringLiteral("timeline.action.createTimelineClip"), {
+          {QStringLiteral("trackId"), picture_track_id},
+          {QStringLiteral("assetId"), QStringLiteral("typed-import-image")},
+          {QStringLiteral("filePath"), canonical_still_path},
+          {QStringLiteral("displayLabel"), QStringLiteral("Typed Import Image")},
+          {QStringLiteral("durationSeconds"), 1.0},
+          {QStringLiteral("trimStartSeconds"), 0.0},
+          {QStringLiteral("trimEndSeconds"), 1.0},
+          {QStringLiteral("startSeconds"), 2000.0},
+          {QStringLiteral("posterSource"), canonical_still_path}}) ||
+      !wait_for_condition([&timeline] { return timeline.agentTaskDocumentReady(); }, 60000)) {
+    return fail_owned("typed media import should return its exact ID and settle source verification before task revert");
+  }
+  const auto reverted = tasks.revert();
+  const auto reverted_state = timeline.agentTaskDocumentState();
+  timeline.releaseAgentTaskDocumentForAutomation();
+  if (!reverted.value(QStringLiteral("ok")).toBool() || reverted_state != baseline_state ||
+      timeline.deterministicDocumentHash() != baseline_hash ||
+      timeline.clipCount() != kExpectedLargeClipCount) {
+    return fail("task revert should restore the exact 1,277-clip baseline after typed creator and retime calls");
+  }
+
+  std::cout << "timeline_typed_mutation_projection_bypass=passed"
+            << " clips=" << kExpectedLargeClipCount
+            << " authoredTitleKeyframes=" << keyframe_total
+            << " creatorActionMs=" << creator_action_ms
+            << " creatorProjectionMs=" << creator_scan_ms
+            << " creatorOldWrapperEquivalentMs=" << creator_action_ms + creator_scan_ms
+            << " retimeActionMs=" << retime_sample.action_ms
+            << " retimeProjectionMs=" << retime_scan_ms
+            << " retimeOldWrapperEquivalentMs=" << retime_sample.action_ms + retime_scan_ms
+            << " optimizedCreatorWrapperClipProjections=0"
+            << " optimizedRetimeWrapperClipProjections=0"
+            << " taskRevert=exact"
+            << '\n';
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_review_notes_inspection() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) return fail("review-note MCP fixture needs isolated app data");
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  const auto source_path = runtime_root.filePath(QStringLiteral("review-source.png"));
+  if (!write_fixture_image(source_path)) return fail("review-note MCP fixture should create its source image");
+
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Review Note MCP Contract")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 180},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  timeline.addClipFromGallery(QStringLiteral("photo:review-mcp"), source_path,
+                              QStringLiteral("Review source"), 1.5, source_path);
+  const auto clip_id = timeline.clips().isEmpty()
+      ? QString{}
+      : timeline.clips().first().toMap().value(QStringLiteral("clipId")).toString();
+  if (clip_id.isEmpty()) return fail("review-note MCP fixture should create a stable target clip");
+  const auto range_id = QStringLiteral("a6636b3a-b205-4dd2-9ae6-21c80ca8724f");
+  const auto point_id = QStringLiteral("a6636b3a-b205-4dd2-9ae6-21c80ca87250");
+  if (timeline.addAnchoredReviewNote(
+          QStringLiteral("Review range"), QStringLiteral("Check the handoff."),
+          4, 24, QStringList{clip_id}, QStringLiteral("Editorial"),
+          QStringLiteral("changes-requested"), range_id) != range_id ||
+      timeline.addAnchoredReviewNote(
+          QStringLiteral("Review frame"), QStringLiteral("Inspect the final pixel."),
+          30, 30, {}, QStringLiteral("Assistant"), QStringLiteral("open"), point_id) != point_id ||
+      !timeline.resolveTimelineReviewNote(point_id, true)) {
+    return fail("review-note MCP fixture should contain one open range and one resolved frame note");
+  }
+
+  photo_editor::desktop::AgentTaskCoordinator tasks;
+  photo_editor::desktop::AgentAppCommandRegistry commands;
+  photo_editor::desktop::register_agent_timeline_commands(
+      commands, &timeline, tasks, [] { return QString{}; },
+      [](const QString&) { return QVariantMap{{QStringLiteral("ok"), true}}; });
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  bridge.setAppCommandRegistry(&commands);
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  QJsonObject inspect_tool;
+  for (const auto& value : read_tools) {
+    const auto tool = value.toObject();
+    if (tool.value(QStringLiteral("name")).toString() ==
+        QStringLiteral("timeline.inspect_review_notes")) {
+      inspect_tool = tool;
+      break;
+    }
+  }
+  const auto tool_schema = inspect_tool.value(QStringLiteral("inputSchema")).toObject();
+  if (inspect_tool.isEmpty() ||
+      !inspect_tool.value(QStringLiteral("annotations")).toObject()
+           .value(QStringLiteral("readOnlyHint")).toBool() ||
+      inspect_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read") ||
+      !tool_schema.value(QStringLiteral("required")).toArray().isEmpty() ||
+      tool_schema.value(QStringLiteral("additionalProperties")).toBool()) {
+    return fail("review-note inspection should be a strict read-capability tool with optional stale-read guards");
+  }
+
+  const auto resource_id = timeline.agentTaskDocumentId();
+  const auto document_hash = timeline.deterministicDocumentHash();
+  const auto dirty_before = timeline.dirty();
+  const auto all_response = server.callTool(
+      QStringLiteral("timeline.inspect_review_notes"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash}},
+      {QStringLiteral("read")});
+  const auto all_body = all_response.value(QStringLiteral("structuredContent")).toObject();
+  const auto all_notes = all_body.value(QStringLiteral("items")).toArray();
+  if (all_response.value(QStringLiteral("isError")).toBool() ||
+      all_body.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      all_body.value(QStringLiteral("documentHash")).toString() != document_hash ||
+      !all_body.value(QStringLiteral("guardApplied")).toBool() || all_notes.size() != 2 ||
+      all_body.value(QStringLiteral("totalCount")).toInt() != 2) {
+    return fail("review-note inspection should return both notes under the exact document guard");
+  }
+  const auto range = all_notes.first().toObject();
+  const auto point = all_notes.last().toObject();
+  if (range.value(QStringLiteral("markerId")).toString() != range_id ||
+      range.value(QStringLiteral("anchorType")).toString() != QStringLiteral("range") ||
+      range.value(QStringLiteral("frame")).toInt() != 4 ||
+      range.value(QStringLiteral("endFrame")).toInt() != 24 ||
+      range.value(QStringLiteral("clipIds")).toArray() != QJsonArray{QJsonValue(clip_id)} ||
+      range.value(QStringLiteral("resolved")).toBool() ||
+      range.value(QStringLiteral("resolutionStatus")).toString() != QStringLiteral("open") ||
+      point.value(QStringLiteral("markerId")).toString() != point_id ||
+      point.value(QStringLiteral("anchorType")).toString() != QStringLiteral("frame") ||
+      point.value(QStringLiteral("frame")).toInt() != 30 ||
+      point.value(QStringLiteral("endFrame")).toInt() != 30 ||
+      !point.value(QStringLiteral("resolved")).toBool()) {
+    return fail("MCP review-note rows should preserve frame/range anchors, clip IDs and resolution fields");
+  }
+  const auto open_response = server.callTool(
+      QStringLiteral("timeline.inspect_review_notes"),
+      QJsonObject{{QStringLiteral("state"), QStringLiteral("open")},
+                  {QStringLiteral("query"), QStringLiteral("handoff")}},
+      {QStringLiteral("read")});
+  const auto open_body = open_response.value(QStringLiteral("structuredContent")).toObject();
+  if (open_response.value(QStringLiteral("isError")).toBool() ||
+      open_body.value(QStringLiteral("totalCount")).toInt() != 1 ||
+      open_body.value(QStringLiteral("items")).toArray().first().toObject()
+              .value(QStringLiteral("markerId")).toString() != range_id) {
+    return fail("review-note read filters should find open notes by their text");
+  }
+  const auto resolved_response = server.callTool(
+      QStringLiteral("timeline.inspect_review_notes"),
+      QJsonObject{{QStringLiteral("state"), QStringLiteral("resolved")},
+                  {QStringLiteral("noteId"), point_id}},
+      {QStringLiteral("read")});
+  const auto resolved_body = resolved_response.value(QStringLiteral("structuredContent")).toObject();
+  if (resolved_response.value(QStringLiteral("isError")).toBool() ||
+      resolved_body.value(QStringLiteral("totalCount")).toInt() != 1 ||
+      resolved_body.value(QStringLiteral("items")).toArray().first().toObject()
+              .value(QStringLiteral("markerId")).toString() != point_id) {
+    return fail("review-note reads should support exact note ID and resolved filtering");
+  }
+  const auto stale_response = server.callTool(
+      QStringLiteral("timeline.inspect_review_notes"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), QString(64, QLatin1Char('0'))}},
+      {QStringLiteral("read")});
+  const auto partial_guard_response = server.callTool(
+      QStringLiteral("timeline.inspect_review_notes"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id}},
+      {QStringLiteral("read")});
+  const auto denied_response = server.callTool(
+      QStringLiteral("timeline.inspect_review_notes"), QJsonObject{},
+      {QStringLiteral("draft")});
+  if (!stale_response.value(QStringLiteral("isError")).toBool() ||
+      !partial_guard_response.value(QStringLiteral("isError")).toBool() ||
+      !denied_response.value(QStringLiteral("isError")).toBool() ||
+      denied_response.value(QStringLiteral("structuredContent")).toObject()
+              .value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read")) {
+    return fail("review-note inspection should reject stale guards, incomplete guard pairs, and draft-only access");
+  }
+
+  const auto create_schema_response = server.callTool(
+      QStringLiteral("app.command_schema"),
+      QJsonObject{{QStringLiteral("commandId"), QStringLiteral("timeline.action.createReviewNote")}},
+      {QStringLiteral("read")});
+  const auto create_schema = create_schema_response.value(QStringLiteral("structuredContent")).toObject()
+                                 .value(QStringLiteral("inputSchema")).toObject();
+  const auto update_schema_response = server.callTool(
+      QStringLiteral("app.command_schema"),
+      QJsonObject{{QStringLiteral("commandId"), QStringLiteral("timeline.action.updateReviewNote")}},
+      {QStringLiteral("read")});
+  const auto resolve_schema_response = server.callTool(
+      QStringLiteral("app.command_schema"),
+      QJsonObject{{QStringLiteral("commandId"), QStringLiteral("timeline.action.resolveReviewNote")}},
+      {QStringLiteral("read")});
+  if (create_schema_response.value(QStringLiteral("isError")).toBool() ||
+      update_schema_response.value(QStringLiteral("isError")).toBool() ||
+      resolve_schema_response.value(QStringLiteral("isError")).toBool() ||
+      !create_schema.value(QStringLiteral("properties")).toObject().contains(QStringLiteral("markerId")) ||
+      !create_schema.value(QStringLiteral("properties")).toObject().contains(QStringLiteral("startFrame")) ||
+      !create_schema.value(QStringLiteral("properties")).toObject().contains(QStringLiteral("clipIds"))) {
+    return fail("typed task-owned create/update/resolve review-note actions should be discoverable with frame and clip fields");
+  }
+  const auto reflected_review_read = server.callTool(
+      QStringLiteral("app.inspect_command"),
+      QJsonObject{{QStringLiteral("commandId"), QStringLiteral("timeline.method.reviewNotes()")},
+                  {QStringLiteral("values"), QJsonObject{}}},
+      {QStringLiteral("read")});
+  const auto reflected_read_body = reflected_review_read.value(QStringLiteral("structuredContent")).toObject();
+  if (reflected_review_read.value(QStringLiteral("isError")).toBool() ||
+      reflected_read_body.value(QStringLiteral("result")).toArray().size() != 2) {
+    return fail("the existing reviewNotes native getter should also be available as a read-only MCP command");
+  }
+  const auto invoke_without_task = server.callTool(
+      QStringLiteral("app.invoke_command"),
+      QJsonObject{
+          {QStringLiteral("commandId"), QStringLiteral("timeline.action.createReviewNote")},
+          {QStringLiteral("values"), QJsonObject{
+              {QStringLiteral("markerId"), QStringLiteral("a6636b3a-b205-4dd2-9ae6-21c80ca87251")},
+              {QStringLiteral("label"), QStringLiteral("Unowned" )},
+              {QStringLiteral("note"), QStringLiteral("Must not be added.")},
+              {QStringLiteral("startFrame"), 0},
+              {QStringLiteral("endFrame"), 0}}}},
+      {QStringLiteral("draft")});
+  if (!invoke_without_task.value(QStringLiteral("isError")).toBool() ||
+      timeline.reviewNotes().size() != 2 || timeline.deterministicDocumentHash() != document_hash ||
+      timeline.dirty() != dirty_before) {
+    return fail("review-note MCP writes should require an active owned task and leave the document untouched when denied");
+  }
+  std::cout << "timeline_review_notes_inspection=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_visible_proof_contract() {
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Visible Proof Contract")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  const auto resource_id_before = timeline.agentTaskDocumentId();
+  const auto document_hash_before = timeline.deterministicDocumentHash();
+  const auto playhead_before = timeline.sequencePlayheadSeconds();
+  const auto dirty_before = timeline.dirty();
+  if (resource_id_before.isEmpty() || document_hash_before.isEmpty()) {
+    return fail("visible proof fixture should create a stable active Timeline");
+  }
+
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  QQuickWindow hidden_window;
+  hidden_window.setProperty("currentWorkspace", 3);
+  hidden_window.setProperty("timelineWorkspaceIndex", 3);
+  bridge.setQmlRootObject(&hidden_window);
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  QJsonObject capture_tool;
+  for (const auto& item : read_tools) {
+    const auto tool = item.toObject();
+    if (tool.value(QStringLiteral("name")).toString() ==
+        QStringLiteral("timeline.capture_visible_proof")) {
+      capture_tool = tool;
+      break;
+    }
+  }
+  const auto schema = capture_tool.value(QStringLiteral("inputSchema")).toObject();
+  const auto schema_properties = schema.value(QStringLiteral("properties")).toObject();
+  if (capture_tool.isEmpty() ||
+      !capture_tool.value(QStringLiteral("annotations")).toObject()
+           .value(QStringLiteral("readOnlyHint")).toBool() ||
+      capture_tool.value(QStringLiteral("requiredCapability")).toString() !=
+          QStringLiteral("read") ||
+      schema_properties.size() != 1 ||
+      !schema_properties.contains(QStringLiteral("captureId")) ||
+      !schema.value(QStringLiteral("required")).toArray().isEmpty() ||
+      schema.value(QStringLiteral("additionalProperties")).toBool(true)) {
+    return fail("visible proof should be a read-only tool with only an optional captureId");
+  }
+
+  const auto hidden_result = server.callTool(
+      QStringLiteral("timeline.capture_visible_proof"), QJsonObject{},
+      {QStringLiteral("read")});
+  if (!hidden_result.value(QStringLiteral("isError")).toBool() ||
+      hidden_result.value(QStringLiteral("structuredContent")).toObject()
+          .contains(QStringLiteral("proofPath")) ||
+      hidden_result.value(QStringLiteral("structuredContent")).toObject()
+          .contains(QStringLiteral("captureId"))) {
+    return fail("visible proof should reject an unavailable or headless window without returning a path");
+  }
+  const auto arbitrary_target = server.callTool(
+      QStringLiteral("timeline.capture_visible_proof"),
+      QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/other-window.png")}},
+      {QStringLiteral("read")});
+  if (!arbitrary_target.value(QStringLiteral("isError")).toBool()) {
+    return fail("visible proof should reject caller-selected paths and targets");
+  }
+  const auto denied = server.callTool(
+      QStringLiteral("timeline.capture_visible_proof"), QJsonObject{},
+      {QStringLiteral("draft")});
+  if (!denied.value(QStringLiteral("isError")).toBool() ||
+      denied.value(QStringLiteral("structuredContent")).toObject()
+          .value(QStringLiteral("requiredCapability")).toString() !=
+          QStringLiteral("read")) {
+    return fail("visible proof should remain available through read capability only");
+  }
+  bridge.setQmlRootObject(nullptr);
+  const auto unavailable_root = server.callTool(
+      QStringLiteral("timeline.capture_visible_proof"), QJsonObject{},
+      {QStringLiteral("read")});
+  if (!unavailable_root.value(QStringLiteral("isError")).toBool()) {
+    return fail("visible proof should fail when the bound Looksy root is unavailable");
+  }
+  if (timeline.agentTaskDocumentId() != resource_id_before ||
+      timeline.deterministicDocumentHash() != document_hash_before ||
+      qAbs(timeline.sequencePlayheadSeconds() - playhead_before) > 0.000001 ||
+      timeline.dirty() != dirty_before) {
+    return fail("visible proof rejection should leave the active Timeline document untouched");
+  }
+  std::cout << "timeline_visible_proof_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_visible_proof_cache_isolation_contract() {
+  QTemporaryDir runtime_root;
+  QTemporaryDir private_cache_root;
+  if (!runtime_root.isValid() || !private_cache_root.isValid()) {
+    return fail("visible proof cache isolation needs temporary runtime directories");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  qputenv("PHOTO_EDITOR_CACHE_DIR", private_cache_root.path().toUtf8());
+
+  const auto selected_cache_root =
+      photo_editor::desktop::AppBootstrap::cacheLocation();
+  const auto empty_cache =
+      photo_editor::desktop::timeline_visible_proof::inspect_cache(selected_cache_root);
+  const auto expected_proof_directory = QDir(selected_cache_root).filePath(
+      QString::fromLatin1(
+          photo_editor::desktop::timeline_visible_proof::kCacheDirectoryName));
+  const auto canonical_private_cache_root =
+      QFileInfo(private_cache_root.path()).canonicalFilePath();
+  if (!empty_cache.ok || empty_cache.capture_count != 0 ||
+      QDir::cleanPath(empty_cache.directory) !=
+          QDir::cleanPath(QFileInfo(expected_proof_directory).canonicalFilePath()) ||
+      !QDir::cleanPath(empty_cache.directory).startsWith(
+          QDir::cleanPath(canonical_private_cache_root) + QDir::separator())) {
+    std::cerr << "cache root=" << selected_cache_root.toStdString()
+              << " private=" << canonical_private_cache_root.toStdString()
+              << " proof=" << empty_cache.directory.toStdString()
+              << " error=" << empty_cache.error.toStdString() << '\n';
+    return fail("visible proof cache inspection should use the app's private cache override");
+  }
+
+  QVector<QPair<QString, QByteArray>> proofs;
+  for (int index = 0;
+       index < photo_editor::desktop::timeline_visible_proof::kMaximumCaptures + 1;
+       ++index) {
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+    const auto name = QStringLiteral("timeline-visible-%1.png").arg(id);
+    const QByteArray contents = QByteArrayLiteral("proof-%1").replace(
+        QByteArrayLiteral("%1"), QByteArray::number(index));
+    QFile file(QDir(empty_cache.directory).filePath(name));
+    if (!file.open(QIODevice::WriteOnly) || file.write(contents) != contents.size()) {
+      return fail("visible proof cache fixture should create its bounded capture entries");
+    }
+    file.close();
+    proofs.push_back({name, contents});
+  }
+  QFile unrelated(QDir(empty_cache.directory).filePath(QStringLiteral("keep-me.txt")));
+  if (!unrelated.open(QIODevice::WriteOnly) ||
+      unrelated.write(QByteArrayLiteral("unrelated")) != 9) {
+    return fail("visible proof cache fixture should create an unrelated retained entry");
+  }
+  unrelated.close();
+
+  const auto full_cache =
+      photo_editor::desktop::timeline_visible_proof::inspect_cache(selected_cache_root);
+  if (full_cache.ok || full_cache.capture_count != proofs.size() ||
+      !full_cache.error.contains(QStringLiteral("bounded storage limit")) ||
+      QFileInfo(unrelated.fileName()).size() != 9) {
+    return fail("visible proof cache inspection should enforce limits in the private root without clearing files");
+  }
+  for (const auto& proof : proofs) {
+    QFile file(QDir(empty_cache.directory).filePath(proof.first));
+    if (!file.open(QIODevice::ReadOnly) || file.readAll() != proof.second) {
+      return fail("visible proof cache inspection should preserve every existing proof byte-for-byte");
+    }
+  }
+  qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
+  qunsetenv("PHOTO_EDITOR_CACHE_DIR");
+  std::cout << "timeline_visible_proof_cache_isolation_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_structure_inspection() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("Timeline structure inspection needs isolated app data");
+  }
+  const auto private_cache_root = runtime_root.filePath(QStringLiteral("cache"));
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  qputenv("PHOTO_EDITOR_CACHE_DIR", private_cache_root.toUtf8());
+  const auto source_path = runtime_root.filePath(QStringLiteral("structure-source.png"));
+  if (!write_fixture_image(source_path)) {
+    return fail("Timeline structure fixture should create a readable source image");
+  }
+
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Structure Inspection")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 180},
+      {QStringLiteral("frameRate"), 10.0},
+  });
+  QString first_video_track;
+  for (const auto& value : timeline.sequenceTracks()) {
+    const auto track = value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() ==
+            QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      first_video_track = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (first_video_track.isEmpty()) {
+    return fail("Timeline structure fixture should contain an unlocked video track");
+  }
+  const auto overlay_track_result = timeline.createTimelineTrackForAutomation(
+      QStringLiteral("video"), QStringLiteral("Overlay Track"));
+  const auto overlay_track_id =
+      overlay_track_result.value(QStringLiteral("trackId")).toString();
+  if (!overlay_track_result.value(QStringLiteral("ok")).toBool() ||
+      overlay_track_id.isEmpty()) {
+    return fail("Timeline structure fixture should create a second video track");
+  }
+
+  const auto first_clip = timeline.createTimelineClipForAutomation(
+      first_video_track, QStringLiteral("asset-opening"), source_path,
+      QStringLiteral("Opening shot"), 1.0, 0.0, 1.0, 0.0, source_path);
+  const auto third_clip = timeline.createTimelineClipForAutomation(
+      first_video_track, QStringLiteral("asset-following"), source_path,
+      QStringLiteral("Following shot"), 1.0, 0.0, 1.0, 1.5, source_path);
+  const auto overlay_clip = timeline.createTimelineClipForAutomation(
+      overlay_track_id, QStringLiteral("asset-overlay"), source_path,
+      QStringLiteral("Overlay shot"), 1.0, 0.0, 1.0, 0.5, source_path);
+  const auto first_clip_id = first_clip.value(QStringLiteral("createdClipId")).toString();
+  const auto third_clip_id = third_clip.value(QStringLiteral("createdClipId")).toString();
+  const auto overlay_clip_id = overlay_clip.value(QStringLiteral("createdClipId")).toString();
+  const QVariantMap mask{
+      {QStringLiteral("shape"), QStringLiteral("rectangle")},
+      {QStringLiteral("left"), 0.15}, {QStringLiteral("top"), 0.20},
+      {QStringLiteral("right"), 0.85}, {QStringLiteral("bottom"), 0.80},
+      {QStringLiteral("cornerRadius"), 0.04},
+  };
+  const QVariantList mask_keyframes{
+      QVariantMap{{QStringLiteral("localSeconds"), 0.0},
+                  {QStringLiteral("value"), 0.85}},
+      QVariantMap{{QStringLiteral("localSeconds"), 1.0},
+                  {QStringLiteral("value"), 0.65}},
+  };
+  const QVariantList mask_animation{QVariantMap{
+      {QStringLiteral("parameter"), QStringLiteral("mask:right")},
+      {QStringLiteral("keyframes"), mask_keyframes},
+  }};
+  const auto mask_result = timeline.setTimelineClipMaskForAutomation(first_clip_id, mask);
+  const auto animation_result = timeline.setTimelineClipAnimationForAutomation(
+      first_clip_id, mask_animation);
+  const auto effect_result = timeline.editClipEffectStackForAutomation(
+      first_clip_id, QStringLiteral("add"), QStringLiteral("Blur"));
+  if (!first_clip.value(QStringLiteral("ok")).toBool() ||
+      !third_clip.value(QStringLiteral("ok")).toBool() ||
+      !overlay_clip.value(QStringLiteral("ok")).toBool() ||
+      first_clip_id.isEmpty() || third_clip_id.isEmpty() || overlay_clip_id.isEmpty() ||
+      !mask_result.value(QStringLiteral("ok")).toBool() ||
+      !animation_result.value(QStringLiteral("ok")).toBool() ||
+      !effect_result.value(QStringLiteral("ok")).toBool()) {
+    return fail("Timeline structure fixture should author clip mask, keyframe, and effect summaries");
+  }
+
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  QJsonObject structure_tool;
+  for (const auto& item : read_tools) {
+    const auto tool = item.toObject();
+    if (tool.value(QStringLiteral("name")).toString() ==
+        QStringLiteral("timeline.inspect_structure")) {
+      structure_tool = tool;
+      break;
+    }
+  }
+  const auto schema = structure_tool.value(QStringLiteral("inputSchema")).toObject();
+  const auto properties = schema.value(QStringLiteral("properties")).toObject();
+  if (structure_tool.isEmpty() ||
+      !structure_tool.value(QStringLiteral("annotations")).toObject()
+           .value(QStringLiteral("readOnlyHint")).toBool() ||
+      structure_tool.value(QStringLiteral("requiredCapability")).toString() !=
+          QStringLiteral("read") ||
+      !schema.value(QStringLiteral("required")).toArray().contains(
+          QStringLiteral("scope")) ||
+      properties.value(QStringLiteral("maxItems")).toObject()
+              .value(QStringLiteral("maximum")).toInt() != 64 ||
+      !structure_tool.value(QStringLiteral("description")).toString()
+           .contains(QStringLiteral("half-open"))) {
+    std::cerr << QJsonDocument(structure_tool).toJson(QJsonDocument::Compact).constData() << '\n';
+    return fail("Timeline structure inspection should expose a strict bounded read-only contract");
+  }
+
+  const auto empty_scope = server.callTool(
+      QStringLiteral("timeline.inspect_structure"), QJsonObject{},
+      {QStringLiteral("read")});
+  const auto invalid_scope = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("document")}},
+      {QStringLiteral("read")});
+  const auto invalid_limit = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("maxItems"), 65}},
+      {QStringLiteral("read")});
+  const auto incompatible_time = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("tracks")},
+                  {QStringLiteral("sequenceSeconds"), 1.0}},
+      {QStringLiteral("read")});
+  const auto denied = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")}},
+      {QStringLiteral("draft")});
+  if (!empty_scope.value(QStringLiteral("isError")).toBool() ||
+      !invalid_scope.value(QStringLiteral("isError")).toBool() ||
+      !invalid_limit.value(QStringLiteral("isError")).toBool() ||
+      !incompatible_time.value(QStringLiteral("isError")).toBool() ||
+      !denied.value(QStringLiteral("isError")).toBool()) {
+    return fail("Timeline structure inspection should reject missing, invalid, oversized, incompatible, and unauthorized requests");
+  }
+
+  const auto resource_id = timeline.agentTaskDocumentId();
+  const auto document_hash = timeline.deterministicDocumentHash();
+  const auto dirty_before = timeline.dirty();
+  const auto first_page = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("offset"), 0},
+                  {QStringLiteral("maxItems"), 1}},
+      {QStringLiteral("read")});
+  const auto first_body = first_page.value(QStringLiteral("structuredContent")).toObject();
+  const auto first_rows = first_body.value(QStringLiteral("items")).toArray();
+  const auto first_row = first_rows.isEmpty() ? QJsonObject{} : first_rows.first().toObject();
+  if (first_page.value(QStringLiteral("isError")).toBool() ||
+      first_body.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      first_body.value(QStringLiteral("documentHash")).toString() != document_hash ||
+      !first_body.value(QStringLiteral("guardApplied")).toBool() ||
+      first_body.value(QStringLiteral("totalCount")).toInt() != 3 ||
+      first_body.value(QStringLiteral("returnedCount")).toInt() != 1 ||
+      !first_body.value(QStringLiteral("hasMore")).toBool() ||
+      first_row.value(QStringLiteral("clipId")).toString() != first_clip_id ||
+      first_row.value(QStringLiteral("trackId")).toString() != first_video_track ||
+      first_row.value(QStringLiteral("stackIndex")).toInt() != 0 ||
+      first_row.value(QStringLiteral("sourceInSeconds")).toDouble() != 0.0 ||
+      first_row.value(QStringLiteral("sourceOutSeconds")).toDouble() != 1.0 ||
+      first_row.contains(QStringLiteral("filePath")) ||
+      first_row.contains(QStringLiteral("keyframes"))) {
+    return fail("Timeline structure inspection should return bounded stable clip rows with source timing and stack order");
+  }
+
+  const auto mask_summary = first_row.value(QStringLiteral("mask")).toObject();
+  const auto effect_names = first_row.value(QStringLiteral("effectNames")).toArray();
+  const auto keyframe_channels = first_row.value(QStringLiteral("keyframeChannels")).toArray();
+  if (!mask_summary.value(QStringLiteral("enabled")).toBool() ||
+      !mask_summary.value(QStringLiteral("keyframedChannels")).toArray()
+           .contains(QStringLiteral("mask:right")) ||
+      !std::any_of(effect_names.begin(), effect_names.end(), [](const QJsonValue& value) {
+        return value.toString() == QStringLiteral("Blur");
+      }) ||
+      !std::any_of(keyframe_channels.begin(), keyframe_channels.end(), [](const QJsonValue& value) {
+        return value.toString() == QStringLiteral("mask:right");
+      })) {
+    return fail("Timeline clip rows should summarize editable masks, effects, and keyframe channels");
+  }
+
+  const auto second_page = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("offset"), 1},
+                  {QStringLiteral("maxItems"), 1}},
+      {QStringLiteral("read")});
+  const auto second_body = second_page.value(QStringLiteral("structuredContent")).toObject();
+  const auto second_rows = second_body.value(QStringLiteral("items")).toArray();
+  if (second_page.value(QStringLiteral("isError")).toBool() ||
+      second_rows.size() != 1 ||
+      second_rows.first().toObject().value(QStringLiteral("clipId")).toString() !=
+          third_clip_id ||
+      !second_body.value(QStringLiteral("guardApplied")).toBool()) {
+    return fail("Timeline structure pagination should walk stable clip IDs in deterministic track order");
+  }
+
+  const auto active_page = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("sequenceSeconds"), 1.05}},
+      {QStringLiteral("read")});
+  const auto active_body = active_page.value(QStringLiteral("structuredContent")).toObject();
+  const auto active_rows = active_body.value(QStringLiteral("items")).toArray();
+  const auto active_row = active_rows.isEmpty() ? QJsonObject{} : active_rows.first().toObject();
+  if (active_page.value(QStringLiteral("isError")).toBool() ||
+      active_body.value(QStringLiteral("sampledSequenceSeconds")).toDouble() != 1.1 ||
+      active_body.value(QStringLiteral("sequenceFrameIndex")).toInt() != 11 ||
+      active_body.value(QStringLiteral("activeInterval")).toString() !=
+          QStringLiteral("start-inclusive-end-exclusive") ||
+      active_body.value(QStringLiteral("totalCount")).toInt() != 1 ||
+      active_row.value(QStringLiteral("clipId")).toString() != overlay_clip_id ||
+      qAbs(active_row.value(QStringLiteral("sourceSecondsAtSample")).toDouble() - 0.6) > 0.000001) {
+    return fail("Timeline active-time inspection should sample the nearest frame and use the native source-time evaluator");
+  }
+  const auto exact_boundary = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("sequenceSeconds"), 1.5}},
+      {QStringLiteral("read")});
+  const auto boundary_body = exact_boundary.value(QStringLiteral("structuredContent")).toObject();
+  const auto boundary_rows = boundary_body.value(QStringLiteral("items")).toArray();
+  if (exact_boundary.value(QStringLiteral("isError")).toBool() ||
+      boundary_body.value(QStringLiteral("totalCount")).toInt() != 1 ||
+      boundary_rows.first().toObject().value(QStringLiteral("clipId")).toString() !=
+          third_clip_id) {
+    return fail("Timeline active-time inspection should include the start boundary and exclude the end boundary");
+  }
+
+  const auto clip_lookup = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("clipId"), first_clip_id},
+                  {QStringLiteral("query"), QStringLiteral("opening")}},
+      {QStringLiteral("read")});
+  const auto clip_lookup_body = clip_lookup.value(QStringLiteral("structuredContent")).toObject();
+  if (clip_lookup.value(QStringLiteral("isError")).toBool() ||
+      clip_lookup_body.value(QStringLiteral("totalCount")).toInt() != 1 ||
+      clip_lookup_body.value(QStringLiteral("items")).toArray().first().toObject()
+              .value(QStringLiteral("clipId")).toString() != first_clip_id) {
+    return fail("Timeline structure inspection should support exact stable-ID lookup and label search");
+  }
+
+  const auto first_track_page = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("tracks")},
+                  {QStringLiteral("offset"), 0},
+                  {QStringLiteral("maxItems"), 1}},
+      {QStringLiteral("read")});
+  const auto track_body = first_track_page.value(QStringLiteral("structuredContent")).toObject();
+  const auto track_rows = track_body.value(QStringLiteral("items")).toArray();
+  if (first_track_page.value(QStringLiteral("isError")).toBool() ||
+      track_body.value(QStringLiteral("totalCount")).toInt() != timeline.trackCount() ||
+      track_rows.size() != 1 ||
+      track_rows.first().toObject().value(QStringLiteral("trackId")).toString() !=
+          first_video_track ||
+      track_rows.first().toObject().contains(QStringLiteral("clips"))) {
+    return fail("Timeline track lookup should paginate compact track rows without nested clip dumps");
+  }
+
+  const auto incomplete_guard = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("resourceId"), resource_id}},
+      {QStringLiteral("read")});
+  const auto stale_guard = server.callTool(
+      QStringLiteral("timeline.inspect_structure"),
+      QJsonObject{{QStringLiteral("scope"), QStringLiteral("clips")},
+                  {QStringLiteral("resourceId"), QStringLiteral("timeline:stale")},
+                  {QStringLiteral("documentHash"), document_hash}},
+      {QStringLiteral("read")});
+  if (!incomplete_guard.value(QStringLiteral("isError")).toBool() ||
+      !stale_guard.value(QStringLiteral("isError")).toBool() ||
+      timeline.deterministicDocumentHash() != document_hash ||
+      timeline.dirty() != dirty_before) {
+    return fail("Timeline structure inspection should reject incomplete/stale guards and leave the document unchanged");
+  }
+
+  std::cout << "timeline_structure_inspection=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_preview_at_time_contract() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("preview seek contract needs isolated app data");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  qputenv("PHOTO_EDITOR_TIMELINE_PLAYBACK_HEADLESS", QByteArrayLiteral("1"));
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Preview Seek Contract")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  QString video_track_id;
+  for (const auto& value : timeline.sequenceTracks()) {
+    const auto track = value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      video_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (video_track_id.isEmpty()) {
+    return fail("preview seek fixture should have an unlocked video track");
+  }
+  const auto title = timeline.createTimelineTitleForAutomation(
+      video_track_id, QStringLiteral("basic"), 0.0, 2.0, {});
+  if (!title.value(QStringLiteral("ok")).toBool() ||
+      timeline.totalDurationSecondsValue() < 1.99) {
+    return fail("preview seek fixture should establish an active two-second Timeline");
+  }
+
+  QQuickWindow window;
+  window.resize(640, 480);
+  window.setProperty("currentWorkspace", 3);
+  window.setProperty("timelineWorkspaceIndex", 3);
+  window.setProperty("timelineProgramFullScreenActive", false);
+  QObject timeline_workspace_loader(&window);
+  timeline_workspace_loader.setObjectName(QStringLiteral("timelineWorkspaceLoader"));
+  timeline_workspace_loader.setProperty("visible", true);
+  QQuickItem timeline_workspace_item(window.contentItem());
+  timeline_workspace_item.setObjectName(QStringLiteral("timelineWorkspace"));
+  timeline_workspace_item.setWidth(640.0);
+  timeline_workspace_item.setHeight(480.0);
+  timeline_workspace_item.setVisible(true);
+  timeline_workspace_item.setProperty("fullScreenProgramActive", false);
+  timeline_workspace_item.setProperty("programComparisonActive", false);
+  timeline_workspace_item.setProperty("timelineZoom", 84.0);
+  QQuickItem timeline_viewport(&timeline_workspace_item);
+  timeline_viewport.setObjectName(QStringLiteral("timelineViewport"));
+  timeline_viewport.setWidth(40.0);
+  timeline_viewport.setHeight(100.0);
+  timeline_viewport.setProperty("contentWidth", 3000.0);
+  timeline_viewport.setProperty("contentHeight", 800.0);
+  timeline_viewport.setProperty("contentX", 1400.0);
+  timeline_viewport.setProperty("contentY", 100.0);
+  timeline_workspace_item.setProperty(
+      "timelineProjectionDiagnostics",
+      QVariantMap{
+          {QStringLiteral("schema"), QStringLiteral("looksy.timeline-projection-diagnostics/v1")},
+          {QStringLiteral("snapshotMethodAvailable"), true},
+          {QStringLiteral("snapshotRefreshCount"), 3},
+          {QStringLiteral("snapshotLastMethodAvailable"), true},
+          {QStringLiteral("snapshotLastTrackCount"), 4},
+          {QStringLiteral("sequenceTrackCount"), 4},
+          {QStringLiteral("sequenceClipCount"), 9},
+          {QStringLiteral("hiddenTrackCount"), 1},
+          {QStringLiteral("visibleTrackCount"), 3},
+          {QStringLiteral("trackFocusMode"), false},
+          {QStringLiteral("trackView"), QStringLiteral("all")},
+          {QStringLiteral("trackWindowEnabled"), false},
+          {QStringLiteral("virtualizedRowModelCount"), 3},
+          {QStringLiteral("virtualizedRowArrayCount"), 3},
+          {QStringLiteral("programBackgroundLayerCount"), 2},
+          {QStringLiteral("programAdjustmentLayerCount"), 1},
+          {QStringLiteral("programAudioLayerCount"), 1},
+          {QStringLiteral("programCompositeOrderCount"), 3},
+          {QStringLiteral("unapprovedDiagnosticField"), QStringLiteral("must not leak")}});
+  timeline_workspace_loader.setProperty(
+      "item", QVariant::fromValue(static_cast<QObject*>(&timeline_workspace_item)));
+  window.show();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+  photo_editor::desktop::TimelinePlaybackController playback(&timeline);
+  playback.setWorkspaceActive(true);
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  bridge.setTimelinePlaybackController(&playback);
+  bridge.setQmlRootObject(&window);
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+
+  const auto geometry_result = server.callTool(
+      QStringLiteral("timeline.inspect_render_geometry"),
+      QJsonObject{{QStringLiteral("clipId"), title.value(QStringLiteral("createdClipId")).toString()}},
+      {QStringLiteral("read")});
+  const auto geometry_payload =
+      geometry_result.value(QStringLiteral("structuredContent")).toObject();
+  const auto projection_diagnostics =
+      geometry_payload.value(QStringLiteral("projectionDiagnostics")).toObject();
+  if (geometry_result.value(QStringLiteral("isError")).toBool() ||
+      !projection_diagnostics.value(QStringLiteral("available")).toBool() ||
+      projection_diagnostics.value(QStringLiteral("sequenceTrackCount")).toInt() != 4 ||
+      projection_diagnostics.value(QStringLiteral("sequenceClipCount")).toInt() != 9 ||
+      projection_diagnostics.value(QStringLiteral("programBackgroundLayerCount")).toInt() != 2 ||
+      projection_diagnostics.contains(QStringLiteral("unapprovedDiagnosticField"))) {
+    return fail("read-only Program geometry should expose only the fixed bounded QML projection summary");
+  }
+
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  const auto draft_tools = server.toolsListResult({QStringLiteral("draft")})
+                               .value(QStringLiteral("tools")).toArray();
+  const auto find_tool = [](const QJsonArray& tools, const QString& name) {
+    for (const auto& value : tools) {
+      const auto tool = value.toObject();
+      if (tool.value(QStringLiteral("name")).toString() == name) return tool;
+    }
+    return QJsonObject{};
+  };
+  const auto preview_tool = find_tool(
+      read_tools, QStringLiteral("timeline.preview_at_time"));
+  if (preview_tool.isEmpty() ||
+      !preview_tool.value(QStringLiteral("annotations")).toObject()
+           .value(QStringLiteral("readOnlyHint")).toBool() ||
+      preview_tool.value(QStringLiteral("requiredCapability")).toString() !=
+          QStringLiteral("read") ||
+      !find_tool(draft_tools, QStringLiteral("timeline.preview_at_time")).isEmpty()) {
+    return fail("preview_at_time should be a dedicated read-only native navigation tool");
+  }
+  const auto schema = preview_tool.value(QStringLiteral("inputSchema")).toObject();
+  const auto schema_properties = schema.value(QStringLiteral("properties")).toObject();
+  const auto required = schema.value(QStringLiteral("required")).toArray();
+  if (schema_properties.size() != 3 ||
+      !schema_properties.contains(QStringLiteral("resourceId")) ||
+      !schema_properties.contains(QStringLiteral("documentHash")) ||
+      !schema_properties.contains(QStringLiteral("seconds")) ||
+      required.size() != 3 || schema.value(QStringLiteral("additionalProperties")).toBool(true)) {
+    return fail("preview_at_time should require exactly resourceId, documentHash, and seconds");
+  }
+
+  const auto resource_id = timeline.agentTaskDocumentId();
+  const auto document_hash = timeline.deterministicDocumentHash();
+  const auto duration = timeline.totalDurationSecondsValue();
+  const auto dirty_before = timeline.dirty();
+  const auto can_undo_before = timeline.canUndo();
+  const auto can_redo_before = timeline.canRedo();
+  const auto clip_count_before = timeline.clipCount();
+  const auto track_count_before = timeline.sequenceTracks().size();
+  timeline.seekSequenceSeconds(0.2);
+  timeline.playSequence();
+  const auto valid_args = QJsonObject{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), document_hash},
+      {QStringLiteral("seconds"), 1.25},
+  };
+  const auto success = server.callTool(
+      QStringLiteral("timeline.preview_at_time"), valid_args,
+      {QStringLiteral("read")});
+  const auto success_body = success.value(QStringLiteral("structuredContent")).toObject();
+  if (success.value(QStringLiteral("isError")).toBool() ||
+      success_body.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      success_body.value(QStringLiteral("documentHash")).toString() != document_hash ||
+      success_body.value(QStringLiteral("requestedDocumentHash")).toString() != document_hash ||
+      success_body.value(QStringLiteral("observedDocumentHash")).toString() != document_hash ||
+      !success_body.value(QStringLiteral("documentHashUnchanged")).toBool() ||
+      qAbs(success_body.value(QStringLiteral("requestedSeconds")).toDouble() - 1.25) > 1.0e-6 ||
+      qAbs(success_body.value(QStringLiteral("observedPlayheadSeconds")).toDouble() - 1.25) > 1.0e-6 ||
+      success_body.value(QStringLiteral("sequencePlaying")).toBool() ||
+      !success_body.value(QStringLiteral("playbackPaused")).toBool() ||
+      !success_body.value(QStringLiteral("workspaceActive")).toBool() ||
+      !success_body.value(QStringLiteral("navigationApplied")).toBool() ||
+      !success_body.value(QStringLiteral("timelineViewportNavigationApplied")).toBool() ||
+      !success_body.value(QStringLiteral("timelineViewportPlayheadVisible")).toBool() ||
+      qAbs(success_body.value(QStringLiteral("timelineViewportContentX")).toDouble() - 85.0) > 0.5 ||
+      success_body.value(QStringLiteral("framePresentationVerified")).toBool() ||
+      !success_body.value(QStringLiteral("requiresFramePresentationVerification")).toBool() ||
+      success_body.value(QStringLiteral("framePresentationStatus")).toString() !=
+          QStringLiteral("unverified") ||
+      success_body.contains(QStringLiteral("frameReady"))) {
+    return fail("native preview seek should return the exact paused playhead without claiming frame presentation");
+  }
+  if (timeline.agentTaskDocumentId() != resource_id ||
+      timeline.deterministicDocumentHash() != document_hash ||
+      timeline.dirty() != dirty_before || timeline.canUndo() != can_undo_before ||
+      timeline.canRedo() != can_redo_before || timeline.clipCount() != clip_count_before ||
+      timeline.sequenceTracks().size() != track_count_before ||
+      qAbs(timeline_viewport.property("contentX").toDouble() - 85.0) > 0.5 ||
+      qAbs(timeline.sequencePlayheadSeconds() - 1.25) > 1.0e-6) {
+    return fail("preview seek must change only native playback position, leaving authored state and Undo/Redo unchanged");
+  }
+
+  const auto rejected_without_navigation = [&](const QJsonObject& args) {
+    timeline.seekSequenceSeconds(0.3);
+    timeline.playSequence();
+    const auto before_seconds = timeline.sequencePlayheadSeconds();
+    const auto before_playing = timeline.sequencePlaying();
+    const auto result = server.callTool(
+        QStringLiteral("timeline.preview_at_time"), args,
+        {QStringLiteral("read")});
+    return result.value(QStringLiteral("isError")).toBool() &&
+        timeline.sequencePlaying() == before_playing &&
+        qAbs(timeline.sequencePlayheadSeconds() - before_seconds) < 1.0e-6;
+  };
+  auto stale_resource = valid_args;
+  stale_resource.insert(QStringLiteral("resourceId"), QStringLiteral("timeline:stale"));
+  if (!rejected_without_navigation(stale_resource)) {
+    return fail("stale resourceId must be rejected before pausing or seeking");
+  }
+  auto stale_hash = valid_args;
+  stale_hash.insert(QStringLiteral("documentHash"), QStringLiteral("stale-document-hash"));
+  if (!rejected_without_navigation(stale_hash)) {
+    return fail("stale documentHash must be rejected before pausing or seeking");
+  }
+  auto out_of_range = valid_args;
+  out_of_range.insert(QStringLiteral("seconds"), duration + 0.01);
+  if (!rejected_without_navigation(out_of_range)) {
+    return fail("out-of-range preview time must be rejected before pausing or seeking");
+  }
+  auto negative_time = valid_args;
+  negative_time.insert(QStringLiteral("seconds"), -0.01);
+  if (!rejected_without_navigation(negative_time)) {
+    return fail("negative preview time must be rejected before pausing or seeking");
+  }
+  auto unexpected_argument = valid_args;
+  unexpected_argument.insert(QStringLiteral("path"), QStringLiteral("/tmp/unrelated"));
+  if (!rejected_without_navigation(unexpected_argument)) {
+    return fail("preview navigation must reject unrecognized arguments without touching playback");
+  }
+  const auto denied = server.callTool(
+      QStringLiteral("timeline.preview_at_time"), valid_args,
+      {QStringLiteral("draft")});
+  if (!denied.value(QStringLiteral("isError")).toBool() ||
+      denied.value(QStringLiteral("structuredContent")).toObject()
+          .value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read")) {
+    return fail("preview navigation should remain available only through read capability");
+  }
+
+  timeline.seekSequenceSeconds(0.4);
+  timeline.playSequence();
+  const auto hidden_playhead = timeline.sequencePlayheadSeconds();
+  window.hide();
+  const auto hidden_window = server.callTool(
+      QStringLiteral("timeline.preview_at_time"), valid_args,
+      {QStringLiteral("read")});
+  if (!hidden_window.value(QStringLiteral("isError")).toBool() ||
+      !timeline.sequencePlaying() ||
+      qAbs(timeline.sequencePlayheadSeconds() - hidden_playhead) > 1.0e-6) {
+    return fail("hidden native window must be rejected before pause or seek");
+  }
+  window.show();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+  window.setProperty("currentWorkspace", 0);
+  const auto hidden_workspace = server.callTool(
+      QStringLiteral("timeline.preview_at_time"), valid_args,
+      {QStringLiteral("read")});
+  if (!hidden_workspace.value(QStringLiteral("isError")).toBool() ||
+      !timeline.sequencePlaying() ||
+      qAbs(timeline.sequencePlayheadSeconds() - hidden_playhead) > 1.0e-6) {
+    return fail("inactive workspace must be rejected before pause or seek");
+  }
+  window.setProperty("currentWorkspace", 3);
+  playback.setWorkspaceActive(false);
+  const auto inactive_playback_was_playing = timeline.sequencePlaying();
+  const auto inactive_playback_playhead = timeline.sequencePlayheadSeconds();
+  const auto inactive_playback = server.callTool(
+      QStringLiteral("timeline.preview_at_time"), valid_args,
+      {QStringLiteral("read")});
+  if (!inactive_playback.value(QStringLiteral("isError")).toBool() ||
+      !inactive_playback.value(QStringLiteral("structuredContent")).toObject()
+           .value(QStringLiteral("error")).toString().contains(
+               QStringLiteral("playback workspace is inactive")) ||
+      playback.workspaceActive() ||
+      timeline.sequencePlaying() != inactive_playback_was_playing ||
+      qAbs(timeline.sequencePlayheadSeconds() - inactive_playback_playhead) > 1.0e-6) {
+    return fail("inactive native playback workspace must be rejected without changing playback or playhead state");
+  }
+  std::cout << "timeline_preview_at_time_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_view_navigation_contract() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("Timeline view navigation contract needs isolated app data");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  qputenv("PHOTO_EDITOR_TIMELINE_PLAYBACK_HEADLESS", QByteArrayLiteral("1"));
+
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("View Navigation Contract")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  QString video_track_id;
+  for (const auto& value : timeline.sequenceTracks()) {
+    const auto track = value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      video_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  if (video_track_id.isEmpty() ||
+      !timeline.createTimelineTitleForAutomation(
+          video_track_id, QStringLiteral("basic"), 0.0, 2.0, {})
+           .value(QStringLiteral("ok")).toBool()) {
+    return fail("view navigation fixture should create an active two-second Timeline");
+  }
+  timeline.selectClip(0);
+
+  QQmlEngine engine;
+  QQmlComponent component(&engine);
+  component.setData(QByteArrayLiteral(R"QML(
+import QtQuick
+import QtQuick.Window
+Window {
+    width: 640
+    height: 480
+    visible: false
+    property int currentWorkspace: 3
+    property int timelineWorkspaceIndex: 3
+    property bool timelineProgramFullScreenActive: false
+    Loader {
+        id: timelineWorkspaceLoader
+        objectName: "timelineWorkspaceLoader"
+        anchors.fill: parent
+        visible: true
+        sourceComponent: Component {
+            Item {
+                id: timelineWorkspace
+                objectName: "timelineWorkspace"
+                property bool fullScreenProgramActive: false
+                property bool programComparisonActive: false
+                property real timelineZoom: 84
+                property string timelineLayoutPreset: "edit"
+                property bool noOpFit: false
+                function zoomToFit() {
+                    if (noOpFit)
+                        return
+                    timelineZoom = 42
+                    timelineViewport.contentX = 0
+                }
+                function zoomToSelection() {
+                    timelineZoom = 160
+                    timelineViewport.contentX = 0
+                }
+                function applyTimelineLayoutPreset(preset) {
+                    if (["edit", "color", "audio", "finish"].indexOf(preset) < 0)
+                        return false
+                    timelineLayoutPreset = preset
+                    return true
+                }
+                Flickable {
+                    id: timelineViewport
+                    objectName: "timelineViewport"
+                    width: 640
+                    height: 480
+                    contentWidth: 2400
+                    contentHeight: 800
+                }
+            }
+        }
+    }
+}
+)QML"), QUrl(QStringLiteral("qrc:/timeline-view-navigation-contract.qml")));
+  std::unique_ptr<QObject> root(component.create());
+  if (!root) {
+    std::cerr << component.errorString().toStdString() << '\n';
+    return fail("view navigation QML fixture should instantiate its bounded workspace");
+  }
+  auto* window = qobject_cast<QQuickWindow*>(root.get());
+  if (window == nullptr) {
+    return fail("view navigation fixture root should be a Quick window");
+  }
+  window->show();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+  photo_editor::desktop::TimelinePlaybackController playback(&timeline);
+  playback.setWorkspaceActive(true);
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  bridge.setTimelinePlaybackController(&playback);
+  bridge.setQmlRootObject(window);
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  const auto draft_tools = server.toolsListResult({QStringLiteral("draft")})
+                               .value(QStringLiteral("tools")).toArray();
+  const auto find_tool = [](const QJsonArray& tools, const QString& name) {
+    for (const auto& value : tools) {
+      const auto tool = value.toObject();
+      if (tool.value(QStringLiteral("name")).toString() == name) return tool;
+    }
+    return QJsonObject{};
+  };
+  const auto tool = find_tool(read_tools, QStringLiteral("timeline.navigate_view"));
+  if (tool.isEmpty() ||
+      tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read") ||
+      !tool.value(QStringLiteral("annotations")).toObject()
+           .value(QStringLiteral("readOnlyHint")).toBool() ||
+      !find_tool(draft_tools, QStringLiteral("timeline.navigate_view")).isEmpty() ||
+      photo_editor::desktop::automation_capability_for_command(
+          QStringLiteral("timeline_view_navigate")) != QStringLiteral("read")) {
+    return fail("Timeline view navigation should be a dedicated read-only tool");
+  }
+  const auto schema = tool.value(QStringLiteral("inputSchema")).toObject();
+  const auto properties = schema.value(QStringLiteral("properties")).toObject();
+  const auto required = schema.value(QStringLiteral("required")).toArray();
+  if (properties.size() != 4 || required.size() != 3 ||
+      !properties.contains(QStringLiteral("resourceId")) ||
+      !properties.contains(QStringLiteral("documentHash")) ||
+      !properties.contains(QStringLiteral("action")) ||
+      !properties.contains(QStringLiteral("preset")) ||
+      schema.value(QStringLiteral("additionalProperties")).toBool(true)) {
+    return fail("Timeline view navigation schema should contain only its bounded identity, action, and preset fields");
+  }
+
+  const auto resource_id = timeline.agentTaskDocumentId();
+  const auto document_hash = timeline.deterministicDocumentHash();
+  const auto dirty_before = timeline.dirty();
+  const auto can_undo_before = timeline.canUndo();
+  const auto can_redo_before = timeline.canRedo();
+  const auto clip_count_before = timeline.clipCount();
+  const auto track_count_before = timeline.sequenceTracks().size();
+  const auto call = [&](const QString& action, const QString& preset = {}) {
+    QJsonObject args{
+        {QStringLiteral("resourceId"), resource_id},
+        {QStringLiteral("documentHash"), document_hash},
+        {QStringLiteral("action"), action},
+    };
+    if (!preset.isNull() && !preset.isEmpty())
+      args.insert(QStringLiteral("preset"), preset);
+    return server.callTool(QStringLiteral("timeline.navigate_view"), args,
+                           {QStringLiteral("read")});
+  };
+  const auto result_for = [](const QJsonObject& response) {
+    return response.value(QStringLiteral("structuredContent")).toObject();
+  };
+
+  const auto fit_sequence = call(QStringLiteral("fit_sequence"));
+  auto body = result_for(fit_sequence);
+  if (fit_sequence.value(QStringLiteral("isError")).toBool() ||
+      !body.value(QStringLiteral("navigationApplied")).toBool() ||
+      body.value(QStringLiteral("action")).toString() != QStringLiteral("fit_sequence") ||
+      qAbs(body.value(QStringLiteral("timelineZoom")).toDouble() - 42.0) > 1.0e-6 ||
+      qAbs(body.value(QStringLiteral("horizontalOffset")).toDouble()) > 1.0e-6 ||
+      body.value(QStringLiteral("visibleStartSeconds")).toDouble() >
+          body.value(QStringLiteral("fitToleranceSeconds")).toDouble() ||
+      body.value(QStringLiteral("visibleEndSeconds")).toDouble() <
+          body.value(QStringLiteral("fitTargetEndSeconds")).toDouble() -
+              body.value(QStringLiteral("fitToleranceSeconds")).toDouble() ||
+      body.value(QStringLiteral("framePresentationVerified")).toBool()) {
+    return fail("fit_sequence should invoke the native fit command and report honest view readback");
+  }
+  auto* workspace = root->findChild<QObject*>(
+      QStringLiteral("timelineWorkspace"), Qt::FindChildrenRecursively);
+  auto* viewport = root->findChild<QQuickItem*>(
+      QStringLiteral("timelineViewport"), Qt::FindChildrenRecursively);
+  if (workspace == nullptr || viewport == nullptr)
+    return fail("fit navigation fixture should expose its real workspace and viewport");
+  workspace->setProperty("timelineZoom", 1.0);
+  viewport->setProperty("contentX", 120.0);
+  workspace->setProperty("noOpFit", true);
+  const auto no_op_zoom = workspace->property("timelineZoom").toDouble();
+  const auto no_op_x = viewport->property("contentX").toDouble();
+  const auto no_op_fit = call(QStringLiteral("fit_sequence"));
+  if (!no_op_fit.value(QStringLiteral("isError")).toBool() ||
+      qAbs(workspace->property("timelineZoom").toDouble() - no_op_zoom) > 1.0e-6 ||
+      qAbs(viewport->property("contentX").toDouble() - no_op_x) > 1.0e-6) {
+    return fail("fit_sequence should reject a native fit method that leaves the visible range unchanged");
+  }
+  workspace->setProperty("noOpFit", false);
+  const auto fit_selection = call(QStringLiteral("fit_selection"));
+  body = result_for(fit_selection);
+  if (fit_selection.value(QStringLiteral("isError")).toBool() ||
+      !body.value(QStringLiteral("navigationApplied")).toBool() ||
+      qAbs(body.value(QStringLiteral("timelineZoom")).toDouble() - 160.0) > 1.0e-6 ||
+      body.value(QStringLiteral("visibleStartSeconds")).toDouble() >
+          body.value(QStringLiteral("fitTargetStartSeconds")).toDouble() +
+              body.value(QStringLiteral("fitToleranceSeconds")).toDouble() ||
+      body.value(QStringLiteral("visibleEndSeconds")).toDouble() <
+          body.value(QStringLiteral("fitTargetEndSeconds")).toDouble() -
+              body.value(QStringLiteral("fitToleranceSeconds")).toDouble()) {
+    return fail("fit_selection should invoke the existing native selection-fit command");
+  }
+
+  for (const auto& preset : {QStringLiteral("color"), QStringLiteral("audio"),
+                             QStringLiteral("finish"), QStringLiteral("edit")}) {
+    const auto response = call(QStringLiteral("set_workspace_preset"), preset);
+    body = result_for(response);
+    if (response.value(QStringLiteral("isError")).toBool() ||
+        !body.value(QStringLiteral("navigationApplied")).toBool() ||
+        body.value(QStringLiteral("preset")).toString() != preset) {
+      return fail("workspace navigation should invoke only the native preset allowlist");
+    }
+  }
+
+  const auto play = call(QStringLiteral("play"));
+  body = result_for(play);
+  if (play.value(QStringLiteral("isError")).toBool() ||
+      !body.value(QStringLiteral("navigationApplied")).toBool() ||
+      !body.value(QStringLiteral("sequencePlaying")).toBool()) {
+    return fail("play navigation should route through native Timeline playback");
+  }
+  const auto pause = call(QStringLiteral("pause"));
+  body = result_for(pause);
+  if (pause.value(QStringLiteral("isError")).toBool() ||
+      !body.value(QStringLiteral("navigationApplied")).toBool() ||
+      body.value(QStringLiteral("sequencePlaying")).toBool()) {
+    return fail("pause navigation should route through native Timeline playback");
+  }
+
+  const auto unchanged_state = [&] {
+    return timeline.agentTaskDocumentId() == resource_id &&
+        timeline.deterministicDocumentHash() == document_hash &&
+        timeline.dirty() == dirty_before && timeline.canUndo() == can_undo_before &&
+        timeline.canRedo() == can_redo_before && timeline.clipCount() == clip_count_before &&
+        timeline.sequenceTracks().size() == track_count_before;
+  };
+  if (!unchanged_state()) {
+    return fail("view navigation must leave the authored document and Undo/Redo state unchanged");
+  }
+
+  const auto rejected_without_navigation = [&](const QJsonObject& args) {
+    const auto before_workspace = root->findChild<QObject*>(
+        QStringLiteral("timelineWorkspace"), Qt::FindChildrenRecursively);
+    const auto before_viewport = root->findChild<QQuickItem*>(
+        QStringLiteral("timelineViewport"), Qt::FindChildrenRecursively);
+    if (before_workspace == nullptr || before_viewport == nullptr)
+      return false;
+    const auto before_zoom = before_workspace->property("timelineZoom").toDouble();
+    const auto before_x = before_viewport->property("contentX").toDouble();
+    const auto before_preset = before_workspace->property("timelineLayoutPreset").toString();
+    const auto response = server.callTool(QStringLiteral("timeline.navigate_view"), args,
+                                          {QStringLiteral("read")});
+    const auto viewport = root->findChild<QQuickItem*>(
+        QStringLiteral("timelineViewport"), Qt::FindChildrenRecursively);
+    const auto workspace = root->findChild<QObject*>(
+        QStringLiteral("timelineWorkspace"), Qt::FindChildrenRecursively);
+    return response.value(QStringLiteral("isError")).toBool() &&
+        workspace != nullptr &&
+        qAbs(workspace->property("timelineZoom").toDouble() - before_zoom) < 1.0e-6 &&
+        viewport != nullptr && qAbs(viewport->property("contentX").toDouble() - before_x) < 1.0e-6 &&
+        workspace != nullptr &&
+        workspace->property("timelineLayoutPreset").toString() == before_preset &&
+        timeline.sequencePlaying() == false && unchanged_state();
+  };
+  QJsonObject valid_preset_args{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), document_hash},
+      {QStringLiteral("action"), QStringLiteral("set_workspace_preset")},
+      {QStringLiteral("preset"), QStringLiteral("audio")},
+  };
+  auto invalid_preset = valid_preset_args;
+  invalid_preset.insert(QStringLiteral("preset"), QStringLiteral("arbitrary"));
+  if (!rejected_without_navigation(invalid_preset)) {
+    return fail("unknown workspace presets should be rejected before changing the view");
+  }
+  auto missing_preset = valid_preset_args;
+  missing_preset.remove(QStringLiteral("preset"));
+  auto unscoped_preset = QJsonObject{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), document_hash},
+      {QStringLiteral("action"), QStringLiteral("fit_sequence")},
+      {QStringLiteral("preset"), QStringLiteral("color")},
+  };
+  if (!rejected_without_navigation(missing_preset) ||
+      !rejected_without_navigation(unscoped_preset)) {
+    return fail("preset must be required only for set_workspace_preset");
+  }
+  auto unknown_action = valid_preset_args;
+  unknown_action.insert(QStringLiteral("action"), QStringLiteral("evaluate"));
+  if (!rejected_without_navigation(unknown_action)) {
+    return fail("unknown navigation actions should be rejected before invoking native methods");
+  }
+  auto unexpected_field = QJsonObject{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), document_hash},
+      {QStringLiteral("action"), QStringLiteral("fit_sequence")},
+      {QStringLiteral("evaluate"), QStringLiteral("zoomToFit()")},
+  };
+  if (!rejected_without_navigation(unexpected_field)) {
+    return fail("unknown view-navigation fields must be rejected without evaluating caller input");
+  }
+  auto stale_hash = unexpected_field;
+  stale_hash.remove(QStringLiteral("evaluate"));
+  stale_hash.insert(QStringLiteral("documentHash"), QStringLiteral("stale"));
+  stale_hash.insert(QStringLiteral("action"), QStringLiteral("fit_sequence"));
+  if (!rejected_without_navigation(stale_hash)) {
+    return fail("stale document identity should be rejected before changing the view");
+  }
+  auto stale_resource = stale_hash;
+  stale_resource.insert(QStringLiteral("resourceId"), QStringLiteral("timeline:stale"));
+  stale_resource.insert(QStringLiteral("documentHash"), document_hash);
+  if (!rejected_without_navigation(stale_resource)) {
+    return fail("stale Timeline resources should be rejected before changing the view");
+  }
+  const auto draft_denied = server.callTool(
+      QStringLiteral("timeline.navigate_view"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("action"), QStringLiteral("pause")}},
+      {QStringLiteral("draft")});
+  if (!draft_denied.value(QStringLiteral("isError")).toBool() ||
+      result_for(draft_denied).value(QStringLiteral("requiredCapability")).toString() !=
+          QStringLiteral("read")) {
+    return fail("view navigation should remain limited to the read capability");
+  }
+  const auto hidden_playhead = timeline.sequencePlayheadSeconds();
+  window->hide();
+  const auto hidden_window = call(QStringLiteral("fit_sequence"));
+  if (!hidden_window.value(QStringLiteral("isError")).toBool() ||
+      qAbs(timeline.sequencePlayheadSeconds() - hidden_playhead) > 1.0e-6 ||
+      !unchanged_state()) {
+    return fail("hidden Timeline windows should reject navigation without document mutation");
+  }
+
+  bridge.setQmlRootObject(nullptr);
+  std::cout << "timeline_view_navigation_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_native_default_lut_manifest_contract(const QString& runtime_root) {
+  const auto photo_path = QDir(runtime_root).filePath(
+      QStringLiteral("native-default-photo.png"));
+  const auto audio_path = QDir(runtime_root).filePath(
+      QStringLiteral("native-default-audio.wav"));
+  if (!write_fixture_image(photo_path) || !write_fixture_pcm_wav(audio_path)) {
+    return fail("native default LUT manifest fixtures should write a photo and WAV source");
+  }
+  const auto canonical_photo_path = QFileInfo(photo_path).canonicalFilePath();
+  const auto canonical_audio_path = QFileInfo(audio_path).canonicalFilePath();
+  if (canonical_photo_path.isEmpty() || canonical_audio_path.isEmpty()) {
+    return fail("native default LUT manifest fixtures should have canonical source paths");
+  }
+
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Native Default LUT Manifest")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 180},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  timeline.addClipFromGallery(QStringLiteral("photo:native-default-manifest"), canonical_photo_path,
+                              QStringLiteral("Default photo"), 1.0, canonical_photo_path);
+  timeline.addClipFromGallery(QStringLiteral("audio:native-default-manifest"), canonical_audio_path,
+                              QStringLiteral("Default audio"), 1.0);
+
+  auto photo_seen = false;
+  auto audio_seen = false;
+  const auto native_sources_verified = [&]() {
+    photo_seen = false;
+    audio_seen = false;
+    for (const auto& value : timeline.clips()) {
+      const auto clip = value.toMap();
+      const auto media_type = clip.value(QStringLiteral("mediaType")).toString();
+      if (media_type != QStringLiteral("photo") &&
+          media_type != QStringLiteral("audio")) {
+        continue;
+      }
+      if (!clip.value(QStringLiteral("colorLutEnabled")).toBool() ||
+          !clip.value(QStringLiteral("colorLutPath")).toString().isEmpty() ||
+          clip.value(QStringLiteral("sourceIntegrityStatus")).toString() !=
+              QStringLiteral("verified") ||
+          clip.value(QStringLiteral("sourceContentSha256")).toString().size() != 64 ||
+          clip.value(QStringLiteral("sourceFileSize")).toLongLong() <= 0) {
+        return false;
+      }
+      photo_seen = photo_seen || media_type == QStringLiteral("photo");
+      audio_seen = audio_seen || media_type == QStringLiteral("audio");
+    }
+    return photo_seen && audio_seen && timeline.agentTaskDocumentReady();
+  };
+  if (!wait_for_condition(native_sources_verified, 15000)) {
+    return fail("native photo and audio clips should settle with enabled empty LUT defaults and verified source hashes");
+  }
+
+  const auto range = QJsonObject{
+      {QStringLiteral("startFrame"), 0},
+      {QStringLiteral("endFrameExclusive"), 30},
+      {QStringLiteral("frameRate"), 30.0},
+  };
+  const auto snapshot = timeline.agentTaskDocumentState();
+  const auto manifest = photo_editor::desktop::timeline_mcp_export_source_manifest(
+      snapshot, range);
+  const auto sources = manifest.value(QStringLiteral("sources")).toList();
+  QSet<QString> manifest_paths;
+  for (const auto& value : sources) {
+    const auto source = value.toMap();
+    manifest_paths.insert(source.value(QStringLiteral("path")).toString());
+  }
+  if (snapshot.isEmpty() || !manifest.value(QStringLiteral("ok")).toBool() ||
+      manifest.value(QStringLiteral("primarySourceCount")).toInt() != 2 ||
+      manifest.value(QStringLiteral("sourceCount")).toInt() != 2 ||
+      sources.size() != 2 || manifest_paths.size() != 2 ||
+      !manifest_paths.contains(canonical_photo_path) ||
+      !manifest_paths.contains(canonical_audio_path)) {
+    return fail("native controller photo/audio snapshot should produce a two-source MCP range manifest despite enabled empty default LUTs");
+  }
+  std::cout << "native_default_lut_manifest=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_export_integrity_domains_contract() {
+  using photo_editor::desktop::AgentEditController;
+  using photo_editor::desktop::CatalogAssetModel;
+  using photo_editor::desktop::JobQueueModel;
+  using photo_editor::desktop::PhotoAutomationBridge;
+  using photo_editor::desktop::PhotoMcpServer;
+  using photo_editor::desktop::TimelineDocumentController;
+
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("Timeline export integrity fixture needs isolated app data");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+
+  const auto photo_path = QDir(runtime_root.path()).filePath(QStringLiteral("primary.png"));
+  if (!write_fixture_image(photo_path, QSize(32, 24))) {
+    return fail("Timeline export integrity fixture should write a primary photo");
+  }
+  const auto canonical_photo_path = QFileInfo(photo_path).canonicalFilePath();
+  QFile original_photo_file(canonical_photo_path);
+  if (canonical_photo_path.isEmpty() || !original_photo_file.open(QIODevice::ReadOnly)) {
+    return fail("Timeline export integrity fixture should read its canonical source");
+  }
+  const auto original_photo_bytes = original_photo_file.readAll();
+  original_photo_file.close();
+  if (original_photo_bytes.isEmpty()) {
+    return fail("Timeline export integrity fixture should retain nonempty source bytes");
+  }
+
+  AgentEditController agent_edit;
+  CatalogAssetModel catalog_model;
+  TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Export Integrity Domains")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 400},
+      {QStringLiteral("frameRate"), 30.0},
+      {QStringLiteral("exportPreset"), QStringLiteral("instagram")},
+  });
+  timeline.addClipFromGallery(QStringLiteral("photo:integrity-primary"), canonical_photo_path,
+                              QStringLiteral("Integrity primary"), 0.5);
+  if (!wait_for_condition([&]() {
+        const auto health = timeline.timelineProjectHealth();
+        return timeline.agentTaskDocumentReady() &&
+               health.value(QStringLiteral("sourceIntegrityVerifiedCount")).toInt() == 1 &&
+               health.value(QStringLiteral("sourceIntegrityMismatchCount")).toInt() == 0 &&
+               health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() == 0;
+      }, 15000)) {
+    return fail("primary source should finish full-file verification before export gate checks");
+  }
+  const auto graphics_track_result = timeline.createTimelineTrackForAutomation(
+      QStringLiteral("graphics"), QStringLiteral("Integrity Overlay"));
+  const auto graphics_track_id =
+      graphics_track_result.value(QStringLiteral("trackId")).toString();
+  if (!graphics_track_result.value(QStringLiteral("ok")).toBool() ||
+      graphics_track_id.isEmpty()) {
+    return fail("integrity fixture should create an editable graphics track");
+  }
+  const auto graphic = timeline.createTimelineGraphicForAutomation(
+      graphics_track_id, QStringLiteral("rectangle"), 0.0, 0.5,
+      QVariantMap{{QStringLiteral("backgroundColor"), QStringLiteral("#ff5060")},
+                  {QStringLiteral("shapeWidth"), 1.0},
+                  {QStringLiteral("shapeHeight"), 1.0}});
+  const auto prepared = timeline.prepareAgentTaskDocumentForAutomation();
+  const auto ready_after_graphic =
+      wait_for_condition([&]() { return timeline.agentTaskDocumentReady(); }, 15000);
+  if (!graphic.value(QStringLiteral("ok")).toBool() ||
+      !prepared.value(QStringLiteral("ok")).toBool() || !ready_after_graphic) {
+    const auto readiness = timeline.agentExportSnapshotReadiness();
+    std::cerr << "graphic-result="
+              << QJsonDocument(QJsonObject::fromVariantMap(graphic))
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " preparation="
+              << QJsonDocument(QJsonObject::fromVariantMap(prepared))
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " ready=" << ready_after_graphic
+              << " export-readiness="
+              << QJsonDocument(QJsonObject::fromVariantMap(readiness))
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << '\n';
+    return fail("integrity fixture should settle its native graphic before export");
+  }
+
+  const auto write_preview_variant = [&](const QString& preview_path,
+                                         const QString& snapshot_path) {
+    const auto snapshot_bytes = timeline.agentTaskDocumentState();
+    QJsonParseError parse_error;
+    auto snapshot = QJsonDocument::fromJson(snapshot_bytes, &parse_error).object();
+    if (snapshot_bytes.isEmpty() || parse_error.error != QJsonParseError::NoError ||
+        !snapshot.contains(QStringLiteral("tracks"))) {
+      return false;
+    }
+    auto tracks = snapshot.value(QStringLiteral("tracks")).toArray();
+    auto updated = false;
+    for (qsizetype track_index = 0; track_index < tracks.size() && !updated; ++track_index) {
+      auto track = tracks.at(track_index).toObject();
+      auto clips = track.value(QStringLiteral("clips")).toArray();
+      for (qsizetype clip_index = 0; clip_index < clips.size(); ++clip_index) {
+        auto clip = clips.at(clip_index).toObject();
+        if (clip.value(QStringLiteral("filePath")).toString() != canonical_photo_path) continue;
+        clip.insert(QStringLiteral("compoundRenderPath"), preview_path);
+        clips.replace(clip_index, clip);
+        track.insert(QStringLiteral("clips"), clips);
+        tracks.replace(track_index, track);
+        updated = true;
+        break;
+      }
+    }
+    if (!updated) return false;
+    snapshot.insert(QStringLiteral("tracks"), tracks);
+    const auto bytes = QJsonDocument(snapshot).toJson(QJsonDocument::Compact);
+    QFile file(snapshot_path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+        file.write(bytes) != bytes.size() || !file.flush()) {
+      return false;
+    }
+    file.close();
+    if (!timeline.loadTimeline(snapshot_path)) {
+      return false;
+    }
+    timeline.releaseAgentTaskDocumentForAutomation();
+    return true;
+  };
+  const auto primary_snapshot_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("primary-sidecar.timeline.json"));
+  if (!write_preview_variant(canonical_photo_path, primary_snapshot_path) ||
+      !wait_for_condition([&]() {
+        const auto health = timeline.timelineProjectHealth();
+        const auto issues = health.value(QStringLiteral("issues")).toList();
+        const auto has_duplicate_warning = std::any_of(
+            issues.cbegin(), issues.cend(), [&](const QVariant& value) {
+              const auto issue = value.toMap();
+              return issue.value(QStringLiteral("key")).toString() ==
+                         QStringLiteral("generated-integrity-untracked") &&
+                     issue.value(QStringLiteral("path")).toString() == canonical_photo_path;
+            });
+        return timeline.agentTaskDocumentReady() && health.value(QStringLiteral("ok")).toBool() &&
+               health.value(QStringLiteral("sourceIntegrityVerifiedCount")).toInt() == 1 &&
+               health.value(QStringLiteral("sourceIntegrityMismatchCount")).toInt() == 0 &&
+               health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() == 0 &&
+               health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() == 1 &&
+               health.value(QStringLiteral("integrityUntrackedCount")).toInt() == 1 &&
+               has_duplicate_warning;
+      }, 15000)) {
+    const auto diagnostic_health = timeline.timelineProjectHealth();
+    std::cerr << "duplicate-sidecar-health="
+              << QJsonDocument(QJsonObject::fromVariantMap(diagnostic_health))
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " state-bytes=" << timeline.agentTaskDocumentState().size() << '\n';
+    return fail("health should distinguish one generated sidecar warning on the SHA-pinned primary path");
+  }
+
+  JobQueueModel jobs;
+  PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  bridge.setTimelineJobQueueModel(&jobs);
+  bridge.setTimelineTaskLifecycleHandler([](const QString& action, const QVariantMap&) {
+    return action == QStringLiteral("status")
+        ? QVariantMap{{QStringLiteral("ok"), true}, {QStringLiteral("active"), false}}
+        : QVariantMap{{QStringLiteral("ok"), false}};
+  });
+  if (!bridge.start(false, {QStringLiteral("read"), QStringLiteral("export")})) {
+    std::cerr << "bridge-start-error=" << bridge.errorMessage().toStdString() << '\n';
+    return fail("export integrity fixture should start with explicit capabilities");
+  }
+  PhotoMcpServer server(&bridge);
+  const auto resource_id = timeline.agentTaskDocumentId();
+  const auto document_hash = timeline.deterministicDocumentHash();
+  const auto request_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto export_args = QJsonObject{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), document_hash},
+      {QStringLiteral("requestId"), request_id},
+      {QStringLiteral("confirmed"), true},
+  };
+  const auto admitted = server.callTool(
+      QStringLiteral("timeline.export_h264"), export_args, {QStringLiteral("export")});
+  if (admitted.value(QStringLiteral("isError")).toBool() ||
+      !admitted.value(QStringLiteral("structuredContent")).toObject()
+           .value(QStringLiteral("accepted")).toBool()) {
+    std::cerr << "export-admission="
+              << QJsonDocument(admitted.value(QStringLiteral("structuredContent"))
+                                    .toObject())
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << " health="
+              << QJsonDocument(QJsonObject::fromVariantMap(timeline.timelineProjectHealth()))
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << '\n';
+    return fail("full export should admit a verified manifest when its only generated warning is the exact same SHA-pinned primary path");
+  }
+  const auto canceled = server.callTool(
+      QStringLiteral("timeline.cancel_export"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("requestId"), request_id},
+                  {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("export")});
+  if (canceled.value(QStringLiteral("isError")).toBool() ||
+      canceled.value(QStringLiteral("structuredContent")).toObject()
+              .value(QStringLiteral("status")).toString() != QStringLiteral("Canceled")) {
+    return fail("admission fixture should cancel its exact queued receipt before a worker starts");
+  }
+
+  auto changed_photo_bytes = original_photo_bytes;
+  changed_photo_bytes[0] = static_cast<char>(changed_photo_bytes.at(0) ^ 0x01);
+  QFile changed_photo_file(canonical_photo_path);
+  if (!changed_photo_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      changed_photo_file.write(changed_photo_bytes) != changed_photo_bytes.size() ||
+      !changed_photo_file.flush()) {
+    return fail("source mismatch fixture should mutate a single byte without changing file size");
+  }
+  changed_photo_file.close();
+  auto mismatch_args = export_args;
+  mismatch_args.insert(QStringLiteral("requestId"),
+                       QUuid::createUuid().toString(QUuid::WithoutBraces));
+  const auto mismatch = server.callTool(
+      QStringLiteral("timeline.export_h264"), mismatch_args, {QStringLiteral("export")});
+  const auto mismatch_data = mismatch.value(QStringLiteral("structuredContent")).toObject();
+  QFile restored_photo_file(canonical_photo_path);
+  if (!restored_photo_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      restored_photo_file.write(original_photo_bytes) != original_photo_bytes.size() ||
+      !restored_photo_file.flush()) {
+    return fail("source mismatch fixture should restore the exact original photo bytes");
+  }
+  restored_photo_file.close();
+  if (!mismatch.value(QStringLiteral("isError")).toBool() ||
+      mismatch_data.value(QStringLiteral("projectHealthFieldsValid")).toBool() != true ||
+      mismatch_data.value(QStringLiteral("projectMismatchedSourceCount")).toInt() != 1) {
+    std::cerr << "source-mismatch-response="
+              << QJsonDocument(mismatch.value(QStringLiteral("structuredContent"))
+                                    .toObject())
+                     .toJson(QJsonDocument::Compact).toStdString()
+              << '\n';
+    return fail("same-size source mutation should be rejected by the primary integrity counters");
+  }
+
+  const auto derived_preview_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("unpinned-generated-preview.png"));
+  const auto derived_snapshot_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("derived-sidecar.timeline.json"));
+  if (!write_fixture_image(derived_preview_path, QSize(19, 23)) ||
+      !write_preview_variant(QFileInfo(derived_preview_path).canonicalFilePath(),
+                             derived_snapshot_path) ||
+      !wait_for_condition([&]() {
+        const auto health = timeline.timelineProjectHealth();
+        return timeline.agentTaskDocumentReady() &&
+               health.value(QStringLiteral("sourceIntegrityVerifiedCount")).toInt() == 1 &&
+               health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() == 0 &&
+               health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() == 1;
+      }, 15000)) {
+    return fail("separate generated preview fixture should keep its primary source verified");
+  }
+  auto derived_args = export_args;
+  derived_args.insert(QStringLiteral("resourceId"), timeline.agentTaskDocumentId());
+  derived_args.insert(QStringLiteral("documentHash"), timeline.deterministicDocumentHash());
+  derived_args.insert(QStringLiteral("requestId"),
+                      QUuid::createUuid().toString(QUuid::WithoutBraces));
+  const auto derived = server.callTool(
+      QStringLiteral("timeline.export_h264"), derived_args, {QStringLiteral("export")});
+  const auto derived_data = derived.value(QStringLiteral("structuredContent")).toObject();
+  if (!derived.value(QStringLiteral("isError")).toBool() ||
+      derived_data.value(QStringLiteral("projectHealthFieldsValid")).toBool() != true ||
+      derived_data.value(QStringLiteral("projectUntrackedDerivedCount")).toInt() != 1 ||
+      derived_data.value(QStringLiteral("projectUnpinnedDerivedCount")).toInt() != 1) {
+    return fail("untracked generated media outside the SHA-pinned primary manifest must remain blocking");
+  }
+
+  if (!timeline.prepareAgentTaskDocumentForAutomation().value(QStringLiteral("ok")).toBool() ||
+      !write_preview_variant(canonical_photo_path, primary_snapshot_path) ||
+      !timeline.prepareAgentTaskDocumentForAutomation().value(QStringLiteral("ok")).toBool() ||
+      !wait_for_condition([&]() {
+        const auto health = timeline.timelineProjectHealth();
+        return timeline.agentTaskDocumentReady() &&
+               health.value(QStringLiteral("sourceIntegrityVerifiedCount")).toInt() == 0 &&
+               health.value(QStringLiteral("sourceIntegrityMismatchCount")).toInt() == 0 &&
+               health.value(QStringLiteral("sourceIntegrityUntrackedCount")).toInt() == 1 &&
+               health.value(QStringLiteral("generatedIntegrityUntrackedCount")).toInt() == 1;
+      }, 15000)) {
+    return fail("paused project reopen should preserve a pending primary checksum for fail-closed export testing");
+  }
+  auto pending_args = export_args;
+  pending_args.insert(QStringLiteral("resourceId"), timeline.agentTaskDocumentId());
+  pending_args.insert(QStringLiteral("documentHash"), timeline.deterministicDocumentHash());
+  pending_args.insert(QStringLiteral("requestId"),
+                      QUuid::createUuid().toString(QUuid::WithoutBraces));
+  const auto pending = server.callTool(
+      QStringLiteral("timeline.export_h264"), pending_args, {QStringLiteral("export")});
+  const auto pending_data = pending.value(QStringLiteral("structuredContent")).toObject();
+  timeline.releaseAgentTaskDocumentForAutomation();
+  if (!pending.value(QStringLiteral("isError")).toBool() ||
+      pending_data.value(QStringLiteral("projectHealthFieldsValid")).toBool() != true ||
+      pending_data.value(QStringLiteral("projectUntrackedSourceCount")).toInt() != 1 ||
+      pending_data.value(QStringLiteral("projectDuplicateDerivedWarningsPinnedToSourceCount")).toInt() != 1) {
+    return fail("pending source integrity must block even when its duplicate generated sidecar warning is SHA-pinned");
+  }
+
+  std::cout << "timeline_export_integrity_domains=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_h264_export_contract() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("native H.264 export contract needs isolated app data");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  if (run_native_default_lut_manifest_contract(runtime_root.path()) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+  timeline.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Standalone Native Export Contract")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 400},
+      {QStringLiteral("frameRate"), 30.0},
+      {QStringLiteral("exportPreset"), QStringLiteral("instagram")},
+  });
+  auto video_track_id = QString{};
+  for (const auto& value : timeline.timelineTracks()) {
+    const auto track = value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      video_track_id = track.value(QStringLiteral("trackId")).toString();
+      if (track.value(QStringLiteral("trackRole")).toString() == QStringLiteral("graphics")) break;
+    }
+  }
+  if (video_track_id.isEmpty()) {
+    return fail("export fixture should provide an unlocked video track");
+  }
+  const auto graphic = timeline.createTimelineGraphicForAutomation(
+      video_track_id, QStringLiteral("rectangle"), 0.0, 0.5,
+      QVariantMap{{QStringLiteral("backgroundColor"), QStringLiteral("#ff5060")},
+                  {QStringLiteral("shapeWidth"), 1.0},
+                  {QStringLiteral("shapeHeight"), 1.0}});
+  if (!graphic.value(QStringLiteral("ok")).toBool() ||
+      !timeline.agentTaskDocumentReady() ||
+      !timeline.timelineProjectHealth().value(QStringLiteral("ok")).toBool()) {
+    return fail("export fixture should be a stable, source-verified native graphics Timeline");
+  }
+  timeline.setTimelineName(QStringLiteral("Standalone Native Export Contract - queued snapshot"));
+  const auto resource_id = timeline.agentTaskDocumentId();
+  const auto document_hash = timeline.deterministicDocumentHash();
+  const auto timeline_id = resource_id.mid(QStringLiteral("timeline:").size());
+  const auto clips_before = timeline.clips();
+  const auto snapshot_hash_before = document_hash;
+  if (!photo_editor::desktop::timeline_mcp_export_canonical_uuid(timeline_id) ||
+      !photo_editor::desktop::timeline_mcp_export_canonical_sha256(document_hash)) {
+    return fail("export fixture should expose canonical resource and document identities");
+  }
+
+  const auto temporary_media = QDir(runtime_root.path()).filePath(QStringLiteral("source.bin"));
+  QFile source_file(temporary_media);
+  if (!source_file.open(QIODevice::WriteOnly) || source_file.write("abc", 3) != 3) {
+    return fail("source-manifest checksum fixture should write its source");
+  }
+  source_file.close();
+  const auto source_hash = QString::fromLatin1(
+      QCryptographicHash::hash(QByteArrayLiteral("abc"), QCryptographicHash::Sha256).toHex());
+  const QJsonObject source_clip{
+      {QStringLiteral("mediaType"), QStringLiteral("video")},
+      {QStringLiteral("filePath"), QFileInfo(temporary_media).canonicalFilePath()},
+      {QStringLiteral("sourceFileSize"), 3},
+      {QStringLiteral("sourceContentSha256"), source_hash},
+  };
+  const QJsonObject manifest_snapshot{
+      {QStringLiteral("tracks"), QJsonArray{QJsonObject{
+          {QStringLiteral("clips"), QJsonArray{source_clip}},
+      }}}};
+  const auto source_manifest = photo_editor::desktop::timeline_mcp_export_source_manifest(
+      QJsonDocument(manifest_snapshot).toJson(QJsonDocument::Compact));
+  if (!source_manifest.value(QStringLiteral("ok")).toBool() ||
+      !photo_editor::desktop::timeline_mcp_export_verify_source_manifest(
+           source_manifest.value(QStringLiteral("sources")).toList())
+           .value(QStringLiteral("ok")).toBool()) {
+    return fail("full source SHA-256 manifest should verify before export");
+  }
+  if (!source_file.open(QIODevice::Append) || source_file.write("changed", 7) != 7) {
+    return fail("source mutation fixture should append to its file");
+  }
+  source_file.close();
+  if (photo_editor::desktop::timeline_mcp_export_verify_source_manifest(
+          source_manifest.value(QStringLiteral("sources")).toList())
+          .value(QStringLiteral("ok")).toBool()) {
+    return fail("source mutation after the accepted checksum must fail closed");
+  }
+
+  photo_editor::desktop::JobQueueModel jobs;
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  bridge.setTimelineJobQueueModel(&jobs);
+  auto active_editing_task = false;
+  photo_editor::desktop::TimelineDraftLifecycle draft_lifecycle(
+      &timeline,
+      [&active_editing_task]() { return active_editing_task; },
+      []() { return true; },
+      []() { return true; });
+  bridge.setTimelineDraftLifecycleHandler(
+      [&draft_lifecycle](const QString& action, const QVariantMap& arguments) {
+        return draft_lifecycle.invoke(action, arguments);
+      });
+  bridge.setTimelineTaskLifecycleHandler(
+      [&active_editing_task](const QString& action, const QVariantMap&) {
+        return action == QStringLiteral("status")
+            ? QVariantMap{{QStringLiteral("ok"), true},
+                          {QStringLiteral("active"), active_editing_task}}
+            : QVariantMap{{QStringLiteral("ok"), false}};
+      });
+  if (!bridge.start(false, {QStringLiteral("read"), QStringLiteral("draft"), QStringLiteral("export")})) {
+    const auto message = (QStringLiteral("export contract bridge should start with read, draft, and export capabilities: ") +
+                          bridge.errorMessage()).toStdString();
+    return fail(message.c_str());
+  }
+  photo_editor::desktop::PhotoMcpServer server(&bridge);
+  const auto request_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto export_args = QJsonObject{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), document_hash},
+      {QStringLiteral("requestId"), request_id},
+      {QStringLiteral("confirmed"), true},
+  };
+  const auto denied = server.callTool(
+      QStringLiteral("timeline.export_h264"), export_args, {QStringLiteral("read")});
+  if (!denied.value(QStringLiteral("isError")).toBool() ||
+      denied.value(QStringLiteral("structuredContent")).toObject()
+          .value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("export")) {
+    return fail("native H.264 export should require the explicit export capability");
+  }
+  auto unconfirmed_args = export_args;
+  unconfirmed_args.insert(QStringLiteral("confirmed"), false);
+  if (!server.callTool(QStringLiteral("timeline.export_h264"), unconfirmed_args,
+                       {QStringLiteral("export")})
+           .value(QStringLiteral("isError")).toBool()) {
+    return fail("native H.264 export should reject missing explicit confirmation");
+  }
+  active_editing_task = true;
+  auto active_task_args = export_args;
+  active_task_args.insert(QStringLiteral("requestId"),
+                          QUuid::createUuid().toString(QUuid::WithoutBraces));
+  if (!server.callTool(QStringLiteral("timeline.export_h264"), active_task_args,
+                       {QStringLiteral("export")})
+           .value(QStringLiteral("isError")).toBool()) {
+    return fail("native H.264 export must not start while an editing task owns the Timeline");
+  }
+  active_editing_task = false;
+
+  photo_editor::desktop::PersistentJobRecord foreign_job;
+  foreign_job.job_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  foreign_job.job_kind = QStringLiteral("timeline_render");
+  foreign_job.asset_id = resource_id;
+  foreign_job.media_type = QStringLiteral("timeline");
+  foreign_job.status = QStringLiteral("Failed");
+  foreign_job.source_path = QStringLiteral("/private/tmp/foreign-snapshot.json");
+  foreign_job.output_path = QStringLiteral("/private/tmp/foreign-output.mp4");
+  foreign_job.metadata_json.insert(QStringLiteral("timelineId"), timeline_id);
+  if (!photo_editor::desktop::upsertPersistedJobRecord(foreign_job)) {
+    return fail("foreign-job cancellation fixture should persist its unrelated render record");
+  }
+  const auto foreign_cancel = server.callTool(
+      QStringLiteral("timeline.cancel_export"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("requestId"), foreign_job.job_id},
+                  {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("export")});
+  if (!foreign_cancel.value(QStringLiteral("isError")).toBool()) {
+    return fail("export cancellation must reject a foreign Timeline job without an MCP receipt");
+  }
+
+  const auto cancel_request_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  auto cancel_args = export_args;
+  cancel_args.insert(QStringLiteral("requestId"), cancel_request_id);
+  const auto second_queued = server.callTool(
+      QStringLiteral("timeline.export_h264"), cancel_args, {QStringLiteral("export")});
+  if (second_queued.value(QStringLiteral("isError")).toBool()) {
+    std::cerr << "queued-admission="
+              << QString::fromUtf8(QJsonDocument(
+                     second_queued.value(QStringLiteral("structuredContent")).toObject())
+                     .toJson(QJsonDocument::Compact)).left(768).toStdString()
+              << '\n';
+    return fail("positive export capability should durably admit the queued cancellation fixture");
+  }
+  const auto second_receipt = second_queued.value(QStringLiteral("structuredContent")).toObject();
+  const auto canceled = server.callTool(
+      QStringLiteral("timeline.cancel_export"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("requestId"), cancel_request_id},
+                  {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("export")});
+  const auto cancel_receipt = canceled.value(QStringLiteral("structuredContent")).toObject();
+  if (second_queued.value(QStringLiteral("isError")).toBool() ||
+      canceled.value(QStringLiteral("isError")).toBool() ||
+      cancel_receipt.value(QStringLiteral("jobId")).toString() !=
+          second_receipt.value(QStringLiteral("jobId")).toString() ||
+      cancel_receipt.value(QStringLiteral("status")).toString() != QStringLiteral("Canceled")) {
+    const auto encode = [](const QJsonObject& value) {
+      return QString::fromUtf8(QJsonDocument(value).toJson(QJsonDocument::Compact)).left(768);
+    };
+    std::cerr << "queued=" << encode(second_queued.value(QStringLiteral("structuredContent")).toObject()).toStdString()
+              << " cancel=" << encode(canceled.value(QStringLiteral("structuredContent")).toObject()).toStdString()
+              << " second=" << encode(second_receipt).toStdString()
+              << " isError=" << canceled.value(QStringLiteral("isError")).toBool() << '\n';
+    return fail("cooperative cancellation should affect the exact queued owned receipt only");
+  }
+
+  const auto queued = server.callTool(
+      QStringLiteral("timeline.export_h264"), export_args, {QStringLiteral("export")});
+  if (queued.value(QStringLiteral("isError")).toBool()) {
+    std::cerr << "queued-admission="
+              << QString::fromUtf8(QJsonDocument(
+                     queued.value(QStringLiteral("structuredContent")).toObject())
+                     .toJson(QJsonDocument::Compact)).left(768).toStdString()
+              << '\n';
+    return fail("positive export capability should durably admit the native worker fixture");
+  }
+  const auto queued_receipt = queued.value(QStringLiteral("structuredContent")).toObject();
+  const auto job_id = queued_receipt.value(QStringLiteral("jobId")).toString();
+  if (queued.value(QStringLiteral("isError")).toBool() ||
+      queued_receipt.value(QStringLiteral("accepted")).toBool() != true ||
+      !photo_editor::desktop::timeline_mcp_export_canonical_uuid(job_id) ||
+      job_id == request_id ||
+      queued_receipt.value(QStringLiteral("requestId")).toString() != request_id ||
+      queued_receipt.value(QStringLiteral("maximumOutputBytes")).toVariant().toLongLong() !=
+          photo_editor::desktop::kMaximumTimelineMcpExportBytes ||
+      QFileInfo(queued_receipt.value(QStringLiteral("outputPath")).toString()).fileName() !=
+          QStringLiteral("%1-%2.mp4").arg(timeline_id, request_id)) {
+    return fail("native export should persist a unique worker job and app-managed output receipt");
+  }
+  QString durable_store_error;
+  const auto durable_records = photo_editor::desktop::loadPersistedJobRecords(&durable_store_error, false);
+  if (!durable_store_error.isEmpty()) {
+    return fail("accepted export receipt must be read back from the durable job store");
+  }
+  if (std::none_of(durable_records.cbegin(), durable_records.cend(), [&](const auto& job) {
+        return job.job_id == job_id && job.status == QStringLiteral("Queued") &&
+            job.metadata_json.value(QStringLiteral("mcpTimelineExport")).toObject()
+                .value(QStringLiteral("requestId")).toString() == request_id;
+      })) {
+    return fail("accepted receipt must resolve to the durably persisted queued job record");
+  }
+  const auto replay = server.callTool(
+      QStringLiteral("timeline.export_h264"), export_args, {QStringLiteral("export")})
+                          .value(QStringLiteral("structuredContent")).toObject();
+  if (replay.value(QStringLiteral("jobId")).toString() != job_id ||
+      !replay.value(QStringLiteral("idempotentReplay")).toBool()) {
+    return fail("identical request replay should return the same durable native job receipt");
+  }
+  auto changed_request = export_args;
+  changed_request.insert(QStringLiteral("documentHash"), QString(64, QLatin1Char('0')));
+  if (!server.callTool(QStringLiteral("timeline.export_h264"), changed_request,
+                       {QStringLiteral("export")})
+           .value(QStringLiteral("isError")).toBool()) {
+    return fail("the same requestId must not be rebound to a different document hash");
+  }
+  const auto inspection = server.callTool(
+      QStringLiteral("timeline.inspect_export"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("requestId"), request_id}},
+      {QStringLiteral("read")}).value(QStringLiteral("structuredContent")).toObject();
+  if (inspection.value(QStringLiteral("jobId")).toString() != job_id ||
+      inspection.value(QStringLiteral("status")).toString() != QStringLiteral("Queued")) {
+    return fail("inspection should resolve the exact persisted request receipt");
+  }
+
+  const QJsonObject lifecycle_args{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), document_hash},
+      {QStringLiteral("confirmed"), true}};
+  const auto unconfirmed_save = server.callTool(
+      QStringLiteral("timeline.save_active_draft"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("confirmed"), false}},
+      {QStringLiteral("draft")});
+  const auto path_injection = server.callTool(
+      QStringLiteral("timeline.close_saved_draft"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("confirmed"), true},
+                  {QStringLiteral("path"), QStringLiteral("/tmp/other-project.json")}},
+      {QStringLiteral("draft")});
+  const auto dirty_close = server.callTool(
+      QStringLiteral("timeline.close_saved_draft"), lifecycle_args, {QStringLiteral("draft")});
+  active_editing_task = true;
+  const auto task_blocked_save = server.callTool(
+      QStringLiteral("timeline.save_active_draft"), lifecycle_args, {QStringLiteral("draft")});
+  const auto task_blocked_close = server.callTool(
+      QStringLiteral("timeline.close_saved_draft"), lifecycle_args, {QStringLiteral("draft")});
+  active_editing_task = false;
+  auto stale_lifecycle_args = lifecycle_args;
+  stale_lifecycle_args.insert(QStringLiteral("documentHash"), QString(64, QLatin1Char('0')));
+  const auto stale_save = server.callTool(
+      QStringLiteral("timeline.save_active_draft"), stale_lifecycle_args, {QStringLiteral("draft")});
+  if (!unconfirmed_save.value(QStringLiteral("isError")).toBool() ||
+      !path_injection.value(QStringLiteral("isError")).toBool() ||
+      !dirty_close.value(QStringLiteral("isError")).toBool() ||
+      !task_blocked_save.value(QStringLiteral("isError")).toBool() ||
+      !task_blocked_close.value(QStringLiteral("isError")).toBool() ||
+      !stale_save.value(QStringLiteral("isError")).toBool() || !timeline.hasActiveTimeline()) {
+    return fail("draft save/close must require confirmation and exact identity, reject paths/tasks, and leave dirty drafts open");
+  }
+
+  const auto save_started = server.callTool(
+      QStringLiteral("timeline.save_active_draft"), lifecycle_args, {QStringLiteral("draft")});
+  const auto save_receipt = save_started.value(QStringLiteral("structuredContent")).toObject();
+  if (save_started.value(QStringLiteral("isError")).toBool() ||
+      !save_receipt.value(QStringLiteral("accepted")).toBool() ||
+      save_receipt.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      save_receipt.value(QStringLiteral("documentHash")).toString() != document_hash) {
+    return fail("save_active_draft should accept one asynchronous save for the exact inspected resource and hash");
+  }
+  QElapsedTimer draft_save_wait;
+  draft_save_wait.start();
+  QJsonObject saved_inspection;
+  while (draft_save_wait.elapsed() < 30000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    const auto response = server.callTool(
+        QStringLiteral("timeline.inspect_document"), QJsonObject{}, {QStringLiteral("read")});
+    saved_inspection = response.value(QStringLiteral("structuredContent")).toObject();
+    if (!saved_inspection.value(QStringLiteral("saveInProgress")).toBool() &&
+        !saved_inspection.value(QStringLiteral("saveFailed")).toBool() &&
+        !saved_inspection.value(QStringLiteral("dirty")).toBool()) {
+      break;
+    }
+    QThread::msleep(5);
+  }
+  const auto saved_document_hash = saved_inspection.value(QStringLiteral("documentHash")).toString();
+  if (saved_inspection.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      !photo_editor::desktop::timeline_mcp_export_canonical_sha256(saved_document_hash) ||
+      saved_inspection.value(QStringLiteral("saveInProgress")).toBool() ||
+      saved_inspection.value(QStringLiteral("saveFailed")).toBool() ||
+      saved_inspection.value(QStringLiteral("dirty")).toBool() ||
+      !saved_inspection.value(QStringLiteral("saved")).toBool()) {
+    std::cerr << "saved-inspection="
+              << QJsonDocument(saved_inspection).toJson(QJsonDocument::Compact).constData()
+              << " controller-status=" << timeline.status().toStdString()
+              << " saveInProgress=" << timeline.timelineSaveInProgress()
+              << " saveFailed=" << timeline.timelineSaveFailed()
+              << " dirty=" << timeline.dirty()
+              << " savedPath=" << timeline.savedDocumentPath().toStdString() << '\n';
+    return fail("compact inspection should report completed successful save before the close step");
+  }
+
+  const auto saved_path_before = timeline.savedDocumentPath();
+  if (saved_path_before.isEmpty() ||
+      QFileInfo(saved_path_before).canonicalFilePath().isEmpty()) {
+    return fail("asynchronous draft save should establish a canonical app-managed Library path");
+  }
+  const QJsonObject saved_close_args{
+      {QStringLiteral("resourceId"), resource_id},
+      {QStringLiteral("documentHash"), saved_document_hash},
+      {QStringLiteral("confirmed"), true}};
+  const auto close_receipt = server.callTool(
+      QStringLiteral("timeline.close_saved_draft"), saved_close_args, {QStringLiteral("draft")});
+  const auto close_content = close_receipt.value(QStringLiteral("structuredContent")).toObject();
+  const auto queued_after_close = photo_editor::desktop::loadPersistedJobRecords(nullptr, false);
+  const auto export_still_queued = std::any_of(
+      queued_after_close.cbegin(), queued_after_close.cend(), [&](const auto& job) {
+        return job.job_id == job_id && job.status == QStringLiteral("Queued") &&
+            QFileInfo::exists(job.source_path);
+      });
+  if (close_receipt.value(QStringLiteral("isError")).toBool() ||
+      !close_content.value(QStringLiteral("closed")).toBool() ||
+      close_content.value(QStringLiteral("resourceId")).toString() != resource_id ||
+      close_content.value(QStringLiteral("documentHash")).toString() != saved_document_hash ||
+      timeline.hasActiveTimeline() || !QFileInfo::exists(saved_path_before) || !export_still_queued) {
+    const auto encode = [](const QJsonObject& value) {
+      return QString::fromUtf8(QJsonDocument(value).toJson(QJsonDocument::Compact)).left(768);
+    };
+    std::cerr << "close=" << encode(close_content).toStdString()
+              << " exportStillQueued=" << export_still_queued << '\n';
+    return fail("close_saved_draft should close only after canonical hash readback while preserving the accepted frozen export job");
+  }
+
+  photo_editor::desktop::JobRunner runner;
+  runner.initializeFromStore();
+  runner.wake();
+  if (!wait_for_condition([&]() {
+        const auto current = photo_editor::desktop::loadPersistedJobRecords(nullptr, false);
+        return std::any_of(current.cbegin(), current.cend(), [&](const auto& job) {
+          return job.job_id == job_id &&
+              (job.status == QStringLiteral("Completed") || job.status == QStringLiteral("Failed") ||
+               job.status == QStringLiteral("Canceled"));
+        });
+      }, 120000)) {
+    return fail("the native H.264 worker should reach a durable terminal status");
+  }
+  const auto records = photo_editor::desktop::loadPersistedJobRecords(nullptr, false);
+  auto completed_job = photo_editor::desktop::PersistentJobRecord{};
+  for (const auto& job : records) if (job.job_id == job_id) completed_job = job;
+  constexpr qint64 kOutputLimitProbeBytes = 256;
+  const auto uncapped_output_bytes = QFileInfo(completed_job.output_path).size();
+  if (completed_job.status != QStringLiteral("Completed") &&
+      QFileInfo::exists(completed_job.source_path)) {
+    QFile snapshot_file(completed_job.source_path);
+    QByteArray snapshot_bytes;
+    if (snapshot_file.open(QIODevice::ReadOnly)) snapshot_bytes = snapshot_file.readAll();
+    const auto diagnostic_snapshot = QDir::temp().filePath(
+        QStringLiteral("looksy-h264-export-failed-snapshot-%1.json").arg(job_id));
+    if (!snapshot_bytes.isEmpty()) {
+      QFile diagnostic_file(diagnostic_snapshot);
+      if (diagnostic_file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+          diagnostic_file.write(snapshot_bytes) != snapshot_bytes.size()) {
+        std::cerr << "failed to preserve diagnostic snapshot\n";
+      }
+    }
+    photo_editor::desktop::TimelineDocumentController snapshot_reload;
+    const auto loaded = snapshot_reload.loadTimeline(completed_job.source_path);
+    const auto snapshot_metadata = completed_job.metadata_json
+        .value(QStringLiteral("mcpTimelineExport")).toObject();
+    std::cerr << "snapshot-diagnostic path=" << diagnostic_snapshot.toStdString()
+              << " bytes=" << snapshot_bytes.size()
+              << " snapshotSha256="
+              << QString::fromLatin1(QCryptographicHash::hash(
+                     snapshot_bytes, QCryptographicHash::Sha256).toHex()).toStdString()
+              << " acceptedDocumentHash=" << document_hash.toStdString()
+              << " metadataDocumentHash="
+              << snapshot_metadata.value(QStringLiteral("documentHash")).toString().toStdString()
+              << " reloadOk=" << loaded
+              << " reloadDocumentHash="
+              << (loaded ? snapshot_reload.deterministicDocumentHash().toStdString() : "<unavailable>")
+              << " reloadStatus=" << snapshot_reload.status().toStdString() << '\n';
+  }
+  if (completed_job.status != QStringLiteral("Completed") ||
+      !QFileInfo::exists(completed_job.output_path) ||
+      uncapped_output_bytes <= kOutputLimitProbeBytes ||
+      uncapped_output_bytes >=
+          photo_editor::desktop::kMaximumTimelineMcpExportBytes ||
+      timeline.hasActiveTimeline() ||
+      !QFileInfo::exists(completed_job.source_path)) {
+    std::cerr << "job-status=" << completed_job.status.toStdString()
+              << " job-error=" << completed_job.error_message.toStdString()
+              << " uncapped-size=" << uncapped_output_bytes
+              << " minimum-probe-bytes=" << kOutputLimitProbeBytes << '\n';
+    return fail("the accepted frozen export should complete under the cap after the Timeline closes, and its output must exceed the later size-limit probe");
+  }
+  QFile frozen_snapshot(completed_job.source_path);
+  const auto frozen_snapshot_hash = [&]() {
+    if (!frozen_snapshot.open(QIODevice::ReadOnly)) return QString{};
+    const auto bytes = frozen_snapshot.readAll();
+    if (frozen_snapshot.error() != QFileDevice::NoError) return QString{};
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+  }();
+  const auto frozen_export_metadata = completed_job.metadata_json
+      .value(QStringLiteral("mcpTimelineExport")).toObject();
+  if (frozen_snapshot_hash.isEmpty() ||
+      frozen_export_metadata.value(QStringLiteral("snapshotSha256")).toString() != frozen_snapshot_hash ||
+      frozen_export_metadata.value(QStringLiteral("documentHash")).toString() != document_hash) {
+    return fail("the completed job should retain and verify the exact immutable export snapshot accepted before the draft save/close");
+  }
+  QProcess decode;
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    return fail("native export integration check requires the installed FFmpeg decoder");
+  }
+  decode.start(ffmpeg, {QStringLiteral("-v"), QStringLiteral("error"),
+                        QStringLiteral("-i"), completed_job.output_path,
+                        QStringLiteral("-f"), QStringLiteral("null"), QStringLiteral("-")});
+  if (!decode.waitForStarted(5000) || !decode.waitForFinished(30000) ||
+      decode.exitStatus() != QProcess::NormalExit || decode.exitCode() != 0) {
+    return fail("native H.264 worker output should fully decode through FFmpeg");
+  }
+  const auto reopened_after_export = server.callTool(
+      QStringLiteral("timeline.open_saved_draft"),
+      QJsonObject{{QStringLiteral("timelineId"), timeline_id}}, {QStringLiteral("draft")});
+  if (reopened_after_export.value(QStringLiteral("isError")).toBool() ||
+      !timeline.hasActiveTimeline() || timeline.agentTaskDocumentId() != resource_id ||
+      QFileInfo(timeline.savedDocumentPath()).canonicalFilePath() !=
+          QFileInfo(saved_path_before).canonicalFilePath() ||
+      timeline.deterministicDocumentHash() != saved_document_hash ||
+      timeline.clips() != clips_before || timeline.dirty()) {
+    return fail("the Library Timeline should reopen after export with the exact saved hash and clip content");
+  }
+  const auto completed_receipt = server.callTool(
+      QStringLiteral("timeline.inspect_export"),
+      QJsonObject{{QStringLiteral("resourceId"), resource_id},
+                  {QStringLiteral("documentHash"), document_hash},
+                  {QStringLiteral("requestId"), request_id}},
+      {QStringLiteral("read")}).value(QStringLiteral("structuredContent")).toObject();
+  if (completed_receipt.value(QStringLiteral("status")).toString() != QStringLiteral("Completed") ||
+      !completed_receipt.value(QStringLiteral("outputIntegrity")).toObject()
+           .value(QStringLiteral("valid")).toBool()) {
+    return fail("completed export receipt should expose verified output integrity");
+  }
+  photo_editor::desktop::TimelineDocumentController capped_controller;
+  const auto snapshot_path = completed_job.source_path;
+  const auto capped_output = QDir(runtime_root.path()).filePath(QStringLiteral("capped.mp4"));
+  if (!capped_controller.loadTimeline(snapshot_path)) {
+    return fail("output-limit check should reopen the immutable worker snapshot");
+  }
+  capped_controller.setRenderOutputByteLimit(kOutputLimitProbeBytes);
+  const auto capped_render_succeeded = capped_controller.renderCurrentTimeline(capped_output);
+  const QFileInfo capped_output_info(capped_output);
+  if (capped_render_succeeded || capped_output_info.exists()) {
+    std::cerr << "size-limit-probe baseline=" << uncapped_output_bytes
+              << " limit=" << kOutputLimitProbeBytes
+              << " renderSucceeded=" << capped_render_succeeded
+              << " outputExists=" << capped_output_info.exists()
+              << " outputBytes=" << capped_output_info.size()
+              << " status=" << capped_controller.status().toStdString() << '\n';
+    return fail("native render must stop and remove its staged output at the configured size ceiling");
+  }
+
+  std::cout << "timeline_h264_export_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_draft_lifecycle_contract() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) return fail("Timeline lifecycle contract needs isolated app data");
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController timeline;
+  timeline.setEditAccessPolicy([] { return true; });
+
+  bool active_task = false;
+  bool edit_access = true;
+  int activation_count = 0;
+  photo_editor::desktop::AgentTaskCoordinator handoff_tasks;
+  photo_editor::desktop::TimelineDraftLifecycle lifecycle(
+      &timeline,
+      [&active_task, &handoff_tasks]() {
+        return active_task || handoff_tasks.journal()->active();
+      },
+      [&edit_access]() { return edit_access; },
+      [&activation_count]() { ++activation_count; return true; });
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&timeline);
+  bridge.setTimelineDraftLifecycleHandler(
+      [&lifecycle](const QString& action, const QVariantMap& arguments) {
+        return lifecycle.invoke(action, arguments);
+      });
+  bridge.setTimelineTaskLifecycleHandler(
+      [&timeline, &handoff_tasks, &runtime_root](const QString& action, const QVariantMap& arguments) {
+        if (action != QStringLiteral("admit") ||
+            arguments.value(QStringLiteral("targetResourceId")).toString() != timeline.agentTaskDocumentId()) {
+          return QVariantMap{{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), QStringLiteral("Task admission did not target the inspected Timeline resource.")}};
+        }
+        const auto prepared = timeline.prepareAgentTaskDocumentForAutomation();
+        const auto task_id = QStringLiteral("timeline-draft-handoff");
+        const auto canonical_output = QFileInfo(runtime_root.path()).canonicalFilePath();
+        if (!prepared.value(QStringLiteral("ok")).toBool() ||
+            !prepared.value(QStringLiteral("ready")).toBool() ||
+            !handoff_tasks.begin(QDir(runtime_root.path()).filePath(QStringLiteral("handoff-tasks")), task_id)
+                 .value(QStringLiteral("ok")).toBool() ||
+            !handoff_tasks.journal()->recordApprovedSnapshot({
+                {QStringLiteral("contract"), QStringLiteral("agent-approved-session-v1")},
+                {QStringLiteral("prompt"), arguments.value(QStringLiteral("objective"))},
+                {QStringLiteral("answers"), QVariantMap{}}}).value(QStringLiteral("ok")).toBool() ||
+            !handoff_tasks.journal()->recordNativeTimelineScope(
+                {timeline.agentTaskDocumentId()}, {}, canonical_output)
+                 .value(QStringLiteral("ok")).toBool()) {
+          return QVariantMap{{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), QStringLiteral("The inspected Timeline could not be handed to a reversible task journal.")}};
+        }
+        const auto resource_id = timeline.agentTaskDocumentId();
+        const auto enrolled = handoff_tasks.enroll(resource_id,
+            photo_editor::desktop::AgentTaskJournal::ResourceAdapter{
+                [&timeline, resource_id]() {
+                  return timeline.agentTaskDocumentId() == resource_id
+                      ? timeline.agentTaskDocumentState() : QByteArray{};
+                },
+                [&timeline, resource_id](const QByteArray& bytes) {
+                  return timeline.agentTaskDocumentId() == resource_id &&
+                      timeline.restoreAgentTaskDocument(bytes);
+                }, {}});
+        const auto accepted = timeline.acceptAgentTaskDocumentPreparationForAutomation();
+        if (!enrolled.value(QStringLiteral("status")).isValid() ||
+            !accepted.value(QStringLiteral("ok")).toBool()) {
+          return QVariantMap{{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), QStringLiteral("The inspected Timeline baseline could not be accepted for task ownership.")}};
+        }
+        return QVariantMap{{QStringLiteral("ok"), true},
+            {QStringLiteral("taskId"), task_id},
+            {QStringLiteral("targetResourceId"), resource_id},
+            {QStringLiteral("baselineHash"), handoff_tasks.journal()->checkpointHash(resource_id)}};
+      });
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  const auto draft_tools = server.toolsListResult({QStringLiteral("draft")})
+                               .value(QStringLiteral("tools")).toArray();
+  const auto find_tool = [](const QJsonArray& tools, const QString& name) {
+    for (const auto& value : tools) {
+      const auto tool = value.toObject();
+      if (tool.value(QStringLiteral("name")).toString() == name) return tool;
+    }
+    return QJsonObject{};
+  };
+  const auto list_tool = find_tool(read_tools, QStringLiteral("timeline.list_saved_drafts"));
+  const auto create_tool = find_tool(draft_tools, QStringLiteral("timeline.create_draft"));
+  const auto save_active_tool = find_tool(draft_tools, QStringLiteral("timeline.save_active_draft"));
+  const auto close_saved_tool = find_tool(draft_tools, QStringLiteral("timeline.close_saved_draft"));
+  const auto open_tool = find_tool(draft_tools, QStringLiteral("timeline.open_saved_draft"));
+  const auto open_autosave_tool = find_tool(draft_tools, QStringLiteral("timeline.open_autosave_recovery"));
+  const auto inspect_autosave_tool = find_tool(read_tools, QStringLiteral("timeline.inspect_autosave_recovery"));
+  if (list_tool.isEmpty() || create_tool.isEmpty() || save_active_tool.isEmpty() ||
+      close_saved_tool.isEmpty() || open_tool.isEmpty() ||
+      open_autosave_tool.isEmpty() || inspect_autosave_tool.isEmpty() ||
+      !find_tool(read_tools, QStringLiteral("timeline.create_draft")).isEmpty() ||
+      !find_tool(read_tools, QStringLiteral("timeline.save_active_draft")).isEmpty() ||
+      !find_tool(read_tools, QStringLiteral("timeline.close_saved_draft")).isEmpty() ||
+      list_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read") ||
+      create_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("draft") ||
+      save_active_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("draft") ||
+      close_saved_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("draft") ||
+      open_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("draft") ||
+      open_autosave_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("draft") ||
+      inspect_autosave_tool.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read")) {
+    return fail("Timeline lifecycle must expose read-only listing/status and draft-gated save/close/create/open schemas");
+  }
+  const auto save_schema = save_active_tool.value(QStringLiteral("inputSchema")).toObject();
+  const auto close_schema = close_saved_tool.value(QStringLiteral("inputSchema")).toObject();
+  if (save_schema.value(QStringLiteral("required")).toArray() !=
+          QJsonArray{QStringLiteral("resourceId"), QStringLiteral("documentHash"), QStringLiteral("confirmed")} ||
+      close_schema.value(QStringLiteral("required")).toArray() !=
+          QJsonArray{QStringLiteral("resourceId"), QStringLiteral("documentHash"), QStringLiteral("confirmed")} ||
+      save_schema.value(QStringLiteral("properties")).toObject()
+          .value(QStringLiteral("confirmed")).toObject().value(QStringLiteral("const")).toBool() != true ||
+      close_schema.value(QStringLiteral("properties")).toObject()
+          .value(QStringLiteral("confirmed")).toObject().value(QStringLiteral("const")).toBool() != true) {
+    return fail("save/close MCP schemas should require exact identities and literal confirmed:true");
+  }
+
+  const auto empty_list = server.callTool(
+      QStringLiteral("timeline.list_saved_drafts"), QJsonObject{}, {QStringLiteral("read")});
+  if (empty_list.value(QStringLiteral("isError")).toBool() ||
+      empty_list.value(QStringLiteral("structuredContent")).toObject()
+          .value(QStringLiteral("draftCount")).toInt() != 0 || timeline.hasActiveTimeline()) {
+    return fail("Saved draft listing should work from the inactive Library without creating a document");
+  }
+
+  const QJsonObject valid_settings{
+      {QStringLiteral("timelineName"), QStringLiteral("Lifecycle Draft")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  };
+  const QJsonObject create_args{{QStringLiteral("settings"), valid_settings}};
+  const auto denied_create = server.callTool(
+      QStringLiteral("timeline.create_draft"), create_args, {QStringLiteral("read")});
+  if (!denied_create.value(QStringLiteral("isError")).toBool() || timeline.hasActiveTimeline()) {
+    return fail("Create draft must be denied without draft capability before changing the Library workspace");
+  }
+  const auto invalid_size = server.callTool(
+      QStringLiteral("timeline.create_draft"),
+      QJsonObject{{QStringLiteral("settings"), QJsonObject{
+          {QStringLiteral("timelineName"), QStringLiteral("Invalid Size")},
+          {QStringLiteral("width"), 15}, {QStringLiteral("height"), 240},
+          {QStringLiteral("frameRate"), 30.0}}}},
+      {QStringLiteral("draft")});
+  const auto invalid_rate = server.callTool(
+      QStringLiteral("timeline.create_draft"),
+      QJsonObject{{QStringLiteral("settings"), QJsonObject{
+          {QStringLiteral("timelineName"), QStringLiteral("Invalid Rate")},
+          {QStringLiteral("width"), 320}, {QStringLiteral("height"), 240},
+          {QStringLiteral("frameRate"), 0.0}}}},
+      {QStringLiteral("draft")});
+  if (!invalid_size.value(QStringLiteral("isError")).toBool() ||
+      !invalid_rate.value(QStringLiteral("isError")).toBool() || timeline.hasActiveTimeline()) {
+    return fail("Invalid Timeline dimensions or frame rate must be rejected before native document creation");
+  }
+  active_task = true;
+  const auto task_blocked_create = server.callTool(
+      QStringLiteral("timeline.create_draft"), create_args, {QStringLiteral("draft")});
+  active_task = false;
+  if (!task_blocked_create.value(QStringLiteral("isError")).toBool() || timeline.hasActiveTimeline()) {
+    return fail("A running or review-held task must block draft navigation before mutation");
+  }
+  edit_access = false;
+  const auto access_blocked_create = server.callTool(
+      QStringLiteral("timeline.create_draft"), create_args, {QStringLiteral("draft")});
+  edit_access = true;
+  if (!access_blocked_create.value(QStringLiteral("isError")).toBool() || timeline.hasActiveTimeline()) {
+    return fail("Timeline creation must retain the app edit-access gate");
+  }
+
+  const auto created = server.callTool(
+      QStringLiteral("timeline.create_draft"), create_args, {QStringLiteral("draft")});
+  const auto created_content = created.value(QStringLiteral("structuredContent")).toObject();
+  const auto created_resource = created_content.value(QStringLiteral("resource")).toObject();
+  const auto created_id = created_resource.value(QStringLiteral("resourceId")).toString();
+  const auto saved_id = created_id.mid(QStringLiteral("timeline:").size());
+  const auto managed_documents_root = QFileInfo(
+      photo_editor::desktop::timelineDocumentsRootPath()).canonicalFilePath();
+  const auto expected_created_path = managed_documents_root.isEmpty()
+      ? QString{} : QDir(managed_documents_root).filePath(saved_id + QStringLiteral(".json"));
+  const auto created_canonical_path = QFileInfo(
+      created_resource.value(QStringLiteral("savedDocumentPath")).toString()).canonicalFilePath();
+  if (created.value(QStringLiteral("isError")).toBool() || !created_content.value(QStringLiteral("ok")).toBool() ||
+      created_id.isEmpty() || created_resource.value(QStringLiteral("ready")).toBool() != true ||
+      created_canonical_path.isEmpty() || created_canonical_path != expected_created_path ||
+      !QFileInfo::exists(expected_created_path) ||
+      created_content.value(QStringLiteral("navigationRevertible")).toBool() ||
+      created_content.value(QStringLiteral("replaySafe")).toBool() || activation_count != 1 ||
+      !created_content.value(QStringLiteral("projectFileCreated")).toBool() ||
+      !created_content.value(QStringLiteral("libraryRegistered")).toBool() ||
+      !created_content.value(QStringLiteral("lostReplyResolution")).toString()
+           .contains(QStringLiteral("inspectAgentDocument")) ||
+      !timeline.hasActiveTimeline() || timeline.dirty()) {
+    return fail("Create should return its inspectAgentDocument resource, save a fresh canonical Library project, and activate Timeline once");
+  }
+  const auto compact_inspection = server.callTool(
+      QStringLiteral("timeline.inspect_document"), QJsonObject{}, {QStringLiteral("read")});
+  const auto compact_inspection_content =
+      compact_inspection.value(QStringLiteral("structuredContent")).toObject();
+  const auto compact_export_readiness =
+      compact_inspection_content.value(QStringLiteral("exportSnapshotReadiness")).toObject();
+  if (compact_inspection.value(QStringLiteral("isError")).toBool() ||
+      !compact_inspection_content.value(QStringLiteral("ready")).toBool() ||
+      !compact_inspection_content.value(QStringLiteral("exportSnapshotReady")).toBool() ||
+      !compact_export_readiness.value(QStringLiteral("ready")).toBool() ||
+      compact_export_readiness.value(QStringLiteral("blockingReasons")).toArray().size() != 0 ||
+      compact_inspection_content.contains(QStringLiteral("clips")) ||
+      compact_inspection_content.contains(QStringLiteral("tracks"))) {
+    return fail("Compact timeline.inspect_document should expose export snapshot readiness without returning clips or tracks");
+  }
+  photo_editor::desktop::TimelineDraftLifecycleTestAccess::queueWaveformAndProxyWork(timeline);
+  const auto derived_work_inspection = server.callTool(
+      QStringLiteral("timeline.inspect_document"), QJsonObject{}, {QStringLiteral("read")});
+  const auto derived_work_content =
+      derived_work_inspection.value(QStringLiteral("structuredContent")).toObject();
+  const auto derived_work_readiness =
+      derived_work_content.value(QStringLiteral("exportSnapshotReadiness")).toObject();
+  const auto derived_work_details = derived_work_readiness.value(QStringLiteral("derivedWork")).toObject();
+  const auto expected_derived_work_hash = timeline.deterministicDocumentHash();
+  if (derived_work_inspection.value(QStringLiteral("isError")).toBool() ||
+      derived_work_content.value(QStringLiteral("ready")).toBool() ||
+      !derived_work_content.value(QStringLiteral("exportSnapshotReady")).toBool() ||
+      !derived_work_readiness.value(QStringLiteral("ready")).toBool() ||
+      derived_work_content.value(QStringLiteral("documentHash")).toString() != expected_derived_work_hash ||
+      derived_work_details.value(QStringLiteral("waveformQueueCount")).toInt() != 1 ||
+      derived_work_details.value(QStringLiteral("proxyGenerationQueueCount")).toInt() != 1 ||
+      derived_work_content.contains(QStringLiteral("clips")) ||
+      derived_work_content.contains(QStringLiteral("tracks"))) {
+    photo_editor::desktop::TimelineDraftLifecycleTestAccess::clearDerivedWork(timeline);
+    return fail("Compact inspection should expose a hash-bound export-ready snapshot during queued waveform/proxy work without returning clips or tracks");
+  }
+  photo_editor::desktop::TimelineDraftLifecycleTestAccess::clearDerivedWork(timeline);
+  const auto status_only = server.callTool(
+      QStringLiteral("timeline.inspect_document"),
+      QJsonObject{{QStringLiteral("includeDocumentHash"), false}}, {QStringLiteral("read")});
+  const auto status_content = status_only.value(QStringLiteral("structuredContent")).toObject();
+  const auto invalid_status_argument = server.callTool(
+      QStringLiteral("timeline.inspect_document"),
+      QJsonObject{{QStringLiteral("includeDocumentHash"), QStringLiteral("false")}},
+      {QStringLiteral("read")});
+  const auto status_path_injection = server.callTool(
+      QStringLiteral("timeline.inspect_document"),
+      QJsonObject{{QStringLiteral("includeDocumentHash"), false},
+                  {QStringLiteral("path"), QStringLiteral("/tmp/other-project.json")}},
+      {QStringLiteral("read")});
+  if (status_only.value(QStringLiteral("isError")).toBool() ||
+      status_content.value(QStringLiteral("resourceId")).toString() != created_id ||
+      !status_content.value(QStringLiteral("documentHash")).toString().isEmpty() ||
+      status_content.value(QStringLiteral("documentHashIncluded")).toBool() ||
+      !invalid_status_argument.value(QStringLiteral("isError")).toBool() ||
+      !status_path_injection.value(QStringLiteral("isError")).toBool()) {
+    return fail("Lightweight status must omit authorization hashes and reject untyped or path arguments");
+  }
+  const auto created_list = server.callTool(
+      QStringLiteral("timeline.list_saved_drafts"), QJsonObject{}, {QStringLiteral("read")});
+  const auto created_library_drafts = created_list.value(QStringLiteral("structuredContent")).toObject()
+                                          .value(QStringLiteral("drafts")).toArray();
+  if (created_list.value(QStringLiteral("isError")).toBool() ||
+      created_list.value(QStringLiteral("structuredContent")).toObject()
+          .value(QStringLiteral("draftCount")).toInt() != 1 || created_library_drafts.size() != 1 ||
+      created_library_drafts.first().toObject().value(QStringLiteral("timelineId")).toString() != saved_id) {
+    return fail("Creating a draft should save exactly one new app-managed Library project before task admission");
+  }
+  // A second navigation must never replace the currently open draft.
+  const auto active_create = server.callTool(
+      QStringLiteral("timeline.create_draft"), create_args, {QStringLiteral("draft")});
+  const auto active_open = server.callTool(
+      QStringLiteral("timeline.open_saved_draft"),
+      QJsonObject{{QStringLiteral("timelineId"), QStringLiteral("00000000-0000-4000-8000-000000000001")}},
+      {QStringLiteral("draft")});
+  if (!active_create.value(QStringLiteral("isError")).toBool() ||
+      !active_open.value(QStringLiteral("isError")).toBool() ||
+      timeline.agentTaskDocumentId() != created_id || activation_count != 1) {
+    return fail("Create/open must leave an active Timeline untouched");
+  }
+
+  if (timeline.savedDocumentPath().isEmpty() || !QFileInfo::exists(timeline.savedDocumentPath())) {
+    return fail("The native create command should already have persisted its empty Library project");
+  }
+  QFile saved_document(timeline.savedDocumentPath());
+  if (!saved_document.open(QIODevice::ReadOnly)) {
+    return fail("The saved Timeline document should be readable for the ID-mismatch guard fixture");
+  }
+  const auto original_document_bytes = saved_document.readAll();
+  saved_document.close();
+  QJsonParseError saved_parse_error;
+  auto tampered_document = QJsonDocument::fromJson(original_document_bytes, &saved_parse_error);
+  if (saved_parse_error.error != QJsonParseError::NoError || !tampered_document.isObject()) {
+    return fail("The saved Timeline should be valid JSON before the identity mismatch fixture");
+  }
+  auto tampered_object = tampered_document.object();
+  tampered_object.insert(QStringLiteral("timelineId"), QStringLiteral("00000000-0000-4000-8000-000000000099"));
+  if (!saved_document.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      saved_document.write(QJsonDocument(tampered_object).toJson(QJsonDocument::Compact)) < 0) {
+    return fail("The identity mismatch fixture should temporarily alter only its isolated saved project");
+  }
+  saved_document.close();
+  photo_editor::desktop::TimelineDocumentController mismatched_controller;
+  mismatched_controller.setEditAccessPolicy([] { return true; });
+  photo_editor::desktop::TimelineDraftLifecycle mismatch_lifecycle(
+      &mismatched_controller, [] { return false; }, [] { return true; }, [] { return true; });
+  const auto mismatched_open = mismatch_lifecycle.invoke(
+      QStringLiteral("open_saved_draft"), {{QStringLiteral("timelineId"), saved_id}});
+  if (mismatched_open.value(QStringLiteral("ok")).toBool() ||
+      mismatched_controller.hasActiveTimeline()) {
+    QFile restore_document(timeline.savedDocumentPath());
+    if (restore_document.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      restore_document.write(original_document_bytes);
+      restore_document.close();
+    }
+    return fail("A Library ID whose JSON document declares a different ID must fail before opening or recovery fallback");
+  }
+  if (!saved_document.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      saved_document.write(original_document_bytes) != original_document_bytes.size()) {
+    return fail("The isolated fixture should restore its original saved document after the ID mismatch check");
+  }
+  saved_document.close();
+  const auto saved_list = server.callTool(
+      QStringLiteral("timeline.list_saved_drafts"), QJsonObject{}, {QStringLiteral("read")});
+  const auto listed_drafts = saved_list.value(QStringLiteral("structuredContent")).toObject()
+                                 .value(QStringLiteral("drafts")).toArray();
+  if (listed_drafts.size() != 1 ||
+      listed_drafts.first().toObject().value(QStringLiteral("timelineId")).toString() != saved_id ||
+      listed_drafts.first().toObject().contains(QStringLiteral("documentPath"))) {
+    return fail("Saved draft listing should expose exact IDs without leaking arbitrary filesystem paths");
+  }
+
+  photo_editor::desktop::TimelineDocumentController path_guard_timeline;
+  path_guard_timeline.setEditAccessPolicy([] { return true; });
+  photo_editor::desktop::TimelineDraftLifecycle path_guard_lifecycle(
+      &path_guard_timeline, [] { return false; }, [] { return true; }, [] { return true; });
+  photo_editor::desktop::PhotoAutomationBridge path_guard_bridge(&agent_edit, &catalog_model);
+  path_guard_bridge.setTimelineDocumentController(&path_guard_timeline);
+  path_guard_bridge.setTimelineDraftLifecycleHandler(
+      [&path_guard_lifecycle](const QString& action, const QVariantMap& arguments) {
+        return path_guard_lifecycle.invoke(action, arguments);
+      });
+  photo_editor::desktop::PhotoMcpServer path_guard_server(&path_guard_bridge, nullptr, true);
+  const auto arbitrary_path = path_guard_server.callTool(
+      QStringLiteral("timeline.open_saved_draft"),
+      QJsonObject{{QStringLiteral("timelineId"), saved_id},
+          {QStringLiteral("path"), QStringLiteral("/tmp/other-project.json")}},
+      {QStringLiteral("draft")});
+  const auto malformed_id = path_guard_server.callTool(
+      QStringLiteral("timeline.open_saved_draft"),
+      QJsonObject{{QStringLiteral("timelineId"), QStringLiteral("../outside.json")}},
+      {QStringLiteral("draft")});
+  const auto unknown_id = path_guard_server.callTool(
+      QStringLiteral("timeline.open_saved_draft"),
+      QJsonObject{{QStringLiteral("timelineId"), QStringLiteral("00000000-0000-4000-8000-000000000001")}},
+      {QStringLiteral("draft")});
+  if (!arbitrary_path.value(QStringLiteral("isError")).toBool() ||
+      !malformed_id.value(QStringLiteral("isError")).toBool() ||
+      !unknown_id.value(QStringLiteral("isError")).toBool() || path_guard_timeline.hasActiveTimeline()) {
+    return fail("Open must reject arbitrary paths, malformed IDs, and unsaved or unknown Library IDs before mutation");
+  }
+
+  photo_editor::desktop::TimelineDocumentController reopened;
+  reopened.setEditAccessPolicy([] { return true; });
+  int reopened_activation_count = 0;
+  photo_editor::desktop::TimelineDraftLifecycle reopen_lifecycle(
+      &reopened, [] { return false; }, [] { return true; },
+      [&reopened_activation_count]() { ++reopened_activation_count; return true; });
+  photo_editor::desktop::PhotoAutomationBridge reopened_bridge(&agent_edit, &catalog_model);
+  reopened_bridge.setTimelineDocumentController(&reopened);
+  reopened_bridge.setTimelineDraftLifecycleHandler(
+      [&reopen_lifecycle](const QString& action, const QVariantMap& arguments) {
+        return reopen_lifecycle.invoke(action, arguments);
+      });
+  photo_editor::desktop::PhotoMcpServer reopened_server(&reopened_bridge, nullptr, true);
+  const auto opened = reopened_server.callTool(
+      QStringLiteral("timeline.open_saved_draft"),
+      QJsonObject{{QStringLiteral("timelineId"), saved_id}}, {QStringLiteral("draft")});
+  const auto opened_content = opened.value(QStringLiteral("structuredContent")).toObject();
+  const auto opened_resource = opened_content.value(QStringLiteral("resource")).toObject();
+  const auto opened_canonical_path =
+      QFileInfo(opened_resource.value(QStringLiteral("savedDocumentPath")).toString()).canonicalFilePath();
+  const auto expected_canonical_path = QFileInfo(timeline.savedDocumentPath()).canonicalFilePath();
+  if (opened.value(QStringLiteral("isError")).toBool() ||
+      !opened_content.value(QStringLiteral("ok")).toBool() ||
+      opened_resource.value(QStringLiteral("resourceId")).toString() != created_id ||
+      opened_resource.contains(QStringLiteral("clips")) ||
+      opened_resource.contains(QStringLiteral("tracks")) ||
+      opened_canonical_path.isEmpty() || opened_canonical_path != expected_canonical_path ||
+      opened_content.value(QStringLiteral("navigationRevertible")).toBool() ||
+      opened_content.value(QStringLiteral("replaySafe")).toBool() ||
+      reopened_activation_count != 1 || !reopened.hasActiveTimeline()) {
+    const QJsonObject diagnostic{
+        {QStringLiteral("isError"), opened.value(QStringLiteral("isError"))},
+        {QStringLiteral("ok"), opened_content.value(QStringLiteral("ok"))},
+        {QStringLiteral("error"), opened_content.value(QStringLiteral("error"))},
+        {QStringLiteral("mutationApplied"), opened_content.value(QStringLiteral("mutationApplied"))},
+        {QStringLiteral("expectedResourceId"), created_id},
+        {QStringLiteral("actualResourceId"), opened_resource.value(QStringLiteral("resourceId"))},
+        {QStringLiteral("canonicalSavedPathMatches"),
+         !opened_canonical_path.isEmpty() && opened_canonical_path == expected_canonical_path},
+        {QStringLiteral("reopenedResourceId"), reopened.agentTaskDocumentId()},
+        {QStringLiteral("reopenedActive"), reopened.hasActiveTimeline()},
+        {QStringLiteral("activationCount"), reopened_activation_count},
+    };
+    std::cerr << "timeline_open_saved_draft_diagnostic="
+              << QJsonDocument(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
+    return fail("Open should resolve one canonical saved Library ID and return its real inspect resource");
+  }
+
+  // Build a real isolated autosave whose stable document hash differs from its
+  // canonical project, then exercise the async MCP recovery/status contract.
+  photo_editor::desktop::TimelineDocumentController recovery_source;
+  recovery_source.setEditAccessPolicy([] { return true; });
+  recovery_source.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Autosave baseline")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  if (!recovery_source.saveTimeline(false)) {
+    return fail("Autosave recovery fixture should persist its canonical baseline project");
+  }
+  const auto recovery_path = recovery_source.savedDocumentPath();
+  QFile recovery_canonical(recovery_path);
+  if (!recovery_canonical.open(QIODevice::ReadOnly)) {
+    return fail("Autosave recovery fixture should read its canonical baseline");
+  }
+  const auto baseline_bytes = recovery_canonical.readAll();
+  recovery_canonical.close();
+  recovery_source.setTimelineName(QStringLiteral("Autosave recovered state"));
+  if (!recovery_source.saveTimeline(false)) {
+    return fail("Autosave recovery fixture should persist its changed state for candidate construction");
+  }
+  if (!recovery_canonical.open(QIODevice::ReadOnly)) {
+    return fail("Autosave recovery fixture should read its changed state");
+  }
+  const auto recovery_bytes = recovery_canonical.readAll();
+  recovery_canonical.close();
+  const auto recovery_hash = recovery_source.deterministicDocumentHash();
+  QFile autosave_file(recovery_path + QStringLiteral(".autosave"));
+  if (recovery_hash.isEmpty() || recovery_bytes.isEmpty() ||
+      !recovery_canonical.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      recovery_canonical.write(baseline_bytes) != baseline_bytes.size()) {
+    return fail("Autosave recovery fixture should restore the older canonical project without altering its recovery target");
+  }
+  recovery_canonical.close();
+  if (!autosave_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      autosave_file.write(recovery_bytes) != recovery_bytes.size()) {
+    return fail("Autosave recovery fixture should create the exact managed autosave candidate");
+  }
+  autosave_file.close();
+
+  photo_editor::desktop::TimelineDocumentController recovered_timeline;
+  recovered_timeline.setEditAccessPolicy([] { return true; });
+  bool recovery_task_active = false;
+  int recovery_activation_count = 0;
+  photo_editor::desktop::TimelineDraftLifecycle recovery_lifecycle(
+      &recovered_timeline,
+      [&recovery_task_active]() { return recovery_task_active; },
+      [] { return true; },
+      [&recovery_activation_count]() { ++recovery_activation_count; return true; });
+  photo_editor::desktop::PhotoAutomationBridge recovery_bridge(&agent_edit, &catalog_model);
+  recovery_bridge.setTimelineDocumentController(&recovered_timeline);
+  recovery_bridge.setTimelineDraftLifecycleHandler(
+      [&recovery_lifecycle](const QString& action, const QVariantMap& arguments) {
+        return recovery_lifecycle.invoke(action, arguments);
+      });
+  photo_editor::desktop::PhotoMcpServer recovery_server(&recovery_bridge, nullptr, true);
+  const auto recovery_args = QJsonObject{
+      {QStringLiteral("timelineId"), recovery_source.agentTaskDocumentId().mid(QStringLiteral("timeline:").size())},
+      {QStringLiteral("documentHash"), recovery_hash}};
+  const auto invalid_recovery = recovery_server.callTool(
+      QStringLiteral("timeline.open_autosave_recovery"),
+      QJsonObject{{QStringLiteral("timelineId"), recovery_args.value(QStringLiteral("timelineId"))},
+          {QStringLiteral("documentHash"), QStringLiteral("not-a-hash")}},
+      {QStringLiteral("draft")});
+  if (!invalid_recovery.value(QStringLiteral("isError")).toBool() ||
+      recovered_timeline.hasActiveTimeline()) {
+    return fail("Autosave recovery must reject malformed stable hashes before opening a document");
+  }
+  recovery_task_active = true;
+  const auto task_guarded_recovery = recovery_server.callTool(
+      QStringLiteral("timeline.open_autosave_recovery"), recovery_args, {QStringLiteral("draft")});
+  recovery_task_active = false;
+  if (!task_guarded_recovery.value(QStringLiteral("isError")).toBool() ||
+      recovered_timeline.hasActiveTimeline()) {
+    return fail("Autosave recovery must reject active or review-held task ownership before opening");
+  }
+  const auto started_recovery = recovery_server.callTool(
+      QStringLiteral("timeline.open_autosave_recovery"), recovery_args, {QStringLiteral("draft")});
+  const auto started_content = started_recovery.value(QStringLiteral("structuredContent")).toObject();
+  const auto started_candidate = QStringLiteral("autosave:%1:%2")
+      .arg(recovery_args.value(QStringLiteral("timelineId")).toString(), recovery_hash);
+  if (started_recovery.value(QStringLiteral("isError")).toBool() ||
+      !started_content.value(QStringLiteral("accepted")).toBool() ||
+      started_content.value(QStringLiteral("terminal")).toBool() ||
+      started_content.value(QStringLiteral("candidateId")).toString() != started_candidate) {
+    return fail("Autosave recovery should return a truthful accepted asynchronous candidate receipt");
+  }
+  QElapsedTimer recovery_wait;
+  recovery_wait.start();
+  QJsonObject recovery_status;
+  while (recovery_wait.elapsed() < 10000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    const auto status_response = recovery_server.callTool(
+        QStringLiteral("timeline.inspect_autosave_recovery"), recovery_args, {QStringLiteral("read")});
+    recovery_status = status_response.value(QStringLiteral("structuredContent")).toObject();
+    const auto resource = recovery_status.value(QStringLiteral("resource")).toObject();
+    if (recovery_status.value(QStringLiteral("terminal")).toBool() &&
+        resource.value(QStringLiteral("ready")).toBool()) break;
+    QThread::msleep(5);
+  }
+  const auto recovered_resource = recovery_status.value(QStringLiteral("resource")).toObject();
+  if (!recovery_status.value(QStringLiteral("ok")).toBool() ||
+      recovery_status.value(QStringLiteral("status")).toString() != QStringLiteral("opened") ||
+      !recovery_status.value(QStringLiteral("documentVerified")).toBool() ||
+      !recovery_status.value(QStringLiteral("workspaceActivated")).toBool() ||
+      recovered_resource.value(QStringLiteral("resourceId")).toString() !=
+          recovery_source.agentTaskDocumentId() ||
+      recovered_resource.value(QStringLiteral("documentHash")).toString() != recovery_hash ||
+      !recovered_resource.value(QStringLiteral("ready")).toBool() ||
+      recovery_activation_count != 1) {
+    return fail("Autosave status should verify the recovered document identity/hash and native workspace activation");
+  }
+
+  const auto handoff = server.callTool(
+      QStringLiteral("timeline.admit_task"),
+      QJsonObject{{QStringLiteral("targetResourceId"), created_id},
+          {QStringLiteral("objective"), QStringLiteral("Lifecycle handoff contract")},
+          {QStringLiteral("actions"), QJsonArray{QJsonObject{
+              {QStringLiteral("kind"), QStringLiteral("media")},
+              {QStringLiteral("summary"), QStringLiteral("Author the Timeline after draft creation")}}}},
+          {QStringLiteral("assetPaths"), QJsonArray{}},
+          {QStringLiteral("outputDirectory"), QFileInfo(runtime_root.path()).canonicalFilePath()},
+          {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("draft")});
+  const auto handoff_result = handoff.value(QStringLiteral("structuredContent")).toObject();
+  if (handoff.value(QStringLiteral("isError")).toBool() ||
+      handoff_result.value(QStringLiteral("targetResourceId")).toString() != created_id ||
+      handoff_result.value(QStringLiteral("baselineHash")).toString().isEmpty() ||
+      handoff_tasks.journal()->checkpointHash(created_id).isEmpty()) {
+    return fail("The exact inspect resource returned by draft creation should enter the existing reversible task baseline");
+  }
+  const auto duplicate_open = reopened_server.callTool(
+      QStringLiteral("timeline.open_saved_draft"),
+      QJsonObject{{QStringLiteral("timelineId"), saved_id}}, {QStringLiteral("draft")});
+  if (!duplicate_open.value(QStringLiteral("isError")).toBool() ||
+      reopened.agentTaskDocumentId() != created_id || reopened_activation_count != 1) {
+    return fail("Opening while a Timeline is active must not reload or replace its current state");
+  }
+  std::cout << "timeline_draft_lifecycle_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_project_input_copy_contract() {
+  QTemporaryDir runtime_root;
+  if (!runtime_root.isValid()) {
+    return fail("Timeline project input contract needs isolated app data");
+  }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  qputenv("PHOTO_EDITOR_TIMELINE_PLAYBACK_HEADLESS", QByteArrayLiteral("1"));
+
+  photo_editor::desktop::TimelineDocumentController source;
+  source.setEditAccessPolicy([] { return true; });
+  source.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Granted Source Project")},
+      {QStringLiteral("width"), 640},
+      {QStringLiteral("height"), 360},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  QString source_track_id;
+  for (const auto& value : source.sequenceTracks()) {
+    const auto track = value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("video") &&
+        !track.value(QStringLiteral("locked")).toBool()) {
+      source_track_id = track.value(QStringLiteral("trackId")).toString();
+      break;
+    }
+  }
+  const auto source_title = source.createTimelineTitleForAutomation(
+      source_track_id, QStringLiteral("basic"), 0.0, 2.0,
+      QVariantMap{{QStringLiteral("titleText"), QStringLiteral("Retained Native Title")}});
+  QStringList source_track_ids;
+  for (const auto& value : source.sequenceTracks()) {
+    const auto track_id = value.toMap().value(QStringLiteral("trackId")).toString();
+    if (!track_id.isEmpty()) source_track_ids.push_back(track_id);
+  }
+  if (source_track_id.isEmpty() || !source_title.value(QStringLiteral("ok")).toBool() ||
+      !source.saveTimeline(false)) {
+    return fail("The source fixture should save a native project with stable track and clip IDs");
+  }
+  const auto source_id = source.agentTaskDocumentId().mid(QStringLiteral("timeline:").size());
+  const auto source_path = QFileInfo(source.savedDocumentPath()).canonicalFilePath();
+  const auto documents_root = QFileInfo(
+      photo_editor::desktop::timelineDocumentsRootPath()).canonicalFilePath();
+  if (source_id.isEmpty() || source_path.isEmpty() ||
+      source_path != QDir(documents_root).filePath(source_id + QStringLiteral(".json"))) {
+    return fail("The source project fixture should be a canonical app-managed document");
+  }
+  QFile source_file(source_path);
+  if (!source_file.open(QIODevice::ReadOnly)) {
+    return fail("The granted source project should be readable");
+  }
+  const auto original_source_bytes = source_file.readAll();
+  source_file.close();
+  const auto source_sha = QString::fromLatin1(
+      QCryptographicHash::hash(original_source_bytes, QCryptographicHash::Sha256).toHex());
+  const auto make_configuration = [](const QString& path, const QString& sha) {
+    return QJsonDocument(QJsonArray{QJsonObject{
+        {QStringLiteral("path"), path},
+        {QStringLiteral("sha256"), sha}}}).toJson(QJsonDocument::Compact);
+  };
+
+  photo_editor::desktop::AgentEditController agent_edit;
+  photo_editor::desktop::CatalogAssetModel catalog_model;
+  photo_editor::desktop::TimelineDocumentController imported;
+  imported.setEditAccessPolicy([] { return true; });
+  bool active_task = false;
+  bool edit_access = true;
+  int activation_count = 0;
+  const auto config = make_configuration(source_path, source_sha);
+  photo_editor::desktop::TimelineDraftLifecycle lifecycle(
+      &imported,
+      [&active_task]() { return active_task; },
+      [&edit_access]() { return edit_access; },
+      [&activation_count]() { ++activation_count; return true; },
+      config);
+  photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
+  bridge.setTimelineDocumentController(&imported);
+  bridge.setTimelineDraftLifecycleHandler(
+      [&lifecycle](const QString& action, const QVariantMap& arguments) {
+        return lifecycle.invoke(action, arguments);
+      });
+  photo_editor::desktop::PhotoMcpServer server(&bridge, nullptr, true);
+
+  const auto read_tools = server.toolsListResult({QStringLiteral("read")})
+                              .value(QStringLiteral("tools")).toArray();
+  const auto draft_tools = server.toolsListResult({QStringLiteral("draft")})
+                               .value(QStringLiteral("tools")).toArray();
+  const auto contains_tool = [](const QJsonArray& tools, const QString& name) {
+    return std::any_of(tools.cbegin(), tools.cend(), [&name](const QJsonValue& value) {
+      return value.toObject().value(QStringLiteral("name")).toString() == name;
+    });
+  };
+  if (!contains_tool(read_tools, QStringLiteral("timeline.list_project_inputs")) ||
+      !contains_tool(draft_tools, QStringLiteral("timeline.import_project_input")) ||
+      contains_tool(read_tools, QStringLiteral("timeline.import_project_input"))) {
+    return fail("Project input listing must be read-only and project import must require draft capability");
+  }
+
+  const auto listed = server.callTool(
+      QStringLiteral("timeline.list_project_inputs"), QJsonObject{}, {QStringLiteral("read")});
+  const auto listed_content = listed.value(QStringLiteral("structuredContent")).toObject();
+  const auto entries = listed_content.value(QStringLiteral("inputs")).toArray();
+  if (listed.value(QStringLiteral("isError")).toBool() || entries.size() != 1 ||
+      !listed_content.value(QStringLiteral("configurationValid")).toBool()) {
+    return fail("The exact startup grant should expose one project input");
+  }
+  const auto input = entries.first().toObject();
+  const auto input_id = input.value(QStringLiteral("inputId")).toString();
+  if (input_id.isEmpty() || input.value(QStringLiteral("displayName")).toString().isEmpty() ||
+      input.size() != 2 || input.contains(QStringLiteral("path")) ||
+      input.contains(QStringLiteral("sha256"))) {
+    return fail("The project input list must expose only an opaque ID and display name");
+  }
+
+  photo_editor::desktop::TimelineDraftLifecycle unset_lifecycle(
+      &imported, [] { return false; }, [] { return true; }, [] { return true; });
+  const auto unset_list = unset_lifecycle.invoke(QStringLiteral("list_project_inputs"), {});
+  if (!unset_list.value(QStringLiteral("ok")).toBool() ||
+      unset_list.value(QStringLiteral("inputCount")).toInt() != 0) {
+    return fail("An unset startup grant must provide no project inputs");
+  }
+  photo_editor::desktop::TimelineDraftLifecycle invalid_lifecycle(
+      &imported, [] { return false; }, [] { return true; }, [] { return true; },
+      QByteArrayLiteral("{invalid"));
+  const auto invalid_list = invalid_lifecycle.invoke(QStringLiteral("list_project_inputs"), {});
+  if (!invalid_list.value(QStringLiteral("ok")).toBool() ||
+      invalid_list.value(QStringLiteral("inputCount")).toInt() != 0 ||
+      invalid_list.value(QStringLiteral("configurationValid")).toBool() ||
+      invalid_list.value(QStringLiteral("configurationError")).toString().contains(source_path)) {
+    return fail("An invalid startup grant must fail closed without exposing its raw contents or paths");
+  }
+  const auto wrong_hash_config = make_configuration(
+      source_path, QString(64, QLatin1Char('0')));
+  photo_editor::desktop::TimelineDraftLifecycle wrong_hash_lifecycle(
+      &imported, [] { return false; }, [] { return true; }, [] { return true; },
+      wrong_hash_config);
+  if (wrong_hash_lifecycle.invoke(QStringLiteral("list_project_inputs"), {})
+          .value(QStringLiteral("inputCount")).toInt() != 0) {
+    return fail("A startup grant with a mismatched exact-file hash must be rejected");
+  }
+  const auto symlink_path = QDir(runtime_root.path()).filePath(QStringLiteral("project-link.json"));
+  if (!QFile::link(source_path, symlink_path) || !QFileInfo(symlink_path).isSymLink()) {
+    return fail("The symlink rejection fixture should be created");
+  }
+  photo_editor::desktop::TimelineDraftLifecycle symlink_lifecycle(
+      &imported, [] { return false; }, [] { return true; }, [] { return true; },
+      make_configuration(symlink_path, source_sha));
+  if (symlink_lifecycle.invoke(QStringLiteral("list_project_inputs"), {})
+          .value(QStringLiteral("inputCount")).toInt() != 0) {
+    return fail("A symlinked project input must be rejected at startup");
+  }
+
+  const auto import_tool = QStringLiteral("timeline.import_project_input");
+  const auto read_denied = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("read")});
+  const auto unconfirmed = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), false}},
+      {QStringLiteral("draft")});
+  const auto arbitrary_path = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), true},
+                  {QStringLiteral("path"), source_path}},
+      {QStringLiteral("draft")});
+  const auto unknown_id = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), QStringLiteral("00000000-0000-4000-8000-000000000001")},
+                  {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("draft")});
+  if (!read_denied.value(QStringLiteral("isError")).toBool() ||
+      !unconfirmed.value(QStringLiteral("isError")).toBool() ||
+      !arbitrary_path.value(QStringLiteral("isError")).toBool() ||
+      !unknown_id.value(QStringLiteral("isError")).toBool() || imported.hasActiveTimeline()) {
+    return fail("Import must require draft capability, confirmed:true, a granted ID, and no path argument");
+  }
+
+  active_task = true;
+  const auto task_blocked = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("draft")});
+  active_task = false;
+  edit_access = false;
+  const auto access_blocked = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("draft")});
+  edit_access = true;
+  if (!task_blocked.value(QStringLiteral("isError")).toBool() ||
+      !access_blocked.value(QStringLiteral("isError")).toBool() || imported.hasActiveTimeline()) {
+    return fail("An active task or closed edit-access gate must block project import before mutation");
+  }
+
+  QByteArray changed_source_bytes = original_source_bytes;
+  changed_source_bytes.append('\n');
+  if (!source_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      source_file.write(changed_source_bytes) != changed_source_bytes.size()) {
+    return fail("The isolated source fixture should be changed for the stale-grant check");
+  }
+  source_file.close();
+  const auto stale_grant = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("draft")});
+  if (!stale_grant.value(QStringLiteral("isError")).toBool() || imported.hasActiveTimeline()) {
+    source_file.open(QIODevice::WriteOnly | QIODevice::Truncate);
+    source_file.write(original_source_bytes);
+    source_file.close();
+    return fail("A project input changed after startup must be rejected before import");
+  }
+  if (!source_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      source_file.write(original_source_bytes) != original_source_bytes.size()) {
+    return fail("The source file fixture should be restored after stale-grant validation");
+  }
+  source_file.close();
+
+  photo_editor::desktop::TimelineDocumentController active_guard;
+  active_guard.setEditAccessPolicy([] { return true; });
+  active_guard.createTimeline(QStringLiteral("Active Import Guard"));
+  photo_editor::desktop::TimelineDraftLifecycle active_lifecycle(
+      &active_guard, [] { return false; }, [] { return true; }, [] { return true; }, config);
+  const auto active_import = active_lifecycle.invoke(
+      QStringLiteral("import_project_input"),
+      {{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), true}});
+  if (active_import.value(QStringLiteral("ok")).toBool() ||
+      !active_guard.hasActiveTimeline()) {
+    return fail("Project import must not replace an already active Timeline");
+  }
+  active_guard.closeTimeline();
+
+  const auto imported_response = server.callTool(
+      import_tool,
+      QJsonObject{{QStringLiteral("inputId"), input_id}, {QStringLiteral("confirmed"), true}},
+      {QStringLiteral("draft")});
+  const auto imported_content = imported_response.value(QStringLiteral("structuredContent")).toObject();
+  const auto resource = imported_content.value(QStringLiteral("resource")).toObject();
+  const auto copied_id = imported_content.value(QStringLiteral("timelineId")).toString();
+  const auto copied_path = QFileInfo(
+      imported_content.value(QStringLiteral("savedDocumentPath")).toString()).canonicalFilePath();
+  const auto expected_copy_path = QDir(documents_root).filePath(copied_id + QStringLiteral(".json"));
+  QStringList returned_clip_ids;
+  for (const auto& value : imported_content.value(QStringLiteral("clipIds")).toArray()) {
+    returned_clip_ids.push_back(value.toString());
+  }
+  if (imported_response.value(QStringLiteral("isError")).toBool() ||
+      !imported_content.value(QStringLiteral("ok")).toBool() ||
+      !imported_content.value(QStringLiteral("graphMatches")).toBool() ||
+      imported_content.value(QStringLiteral("sourceSha256")).toString() != source_sha ||
+      imported_content.value(QStringLiteral("sourceGraphSha256")).toString().isEmpty() ||
+      imported_content.value(QStringLiteral("sourceGraphSha256")).toString() !=
+          imported_content.value(QStringLiteral("copyGraphSha256")).toString() ||
+      copied_id.isEmpty() || copied_id == source_id || copied_path != expected_copy_path ||
+      resource.value(QStringLiteral("resourceId")).toString() != QStringLiteral("timeline:") + copied_id ||
+      returned_clip_ids != QStringList{source_title.value(QStringLiteral("createdClipId")).toString()} ||
+      imported_content.value(QStringLiteral("clipCount")).toInt() != 1 ||
+      imported_content.value(QStringLiteral("trackCount")).toInt() < 1 ||
+      !imported_content.value(QStringLiteral("readbackVerified")).toBool() ||
+      !imported_content.value(QStringLiteral("libraryRegistered")).toBool() ||
+      activation_count != 1 || !imported.hasActiveTimeline()) {
+    return fail("A valid granted project should become a new verified Library copy preserving stable clip IDs");
+  }
+  QFile source_after(source_path);
+  if (!source_after.open(QIODevice::ReadOnly) || source_after.readAll() != original_source_bytes) {
+    return fail("Import must leave the exact source project bytes unchanged");
+  }
+  photo_editor::desktop::TimelineDocumentController reopened;
+  reopened.setEditAccessPolicy([] { return true; });
+  if (!reopened.loadTimeline(copied_path) ||
+      reopened.agentTaskDocumentId() != QStringLiteral("timeline:") + copied_id ||
+      reopened.sequenceTracks().isEmpty()) {
+    return fail("The imported native Library copy should reopen from its exact canonical path");
+  }
+  QStringList reopened_track_ids;
+  for (const auto& value : reopened.sequenceTracks()) {
+    const auto track_id = value.toMap().value(QStringLiteral("trackId")).toString();
+    if (!track_id.isEmpty()) reopened_track_ids.push_back(track_id);
+  }
+  if (reopened_track_ids != source_track_ids) {
+    return fail("The reopened project copy should preserve the source stable track IDs in order");
+  }
+  QString reopened_clip_id;
+  for (const auto& value : reopened.clips()) {
+    const auto clip = value.toMap();
+    if (clip.value(QStringLiteral("clipId")).toString() ==
+        source_title.value(QStringLiteral("createdClipId")).toString()) {
+      reopened_clip_id = clip.value(QStringLiteral("clipId")).toString();
+      break;
+    }
+  }
+  if (reopened_clip_id.isEmpty()) {
+    return fail("The reopened copy should retain the original stable clip ID");
+  }
+  photo_editor::desktop::TimelineDraftLifecycle readback_lifecycle(
+      &reopened, [] { return false; }, [] { return true; }, [] { return true; });
+  const auto library = readback_lifecycle.invoke(QStringLiteral("list_saved_drafts"), {});
+  if (library.value(QStringLiteral("draftCount")).toInt() != 2) {
+    return fail("The copied native project should appear beside its source in the app-managed Library");
+  }
+
+  QJsonParseError relative_parse_error;
+  auto relative_project = QJsonDocument::fromJson(original_source_bytes, &relative_parse_error);
+  if (relative_parse_error.error != QJsonParseError::NoError || !relative_project.isObject()) {
+    return fail("The source project should remain valid before the relative-path guard fixture");
+  }
+  auto relative_object = relative_project.object();
+  auto relative_tracks = relative_object.value(QStringLiteral("tracks")).toArray();
+  bool relative_fixture_updated = false;
+  for (int track_index = 0; track_index < relative_tracks.size() && !relative_fixture_updated; ++track_index) {
+    auto track = relative_tracks.at(track_index).toObject();
+    auto track_clips = track.value(QStringLiteral("clips")).toArray();
+    for (int clip_index = 0; clip_index < track_clips.size(); ++clip_index) {
+      auto clip = track_clips.at(clip_index).toObject();
+      if (clip.value(QStringLiteral("clipId")).toString() != source_title.value(QStringLiteral("createdClipId")).toString()) {
+        continue;
+      }
+      clip.insert(QStringLiteral("mediaType"), QStringLiteral("image"));
+      clip.insert(QStringLiteral("filePath"), QStringLiteral("../outside/photo.jpg"));
+      track_clips.replace(clip_index, clip);
+      track.insert(QStringLiteral("clips"), track_clips);
+      relative_tracks.replace(track_index, track);
+      relative_fixture_updated = true;
+      break;
+    }
+  }
+  if (!relative_fixture_updated) {
+    return fail("The relative-path guard fixture should locate the stable source clip");
+  }
+  relative_object.insert(QStringLiteral("tracks"), relative_tracks);
+  const auto relative_bytes = QJsonDocument(relative_object).toJson(QJsonDocument::Compact);
+  const auto relative_path = QDir(runtime_root.path()).filePath(QStringLiteral("relative-path-project.json"));
+  QFile relative_file(relative_path);
+  if (!relative_file.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+      relative_file.write(relative_bytes) != relative_bytes.size()) {
+    return fail("The relative-path guard fixture should be written as a separate granted project");
+  }
+  relative_file.close();
+  const auto relative_canonical_path = QFileInfo(relative_path).canonicalFilePath();
+  const auto relative_sha = QString::fromLatin1(
+      QCryptographicHash::hash(relative_bytes, QCryptographicHash::Sha256).toHex());
+  photo_editor::desktop::TimelineDocumentController relative_guard;
+  relative_guard.setEditAccessPolicy([] { return true; });
+  photo_editor::desktop::TimelineDraftLifecycle relative_lifecycle(
+      &relative_guard, [] { return false; }, [] { return true; }, [] { return true; },
+      make_configuration(relative_canonical_path, relative_sha));
+  const auto relative_inputs = relative_lifecycle.invoke(
+      QStringLiteral("list_project_inputs"), {});
+  const auto relative_input_entries = relative_inputs.value(QStringLiteral("inputs")).toList();
+  const auto relative_input_id = relative_input_entries.size() == 1
+      ? relative_input_entries.first().toMap().value(QStringLiteral("inputId")).toString()
+      : QString{};
+  const auto relative_import = relative_lifecycle.invoke(
+      QStringLiteral("import_project_input"),
+      {{QStringLiteral("inputId"), relative_input_id},
+       {QStringLiteral("confirmed"), true}});
+  if (!relative_inputs.value(QStringLiteral("configurationValid")).toBool() ||
+      relative_input_id.isEmpty() || relative_import.value(QStringLiteral("ok")).toBool() ||
+      !relative_import.value(QStringLiteral("mutationNotApplied")).toBool() ||
+      relative_guard.hasActiveTimeline()) {
+    return fail("A project with a relative media path must fail before changing the active document");
+  }
+  std::cout << "timeline_project_input_copy_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_timeline_passive_wheel_filter_contract() {
+  QQmlEngine engine;
+  QQmlComponent window_component(&engine);
+  const QByteArray window_qml = R"QML(
+import QtQuick
+import QtQuick.Window
+
+Window {
+    id: root
+    objectName: "passiveWheelWindow"
+    width: 520
+    height: 360
+    visible: true
+    property int currentWorkspace: 3
+    readonly property int timelineWorkspaceIndex: 3
+
+    Loader {
+        id: timelineWorkspaceLoader
+        objectName: "timelineWorkspaceLoader"
+        anchors.fill: parent
+        visible: true
+        active: true
+        sourceComponent: Component {
+            Rectangle {
+                id: timelineWorkspace
+                objectName: "timelineWorkspace"
+                anchors.fill: parent
+                property var timelineViewport: viewport
+
+                Flickable {
+                    id: viewport
+                    objectName: "timelineViewport"
+                    x: 50
+                    y: 40
+                    width: 300
+                    height: 220
+                    contentWidth: 1000
+                    contentHeight: 800
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    flickableDirection: Flickable.HorizontalAndVerticalFlick
+
+                    Rectangle {
+                        width: viewport.contentWidth
+                        height: viewport.contentHeight
+                        color: "#202830"
+                    }
+                }
+            }
+        }
+    }
+}
+)QML";
+  window_component.setData(
+      window_qml,
+      QUrl::fromLocalFile(QStringLiteral(
+          PHOTO_EDITOR_SOURCE_DIR "/tests/TimelinePassiveWheelFilterHarness.qml")));
+  std::unique_ptr<QObject> window_object(window_component.create());
+  if (!window_object) {
+    qCritical().noquote() << window_component.errorString();
+    return fail("The passive native wheel filter fixture should load.");
+  }
+  auto* window = qobject_cast<QQuickWindow*>(window_object.get());
+  if (window == nullptr) {
+    return fail("The passive native wheel filter fixture should create a QQuickWindow.");
+  }
+  auto* viewport_object = window->findChild<QObject*>(
+      QStringLiteral("timelineViewport"), Qt::FindChildrenRecursively);
+  auto* viewport = qobject_cast<QQuickItem*>(viewport_object);
+  if (viewport == nullptr) {
+    return fail("The passive native wheel filter fixture should expose its exact Timeline viewport.");
+  }
+
+  photo_editor::desktop::PhotoAutomationBridge bridge(nullptr, nullptr);
+  bridge.setQmlRootObject(window);
+  window->show();
+  settle_events();
+  viewport->setProperty("contentX", 100.0);
+  viewport->setProperty("contentY", 100.0);
+  settle_events();
+
+  const auto horizontal_handler_url = QUrl::fromLocalFile(QStringLiteral(
+      PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/components/TimelineViewportWheelHandler.qml"));
+  QQmlComponent horizontal_handler_component(&engine, horizontal_handler_url);
+  std::unique_ptr<QObject> horizontal_handler(horizontal_handler_component.create());
+  if (!horizontal_handler) {
+    qCritical().noquote() << horizontal_handler_component.errorString();
+    return fail("The production horizontal wheel handler should load in the native filter fixture.");
+  }
+  if (!horizontal_handler->setProperty("viewport", QVariant::fromValue<QObject*>(viewport)) ||
+      !horizontal_handler->setProperty("parent", QVariant::fromValue<QObject*>(viewport))) {
+    return fail("The production horizontal wheel handler should attach to the filter fixture viewport.");
+  }
+
+  const auto send_wheel = [window](const QPointF& position,
+                                   const QPoint& pixel_delta,
+                                   const QPoint& angle_delta) {
+    const auto global = window->mapToGlobal(position.toPoint());
+    QWheelEvent event(position, QPointF(global), pixel_delta, angle_delta,
+                      Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false);
+    const bool accepted_before_delivery = event.isAccepted();
+    QCoreApplication::sendEvent(window, &event);
+    settle_events();
+    return accepted_before_delivery;
+  };
+
+  static_cast<void>(send_wheel(QPointF(10.0, 10.0), QPoint(-9, 0), QPoint(-120, 0)));
+  const auto outside_snapshot =
+      photo_editor::desktop::PhotoAutomationBridgeTestAccess::lastNativeWheelEvent(bridge);
+  if (outside_snapshot.value(QStringLiteral("received")).toBool()) {
+    return fail("The passive native filter must ignore wheel packets outside the Timeline viewport.");
+  }
+
+  const auto viewport_origin = viewport->mapToScene(QPointF(0.0, 0.0));
+  const QPointF pointer_in_viewport(60.0, 70.0);
+  const auto window_position = viewport->mapToScene(pointer_in_viewport);
+  const auto accepted_before_delivery =
+      send_wheel(window_position, QPoint(-23, 0), QPoint(-120, 0));
+  const auto horizontal_snapshot =
+      photo_editor::desktop::PhotoAutomationBridgeTestAccess::lastNativeWheelEvent(bridge);
+  if (!horizontal_snapshot.value(QStringLiteral("received")).toBool() ||
+      horizontal_snapshot.value(QStringLiteral("sequence")).toLongLong() != 1 ||
+      horizontal_snapshot.value(QStringLiteral("acceptedBeforeDelivery")).toBool() !=
+          accepted_before_delivery ||
+      horizontal_snapshot.value(QStringLiteral("deviceTypeName")).toString().isEmpty() ||
+      horizontal_snapshot.value(QStringLiteral("phaseName")).toString() != QStringLiteral("update") ||
+      horizontal_snapshot.value(QStringLiteral("sourceName")).toString().isEmpty() ||
+      horizontal_snapshot.value(QStringLiteral("pixelDeltaX")).toInt() != -23 ||
+      horizontal_snapshot.value(QStringLiteral("angleDeltaX")).toInt() != -120 ||
+      std::abs(horizontal_snapshot.value(QStringLiteral("windowX")).toReal() -
+               window_position.x()) > 0.01 ||
+      std::abs(horizontal_snapshot.value(QStringLiteral("windowY")).toReal() -
+               window_position.y()) > 0.01 ||
+      std::abs(horizontal_snapshot.value(QStringLiteral("mappedViewportX")).toReal() -
+               pointer_in_viewport.x()) > 0.01 ||
+      std::abs(horizontal_snapshot.value(QStringLiteral("mappedViewportY")).toReal() -
+               pointer_in_viewport.y()) > 0.01 ||
+      std::abs(horizontal_snapshot.value(QStringLiteral("viewportSceneX")).toReal() -
+               viewport_origin.x()) > 0.01 ||
+      std::abs(horizontal_snapshot.value(QStringLiteral("viewportSceneY")).toReal() -
+               viewport_origin.y()) > 0.01 ||
+      horizontal_snapshot.value(QStringLiteral("contentXAtFilter")).toReal() != 100.0 ||
+      viewport->property("contentX").toReal() != 123.0) {
+    qCritical().noquote() << "Passive native wheel filter diagnostic="
+                          << QJsonDocument::fromVariant(horizontal_snapshot)
+                                 .toJson(QJsonDocument::Compact);
+    return fail("The window filter should capture raw horizontal input before the production QML handler without consuming it.");
+  }
+
+  static_cast<void>(send_wheel(window_position, QPoint(0, 17), QPoint(0, 0)));
+  const auto latest_snapshot =
+      photo_editor::desktop::PhotoAutomationBridgeTestAccess::lastNativeWheelEvent(bridge);
+  if (!latest_snapshot.value(QStringLiteral("received")).toBool() ||
+      latest_snapshot.value(QStringLiteral("sequence")).toLongLong() != 2 ||
+      latest_snapshot.value(QStringLiteral("pixelDeltaX")).toInt() != 0 ||
+      latest_snapshot.value(QStringLiteral("pixelDeltaY")).toInt() != 17 ||
+      latest_snapshot.contains(QStringLiteral("history"))) {
+    return fail("The passive wheel diagnostic should retain only the latest in-viewport packet.");
+  }
+
+  bridge.setQmlRootObject(nullptr);
+  static_cast<void>(send_wheel(window_position, QPoint(-5, 0), QPoint(-120, 0)));
+  const auto detached_snapshot =
+      photo_editor::desktop::PhotoAutomationBridgeTestAccess::lastNativeWheelEvent(bridge);
+  if (detached_snapshot.value(QStringLiteral("received")).toBool()) {
+    return fail("Rebinding the bridge away from a window must remove its passive input filter.");
+  }
+  bridge.setQmlRootObject(window);
+  static_cast<void>(send_wheel(window_position, QPoint(-5, 0), QPoint(-120, 0)));
+  const auto rebound_snapshot =
+      photo_editor::desktop::PhotoAutomationBridgeTestAccess::lastNativeWheelEvent(bridge);
+  if (!rebound_snapshot.value(QStringLiteral("received")).toBool() ||
+      rebound_snapshot.value(QStringLiteral("sequence")).toLongLong() != 1) {
+    return fail("Rebinding to a Timeline window should refresh the loader reference and restart its bounded sequence.");
+  }
+  bridge.setQmlRootObject(nullptr);
+  std::cout << "timeline_passive_wheel_filter_contract=passed\n";
+  return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -481,6 +4997,88 @@ int main(int argc, char** argv) {
   QGuiApplication app(argc, argv);
   QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
   QCoreApplication::setApplicationName(QStringLiteral("PhotoAutomationBridgeTest"));
+  const auto catalog_output_flag = app.arguments().indexOf(QStringLiteral("--write-mcp-tool-catalog"));
+  if (catalog_output_flag >= 0) {
+    if (catalog_output_flag + 1 >= app.arguments().size()) return fail("Provide an output file for the MCP catalog");
+    QFile output(app.arguments().at(catalog_output_flag + 1));
+    if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate)) return fail("Cannot write MCP tool catalog");
+    photo_editor::desktop::PhotoMcpServer server(nullptr);
+    output.write(QJsonDocument(server.toolsListResult()).toJson(QJsonDocument::Indented));
+    return EXIT_SUCCESS;
+  }
+  if (app.arguments().contains(QStringLiteral("--mcp-discovery-contract"))) {
+    if (!agent_mcp_discovery_contract()) return fail("MCP handshake, context and capability discovery contract failed");
+    std::cout << "Standard MCP discovery and shared workflow context preserve capability boundaries.\n";
+    return EXIT_SUCCESS;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-render-jobs-inspection"))) {
+    return run_timeline_render_jobs_inspection();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-used-media-inspection"))) {
+    return run_timeline_used_media_inspection();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-source-replacement-contract"))) {
+    return run_timeline_source_replacement_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-grade-effect-command-scan-bypass"))) {
+    return run_timeline_grade_effect_command_scan_bypass();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-typed-mutation-projection-bypass"))) {
+    return run_timeline_typed_mutation_projection_bypass();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-review-notes-inspection"))) {
+    return run_timeline_review_notes_inspection();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-passive-wheel-filter-contract"))) {
+    return run_timeline_passive_wheel_filter_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-visible-proof-contract"))) {
+    return run_timeline_visible_proof_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-visible-proof-cache-isolation-contract"))) {
+    return run_timeline_visible_proof_cache_isolation_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-structure-inspection"))) {
+    return run_timeline_structure_inspection();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-preview-at-time-contract"))) {
+    return run_timeline_preview_at_time_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-view-navigation-contract"))) {
+    return run_timeline_view_navigation_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-h264-export-contract"))) {
+    return run_timeline_h264_export_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-export-integrity-domains-contract"))) {
+    return run_timeline_export_integrity_domains_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-draft-lifecycle-contract"))) {
+    return run_timeline_draft_lifecycle_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-project-input-copy-contract"))) {
+    return run_timeline_project_input_copy_contract();
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-agent-draft-batch-contract"))) {
+    return run_timeline_agent_draft_batch_contract();
+  }
 
   QVariantList native_font_faces;
   for (int index = 0; index < 181; ++index) {
@@ -651,9 +5249,10 @@ int main(int argc, char** argv) {
       make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
       make_asset(QStringLiteral("asset-2"), second_source_path, original_recipe),
   });
-  catalog_model.selectIndex(0);
+  if (!catalog_model.selectAssetById(QStringLiteral("asset-1")))
+    return fail("The initial fixture asset must be selected by stable identity");
   catalog_model.clearSelection();
-  catalog_model.toggleSelectionIndex(0);
+  catalog_model.toggleSelectionIndex(catalog_model.selectedIndex());
 
   photo_editor::desktop::AgentEditController agent_edit;
   if (agent_edit.runTimeoutMs() != -1)
@@ -966,6 +5565,8 @@ int main(int argc, char** argv) {
     auto paint_requires_points = false;
     auto paint_size_limit_is_typed = false;
     auto text_requires_values = false;
+    auto paragraph_requires_geometry = false;
+    auto range_requires_snapshot = false;
     auto photo_fragment_requires_single_source = false;
     auto lasso_requires_points = false;
     auto lasso_points_are_bounded = false;
@@ -1017,6 +5618,12 @@ int main(int argc, char** argv) {
             feather_schema.value(QStringLiteral("minimum")).toDouble() == 0.0 &&
             feather_schema.value(QStringLiteral("maximum")).toDouble() == 0.05;
       }
+      if (operation_name == QStringLiteral("add_paragraph_text"))
+        paragraph_requires_geometry = required.contains(QStringLiteral("text")) && required.contains(QStringLiteral("x")) &&
+            required.contains(QStringLiteral("y")) && required.contains(QStringLiteral("width")) && required.contains(QStringLiteral("height"));
+      if (operation_name == QStringLiteral("text_range_style"))
+        range_requires_snapshot = required.contains(QStringLiteral("start")) && required.contains(QStringLiteral("end")) &&
+            required.contains(QStringLiteral("textSnapshot")) && required.contains(QStringLiteral("style"));
       if (operation_name == QStringLiteral("add_text"))
         text_requires_values = required.contains(QStringLiteral("text")) &&
             required.contains(QStringLiteral("x")) && required.contains(QStringLiteral("y"));
@@ -1036,6 +5643,13 @@ int main(int argc, char** argv) {
             save_values.value(QStringLiteral("oneOf")).toList().size() == 2;
       }
     }
+    if (!paragraph_requires_geometry || !range_requires_snapshot ||
+        !operation_values.contains(QStringLiteral("add_paragraph_text")) ||
+        !operation_values.contains(QStringLiteral("text_range_style")) ||
+        value_properties.value(QStringLiteral("width")).toMap().value(QStringLiteral("minimum")).toInt() != 16 ||
+        value_properties.value(QStringLiteral("start")).toMap().value(QStringLiteral("type")) != QStringLiteral("integer") ||
+        value_properties.value(QStringLiteral("style")).toMap().value(QStringLiteral("additionalProperties")).toBool())
+      return fail("Live MCP text schema must expose typed paragraph geometry and snapshot-scoped character formatting");
     const auto light_exposure_property = value_properties.value(QStringLiteral("lightExposure")).toMap();
     const auto top_level_coordinates_are_integers =
         value_properties.value(QStringLiteral("x")).toMap().value(QStringLiteral("type")).toString() ==
@@ -1164,6 +5778,75 @@ int main(int argc, char** argv) {
     std::cout << "search_edit_tool_contract=passed\n";
     return EXIT_SUCCESS;
   }
+  if (app.arguments().contains(QStringLiteral("--timeline-task-tool-contract"))) {
+    const auto read_tools = mcp_server.toolsListResult({QStringLiteral("read")}).value("tools").toArray();
+    const auto draft_tools = mcp_server.toolsListResult({QStringLiteral("read"), QStringLiteral("draft")})
+        .value("tools").toArray();
+    const auto find_tool = [](const QJsonArray& tools, const QString& name) {
+      for (const auto& value : tools)
+        if (value.toObject().value(QStringLiteral("name")).toString() == name) return value.toObject();
+      return QJsonObject{};
+    };
+    const auto admission = find_tool(draft_tools, QStringLiteral("timeline.admit_task"));
+    const auto inspection = find_tool(read_tools, QStringLiteral("timeline.inspect_task"));
+    const auto finish = find_tool(draft_tools, QStringLiteral("timeline.finish_task"));
+    const auto revert = find_tool(draft_tools, QStringLiteral("timeline.revert_task"));
+    const auto recovery = find_tool(draft_tools, QStringLiteral("timeline.recover_task"));
+    const auto preparation_cancel =
+        find_tool(draft_tools, QStringLiteral("timeline.cancel_task_preparation"));
+    const auto render_geometry = find_tool(read_tools, QStringLiteral("timeline.inspect_render_geometry"));
+    const auto render_jobs = find_tool(read_tools, QStringLiteral("timeline.inspect_render_jobs"));
+    const auto visible_proof = find_tool(read_tools, QStringLiteral("timeline.capture_visible_proof"));
+    const auto read_mutation = find_tool(read_tools, QStringLiteral("timeline.admit_task"));
+    const auto admission_schema = admission.value(QStringLiteral("inputSchema")).toObject();
+    const auto action_enum = finish.value(QStringLiteral("inputSchema")).toObject()
+        .value(QStringLiteral("properties")).toObject().value(QStringLiteral("action")).toObject()
+        .value(QStringLiteral("enum")).toArray();
+    const auto admission_properties = admission_schema.value(QStringLiteral("properties")).toObject();
+    const auto revert_annotations = revert.value(QStringLiteral("annotations")).toObject();
+    const auto summary_schema = admission_properties.value(QStringLiteral("actions")).toObject()
+        .value(QStringLiteral("items")).toObject().value(QStringLiteral("properties")).toObject()
+        .value(QStringLiteral("summary")).toObject();
+    if (summary_schema.value(QStringLiteral("minLength")).toInt() != 1 ||
+        summary_schema.value(QStringLiteral("maxLength")).toInt() != 180)
+      return fail("Timeline task discovery must expose the native action-summary length limits");
+    if (admission.isEmpty() || inspection.isEmpty() || finish.isEmpty() || revert.isEmpty() ||
+        recovery.isEmpty() || preparation_cancel.isEmpty() || !read_mutation.isEmpty() ||
+        render_geometry.isEmpty() ||
+        render_jobs.isEmpty() ||
+        visible_proof.isEmpty() ||
+        !visible_proof.value(QStringLiteral("annotations")).toObject()
+             .value(QStringLiteral("readOnlyHint")).toBool() ||
+        visible_proof.value(QStringLiteral("requiredCapability")).toString() != QStringLiteral("read") ||
+        !render_jobs.value(QStringLiteral("annotations")).toObject()
+             .value(QStringLiteral("readOnlyHint")).toBool() ||
+        !render_jobs.value(QStringLiteral("inputSchema")).toObject()
+             .value(QStringLiteral("properties")).toObject().isEmpty() ||
+        !render_geometry.value(QStringLiteral("annotations")).toObject()
+             .value(QStringLiteral("readOnlyHint")).toBool() ||
+        !render_geometry.value(QStringLiteral("inputSchema")).toObject()
+             .value(QStringLiteral("required")).toArray()
+             .contains(QStringLiteral("clipId")) ||
+        !admission.value(QStringLiteral("annotations")).toObject().value(QStringLiteral("requiresConfirmation")).toBool() ||
+        preparation_cancel.value(QStringLiteral("annotations")).toObject()
+            .value(QStringLiteral("destructiveHint")).toBool() ||
+        !preparation_cancel.value(QStringLiteral("inputSchema")).toObject()
+             .value(QStringLiteral("properties")).toObject().isEmpty() ||
+        !revert_annotations.value(QStringLiteral("requiresConfirmation")).toBool() ||
+        !admission_schema.value(QStringLiteral("required")).toArray().contains(QStringLiteral("targetResourceId")) ||
+        !admission_schema.value(QStringLiteral("required")).toArray().contains(QStringLiteral("assetPaths")) ||
+        admission_properties.value(QStringLiteral("actions")).toObject().value(QStringLiteral("maxItems")).toInt() != 9 ||
+        action_enum != QJsonArray{QStringLiteral("review"), QStringLiteral("continue")} ||
+        photo_editor::desktop::automation_capability_for_command(QStringLiteral("timeline_task_status")) != QStringLiteral("read") ||
+        photo_editor::desktop::automation_capability_for_command(QStringLiteral("timeline_render_geometry_inspect")) != QStringLiteral("read") ||
+        photo_editor::desktop::automation_capability_for_command(QStringLiteral("timeline_render_jobs_inspect")) != QStringLiteral("read") ||
+        photo_editor::desktop::automation_capability_for_command(QStringLiteral("timeline_visible_proof_capture")) != QStringLiteral("read") ||
+        !find_tool(draft_tools, QStringLiteral("photo.commit_agent_draft")).isEmpty() ||
+        !find_tool(draft_tools, QStringLiteral("photo.export_batch")).isEmpty())
+      return fail("Native Timeline task tools must admit one confirmed stable target, expose reversible lifecycle only, and retain read/draft capability boundaries");
+    std::cout << "timeline_task_tool_contract=passed\n";
+    return EXIT_SUCCESS;
+  }
   QJsonObject session;
   if (bridge.start(
           true,
@@ -1252,6 +5935,17 @@ int main(int argc, char** argv) {
     }
 
     auto mcp_http_status_code = 0;
+    const auto initialized = send_mcp_http_request(bridge.mcpEndpoint(),
+        {{"jsonrpc", "2.0"}, {"id", 99}, {"method", "initialize"},
+         {"params", QJsonObject{{"protocolVersion", "2025-06-18"}, {"capabilities", QJsonObject{}},
+             {"clientInfo", QJsonObject{{"name", "test-client"}, {"version", "1"}}}}}},
+        bridge.token(), &mcp_http_status_code);
+    if (mcp_http_status_code != 200 || initialized.value("result").toObject().value("serverInfo")
+        .toObject().value("name") != "looksy-desktop") return fail("MCP HTTP must support a standard client handshake");
+    const auto notification = send_mcp_http_request(bridge.mcpEndpoint(),
+        {{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}}, bridge.token(), &mcp_http_status_code);
+    if (mcp_http_status_code != 202 || !notification.isEmpty())
+      return fail("MCP HTTP notifications must receive an empty 202 response");
     const auto mcp_http_tools = send_mcp_http_request(
         bridge.mcpEndpoint(),
         QJsonObject{
@@ -1321,6 +6015,8 @@ int main(int argc, char** argv) {
                 .toObject()
                 .value(QStringLiteral("selectedAssetId"))
                 .toString() != QStringLiteral("asset-1")) {
+      std::cerr << "MCP status diagnostic: HTTP=" << mcp_http_call_status_code
+                << " response=" << QJsonDocument(mcp_http_status).toJson(QJsonDocument::Compact).toStdString() << '\n';
       return fail("MCP HTTP endpoint should serve tools/call with structured tool results");
     }
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
@@ -6223,7 +10919,7 @@ int main(int argc, char** argv) {
   const auto mcp_invalid_method = mcp_server.handleJsonRpc(QJsonObject{
       {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
       {QStringLiteral("id"), 5},
-      {QStringLiteral("method"), QStringLiteral("resources/list")},
+      {QStringLiteral("method"), QStringLiteral("resources/subscribe")},
   });
   if (mcp_invalid_method.value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toInt() !=
       -32601) {
@@ -6314,6 +11010,12 @@ int main(int argc, char** argv) {
       agent_edit.draftActive()) {
     return fail("photo_render_proof should write a read-only proof artifact for the selected asset");
   }
+  const auto mcp_proof = mcp_server.callTool(QStringLiteral("photo.render_current_proof"), {}, {"read"});
+  const auto proof_content = mcp_proof.value("content").toArray();
+  if (mcp_proof.value("isError").toBool() || proof_content.size() != 2 ||
+      proof_content.last().toObject().value("type") != "image" ||
+      !mcp_proof.value("structuredContent").toObject().value("mcpProofImage").toObject().value("available").toBool())
+    return fail("External MCP clients must receive actual bounded rendered proof pixels, with a provenance receipt");
 
   const auto validate_edit = send_request(
       bridge,
@@ -6565,7 +11267,7 @@ int main(int argc, char** argv) {
     return fail("photo_plan_bulk_edit should require a multi-asset selection");
   }
 
-  catalog_model.toggleSelectionIndex(1);
+  catalog_model.selectAll();
   const auto bulk_plan = send_request(
       bridge,
       session,

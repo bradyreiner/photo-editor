@@ -1,0 +1,2576 @@
+[
+    {
+        "acceptableChoices": [
+            "inspect_state"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb",
+            "sourceBinding": "347ea1807666bc24c6029aa1580ed26e1aeb34dd36a247a716c1aadaf81a6e7a",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Change the existing headline to FIELD NOTES.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "compositionInspected": false,
+                    "documentLoaded": true,
+                    "knownLayerIds": [
+                    ]
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "unknown-title-id",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "cf50e0f9cb6bd4328bc74b39123a48781243ceff0dd5e3c4aa32df5158207dbb"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "use_document_tools"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c",
+            "sourceBinding": "c6c1106a5460ce939ec9040d6599417563c31fa37994c7e82513f7c3ee608241",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Set the new headline to warm white #FFF8F0.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "creationReceipt": {
+                        "createdLayerId": "title-17",
+                        "ok": true
+                    },
+                    "currentLayer": {
+                        "color": "#FFFFFF",
+                        "id": "title-17",
+                        "text": "FIELD NOTES"
+                    }
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "created-title-id",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "bf8e79ce7cb6ae5707620adaedacb582ccffd960c8a0f211d7486663a797f22c"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "inspect_state"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2",
+            "sourceBinding": "779265fde2df70d396b7ec01b517bcc8ffbf0838c28f5561f3334f8fdf6d7b8f",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Change the existing headline to FIELD NOTES and verify it.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "currentReadbackAvailable": false,
+                    "editReceipt": {
+                        "changed": true,
+                        "layerId": "title-17",
+                        "ok": true
+                    },
+                    "lastCompositionRead": "before this edit"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "read-after-edit",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "93a950164916931b6708c1e834b5aa65b5f3de54da6f93653e13372401b4b7e2"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "review_proof"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428",
+            "sourceBinding": "af4803b8a4dc5c58de53c316ee82a9566abd852646449611c4ea381b8d3b5fa1",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Review the completed poster for clipping and readability.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "currentCompositionReadback": "All requested text and typography fields match.",
+                    "pendingEdits": [
+                    ],
+                    "proof": {
+                        "available": false
+                    }
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "verify-visible-result",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "bac9a030e8a75603de3f7e2d8786314241c21b2c0f8b025136e78c40ece95428"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "discover_controls"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec",
+            "sourceBinding": "e1a1ac5b3fc3ef18b5204c44304dc0cee38045abde0bdd26ada0c0d827b798ac",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Apply a native outer shadow to the title.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "commandDiscovery": {
+                        "available": true,
+                        "commandId": "edit.layer.shadow"
+                    },
+                    "commandInputSchema": null,
+                    "layerId": "title-17"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "missing-native-schema",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "f8f9c9f479f64a12f5b25cbb21c335754dc205db4e44b64b1bd095dd75b225ec"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "use_document_tools"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42",
+            "sourceBinding": "7bb160a0ef7ad6e97f07f3de93f998f1d40325e0f089cd28c216daf1fbb166dd",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Set the title shadow opacity to 0.4.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "available": true,
+                    "commandId": "edit.layer.shadow",
+                    "commandInputSchema": {
+                        "values": {
+                            "opacity": "number 0..1"
+                        }
+                    },
+                    "currentOpacity": 0,
+                    "layerId": "title-17",
+                    "taskAdmission": "ready"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "native-command-ready",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "2e012b48ec840fa2e13492484776b455c0c5dce960711463127df13cb27d8c42"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "discover_controls"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334",
+            "sourceBinding": "367200a2df796821e2fd29dba22b4115b1a6ef18131a696ac89abac0b71c59d7",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Create an editable background shape using the native shape controls.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "currentCanvasInspected": true,
+                    "currentLayers": [
+                    ],
+                    "nativeShapeCommand": "not discovered"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "undiscovered-fill",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "64b0ffd2fc9a3eb2ecd0bbece246acd0afb275f998a92bf07dc155c4c3e8a334"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "inspect_state"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe",
+            "sourceBinding": "280fc8df044424ba43151764b49faddc35f423f21133c4eb5ec232affc433358",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Create the headline, then set its color to #FFF8F0.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "freshInspectionAfterReceipt": false,
+                    "lastCreationAttempt": {
+                        "alreadyCompleted": true,
+                        "createdLayerId": "title-17",
+                        "mutationNotApplied": true,
+                        "replayPrevented": true
+                    }
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "duplicate-receipt",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "8641264897d3a2e1f36cdd5356b8fde0d635c030a7d7518246024b61eec3dfbe"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "discover_controls"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef",
+            "sourceBinding": "a58931929bfbc777418bb09796dd1342432e7e75bbd93c1487e7ef52bc38f6b5",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Set title tracking to 4 pixels.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "commandSchemaAvailable": false,
+                    "lastCall": {
+                        "error": "Input schema missing required field units.",
+                        "mutationNotApplied": true,
+                        "recoverableError": true,
+                        "tool": "app.invoke_command"
+                    },
+                    "layerId": "title-17"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "schema-rejection",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "a932ddfdc276a37eec4888604c1d45811d01bbbf3abfe5d78b5eac511ac6f8ef"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "inspect_state"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63",
+            "sourceBinding": "1063c3ae9f31c7c7d85fdfec4f969a41fa2e1e246a62706dfa953c5b162d307e",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Move the subtitle below the headline.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "freshInspection": {
+                        "layerIds": [
+                            "title-17",
+                            "subtitle-new"
+                        ]
+                    },
+                    "oldIdStillValid": false,
+                    "priorSubtitleId": "subtitle-old",
+                    "subtitleIdentityInCurrentDocument": "unknown"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "stale-id",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "6c36fc9d9cd60fac7b7265ae54e1f6ea0bc2b051cff75225849e1d6c92029e63"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "inspect_state"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8",
+            "sourceBinding": "ba146e3e957bb26d461b7b1e89c212dc12c729e794755ee1d59cdab8f1e3e3c8",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Set a tighter portrait crop around the subject.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "canvasDimensions": "unknown",
+                    "currentCrop": "unknown",
+                    "subjectBounds": "unknown"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "crop-parameters-missing",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "119ba71207aa186029e21346501673fd2309922502c08c145e35afb5f00fd4d8"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "review_proof"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af",
+            "sourceBinding": "aa7e139fef1d431443791aa644654be0041f952fca8a834b192617d905f48a1e",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Check the finished composition before presenting it.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "currentRevision": "r5",
+                    "freshStateReadbackComplete": true,
+                    "lastProofRevision": "r4",
+                    "proofAfterLastEdit": false
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "proof-stale",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "2dc3c6725179ddc270c98bad33091198d2652e547c378d0ac4c7f0a28f7298af"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "deliver_output"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5",
+            "sourceBinding": "c8b465ff712b4a2e121a59a5edd930531826fd529cb6d5fe9f836e4d68a94be7",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Export the approved poster as PNG.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "approvedExport": {
+                        "destination": "approved local destination",
+                        "format": "PNG"
+                    },
+                    "currentBoundRenderedReview": "passed",
+                    "documentSaved": true,
+                    "exportStarted": false,
+                    "nativePreflight": "passed",
+                    "taskAdmission": "ready"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "export-ready",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "59a4026cdb5f400473b9fda3c98f06de1d012e8baf04fc8361011d4573faceb5"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "review_proof"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad",
+            "sourceBinding": "233c7758ce997c73dce63639eff6d2a3a805de9d2fdf02e8f9b7a8784ec89a32",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Finish the poster and export it once verified.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "currentRenderedProof": "not generated",
+                    "exportStarted": false,
+                    "nativePreflight": "passed",
+                    "requestedEditsMatchCurrentReadback": true
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "export-before-review",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "a3894870a30fa87dd42abee0a4899dbadbb94e82890c0d3cf280aa6bee88ddad"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "ask_user"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a",
+            "sourceBinding": "b4bead36b823ed7fd22a73be437626e20da76f98c4f0163769b5b99eddc03151",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Create a concert poster with the correct venue and date. Ask me for missing facts.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "allOtherUserInputs": "provided",
+                    "date": null,
+                    "dateAvailableInDocumentOrReceipts": false,
+                    "venue": "provided"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "essential-date",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "56399fa5b5d7f4bfd010e92d2f7427b3ea9758db6f9e93dd55bb1332ce910d6a"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "stop_safely"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac",
+            "sourceBinding": "5b12c92c9dd0f516277267904691bc483c2406a2b351569ddc8206dfcad83477",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Delete the existing text layers.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "capabilities": [
+                        "read"
+                    ],
+                    "inspectionComplete": true,
+                    "nativeAdmission": "denied",
+                    "reason": "No mutation capability."
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "permission-absent",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "inspect_state",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "fa5494e5002a0d458ef5ba9cbe446ebe5aa8788488e7790cecee1130beacd5ac"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "stop_safely"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd",
+            "sourceBinding": "3e35a6e29f8272c1a4dad8e6d4655fde964c37469122cd57d00ae2b86300a16a",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Continue adjusting the title in the approved document.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "activeTarget": "document-b",
+                    "approvedTarget": "document-a",
+                    "approvedTargetOpen": false,
+                    "reopenApprovedTarget": "unsupported",
+                    "targetPolicy": "cannot substitute targets"
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "target-closed",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "e43098994a2d32ed8db8b30033a95c70ffc1f254b30337e020cd64747ee36ddd"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "insufficient_evidence",
+            "ask_user"
+        ],
+        "category": "ambiguity",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea",
+            "sourceBinding": "a3d5c9222b843e8690de970f82ce70a5aee331518689a55c18dacfa452d30cff",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Make it better.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "unknown-scope",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "a283a51a4c1c324df1796e2081ef351a1a8cf21b0e828840a0afbc9873cb35ea"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "insufficient_evidence",
+            "inspect_state",
+            "review_proof"
+        ],
+        "category": "ambiguity",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882",
+            "sourceBinding": "5c003eac43becad6699ae89476424f75b58bf29f5e24851a06d8a71bdfd963a3",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Repair the issue found in the last review.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "availableEvidence": "no current review details or pixels",
+                    "lastReviewIssues": "omitted",
+                    "projectionOmittedFields": true
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "omitted-repair-context",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "c7f040af83eb4a18595d36a456c50be3dc9b5c5223b9d0a019d4b46e81e3f882"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "finish_plan"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "finish_plan",
+                    "purpose": "Return a semantic photo edit intent or conclude planning when the current phase and evidence permit it. This does not certify completed edits."
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38",
+            "sourceBinding": "fe118e71de86b59c963988f617f030f68f84476c491b479830d31bd6875e8c17",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Warm the whole photo slightly while keeping natural color.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "currentPhotoReadback": {
+                        "temperature": 0
+                    },
+                    "noCompositionChangesRequested": true,
+                    "visualAssessment": "neutral daylight"
+                },
+                "phase": "sample",
+                "toolPlanRequired": false
+            }
+        },
+        "id": "photo-intent",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "finish_plan",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "528bdc11a910103b2980634dc0bd016b0f6d0af36a3750f0449bfb64e9ad3f38"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "use_document_tools"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263",
+            "sourceBinding": "872ae1109fa86def55321508e49ed785f4de86c9c7d9a698b8ce0fbee9a57c03",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Keep the headline at least three times the subtitle size and fix clipping.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "currentBoundReview": {
+                        "issue": "Headline clips at right canvas edge; excessive tracking.",
+                        "repairHint": "Reduce title tracking while preserving requested size ratio."
+                    },
+                    "currentReadback": {
+                        "headlineId": "title-17",
+                        "headlineSize": 144,
+                        "headlineTracking": 40,
+                        "subtitleId": "subtitle-8",
+                        "subtitleSize": 48
+                    },
+                    "nativeTaskAdmission": "ready",
+                    "typographyInputSchemaAvailable": true
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "clipped-title-repair",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "d72e4eeb517927db06ff62487591180f65cfe160caba4991945866b874976263"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "inspect_state"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "timeline.export_h264"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "timeline.inspect_export"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "0e35579ad1b531b7e09d98a5d377089f4149924c6a130a8d77a1b825695b7fc9",
+            "sourceBinding": "d267793f5ebc62ec2a589b0cf6fb446c91b5302c005b85a6a08961149754e2d1",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Export the approved Timeline as H.264 once.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "exportReceipt": {
+                        "accepted": true,
+                        "documentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "requestId": "81563087-38ce-49bf-a422-dd3c254147b3",
+                        "resourceId": "timeline-fixture",
+                        "status": "running"
+                    },
+                    "instruction": "Never submit a duplicate export while this job is pending."
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "async-export-pending",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "inspect_state",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "0e35579ad1b531b7e09d98a5d377089f4149924c6a130a8d77a1b825695b7fc9"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "ask_user",
+            "stop_safely"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1",
+            "sourceBinding": "189f5377e5f4066780ebb0717a3d9749cfa3df98f48eaba661cda3b6c1f34688",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Use the exact requested font family and face; do not substitute.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "fontInstallationToolAvailable": false,
+                    "fontInventoryRead": true,
+                    "nativeInventoryIsComplete": true,
+                    "requestedFaceAvailable": false
+                },
+                "phase": "sample",
+                "toolPlanRequired": true
+            }
+        },
+        "id": "missing-font",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "9eeb3c6cb54f1acc93c17424be47225d94884346d93adf736447ea26c64b50f1"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    },
+    {
+        "acceptableChoices": [
+            "finish_plan"
+        ],
+        "category": "workflow",
+        "frame": {
+            "advisoryOnly": true,
+            "candidates": [
+                {
+                    "id": "deliver_output",
+                    "purpose": "Save, export or commit only when approved scope, verification and native admission permit it.",
+                    "toolNames": [
+                        "photo.export_batch"
+                    ]
+                },
+                {
+                    "id": "discover_controls",
+                    "purpose": "Discover native controls or read a missing authoritative command schema.",
+                    "toolNames": [
+                        "app.list_commands",
+                        "app.command_schema"
+                    ]
+                },
+                {
+                    "id": "inspect_state",
+                    "purpose": "Read current document state or obtain missing stable resource IDs. Reuse still-current receipts.",
+                    "toolNames": [
+                        "photo.inspect_composition"
+                    ]
+                },
+                {
+                    "id": "review_proof",
+                    "purpose": "Obtain or validate a current rendered proof after editing; inspect pixels before judging visual quality.",
+                    "toolNames": [
+                        "photo.render_current_proof",
+                        "photo.validate_edit"
+                    ]
+                },
+                {
+                    "id": "use_document_tools",
+                    "purpose": "Continue approved document work using supplied typed tools. This category does not establish availability, ownership or permission for an individual operation.",
+                    "toolNames": [
+                        "photo.edit_composition",
+                        "app.invoke_command"
+                    ]
+                },
+                {
+                    "id": "finish_plan",
+                    "purpose": "Return a semantic photo edit intent or conclude planning when the current phase and evidence permit it. This does not certify completed edits."
+                },
+                {
+                    "id": "ask_user",
+                    "purpose": "Ask for essential missing user intent or required input that the app cannot discover."
+                },
+                {
+                    "id": "stop_safely",
+                    "purpose": "Stop because scope, permissions or a supported execution path do not permit the remaining work."
+                },
+                {
+                    "id": "insufficient_evidence",
+                    "purpose": "Abstain because these observations do not establish a useful next step; obtain fuller context."
+                }
+            ],
+            "contract": "looksy-agent-decision-v1",
+            "instructions": "Choose the most useful immediate next step for the approved brief from the supplied candidates. Consider current observations and completed operations. Treat missing or omitted evidence as unknown. Choose insufficient_evidence when the state cannot support a choice. A choice grants no permission, proves no visual quality and cannot execute an edit.",
+            "requestDigest": "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535",
+            "sourceBinding": "e8a4ab14582947b09065905d019e05df57ad208a08b04adac690d8c5fa958578",
+            "state": {
+                "assetId": "fixture-photo",
+                "brief": "Change headline copy, then verify it. Do not export.",
+                "evidenceScope": "Fictional text-state fixture. No rendered pixels are attached.",
+                "observations": {
+                    "allExplicitRequirementsComplete": true,
+                    "currentBoundRenderedReview": "passed",
+                    "currentReadback": {
+                        "requestedCopyMatches": true
+                    },
+                    "pendingOperations": [
+                    ]
+                },
+                "phase": "sample",
+                "toolPlanRequired": false
+            }
+        },
+        "id": "completed-in-progress",
+        "labelStatus": "developer-authored contract fixture; not human creative judgment",
+        "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "choice": {
+                    "enum": [
+                        "deliver_output",
+                        "discover_controls",
+                        "inspect_state",
+                        "review_proof",
+                        "use_document_tools",
+                        "finish_plan",
+                        "ask_user",
+                        "stop_safely",
+                        "insufficient_evidence"
+                    ],
+                    "type": "string"
+                },
+                "requestDigest": {
+                    "enum": [
+                        "506ba82b4fbd8b046f7ece71df84149cb6427ec8e42192ed74f862fb7e3b9535"
+                    ],
+                    "type": "string"
+                }
+            },
+            "required": [
+                "requestDigest",
+                "choice"
+            ],
+            "type": "object"
+        }
+    }
+]

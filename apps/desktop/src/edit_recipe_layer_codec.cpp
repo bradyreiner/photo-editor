@@ -1,8 +1,47 @@
 #include "edit_recipe_state.h"
+#include "photo_layer_style_light.h"
+#include "photo_smart_document_payload_codec.h"
 
 #include <array>
 
 namespace photo_editor::desktop::detail {
+
+bool photo_layers_have_styles(const QVariantList& layers) {
+  for (const auto& value : layers) {
+    const auto layer = value.toMap();
+    if (layer.contains("layerStyleStack")) return true;
+    for (const auto* key : {"children", "layers"})
+      if (photo_layers_have_styles(layer.value(QString::fromLatin1(key)).toList())) return true;
+    if (photo_layers_have_styles(layer.value("smartObjectDocument").toMap().value("layers").toList())) return true;
+  }
+  return false;
+}
+
+bool photo_layers_have_linked_style_lighting(const QVariantList& layers) {
+  return photo_layer_style_light::has_linked_lighting(layers);
+}
+
+bool recipe_requires_document_layer_style_light(const EditRecipeState& state) {
+  return photo_layer_style_light::requires_document_light_capability(state);
+}
+
+bool photo_layers_have_component_objects(const QVariantList& layers) {
+  for (const auto& value : layers) {
+    const auto layer = value.toMap();
+    if (layer.contains("smartObject") || layer.contains("smartObjectDocument")) return true;
+    for (const auto* key : {"children", "layers"})
+      if (photo_layers_have_component_objects(layer.value(QString::fromLatin1(key)).toList())) return true;
+  }
+  return false;
+}
+
+bool photo_layers_have_components(const QVariantList& layers) {
+  for (const auto& value : layers) {
+    const auto layer = value.toMap(); if (layer.contains("smartObjectDocument")) return true;
+    for (const auto* key : {"children", "layers"}) if (photo_layers_have_components(layer.value(QString::fromLatin1(key)).toList())) return true;
+  }
+  return false;
+}
 
 bool photo_layers_have_paint_tiles(const QVariantList& layers) {
   for (const auto& value : layers) {
@@ -24,6 +63,22 @@ bool photo_layers_have_typography(const QVariantList& layers) {
   return false;
 }
 
+bool photo_layers_have_text_dimensions(const QVariantList& layers) {
+  for (const auto& value : layers) {
+    const auto layer = value.toMap();
+    if (layer.contains(QStringLiteral("textDimension"))) return true;
+    for (const auto* key : {"children", "layers"})
+      if (photo_layers_have_text_dimensions(
+              layer.value(QString::fromLatin1(key)).toList()))
+        return true;
+    const auto nested = layer.value(QStringLiteral("smartObjectDocument")).toMap();
+    if (photo_layers_have_text_dimensions(
+            nested.value(QStringLiteral("layers")).toList()))
+      return true;
+  }
+  return false;
+}
+
 bool photo_layers_have_effect_stacks(const QVariantList& layers) {
   for (const auto& value : layers) {
     const auto layer = value.toMap();
@@ -38,6 +93,16 @@ bool photo_layers_have_effect_stacks(const QVariantList& layers) {
 namespace {
 
 QVariantMap normalize_photo_layer_payloads(QVariantMap layer) {
+  if (layer.contains("smartObjectDocument")) layer.insert("smartObjectDocument", decode_component_payloads(layer.value("smartObjectDocument")));
+  for (const auto* key : {"children", "layers"}) {
+    if (!layer.contains(QString::fromLatin1(key))) continue;
+    auto children = layer.value(QString::fromLatin1(key)).toList();
+    for (auto& child : children) {
+      if (child.canConvert<QVariantMap>())
+        child = normalize_photo_layer_payloads(child.toMap());
+    }
+    layer.insert(QString::fromLatin1(key), children);
+  }
   constexpr std::array<const char*, 2> kBytePayloadKeys{
       "maskData", "pixelData"};
   for (const auto* raw_key : kBytePayloadKeys) {
@@ -55,6 +120,7 @@ QVariantMap normalize_photo_layer_payloads(QVariantMap layer) {
 }
 
 QVariantMap encode_photo_layer_payloads(QVariantMap layer) {
+  if (layer.contains("smartObjectDocument")) layer.insert("smartObjectDocument", encode_component_payloads(layer.value("smartObjectDocument")));
   for (auto iterator = layer.begin(); iterator != layer.end();) {
     if (iterator.key().startsWith(
             QStringLiteral("thumbnail"), Qt::CaseInsensitive)) {

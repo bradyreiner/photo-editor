@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtCore
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Window
@@ -14,11 +15,33 @@ Rectangle {
     signal reviewImportedRequested()
 
     Theme { id: theme }
+    Settings {
+        id: importBrowserSettings
+        category: "ImportBrowser"
+        property string recentSourcesJson: "[]"
+        property string favoriteSourcesJson: "[]"
+        property bool groupRawJpeg: true
+        property string dismissedReceiptId: ""
+    }
+    property string sourceBrowserMode: "locations"
+    readonly property var savedRecentSources: parseSavedSources(importBrowserSettings.recentSourcesJson)
+    readonly property var savedFavoriteSources: parseSavedSources(importBrowserSettings.favoriteSourcesJson)
+    readonly property var sourceBrowserEntries: {
+        if (sourceBrowserMode === "locations") return catalogAssets.importSources
+        const paths = sourceBrowserMode === "favorites" ? savedFavoriteSources : savedRecentSources
+        return paths.map(function(path) { return {path: path, url: root.fileUrlForPath(path), label: root.fileNameForPath(path) || "Computer", subtitle: ""} })
+    }
+    property string dismissedImportJobId: importBrowserSettings.dismissedReceiptId
+    onDismissedImportJobIdChanged: { importBrowserSettings.dismissedReceiptId = dismissedImportJobId; importBrowserSettings.sync() }
+    property real previewZoom: 0
+    property int duplicateReviewIndex: -1
+    readonly property var duplicateReviewMatches: importPreflight.duplicateMatches || []
+    readonly property var duplicateReviewMatch: duplicateReviewMatches[duplicateReviewIndex] || ({})
 
-    readonly property string importVisibilityContract: "import-visibility:v1|always:sources-folders-header-media-grid-primary-import|contextual:destination-panel-selection-actions-filter-empty-progress|one-expansion:import-options-project-target-refresh-sources-clear-selection|hover-focus:media-selection-source-folder-keyboard|diagnostic:import-progress-source-empty|preserve:functionality"
-    readonly property string importSurfaceContract: "import-surfaces:v1|sources:left-rail|folders:navigation-list|media:grid-filter-selection|destination:contextual-project-picker|actions:split-import-menu|no-elide:true|no-overlap:true"
-    readonly property string importWorkflowPolishContract: "import-workflow-polish:v1|first-glance:sources-current-folder-media-grid-primary-import|close-inspection:source-confirmation-filter-counts-selection-destination-progress|clutter:single-progress-place-split-import-options|interaction:choose-source-select-visible-clear-import-retry-refresh|text:no-elide-no-overlap-paths-wrap|functionality:preserved"
-    readonly property string importPageCompletionContract: "page-completion:v1|import|sidebar:sources-folders-refresh|content:header-filter-media-grid-empty|destination:project-picker-create-confirm-cancel|toolbar:select-visible-clear-primary-import|states:no-source-empty-filtered-selected-importing-failed-complete"
+    readonly property string importVisibilityContract: "import-visibility:v3|source:source-rail-media-grid-empty|destination:library-backup-when-enabled|review:photo-preview-compact-choices-readiness-issues|progress:import-job-summary|actions:one-persistent-selected-import|advanced:workflow-disclosure-filename-duplicate-backup-policies|preserve:functionality"
+    readonly property string importSurfaceContract: "import-surfaces:v3|source:left-rail-and-media-grid|destination:library-storage-disclosure|review:photo-choices-copy-readiness-details|advanced:workflow-preset-organization-pair-policy|actions:one-primary-import-selected-count|no-elide:true|no-overlap:true"
+    readonly property string importWorkflowPolishContract: "import-workflow-polish:v3|flow:choose-source-select-photos-destination-review-import|review-first-viewport:photo-collection-copy-ready-blockers|advanced:progressive-disclosure-filename-duplicate-backup|interaction:choose-source-select-visible-clear-review-confirm-retry-refresh|primary:persistent-import-selected-count-accessible-disabled-reason|text:no-elide-no-overlap-paths-wrap|functionality:preserved"
+    readonly property string importPageCompletionContract: "page-completion:v3|import|source:rail-folder-navigation|content:media-grid-filter-selection-empty|destination:library-storage-backup-when-enabled|review:photo-target-copy-readiness-issues|actions:one-persistent-import-selected-count-confirm-cancel|states:no-source-empty-filtered-selected-importing-failed-complete"
     readonly property string importSafetyContract: "import-safety:v1|preflight:source-destination-mode-count-types-size|problems:duplicates-unsupported-unreadable-raw-jpeg|organization:folders-filenames|modes:managed-copy-referenced-link|duplicate-policy:skip-replace|progress:nonblocking|summary:success-skipped-duplicates-failures|retry:job-queue"
 
     property string sourceRootPath: ""
@@ -35,6 +58,8 @@ Rectangle {
     property string organizationTemplate: "date-camera"
     property string rawJpegPolicy: "both"
     property string importPresetStatus: ""
+    property bool advancedImportOptionsOpen: false
+    property bool newProjectEntryOpen: false
     property bool importProjectChooserOpen: false
     property string importMode: "managed"
     property string duplicatePolicy: "skip"
@@ -43,6 +68,23 @@ Rectangle {
     property var pendingImportPaths: []
     readonly property var importPreflight: catalogAssets.importPreflightResult
     property string mediaQuickFilter: "all"
+    property string filenameQuery: ""
+    property real thumbnailSize: 224
+    readonly property bool compactSourceControls: height < theme.scaled(550)
+    readonly property bool compactImportDensity: theme.interfaceScale >= 1.5
+    property string selectionAnchorPath: ""
+    property string dropMessage: ""
+    property bool dropMessageIsError: false
+    property bool reviewPathsExpanded: false
+    property bool reviewSelectionExpanded: false
+    property string copiedReviewPath: ""
+    property var previewPaths: []
+    property int previewIndex: -1
+    readonly property string previewCurrentPath: previewPaths[previewIndex] || ""
+    readonly property bool previewCurrentSelected: {
+        selectionRevision
+        return !!selectedPathsByFile[previewCurrentPath]
+    }
     property var selectedPathsByFile: ({})
     property int selectionRevision: 0
     readonly property var activeImportJob: {
@@ -58,8 +100,11 @@ Rectangle {
     readonly property bool hasStagedSelection: selectedFileCount > 0
     readonly property bool canImportSelection: hasStagedSelection && !catalogAssets.busy
     readonly property bool canImportFolder: currentFolderPath.length > 0 && !sourceRootIsFileSelection && !catalogAssets.busy
-    readonly property bool canConfirmImport: !!importPreflight.ok && !catalogAssets.importPreflightBusy && !catalogAssets.busy
-    readonly property string importActionContract: "import-actions:v1|split-button:true|primary:import-to-photo-library|menu:import-selection,import-folder,import-with-preset,select-visible,clear-selection,refresh-sources|disabled-reasons:true|no-clutter:true"
+    readonly property bool canConfirmImport: !!importPreflight.ok && !catalogAssets.importPreflightBusy && !catalogAssets.busy && !appShell.photoLibraryMigrationRunning
+    readonly property bool canActivatePersistentImport: importProjectChooserOpen
+                                                        ? canConfirmImport
+                                                        : canImportSelection && !appShell.photoLibraryMigrationRunning
+    readonly property string importActionContract: "import-actions:v3|split-button:false|primary:persistent-import-selected-count-review-then-confirm|menu:import-folder,import-with-preset,select-visible,clear-selection,refresh-sources|disabled-reasons:tooltip-and-accessibility|cancel-and-recovery:preserved"
     readonly property string currentFolderName: currentFolderPath.length > 0 ? fileNameForPath(currentFolderPath) : "No folder"
     readonly property int visiblePhotoCount: {
         const total = sourceRootIsFileSelection ? stagedPickerFilePaths.length : fileModel.count
@@ -86,7 +131,6 @@ Rectangle {
         return count
     }
     readonly property var filteredFileEntries: {
-        selectionRevision
         const filterMode = mediaQuickFilter
         const pickerSelection = sourceRootIsFileSelection ? stagedPickerFilePaths : null
         const total = pickerSelection ? pickerSelection.length : fileModel.count
@@ -102,8 +146,11 @@ Rectangle {
                 continue
 
             const fileName = pickerSelection ? root.fileNameForPath(filePath) : fileModel.get(index, "fileName")
+            if (filenameQuery.trim().length > 0 && fileName.toLowerCase().indexOf(filenameQuery.trim().toLowerCase()) < 0)
+                continue
             entries.push({
                            filePath: filePath,
+                           filePaths: [filePath],
                            fileName: fileName,
                            fileUrl: pickerSelection ? root.fileUrlForPath(filePath) : fileModel.get(index, "fileUrl"),
                            isVideo: isVideo,
@@ -112,7 +159,34 @@ Rectangle {
                                       : "FILE"
                        })
         }
-        return entries
+        if (!importBrowserSettings.groupRawJpeg) return entries
+        const pairs = ({})
+        for (let i = 0; i < entries.length; ++i) {
+            const entry = entries[i]
+            const ext = entry.extension.toLowerCase()
+            const raw = /^(3fr|arw|cr2|cr3|dng|erf|iiq|kdc|kdc|mef|mos|nef|nrw|orf|pef|raf|raw|rw2|sr2|srf|x3f)$/.test(ext)
+            const jpeg = ext === "jpg" || ext === "jpeg"
+            if (!raw && !jpeg) continue
+            const key = root.parentPathForFile(entry.filePath) + "/" + entry.fileName.replace(/\.[^.]+$/, "").toLowerCase()
+            if (!pairs[key]) pairs[key] = {raw: [], jpeg: []}
+            pairs[key][raw ? "raw" : "jpeg"].push(entry)
+        }
+        const consumed = ({})
+        return entries.filter(function(entry) {
+            if (consumed[entry.filePath]) return false
+            const key = root.parentPathForFile(entry.filePath) + "/" + entry.fileName.replace(/\.[^.]+$/, "").toLowerCase()
+            const pair = pairs[key]
+            if (!pair || pair.raw.length === 0 || pair.jpeg.length === 0) return true
+            const members = pair.jpeg.concat(pair.raw)
+            const representative = pair.jpeg[0]
+            const memberPaths = members.map(function(member) { consumed[member.filePath] = true; return member.filePath })
+            entry.filePath = representative.filePath
+            entry.fileUrl = representative.fileUrl
+            entry.fileName = representative.fileName.replace(/\.[^.]+$/, "")
+            entry.extension = "RAW + JPEG"
+            entry.filePaths = memberPaths
+            return true
+        })
     }
     readonly property int filteredFileCount: filteredFileEntries.length
     readonly property var selectedFilePaths: {
@@ -126,6 +200,95 @@ Rectangle {
         return paths
     }
     readonly property int selectedFileCount: selectedFilePaths.length
+    readonly property int importPreflightBlockerCount: {
+        const issues = importPreflight.issues || []
+        let count = 0
+        for (let index = 0; index < issues.length; ++index) {
+            if (issues[index].severity === "error")
+                ++count
+        }
+        return count
+    }
+
+    function preflightExceptionsText() {
+        const parts = []
+        if (importPreflightBlockerCount > 0)
+            parts.push(importPreflightBlockerCount + " blockers")
+        if ((importPreflight.duplicateCount || 0) > 0)
+            parts.push(importPreflight.duplicateCount + " duplicates")
+        if ((importPreflight.unsupportedCount || 0) > 0)
+            parts.push(importPreflight.unsupportedCount + " unsupported")
+        if ((importPreflight.unreadableCount || 0) > 0)
+            parts.push(importPreflight.unreadableCount + " unreadable")
+        return parts.join(" · ")
+    }
+
+    component MediaFilterTab: NavigationTab {
+        underlineSelection: true
+        implicitHeight: theme.scaled(36)
+        Accessible.description: selected ? "Current media filter" : "Filter media"
+    }
+    component ImportDialogButton: ActionButton {
+        Keys.onReturnPressed: clicked()
+        Keys.onEnterPressed: clicked()
+    }
+    component ReviewLocation: ColumnLayout {
+        id: location
+        property string caption: ""
+        property string path: ""
+        property string summary: ""
+        property bool showPath: root.reviewPathsExpanded
+        Layout.fillWidth: true
+        Layout.alignment: Qt.AlignTop
+        spacing: theme.space4
+
+        Label {
+            text: location.caption
+            color: theme.textFaint
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeMicro
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: theme.space8
+            Label {
+                Layout.fillWidth: true
+                id: locationName
+                Accessible.description: location.path
+                HoverHandler { id: locationHover }
+                AppToolTip { targetItem: locationName; visible: locationHover.hovered; text: location.path }
+                text: location.summary.length > 0 ? location.summary
+                      : root.fileNameForPath(location.path.replace(/\/+$/, "")) || location.path || "Checking…"
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                font.weight: Font.Medium
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            }
+            ActionButton {
+                objectName: "importCopy" + location.caption + "PathButton"
+                visible: location.path.length > 0
+                iconName: root.copiedReviewPath === location.path ? "check" : "copy"
+                showText: false
+                compact: true
+                embedded: true
+                tooltipText: root.copiedReviewPath === location.path ? "Path copied" : "Copy " + location.caption.toLowerCase() + " path"
+                onClicked: root.copyReviewPath(location.path)
+            }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: location.showPath && location.path.length > 0 && location.summary !== location.path
+            text: location.path
+            color: theme.textMuted
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeMicro
+            wrapMode: Text.WrapAnywhere
+        }
+    }
+
     readonly property int selectedPhotoCount: {
         selectionRevision
         let count = 0
@@ -158,7 +321,7 @@ Rectangle {
         return values
     }
     readonly property var projectOptionLabels: {
-        const labels = ["No Project"]
+        const labels = ["Photo Library"]
         for (let i = 0; i < catalogAssets.projectNames.length; ++i)
             labels.push(catalogAssets.projectNames[i])
         return labels
@@ -302,6 +465,202 @@ Rectangle {
         selectedPathsByFile = ({})
         importProjectChooserOpen = false
         selectionRevision += 1
+        selectionAnchorPath = ""
+    }
+
+    function entryPaths(entry) { return entry.filePaths || [entry.filePath] }
+    function parseSavedSources(json) {
+        try {
+            const paths = JSON.parse(json)
+            return Array.isArray(paths) ? paths.filter(function(path) { return typeof path === "string" && path.startsWith("/") }).slice(0, 8) : []
+        } catch (error) { return [] }
+    }
+    function rememberSource(path) {
+        const recent = savedRecentSources.filter(function(value) { return value !== path })
+        recent.unshift(path)
+        importBrowserSettings.recentSourcesJson = JSON.stringify(recent.slice(0, 8))
+    }
+    function toggleSourceFavorite() {
+        if (!hasSource) return
+        const favorites = savedFavoriteSources.slice()
+        const index = favorites.indexOf(sourceRootPath)
+        if (index >= 0) favorites.splice(index, 1)
+        else favorites.unshift(sourceRootPath)
+        importBrowserSettings.favoriteSourcesJson = JSON.stringify(favorites.slice(0, 8))
+    }
+    function openSavedSource(path) {
+        const entry = catalogAssets.inspectImportDrop([fileUrlForPath(path)])
+        if (!entry.folderPath) {
+            dropMessage = "This saved source is unavailable. Connect it and try again."
+            dropMessageIsError = true
+            return false
+        }
+        openSource(entry.folderPath, entry.folderUrl, fileNameForPath(entry.folderPath))
+        return true
+    }
+    function chooseImportStorage(backup) {
+        const path = catalogAssets.pickFolder(backup ? "Choose an originals backup folder" : "Choose a Photo Library folder")
+        if (!path) return false
+        const accepted = backup ? appShell.setOriginalsBackupLocation(path) : appShell.setPhotoLibraryLocation(path)
+        storageFeedback = appShell.storageConfigurationStatus
+        return accepted
+    }
+    function setPreviewZoom(value) {
+        previewZoom = value === 0 ? 0 : Math.max(0.1, Math.min(4, value))
+        Qt.callLater(function() {
+            previewFlick.contentX = Math.max(0, (previewFlick.contentWidth - previewFlick.width) / 2)
+            previewFlick.contentY = Math.max(0, (previewFlick.contentHeight - previewFlick.height) / 2)
+        })
+    }
+    property string storageFeedback: ""
+    readonly property var previewFileDetails: catalogAssets.importFileDetails.path === previewCurrentPath ? catalogAssets.importFileDetails : ({loading: previewCurrentPath.length > 0})
+    onPreviewCurrentPathChanged: {
+        previewZoom = 0
+        metadataDelay.restart()
+    }
+    Timer {
+        id: metadataDelay
+        interval: 80
+        onTriggered: catalogAssets.requestImportFileDetails(root.previewCurrentPath)
+    }
+
+    function selectVisibleEntry(index, modifiers) {
+        const entries = filteredFileEntries.slice()
+        if (index < 0 || index >= entries.length)
+            return
+        const path = entries[index].filePath
+        const anchor = entries.findIndex(function(entry) { return entry.filePath === root.selectionAnchorPath })
+        if ((modifiers & Qt.ShiftModifier) && anchor >= 0) {
+            const next = Object.assign({}, selectedPathsByFile)
+            for (let i = Math.min(anchor, index); i <= Math.max(anchor, index); ++i) {
+                const members = entryPaths(entries[i])
+                for (let j = 0; j < members.length; ++j) next[members[j]] = true
+            }
+            selectedPathsByFile = next
+            selectionRevision += 1
+        } else {
+            const next = Object.assign({}, selectedPathsByFile)
+            const members = entryPaths(entries[index])
+            const allSelected = members.every(function(member) { return !!next[member] })
+            for (let j = 0; j < members.length; ++j) {
+                if (allSelected) delete next[members[j]]
+                else next[members[j]] = true
+            }
+            selectedPathsByFile = next
+            selectionRevision += 1
+            selectionAnchorPath = path
+        }
+        mediaGrid.currentIndex = Math.min(index, filteredFileCount - 1)
+    }
+
+    function openPreview(index) {
+        if (index < 0 || index >= filteredFileEntries.length)
+            return
+        const paths = []
+        let start = 0
+        for (let i = 0; i < filteredFileEntries.length; ++i) {
+            if (i === index) start = paths.length
+            const members = entryPaths(filteredFileEntries[i])
+            for (let j = 0; j < members.length; ++j) paths.push(members[j])
+        }
+        previewPaths = paths
+        previewIndex = start
+        mediaPreviewDialog.open()
+    }
+
+    function openReviewPreview(path) {
+        previewPaths = pendingImportPaths.slice()
+        previewIndex = previewPaths.indexOf(path)
+        if (previewIndex >= 0)
+            mediaPreviewDialog.open()
+    }
+
+    function stageDroppedUrls(urls) {
+        if (catalogAssets.busy || importProjectChooserOpen)
+            return false
+        const result = catalogAssets.inspectImportDrop(urls)
+        if (result.error) {
+            dropMessage = result.error
+            dropMessageIsError = true
+            return false
+        }
+        if (result.folderPath) {
+            openSource(result.folderPath, result.folderUrl, fileNameForPath(result.folderPath))
+            dropMessage = "Folder opened. Select files to review, or review the entire folder from Import options."
+        } else {
+            if (!stagePickedFiles(result.files || []))
+                return false
+            dropMessage = result.files.length + " files ready to review" +
+                          (result.ignoredCount > 0 ? " · " + result.ignoredCount + " unsupported or unavailable items ignored" : "")
+        }
+        dropMessageIsError = false
+        return true
+    }
+
+    function reviewActionText() {
+        return selectedFileCount > 0 ? "Review " + selectedFileCount + (selectedFileCount === 1 ? " file" : " files") : "Review import"
+    }
+
+    function confirmActionText() {
+        if (catalogAssets.importPreflightBusy)
+            return "Checking files…"
+        const count = importPreflight.importableCount || 0
+        const kind = count > 0 && importPreflight.photoCount === count ? (count === 1 ? " photo" : " photos")
+                   : count > 0 && importPreflight.videoCount === count ? (count === 1 ? " video" : " videos")
+                   : (count === 1 ? " file" : " files")
+        return count > 0 ? "Import " + count + kind + (importPreflight.backupEnabled ? " with Backup" : "") : "Import"
+    }
+
+    function persistentImportActionText() {
+        if (importProjectChooserOpen && pendingImportKind === "folder")
+            return catalogAssets.importPreflightBusy ? "Checking folder…" : confirmActionText()
+        const count = importProjectChooserOpen ? pendingImportPaths.length : selectedFileCount
+        return "Import selected photos" + (count > 0 ? " · " + count : "")
+    }
+
+    function importAdvancedPolicySummaryText() {
+        const organization = organizationTemplate === "date-camera" ? "Date + Camera folders" : "Source folders"
+        const duplicates = duplicatePolicy === "skip" ? "skip matching files" : "replace matching files"
+        const backup = importMode !== "managed" ? "backup not used for Leave in Place"
+                      : appShell.originalsBackupEnabled ? "verified originals backup on" : "originals backup off"
+        return organization + " · original filenames · duplicates " + duplicates + " · " + backup
+    }
+
+    function persistentImportDisabledReason() {
+        if (catalogAssets.busy)
+            return "An import operation is already running."
+        if (appShell.photoLibraryMigrationRunning)
+            return appShell.storageConfigurationStatus || "Wait for Photo Library migration to finish."
+        if (importProjectChooserOpen) {
+            if (catalogAssets.importPreflightBusy)
+                return "Checking the selected files and destination."
+            if (!importPreflight.ok) {
+                const issues = importPreflight.issues || []
+                for (let index = 0; index < issues.length; ++index) {
+                    if (issues[index].severity === "error")
+                        return String(issues[index].detail || issues[index].title || "Resolve the import review issue before importing.")
+                }
+                return "No files are ready to import. Review the destination and file handling options."
+            }
+            return ""
+        }
+        if (selectedFileCount === 0)
+            return "Select photos or videos to import."
+        return ""
+    }
+
+    function activatePersistentImportAction() {
+        if (!canActivatePersistentImport)
+            return
+        if (importProjectChooserOpen)
+            confirmSelectedImport()
+        else
+            importSelected()
+    }
+
+    function copyReviewPath(path) {
+        if (appShell.copyTextToClipboard(path))
+            copiedReviewPath = path
     }
 
     function toggleSelection(filePath) {
@@ -316,8 +675,10 @@ Rectangle {
 
     function selectAllVisible() {
         const nextSelection = Object.assign({}, selectedPathsByFile)
-        for (let index = 0; index < filteredFileEntries.length; ++index)
-            nextSelection[filteredFileEntries[index].filePath] = true
+        for (let index = 0; index < filteredFileEntries.length; ++index) {
+            const members = entryPaths(filteredFileEntries[index])
+            for (let j = 0; j < members.length; ++j) nextSelection[members[j]] = true
+        }
         selectedPathsByFile = nextSelection
         selectionRevision += 1
     }
@@ -369,6 +730,8 @@ Rectangle {
     function selectionMixText() {
         if (selectedFileCount === 0)
             return String(filteredFileCount) + " visible"
+        if (filteredFileEntries.some(function(entry) { return entry.filePaths && entry.filePaths.length > 1 }))
+            return selectedFileCount + (selectedFileCount === 1 ? " file" : " files")
         let mediaSummary = ""
         if (selectedPhotoCount > 0 && selectedVideoCount > 0)
             mediaSummary = selectedPhotoCount + " photo / " + selectedVideoCount + " video"
@@ -394,6 +757,11 @@ Rectangle {
     }
 
     function openSource(path, url, label) {
+        rememberSource(path)
+        filenameQuery = ""
+        selectionAnchorPath = ""
+        dropMessage = ""
+        mediaPreviewDialog.close()
         sourceRootPath = path
         sourceRootUrl = url
         sourceLabel = label
@@ -469,6 +837,8 @@ Rectangle {
         if (sourceRootPath.length === 0 || selectedFileCount === 0)
             return
         pendingImportKind = "selection"
+        reviewPathsExpanded = false
+        copiedReviewPath = ""
         pendingImportRootPath = sourceRootPath
         pendingImportPaths = selectedFilePaths
         importProjectChooserOpen = true
@@ -540,6 +910,8 @@ Rectangle {
         if (currentFolderPath.length === 0)
             return
         pendingImportKind = "folder"
+        reviewPathsExpanded = false
+        copiedReviewPath = ""
         pendingImportRootPath = currentFolderPath
         pendingImportPaths = []
         importProjectChooserOpen = true
@@ -549,30 +921,22 @@ Rectangle {
     function importActionMenuItems() {
         return [
             {
-                key: "import-selection",
-                label: "Import Selection",
-                icon: "media",
-                enabled: root.canImportSelection,
-                disabledReason: root.selectedFileCount > 0 ? "Selected files are not importable." : "Select media to import.",
-                tooltip: "Import the currently selected files."
-            },
-            {
                 key: "import-folder",
-                label: "Import Current Folder",
+                label: "Review Current Folder",
                 icon: "folder",
                 enabled: root.canImportFolder,
                 disabledReason: root.sourceRootIsFileSelection
                                 ? "Choose a source folder to import its contents; this picker contains only the selected files."
                                 : (root.currentFolderPath.length > 0 ? "No importable media found in this folder." : "Choose a folder first."),
-                tooltip: "Import the current folder."
+                tooltip: "Review the current folder and its subfolders before confirming import."
             },
             {
                 key: "import-with-preset",
-                label: "Import With Preset",
+                label: "Review With Preset",
                 icon: "swatch",
                 enabled: root.canImportSelection || root.canImportFolder,
                 disabledReason: "Select media or choose a folder first.",
-                tooltip: "Open Studio preflight and load a saved import preset."
+                tooltip: "Review files with a saved import preset."
             },
             {
                 key: "select-visible",
@@ -602,12 +966,11 @@ Rectangle {
     }
 
     function handleImportMenuAction(key) {
-        if (key === "import-selection") {
-            importSelected()
-        } else if (key === "import-folder") {
+        if (key === "import-folder") {
             importCurrentFolder()
         } else if (key === "import-with-preset") {
             workflowProfile = "studio"
+            advancedImportOptionsOpen = true
             if (canImportSelection)
                 importSelected()
             else if (canImportFolder)
@@ -640,20 +1003,26 @@ Rectangle {
     function importActivityTitle() {
         if (!hasActiveImportJobs())
             return ""
+        const reviewed = activeImportJob.metadata && activeImportJob.metadata.importPreflight
+                         ? Number(activeImportJob.metadata.importPreflight.importableCount || 0) : 0
+        if (reviewed > 0)
+            return "Importing " + reviewed + (reviewed === 1 ? " file" : " files")
         return activeImportJob.displayLabel && activeImportJob.displayLabel.length > 0
                 ? "Importing " + activeImportJob.displayLabel
                 : "Importing media"
     }
 
     function importActivityProgress() {
-        if (!hasActiveImportJobs())
+        if (!activeImportJob.jobId)
             return -1
         const status = activeImportJob.status ? String(activeImportJob.status) : ""
         const raw = activeImportJob.progress !== undefined ? Number(activeImportJob.progress) : 0
         if (status === "Queued")
-            return 0.08
+            return -1
+        if (status === "Paused")
+            return Math.max(0, Math.min(1, raw / 100.0))
         if (raw > 0)
-            return Math.max(0.05, Math.min(1, raw / 100.0))
+            return Math.max(0, Math.min(1, raw / 100.0))
         return -1
     }
 
@@ -685,6 +1054,17 @@ Rectangle {
         return "Verified backup · " + verifiedCount + " copies · " + method + " · " + destination
     }
 
+    function importBackupReceiptSummaryText() {
+        const summary = importSummaryMetadata()
+        if (!summary.backupEnabled)
+            return "Originals backup · Off"
+        const verifiedCount = Number(summary.backedUpCount || 0) + Number(summary.reusedBackupCount || 0)
+        const destination = String(summary.backupDestination || summary.backupDestinationPath || "")
+        return "Verified backup · " + verifiedCount + (verifiedCount === 1 ? " copy" : " copies") +
+               " · " + String(summary.verificationAlgorithm || "SHA-256").toUpperCase() +
+               " · " + (root.fileNameForPath(destination) || "Configured")
+    }
+
     function importCompletionSummaryText() {
         const summary = importSummaryMetadata()
         const status = activeImportJob.status ? String(activeImportJob.status) : ""
@@ -705,12 +1085,16 @@ Rectangle {
             return "Pausing at a safe file boundary…"
         if (status === "Canceling")
             return "Stopping after the current safe file boundary…"
+        if (status === "Running") {
+            const percent = Number(activeImportJob.progress || 0)
+            return "Import in progress" + (percent > 0 ? " · " + percent + "%" : "")
+        }
         return root.importJobStatus()
     }
 
     function importWorkflowPolishSignature() {
         const hasJob = root.hasActiveImportJobs()
-        return "import-workflow-polish:v1" +
+        return "import-workflow-polish:v3" +
                "|source:" + (root.hasSource ? "selected" : "none") +
                "|folder:" + (root.currentFolderPath.length > 0 ? "selected" : "none") +
                "|visible:" + String(root.filteredFileCount) +
@@ -723,6 +1107,8 @@ Rectangle {
                "|filter:" + root.mediaQuickFilter +
                "|destination:" + (root.importProjectChooserOpen ? "open" : "closed") +
                "|can-import-selection:" + String(root.canImportSelection) +
+               "|persistent-primary:" + String(root.canActivatePersistentImport) +
+               "|primary-disabled-reason:" + root.persistentImportDisabledReason() +
                "|can-import-folder:" + String(root.canImportFolder) +
                "|progress:" + (hasJob ? "active" : "idle") +
                "|activity-title:" + (hasJob ? root.importActivityTitle() : "none") +
@@ -771,6 +1157,9 @@ Rectangle {
         if (importProjectChooserOpen)
             refreshImportPreflight()
     }
+
+    onFilenameQueryChanged: selectionAnchorPath = ""
+    onMediaQuickFilterChanged: selectionAnchorPath = ""
 
     onWorkflowProfileChanged: {
         if (workflowProfile === "personal") {
@@ -822,6 +1211,9 @@ Rectangle {
                     return
             }
 
+            if (catalogAssets.inspectImportDrop([root.sourceRootUrl]).folderPath)
+                return
+
             root.sourceRootPath = ""
             root.sourceRootUrl = ""
             root.sourceLabel = ""
@@ -866,7 +1258,7 @@ Rectangle {
 
     FolderListModel {
         id: directoryModel
-        folder: root.currentFolderUrl
+        folder: root.currentFolderUrl.length > 0 ? root.currentFolderUrl : "file:///__looksy_no_import_source__"
         showDirs: true
         showFiles: false
         showDotAndDotDot: false
@@ -876,7 +1268,7 @@ Rectangle {
 
     FolderListModel {
         id: fileModel
-        folder: root.currentFolderUrl
+        folder: root.currentFolderUrl.length > 0 ? root.currentFolderUrl : "file:///__looksy_no_import_source__"
         showDirs: false
         showFiles: true
         showDotAndDotDot: false
@@ -885,69 +1277,620 @@ Rectangle {
         nameFilters: catalogAssets.importFileNameFilters
     }
 
+    AppDialog {
+        id: mediaPreviewDialog
+        objectName: "importMediaPreviewDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(popupAvailableWidth, theme.scaled(1120))
+        height: Math.min(popupAvailableHeight, theme.scaled(840))
+        title: root.fileNameForPath(root.previewCurrentPath)
+        onClosed: {
+            root.previewIndex = -1
+            root.previewPaths = []
+            if (!root.importProjectChooserOpen) {
+                const card = mediaGrid.itemAtIndex(mediaGrid.currentIndex)
+                if (card) card.forceActiveFocus()
+            }
+        }
+        contentItem: ColumnLayout {
+            spacing: theme.space12
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.space8
+                ImportDialogButton {
+                    objectName: "importPreviewFitButton"
+                    text: "Fit"
+                    compact: true
+                    embedded: true
+                    active: root.previewZoom === 0
+                    onClicked: root.setPreviewZoom(0)
+                }
+                ImportDialogButton {
+                    objectName: "importPreviewActualSizeButton"
+                    text: "100%"
+                    compact: true
+                    embedded: true
+                    active: root.previewZoom === 1
+                    onClicked: root.setPreviewZoom(1)
+                }
+                ImportDialogButton {
+                    text: "−"
+                    accessibleName: "Zoom out"
+                    compact: true
+                    embedded: true
+                    onClicked: root.setPreviewZoom((root.previewZoom || previewFlick.fitScale) / 1.5)
+                }
+                ImportDialogButton {
+                    text: "+"
+                    accessibleName: "Zoom in"
+                    compact: true
+                    embedded: true
+                    onClicked: root.setPreviewZoom((root.previewZoom || previewFlick.fitScale) * 1.5)
+                }
+                Item { Layout.fillWidth: true }
+                Label {
+                    text: root.previewZoom === 0 ? "Fit to window" : Math.round(root.previewZoom * 100) + "% · Drag to pan"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
+                }
+            }
+            Flickable {
+                id: previewFlick
+                objectName: "importPreviewPanSurface"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                readonly property real nativeWidth: Math.max(1, largePreviewImage.implicitWidth)
+                readonly property real nativeHeight: Math.max(1, largePreviewImage.implicitHeight)
+                readonly property real fitScale: Math.min(width * Screen.devicePixelRatio / nativeWidth, height * Screen.devicePixelRatio / nativeHeight)
+                contentWidth: Math.max(width, largePreviewImage.width)
+                contentHeight: Math.max(height, largePreviewImage.height)
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentWidth > width + 1 || contentHeight > height + 1
+                clip: true
+                ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                Rectangle { width: previewFlick.contentWidth; height: previewFlick.contentHeight; color: theme.mediaCanvas }
+                Image {
+                    id: largePreviewImage
+                    objectName: "importLargePreviewImage"
+                    x: Math.max(0, (previewFlick.width - width) / 2)
+                    y: Math.max(0, (previewFlick.height - height) / 2)
+                    width: previewFlick.nativeWidth / Screen.devicePixelRatio * (root.previewZoom || previewFlick.fitScale)
+                    height: previewFlick.nativeHeight / Screen.devicePixelRatio * (root.previewZoom || previewFlick.fitScale)
+                    source: mediaPreviewDialog.opened && !root.isVideoFile(root.previewCurrentPath)
+                            ? catalogAssets.originalPreviewSource(root.previewCurrentPath) : ""
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    cache: false
+                    visible: status === Image.Ready
+                }
+                OpticalActivityIndicator {
+                    x: Math.max(0, previewFlick.width - width - theme.space14)
+                    y: Math.max(0, previewFlick.height - height - theme.space14)
+                    width: theme.scaled(18)
+                    height: width
+                    active: largePreviewImage.status === Image.Loading
+                    visible: active
+                }
+                Label {
+                    x: 0; y: Math.max(0, (previewFlick.height - height) / 2)
+                    width: previewFlick.width
+                    horizontalAlignment: Text.AlignHCenter
+                    text: root.isVideoFile(root.previewCurrentPath) ? "Video file"
+                          : largePreviewImage.status === Image.Loading ? "Loading preview…" : "Preview unavailable"
+                    visible: largePreviewImage.status !== Image.Ready && largePreviewImage.status !== Image.Loading
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeBody
+                    wrapMode: Text.WordWrap
+                }
+            }
+            Label {
+                objectName: "importPreviewMetadata"
+                Layout.fillWidth: true
+                text: [root.previewFileDetails.format || "", root.previewFileDetails.width > 0 ? root.previewFileDetails.width + " × " + root.previewFileDetails.height : "", root.previewFileDetails.sizeText || ""].filter(function(value) { return value.length > 0 }).join(" · ")
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    text: (root.previewIndex + 1) + " / " + root.previewPaths.length
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                }
+                ImportDialogButton {
+                    visible: root.isVideoFile(root.previewCurrentPath)
+                    text: "Open video"
+                    compact: true
+                    onClicked: Qt.openUrlExternally(root.fileUrlForPath(root.previewCurrentPath))
+                }
+                ImportDialogButton {
+                    objectName: "importPreviewSelectionButton"
+                    text: root.previewCurrentSelected ? "Deselect" : "Select"
+                    active: root.previewCurrentSelected
+                    compact: true
+                    onClicked: root.toggleSelection(root.previewCurrentPath)
+                }
+            }
+        }
+        footer: Item {
+            implicitHeight: previewFooter.implicitHeight + theme.popupPadding * 2
+            RowLayout {
+                id: previewFooter
+                anchors.fill: parent
+                anchors.margins: theme.popupPadding
+                spacing: theme.space8
+                ImportDialogButton {
+                    objectName: "importPreviewPreviousButton"
+                    text: "Previous"
+                    iconName: "chevron-left"
+                    compact: true
+                    enabled: root.previewIndex > 0
+                    onClicked: root.previewIndex -= 1
+                }
+                ImportDialogButton {
+                    objectName: "importPreviewNextButton"
+                    text: "Next"
+                    compact: true
+                    enabled: root.previewIndex + 1 < root.previewPaths.length
+                    onClicked: root.previewIndex += 1
+                }
+                Item { Layout.fillWidth: true }
+                ImportDialogButton {
+                    objectName: "importPreviewCloseButton"
+                    text: "Done"
+                    tone: "primary"
+                    compact: true
+                    onClicked: mediaPreviewDialog.close()
+                }
+            }
+        }
+        Shortcut {
+            sequences: ["Left"]
+            enabled: mediaPreviewDialog.opened && root.previewIndex > 0
+            onActivated: root.previewIndex -= 1
+        }
+        Shortcut {
+            sequences: ["Right"]
+            enabled: mediaPreviewDialog.opened && root.previewIndex + 1 < root.previewPaths.length
+            onActivated: root.previewIndex += 1
+        }
+    }
+
+    AppDialog {
+        id: sourceDetailsDialog
+        objectName: "importSourceDetailsDialog"
+        property Item opener: null
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(popupAvailableWidth, theme.scaled(680))
+        title: "Folder details"
+        onClosed: if (opener) opener.forceActiveFocus(Qt.OtherFocusReason)
+        contentItem: ColumnLayout {
+            spacing: theme.space12
+            BodyLabel {
+                objectName: "importSourceFullPath"
+                Layout.fillWidth: true
+                text: root.currentFolderPath
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
+                font.pixelSize: theme.typeCaption
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ActionButton {
+                    objectName: "importCopyFolderDetailsPathButton"
+                    text: "Copy path"
+                    iconName: "copy"
+                    onClicked: appShell.copyTextToClipboard(root.currentFolderPath)
+                }
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    objectName: "importCloseSourceDetailsButton"
+                    text: "Close"
+                    onClicked: sourceDetailsDialog.close()
+                }
+            }
+        }
+    }
+
+    AppDialog {
+        id: importStorageDialog
+        objectName: "importStorageDialog"
+        property bool showLocations: false
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(popupAvailableWidth, theme.scaled(480))
+        title: "Import storage"
+        onOpened: showLocations = false
+        contentItem: ColumnLayout {
+            spacing: theme.space16
+            RowLayout {
+                Layout.fillWidth: true
+                ReviewLocation {
+                    caption: "Photo Library"
+                    showPath: false
+                    path: appShell.photoLibraryLocation
+                    summary: root.fileNameForPath(path) === "managed" ? "Looksy Library" : root.fileNameForPath(path)
+                }
+                ImportDialogButton {
+                    text: "Change…"
+                    compact: true
+                    enabled: !appShell.photoLibraryMigrationRunning && !root.hasActiveImportJobs()
+                    tooltipText: "Move the library with verification. The previous copy is retained."
+                    onClicked: root.chooseImportStorage(false)
+                }
+            }
+            BodyLabel {
+                Layout.fillWidth: true
+                visible: importStorageDialog.showLocations
+                text: appShell.photoLibraryLocation
+                font.pixelSize: theme.typeCaption
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ReviewLocation {
+                    caption: "Originals backup"
+                    showPath: false
+                    path: appShell.originalsBackupLocation
+                    summary: appShell.originalsBackupEnabled ? root.fileNameForPath(path) : "Off"
+                }
+                ImportDialogButton {
+                    text: appShell.originalsBackupEnabled ? "Change…" : "Set up…"
+                    compact: true
+                    enabled: !appShell.photoLibraryMigrationRunning && !root.hasActiveImportJobs()
+                    onClicked: root.chooseImportStorage(true)
+                }
+                ImportDialogButton {
+                    text: "Turn off"
+                    compact: true
+                    visible: appShell.originalsBackupEnabled
+                    enabled: !root.hasActiveImportJobs()
+                    onClicked: { appShell.disableOriginalsBackup(); root.storageFeedback = appShell.storageConfigurationStatus }
+                }
+            }
+            BodyLabel {
+                Layout.fillWidth: true
+                visible: importStorageDialog.showLocations && appShell.originalsBackupEnabled
+                text: appShell.originalsBackupLocation
+                font.pixelSize: theme.typeCaption
+            }
+            BodyLabel {
+                Layout.fillWidth: true
+                text: appShell.photoLibraryMigrationRunning ? appShell.storageConfigurationStatus : root.storageFeedback
+                visible: text.length > 0
+                font.pixelSize: theme.typeCaption
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ImportDialogButton {
+                    text: importStorageDialog.showLocations ? "Hide locations" : "Show locations"
+                    compact: true
+                    onClicked: importStorageDialog.showLocations = !importStorageDialog.showLocations
+                }
+                Item { Layout.fillWidth: true }
+                ImportDialogButton {
+                    objectName: "importStorageDoneButton"
+                    text: "Done"
+                    tone: "primary"
+                    onClicked: importStorageDialog.close()
+                }
+            }
+        }
+    }
+
+    AppDialog {
+        id: duplicateReviewDialog
+        objectName: "importDuplicateReviewDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(popupAvailableWidth, theme.scaled(1020))
+        height: Math.min(popupAvailableHeight, theme.scaled(680))
+        title: "Existing file matches"
+        contentItem: ColumnLayout {
+            spacing: theme.space12
+            Label {
+                Layout.fillWidth: true
+                text: "Matching filenames. Compare before replacing; file contents may differ."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: theme.space12
+                Repeater {
+                    model: ["Incoming", "Existing"]
+                    delegate: ColumnLayout {
+                        id: comparison
+                        required property string modelData
+                        readonly property string filePath: modelData === "Incoming" ? root.duplicateReviewMatch.sourcePath || "" : root.duplicateReviewMatch.existingPath || ""
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Label { text: comparison.modelData; font.family: theme.fontUi; font.pixelSize: theme.typeCaption; color: theme.textStrong }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            color: theme.mediaCanvas
+                            Image {
+                                objectName: comparison.modelData === "Incoming" ? "importDuplicateIncomingImage" : "importDuplicateExistingImage"
+                                id: duplicateImage
+                                anchors.fill: parent
+                                source: duplicateReviewDialog.opened && !root.duplicateReviewMatch.isVideo ? catalogAssets.originalPreviewSource(comparison.filePath) : ""
+                                fillMode: Image.PreserveAspectFit
+                                asynchronous: true
+                            }
+                            Label {
+                                anchors.centerIn: parent
+                                visible: !root.duplicateReviewMatch.isVideo && duplicateImage.status === Image.Error
+                                text: duplicateImage.status === Image.Loading ? "Loading preview…" : "Preview unavailable"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                            }
+                            OpticalActivityIndicator {
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                anchors.margins: theme.space14
+                                width: theme.scaled(18)
+                                height: width
+                                active: duplicateImage.status === Image.Loading
+                                visible: active
+                            }
+                            ImportDialogButton {
+                                anchors.centerIn: parent
+                                visible: !!root.duplicateReviewMatch.isVideo
+                                text: "Open video"
+                                compact: true
+                                onClicked: Qt.openUrlExternally(root.fileUrlForPath(comparison.filePath))
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            id: comparisonFilename
+                            text: root.fileNameForPath(comparison.filePath)
+                            Accessible.description: comparison.filePath
+                            HoverHandler { id: comparisonNameHover }
+                            AppToolTip { targetItem: comparisonFilename; visible: comparisonNameHover.hovered; text: comparison.filePath }
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
+                            color: theme.textMuted
+                            wrapMode: Text.WrapAnywhere
+                        }
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ImportDialogButton { text: "Previous"; compact: true; enabled: root.duplicateReviewIndex > 0; onClicked: root.duplicateReviewIndex -= 1 }
+                ImportDialogButton { text: "Next"; compact: true; enabled: root.duplicateReviewIndex + 1 < root.duplicateReviewMatches.length; onClicked: root.duplicateReviewIndex += 1 }
+                Label {
+                    Layout.fillWidth: true
+                    text: (root.duplicateReviewIndex + 1) + " of " + root.duplicateReviewMatches.length + (root.importPreflight.duplicateCount > root.duplicateReviewMatches.length ? " shown" : "")
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
+                }
+                ImportDialogButton { objectName: "importDuplicateKeepButton"; text: "Skip matches"; active: root.duplicatePolicy === "skip"; compact: true; onClicked: { root.duplicatePolicy = "skip"; duplicateReviewDialog.close() } }
+                ImportDialogButton { objectName: "importDuplicateReplaceButtonInDialog"; text: "Replace matches"; active: root.duplicatePolicy === "replace"; compact: true; onClicked: { root.workflowProfile = "studio"; root.duplicatePolicy = "replace"; duplicateReviewDialog.close() } }
+                ImportDialogButton { objectName: "importDuplicateDoneButton"; text: "Done"; compact: true; onClicked: duplicateReviewDialog.close() }
+            }
+        }
+    }
+
+    DropArea {
+        id: importDropArea
+        objectName: "importDropArea"
+        anchors.fill: parent
+        enabled: !catalogAssets.busy && !root.importProjectChooserOpen && !mediaPreviewDialog.opened
+        onEntered: function(drag) { drag.accepted = drag.hasUrls }
+        onDropped: function(drop) { drop.accepted = root.stageDroppedUrls(drop.urls) }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        z: 10
+        visible: importDropArea.containsDrag
+        color: theme.alpha(theme.ink950, 0.94)
+        border.width: theme.focusBorderWidth
+        border.color: theme.focusRing
+        radius: theme.radius4
+        Column {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - theme.space24, theme.scaled(420))
+            spacing: theme.space12
+            Label {
+                width: parent.width
+                text: "Drop media to review"
+                horizontalAlignment: Text.AlignHCenter
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: theme.typePageTitle
+            }
+            Label {
+                width: parent.width
+                text: "Drop individual files or one folder. Import starts only after you review and confirm."
+                horizontalAlignment: Text.AlignHCenter
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
-        spacing: theme.space12
+        spacing: root.compactImportDensity ? theme.space6 : theme.space12
 
         RowLayout {
+            id: importWorkspacePanels
+            objectName: "importWorkspacePanels"
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            // Keep the panels inside the space left above the persistent footer.
+            // A fill-height preference can otherwise let tall source content
+            // compete with the footer when text is enlarged.
+            Layout.fillHeight: false
+            Layout.preferredHeight: Math.max(0, root.height - importPersistentActionBar.implicitHeight -
+                (root.compactImportDensity ? theme.space6 : theme.space12))
+            Layout.maximumHeight: Math.max(0, root.height - importPersistentActionBar.implicitHeight -
+                (root.compactImportDensity ? theme.space6 : theme.space12))
+            Layout.minimumHeight: 0
             spacing: theme.space12
 
             BrandPanel {
                 objectName: "importSourcePanel"
                 readonly property string visibilityRole: "always-visible|source-list-folder-nav-folder-list-refresh"
-                visible: !root.importProjectChooserOpen || root.width >= theme.scaled(1120)
-                Layout.preferredWidth: root.width < theme.scaled(1120)
-                                      ? theme.scaled(208)
-                                      : Math.min(theme.scaled(320), Math.max(theme.scaled(240), root.width * 0.2))
-                Layout.minimumWidth: theme.scaled(192)
+                visible: !root.importProjectChooserOpen
+                Layout.preferredWidth: theme.scaled(208)
+                Layout.minimumWidth: theme.scaled(176)
+                Layout.minimumHeight: 0
                 Layout.fillHeight: true
+                clip: true
                 title: "Sources"
                 subtitle: ""
                 accent: theme.accentCool400
+                headerVisible: false
+                bodyMargin: theme.panelPadding
+                bodySpacing: theme.space8
+
+                Flickable {
+                    id: importSourceScroll
+                    objectName: "importSourceScrollArea"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 0
+                    clip: true
+                    contentWidth: width
+                    contentHeight: importSourceContents.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                    ColumnLayout {
+                        id: importSourceContents
+                        width: importSourceScroll.width
+                        spacing: root.compactImportDensity ? theme.space4 : theme.space8
 
             RowLayout {
                 Layout.fillWidth: true
                 spacing: theme.space6
 
-                ActionButton {
-                    text: "Files"
-                    iconName: "media"
-                    compact: true
-                    tooltipText: "Choose one or many individual media files"
-                    onClicked: root.browseForFiles()
+                Label {
+                    Layout.fillWidth: true
+                    text: "Sources"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                    font.weight: Font.DemiBold
                 }
-
-                ActionButton {
-                    text: "Folder"
-                    iconName: "folder"
-                    compact: true
-                    tooltipText: "Choose any local folder or connected volume"
-                    onClicked: root.browseForSource()
-                }
-
-                Item { Layout.fillWidth: true }
 
                 ActionButton {
                     showText: false
-                    iconName: "source"
+                    iconName: "refresh"
+                    compact: true
+                    embedded: true
                     tooltipText: "Refresh sources"
                     enabled: !catalogAssets.busy
                     onClicked: catalogAssets.refreshImportSources(true)
                 }
             }
 
+            ActionButton {
+                Layout.fillWidth: true
+                visible: false
+                text: "Choose folder…"
+                iconName: "folder"
+                compact: true
+                tooltipText: "Browse a local folder or connected volume"
+                onClicked: root.browseForSource()
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                visible: false
+                text: "Choose files…"
+                iconName: "media"
+                compact: true
+                embedded: true
+                tooltipText: root.supportedImportTypesText()
+                onClicked: root.browseForFiles()
+            }
+
+            SplitButton {
+                Layout.fillWidth: true
+                // The central no-source state owns first-run folder/file
+                // choices. Once a source is open, keep replacement choices
+                // here and let the empty state offer files only.
+                visible: root.hasSource
+                text: "Choose folder…"
+                iconName: "folder"
+                menuTooltipText: "Choose a source folder or individual files"
+                menuItems: [{key: "files", label: "Choose files…", icon: "media"}]
+                onClicked: root.browseForSource()
+                onMenuItemTriggered: function(key) { if (key === "files") root.browseForFiles() }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: theme.hairlineWidth
+                color: theme.alpha(theme.lineSoft, 0.3)
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.space6
+            ToneComboBox {
+                objectName: "importSourceBrowserMode"
+                Layout.fillWidth: true
+                accessibleLabel: "Import source list"
+                model: ["Locations", "Recent", "Favorites"]
+                currentIndex: root.sourceBrowserMode === "recent" ? 1 : root.sourceBrowserMode === "favorites" ? 2 : 0
+                onActivated: function(index) { root.sourceBrowserMode = ["locations", "recent", "favorites"][index] }
+            }
+            ActionButton {
+                objectName: "importFavoriteSourceButton"
+                text: root.savedFavoriteSources.indexOf(root.sourceRootPath) >= 0 ? "Remove favorite" : "Favorite this source"
+                showText: false
+                iconName: "star"
+                active: root.savedFavoriteSources.indexOf(root.sourceRootPath) >= 0
+                tooltipText: text
+                embedded: true
+                compact: true
+                enabled: root.hasSource
+                onClicked: root.toggleSourceFavorite()
+            }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.sourceBrowserMode !== "locations" && root.sourceBrowserEntries.length === 0
+                text: root.sourceBrowserMode === "favorites" ? "Favorite a source to keep it here." : "Sources you open will appear here."
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
+                color: theme.textMuted
+                wrapMode: Text.WordWrap
+            }
             ListView {
                 id: sourceListView
                 objectName: "importSourceList"
                 readonly property string visibilityRole: "always-visible|mounted-sources-select"
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(contentHeight, 250)
+                Layout.minimumHeight: 0
+                Layout.alignment: Qt.AlignTop
+                Layout.preferredHeight: Math.min(contentHeight, root.compactSourceControls ? Math.max(theme.controlHeight, root.height * (root.compactImportDensity ? 0.1 : 0.16)) : Math.max(theme.scaled(184), root.height * 0.4))
                 Layout.fillHeight: false
                 clip: true
                 spacing: theme.space4
-                model: catalogAssets.importSources
+                model: root.sourceBrowserEntries
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -967,7 +1910,7 @@ Rectangle {
                         sourceUrl: String(sourceDelegate.modelData.url || "")
                         selected: root.sourceRootPath === path
                         onActivated: function(path, sourceUrl, label) {
-                            root.openSource(path, sourceUrl, label)
+                            root.openSavedSource(path)
                         }
                     }
                 }
@@ -984,31 +1927,29 @@ Rectangle {
             }
 
             Label {
-                visible: root.hasSource
+                visible: root.hasSource && !root.sourceRootIsFileSelection
                 Layout.fillWidth: true
-                text: "FOLDERS"
-                color: theme.textFaint
-                font.family: theme.fontMono
-                font.pixelSize: theme.typeMicro
+                text: "Folders" + (directoryModel.count > 0 ? "  ·  " + directoryModel.count : "")
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
                 font.weight: Font.DemiBold
             }
 
             Rectangle {
                 objectName: "importFolderNavigation"
                 readonly property string visibilityRole: "contextual|up-current-folder-source-folder-count"
-                visible: root.hasSource
+                visible: root.hasSource && !root.sourceRootIsFileSelection
                 Layout.fillWidth: true
-                implicitHeight: folderNavRow.implicitHeight + (theme.space8 * 2)
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.18)
-                border.width: theme.hairlineWidth
-                border.color: theme.alpha(theme.lineSoft, 0.12)
+                implicitHeight: folderNavRow.implicitHeight
+                color: "transparent"
+                border.width: 0
 
                 RowLayout {
                     id: folderNavRow
                     anchors.fill: parent
-                    anchors.margins: theme.space8
-                    spacing: theme.space8
+                    anchors.margins: 0
+                    spacing: theme.space6
 
                     ActionButton {
                         iconName: "chevron-left"
@@ -1020,50 +1961,17 @@ Rectangle {
                         onClicked: root.goUp()
                     }
 
-                    ColumnLayout {
+                    BodyLabel {
+                        objectName: "importCurrentFolderLabel"
                         Layout.fillWidth: true
-                        spacing: theme.space2
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.currentFolderName
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeCaption
-                            font.weight: Font.Medium
-                            fontSizeMode: Text.HorizontalFit
-                            minimumPixelSize: theme.typeMicro
-                            elide: Text.ElideNone
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.sourceLabel
-                            color: theme.textFaint
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeMicro
-                            fontSizeMode: Text.HorizontalFit
-                            minimumPixelSize: theme.typeMicro
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    Rectangle {
-                        implicitWidth: folderCountLabel.implicitWidth + (theme.space8 * 2)
-                        implicitHeight: folderCountLabel.implicitHeight + theme.space6
-                        radius: theme.radiusChip
-                        color: theme.alpha(theme.ink800, 0.92)
-                        border.width: theme.hairlineWidth
-                        border.color: theme.alpha(theme.lineSoft, 0.16)
-
-                        Label {
-                            id: folderCountLabel
-                            anchors.centerIn: parent
-                            text: String(directoryModel.count)
-                            color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeMicro
-                        }
+                        text: root.currentFolderName
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: Font.Medium
+                        fontSizeMode: Text.FixedSize
+                        elide: Text.ElideNone
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     }
                 }
             }
@@ -1072,9 +1980,13 @@ Rectangle {
                 id: folderListView
                 objectName: "importFolderList"
                 readonly property string visibilityRole: "contextual|folder-browse-keyboard"
-                visible: root.hasSource
+                visible: root.hasSource && !root.sourceRootIsFileSelection
                 Layout.fillWidth: true
-                Layout.fillHeight: true
+                Layout.fillHeight: false
+                Layout.minimumHeight: 0
+                Layout.preferredHeight: Math.min(contentHeight, root.compactSourceControls
+                    ? Math.max(theme.controlHeight, root.height * 0.12)
+                    : Math.max(theme.scaled(120), root.height * 0.2))
                 clip: true
                 spacing: theme.space4
                 model: directoryModel
@@ -1100,167 +2012,181 @@ Rectangle {
                 }
             }
 
+            Item {
+                Layout.fillHeight: false
+                visible: !root.hasSource || root.sourceRootIsFileSelection
+            }
+
+                    }
+                }
+
         }
 
             Rectangle {
                 objectName: "importMainPanel"
                 readonly property string surfaceContract: "import-main-panel:v1|header:always|media-grid:always|filter:always|selection-actions:always|empty-states:contextual|primary-import:always|no-elide:true|no-overlap:true"
-                visible: !root.importProjectChooserOpen || root.width >= theme.scaled(1120)
+                visible: !root.importProjectChooserOpen
                 Layout.fillWidth: true
-            Layout.fillHeight: true
-            radius: theme.radiusSurface
-            color: theme.ink850
-            border.width: theme.hairlineWidth
-            border.color: theme.alpha(theme.lineSoft, 0.18)
-
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: theme.alpha(theme.accentCool500, 0.05) }
-                GradientStop { position: 0.14; color: theme.alpha(theme.ink850, 0.98) }
-                GradientStop { position: 1.0; color: theme.ink900 }
-            }
+                Layout.fillHeight: true
+                Layout.minimumHeight: 0
+                radius: 0
+                color: "transparent"
+                border.width: 0
+                clip: true
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: root.width < theme.scaled(1120) ? theme.panelPadding : theme.panelPaddingStandard
-                spacing: theme.space12
+                anchors.margins: 0
+                spacing: root.compactImportDensity ? theme.space4 : theme.space10
 
                 Rectangle {
                     objectName: "importHeaderBar"
-                    readonly property string visibilityRole: "always-visible|source-path-counts-select-visible-clear-import"
+                    readonly property string visibilityRole: "always-visible|title-selected-count-select-visible-clear-import"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(theme.scaled(96), importHeaderContent.implicitHeight + theme.space20)
-                    radius: theme.radiusSurface
-                    color: theme.alpha(theme.ink900, 0.92)
-                    border.width: theme.hairlineWidth
-                    border.color: theme.alpha(theme.lineSoft, 0.3)
+                    Layout.preferredHeight: importHeaderContent.implicitHeight + (root.compactImportDensity ? theme.space8 : theme.space16)
+                    radius: theme.radius4
+                    color: "transparent"
+                    border.width: 0
 
                     GridLayout {
                         id: importHeaderContent
                         anchors.fill: parent
-                        anchors.margins: theme.space16
-                        columns: root.width < theme.scaled(1120) ? 1 : 2
+                        anchors.margins: theme.space8
+                        columns: width < theme.scaled(280) ? 1 : 2
                         columnSpacing: theme.space12
-                        rowSpacing: theme.space8
+                        rowSpacing: root.compactImportDensity ? theme.space4 : theme.space8
 
-                        ColumnLayout {
+                        RowLayout {
                             Layout.fillWidth: true
                             spacing: theme.space4
 
                             Label {
                                 Layout.fillWidth: true
-                                text: root.hasSource ? root.sourceLabel : "Pick a source"
+                                text: root.hasSource ? "Select media" : "Import"
                                 color: theme.textStrong
                                 font.family: theme.fontDisplay
-                                font.pixelSize: theme.typePageTitle
+                                font.pixelSize: theme.typeTitle
                                 font.weight: Font.DemiBold
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 maximumLineCount: 1
                                 elide: Text.ElideNone
                             }
 
-                            Label {
-                                Layout.fillWidth: true
-                                text: root.currentFolderPath.length > 0 ? root.currentFolderPath
-                                      : root.pendingFolderPath.length > 0 ? "Opening folder…"
-                                      : root.hasSource ? "Choose a folder in this source"
-                                      : "Choose a mounted drive or folder"
-                                color: root.currentFolderPath.length > 0 ? theme.accentWarm300 : theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: theme.typeMicro
-                                wrapMode: Text.WrapAnywhere
-                                maximumLineCount: root.width < theme.scaled(1120) ? 2 : 1
-                                elide: Text.ElideNone
-                            }
-
                             RowLayout {
-                                Layout.fillWidth: true
-                                spacing: theme.space8
+                                Layout.fillWidth: false
+                                spacing: theme.space10
 
-                                StatusChip {
-                                    objectName: "importSourceConfirmationChip"
-                                    text: root.sourceConfirmationText()
-                                    iconName: root.hasSource ? "check" : "source"
-                                    tone: root.hasSource ? "success" : "neutral"
+                                ActionButton {
+                                    id: sourceDetailsButton
+                                    objectName: "importSourceDetailsButton"
+                                    visible: root.currentFolderPath.length > 0
+                                    text: "Source details"
+                                    showText: false
+                                    iconName: "folder"
+                                    embedded: true
                                     compact: true
-                                    minimumReadableWidth: 104
-                                    maximumReadableWidth: 154
-                                    tooltipText: root.currentFolderPath.length > 0
-                                                 ? root.currentFolderPath
-                                                 : "Choose an import source from the left rail."
+                                    tooltipText: root.currentFolderPath
+                                    onClicked: { sourceDetailsDialog.opener = sourceDetailsButton; sourceDetailsDialog.open() }
+                                }
+                                Label {
+                                    objectName: "importSourceConfirmationChip"
+                                    visible: false
+                                    text: root.pendingFolderPath.length > 0 ? "Opening…" : root.sourceRootIsFileSelection ? "File selection" : root.hasSource ? "Folder source" : "Local import"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    font.weight: Font.Medium
                                 }
 
-                                StatusChip {
+                                Rectangle {
+                                    Layout.preferredWidth: theme.scaled(3)
+                                    Layout.preferredHeight: theme.scaled(3)
+                                    radius: 2
+                                    color: theme.textFaint
+                                    visible: false
+                                }
+
+                                Label {
                                     objectName: "importSelectionMixChip"
-                                    text: root.selectionMixText()
-                                    iconName: root.selectedFileCount > 0 ? "media" : "grid"
-                                    tone: root.selectedFileCount > 0
-                                          ? (root.selectedPhotoCount > 0 && root.selectedVideoCount > 0 ? "warning" : "accent")
-                                          : "neutral"
-                                    compact: true
-                                    minimumReadableWidth: 104
-                                    maximumReadableWidth: 232
-                                    tooltipText: root.selectedFileCount > 0
-                                                 ? "Selection includes " + root.selectedPhotoCount + " photos and " + root.selectedVideoCount + " videos across " + root.selectedFolderCount + (root.selectedFolderCount === 1 ? " folder." : " folders.")
-                                                 : root.filteredFileCount + " visible files in this folder."
+                                    visible: false
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    text: root.selectionMixText() + " selected"
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    font.weight: root.selectedFileCount > 0 ? Font.DemiBold : Font.Normal
                                 }
                             }
                         }
 
-                        RowLayout {
+                        GridLayout {
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignRight
-                            spacing: theme.space8
-
-                            Item { Layout.fillWidth: true; visible: root.width < theme.scaled(1120) }
+                            columns: 3
+                            columnSpacing: theme.space8
+                            rowSpacing: theme.space8
 
                             ActionButton {
-                                iconName: "plus"
+                                visible: !root.compactSourceControls && root.filteredFileCount > 0
                                 text: "Select all"
+                                embedded: true
                                 compact: true
                                 enabled: root.filteredFileCount > 0
                                 onClicked: root.selectAllVisible()
                             }
 
                             ActionButton {
-                                iconName: "delete"
-                                showText: false
+                                visible: !root.compactSourceControls && root.selectedFileCount > 0
+                                iconName: "close"
+                                text: "Clear"
+                                embedded: true
                                 tooltipText: "Clear selection"
                                 compact: true
                                 enabled: root.selectedFileCount > 0
                                 onClicked: root.clearSelection()
                             }
 
-                            SplitButton {
-                                objectName: "importPrimarySplitButton"
-                                readonly property string visibilityRole: "always-visible|primary-import-one-expansion-options"
-                                text: root.hasActiveImportJobs() ? "Importing" : "Import to Photo Library"
-                                iconName: "media"
-                                tone: "primary"
-                                primaryEnabled: root.canImportSelection
-                                disabledReason: root.hasStagedSelection
-                                                ? "Selected files are not importable right now."
-                                                : "Select media to import."
+                            MenuButton {
+                                objectName: "importHeaderMoreMenuButton"
+                                Layout.columnSpan: 1
+                                Layout.alignment: Qt.AlignRight
+                                readonly property string visibilityRole: "always-visible|secondary-import-and-selection-options"
+                                text: "More"
+                                iconName: "more"
+                                primaryOpensMenu: true
+                                showMenuIndicator: false
+                                secondaryActionMenu: true
+                                menuTooltipText: "More import options"
                                 menuItems: root.importActionMenuItems()
-                                menuTooltipText: "Import options"
-                                onClicked: root.importSelected()
+                                tooltipText: "Review a folder import, use a preset, or change selection."
                                 onMenuItemTriggered: function(key) { root.handleImportMenuAction(key) }
                             }
                         }
                     }
                 }
 
+                Label {
+                    objectName: "importDropFeedback"
+                    Layout.fillWidth: true
+                    visible: root.dropMessage.length > 0 && (!root.compactSourceControls || root.dropMessageIsError)
+                    text: root.dropMessage
+                    color: root.dropMessageIsError ? theme.warning : theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                    wrapMode: Text.WordWrap
+                }
+
                 Rectangle {
                     objectName: "importProgressSummaryCard"
                     readonly property string visibilityRole: "contextual|queued-running-canceling-completed-failed-canceled-summary-actions"
                     Layout.fillWidth: true
-                    visible: !!root.activeImportJob.jobId
+                    visible: !!root.activeImportJob.jobId && root.activeImportJob.jobId !== root.dismissedImportJobId
                     implicitHeight: importProgressSummaryRow.implicitHeight + (theme.space8 * 2)
-                    radius: theme.radius10
-                    color: theme.alpha(theme.ink950, 0.32)
-                    border.width: theme.hairlineWidth
-                    border.color: root.activeImportJob.status === "Failed"
-                                  ? theme.alpha(theme.error, 0.32)
-                                  : theme.alpha(theme.lineSoft, 0.18)
+                    radius: 0
+                    color: "transparent"
+                    border.width: 0
 
                     RowLayout {
                         id: importProgressSummaryRow
@@ -1268,13 +2194,16 @@ Rectangle {
                         anchors.margins: theme.space8
                         spacing: theme.space8
 
-                        StatusChip {
-                            text: root.activeImportJob.status || "Queued"
-                            iconName: root.activeImportJob.status === "Completed" ? "check" : "media"
-                            tone: root.activeImportJob.status === "Completed"
-                                  ? "success"
-                                  : (root.activeImportJob.status === "Failed" ? "warning" : "accent")
-                            compact: true
+                        Item {
+                            Layout.preferredWidth: theme.scaled(18)
+                            Layout.preferredHeight: theme.scaled(18)
+                            OpticalActivityIndicator { anchors.fill: parent; active: visible; visible: root.hasActiveImportJobs() }
+                            AppIcon {
+                                anchors.fill: parent
+                                visible: !root.hasActiveImportJobs()
+                                name: root.activeImportJob.status === "Completed" ? "check" : root.activeImportJob.status === "Failed" ? "error" : "media"
+                                color: root.activeImportJob.status === "Failed" ? theme.error : theme.textMuted
+                            }
                         }
 
                         ColumnLayout {
@@ -1302,13 +2231,21 @@ Rectangle {
                             }
 
                             Label {
+                                id: importBackupReceiptLabel
                                 Layout.fillWidth: true
                                 visible: root.activeImportJob.status === "Completed"
-                                text: root.importBackupReceiptText()
+                                text: root.importBackupReceiptSummaryText()
                                 color: root.importSummaryMetadata().backupEnabled ? theme.success : theme.textFaint
-                                font.family: theme.fontMono
-                                font.pixelSize: theme.typeMicro
-                                wrapMode: Text.WrapAnywhere
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                Accessible.description: root.importBackupReceiptText()
+                                HoverHandler { id: importBackupReceiptHover }
+                                AppToolTip {
+                                    targetItem: importBackupReceiptLabel
+                                    visible: importBackupReceiptHover.hovered
+                                    text: root.importBackupReceiptText()
+                                }
                             }
 
                             Label {
@@ -1321,14 +2258,12 @@ Rectangle {
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             }
 
-                            LooksyLoadingScene {
+                            ProgressStrip {
                                 objectName: "importLoadingScene"
-                                Layout.alignment: Qt.AlignHCenter
-                                Layout.preferredWidth: Math.min(280, parent.width)
-                                visible: root.hasActiveImportJobs()
-                                scene: "import"
-                                compact: true
-                                active: root.hasActiveImportJobs()
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: theme.scaled(4)
+                                visible: root.hasActiveImportJobs() || root.activeImportJob.status === "Paused"
+                                active: visible && root.activeImportJob.status === "Running"
                                 progress: root.importActivityProgress()
                             }
                         }
@@ -1336,7 +2271,7 @@ Rectangle {
                         ActionButton {
                             visible: jobQueue && jobQueue.canPauseJob(root.activeImportJob.jobId || "")
                             text: "Pause"
-                            iconName: "media"
+                            iconName: "pause"
                             compact: true
                             onClicked: jobQueue.pauseJob(root.activeImportJob.jobId)
                         }
@@ -1344,7 +2279,7 @@ Rectangle {
                         ActionButton {
                             visible: jobQueue && jobQueue.canResumeJob(root.activeImportJob.jobId || "")
                             text: "Resume"
-                            iconName: "media"
+                            iconName: "play"
                             compact: true
                             onClicked: jobQueue.resumeJob(root.activeImportJob.jobId)
                         }
@@ -1352,7 +2287,7 @@ Rectangle {
                         ActionButton {
                             visible: jobQueue && jobQueue.canCancelJob(root.activeImportJob.jobId || "")
                             text: "Cancel"
-                            iconName: "delete"
+                            iconName: "close"
                             compact: true
                             onClicked: jobQueue.cancelJob(root.activeImportJob.jobId)
                         }
@@ -1378,6 +2313,15 @@ Rectangle {
                         }
 
                         ActionButton {
+                            objectName: "importDismissSummaryButton"
+                            visible: root.activeImportJob.status === "Completed" || root.activeImportJob.status === "Canceled"
+                            text: "Dismiss"
+                            compact: true
+                            embedded: true
+                            onClicked: root.dismissedImportJobId = root.activeImportJob.jobId
+                        }
+
+                        ActionButton {
                             objectName: "importReviewImportedButton"
                             visible: root.activeImportJob.status === "Completed" &&
                                      root.importCompletedCount(root.importSummaryMetadata()) > 0
@@ -1393,109 +2337,161 @@ Rectangle {
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    spacing: theme.space10
+                    spacing: root.compactImportDensity ? theme.space4 : theme.space10
 
-                    BrandPanel {
+                    Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        title: ""
-                        subtitle: ""
-                        accent: theme.accentCool400
-                        headerVisible: false
 
                         ColumnLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            spacing: theme.space6
+                            anchors.fill: parent
+                            spacing: root.compactImportDensity ? theme.space4 : theme.space8
 
-                            Rectangle {
+                            RowLayout {
                                 objectName: "importMediaFilterBar"
                                 readonly property string visibilityRole: "always-visible|all-photos-videos-selected-filter-summary-reset"
                                 Layout.fillWidth: true
-                                implicitHeight: mediaToolbar.implicitHeight + (theme.space6 * 2)
-                                radius: theme.radius10
-                                color: theme.alpha(theme.ink950, 0.18)
-                                border.width: theme.hairlineWidth
-                                border.color: theme.alpha(theme.lineSoft, 0.12)
+                                spacing: theme.space4
 
-                                ColumnLayout {
-                                    id: mediaToolbar
-                                    anchors.fill: parent
-                                    anchors.margins: theme.space6
-                                    spacing: 0
+                                MediaFilterTab {
+                                    text: "All"
+                                    selected: root.mediaQuickFilter === "all"
+                                    onClicked: root.mediaQuickFilter = "all"
+                                }
 
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: theme.space6
+                                MediaFilterTab {
+                                    text: "Photos"
+                                    selected: root.mediaQuickFilter === "photos"
+                                    onClicked: root.mediaQuickFilter = "photos"
+                                }
 
-                                        FilterChip {
-                                            text: "All"
-                                            accent: theme.accentWarm400
-                                            active: root.mediaQuickFilter === "all"
-                                            onClicked: root.mediaQuickFilter = "all"
-                                        }
+                                MediaFilterTab {
+                                    text: "Videos"
+                                    selected: root.mediaQuickFilter === "videos"
+                                    onClicked: root.mediaQuickFilter = "videos"
+                                }
 
-                                        FilterChip {
-                                            text: "Photos"
-                                            accent: theme.accentCool400
-                                            active: root.mediaQuickFilter === "photos"
-                                            onClicked: root.mediaQuickFilter = "photos"
-                                        }
+                                MediaFilterTab {
+                                    text: "Selected"
+                                    selected: root.mediaQuickFilter === "selected"
+                                    onClicked: root.mediaQuickFilter = "selected"
+                                }
 
-                                        FilterChip {
-                                            text: "Videos"
-                                            accent: theme.warning
-                                            active: root.mediaQuickFilter === "videos"
-                                            onClicked: root.mediaQuickFilter = "videos"
-                                        }
+                                Item { Layout.fillWidth: true }
 
-                                        FilterChip {
-                                            text: "Selected"
-                                            accent: theme.success
-                                            active: root.mediaQuickFilter === "selected"
-                                            onClicked: root.mediaQuickFilter = "selected"
-                                        }
+                                BodyLabel {
+                                    objectName: "importVisibleFileCount"
+                                    text: root.filteredFileEntries.some(function(entry) { return entry.filePaths && entry.filePaths.length > 1 })
+                                          ? root.filteredFileCount + (root.filteredFileCount === 1 ? " capture" : " captures") : root.filteredFileCount + " files"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                }
 
-                                        Item { Layout.fillWidth: true }
+                                ActionButton {
+                                    iconName: "delete"
+                                    showText: false
+                                    tooltipText: "Show all media"
+                                    compact: true
+                                    visible: root.mediaQuickFilter !== "all"
+                                    onClicked: root.mediaQuickFilter = "all"
+                                }
+                            }
 
-                                        Label {
-                                            text: root.mediaFilterLabel() + " · " + root.filteredFileCount + " shown"
-                                            color: theme.textFaint
-                                            font.family: theme.fontMono
-                                            font.pixelSize: theme.typeMicro
-                                        }
-
-                                        ActionButton {
-                                            iconName: "delete"
-                                            showText: false
-                                            tooltipText: "Reset filter"
-                                            compact: true
-                                            visible: root.mediaQuickFilter !== "all"
-                                            onClicked: root.mediaQuickFilter = "all"
-                                        }
-                                    }
+                            GridLayout {
+                                objectName: "importBrowseTools"
+                                Layout.fillWidth: true
+                                columns: root.compactSourceControls ? 3 : 5
+                                columnSpacing: root.compactImportDensity ? theme.space4 : theme.space8
+                                rowSpacing: root.compactImportDensity ? theme.space4 : theme.space6
+                                RowLayout {
+                                Layout.fillWidth: true
+                                Layout.columnSpan: root.compactSourceControls ? 3 : 1
+                                spacing: theme.space6
+                                ToneTextField {
+                                    id: filenameSearch
+                                    objectName: "importFilenameSearch"
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: theme.scaled(120)
+                                    implicitHeight: theme.controlHeightDense
+                                    placeholderText: "Search filenames"
+                                    accessibleLabel: "Search import filenames"
+                                    text: root.filenameQuery
+                                    onTextEdited: root.filenameQuery = text
+                                }
+                                ActionButton {
+                                    text: "Clear search"
+                                    showText: !root.compactSourceControls
+                                    iconName: "close"
+                                    embedded: true
+                                    compact: true
+                                    visible: root.filenameQuery.length > 0
+                                    onClicked: root.filenameQuery = ""
+                                }
+                                }
+                                ActionButton {
+                                    objectName: "importOpenPreviewButton"
+                                    text: "Preview"
+                                    showText: !root.compactSourceControls
+                                    iconName: "image"
+                                    tooltipText: "Large preview · Space"
+                                    compact: true
+                                    embedded: true
+                                    enabled: root.filteredFileCount > 0
+                                    onClicked: root.openPreview(Math.max(0, mediaGrid.currentIndex))
+                                }
+                                ActionButton {
+                                    objectName: "importGroupPairsButton"
+                                    text: "RAW + JPEG"
+                                    tooltipText: "Group matching RAW and JPEG files from the same folder"
+                                    active: importBrowserSettings.groupRawJpeg
+                                    embedded: true
+                                    compact: true
+                                    onClicked: importBrowserSettings.groupRawJpeg = !importBrowserSettings.groupRawJpeg
+                                }
+                                Label {
+                                    visible: root.width >= theme.scaled(1120)
+                                    text: "Size"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                }
+                                ToolValueSlider {
+                                    objectName: "importThumbnailSizeSlider"
+                                    Layout.preferredWidth: theme.scaled(112)
+                                    Layout.minimumWidth: theme.scaled(84)
+                                    label: "Thumbnail size"
+                                    valueText: Math.round(value) + " pixels"
+                                    from: 180
+                                    to: 380
+                                    stepSize: 20
+                                    value: root.thumbnailSize
+                                    onMoved: root.thumbnailSize = value
                                 }
                             }
 
                             Item {
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
+                                Layout.minimumHeight: root.compactImportDensity ? theme.scaled(96) : 0
                                 GridView {
                                     id: mediaGrid
                                     objectName: "importMediaGrid"
                                     readonly property string visibilityRole: "always-visible|media-preview-selection-keyboard"
                                     anchors.fill: parent
                                     clip: true
-                                    property int columns: Math.max(2, Math.floor(width / 210))
-                                    property int gutter: theme.space8
+                                    property int columns: Math.max(1, Math.floor(width / theme.scaled(root.thumbnailSize)))
+                                    property int gutter: theme.space12
                                     readonly property bool compactPreview: root.height < theme.scaled(760)
-                                    readonly property real compactPreviewAspectRatio: compactPreview ? 0.54 : 0.68
+                                    readonly property real compactPreviewAspectRatio: 0.72
                                     readonly property int compactPreviewMinimumHeight: compactPreview ? 110 : 142
-                                    cellWidth: Math.floor((width - ((columns - 1) * gutter)) / columns)
+                                    cellWidth: Math.floor(width / columns)
                                     cellHeight: Math.max(compactPreviewMinimumHeight,
-                                                         (cellWidth - gutter) * compactPreviewAspectRatio) + 48
+                                                         (cellWidth - gutter) * compactPreviewAspectRatio) + 32
                                     boundsBehavior: Flickable.StopAtBounds
                                     model: root.filteredFileEntries
+                                    keyNavigationEnabled: true
+                                    currentIndex: count > 0 ? 0 : -1
 
                                     delegate: FocusScope {
                                         id: importMediaCard
@@ -1505,200 +2501,63 @@ Rectangle {
                                         required property string fileUrl
                                         required property bool isVideo
                                         required property string extension
+                                        required property var filePaths
 
                                         readonly property string delegateFilePath: filePath
                                         readonly property string delegateFileName: fileName
                                         readonly property string delegateFileUrl: fileUrl
                                         readonly property bool delegateIsVideo: isVideo
-                                        readonly property bool selected: !!root.selectedPathsByFile[filePath]
+                                        readonly property bool selected: filePaths.every(function(path) { return !!root.selectedPathsByFile[path] })
+                                        readonly property bool partiallySelected: !selected && filePaths.some(function(path) { return !!root.selectedPathsByFile[path] })
                                         readonly property string delegateExtension: extension
                                         readonly property string delegateFolderLabel: root.pickerFolderLabel(filePath)
                                         objectName: "importMediaCard_" + String(index)
 
                                         width: mediaGrid.cellWidth - mediaGrid.gutter
-                                        height: previewFrame.height + infoColumn.implicitHeight + theme.space6
+                                        height: mediaGrid.cellHeight - mediaGrid.gutter
                                         activeFocusOnTab: true
-                                        scale: selected ? 1.01 : (mediaMouseArea.containsMouse ? 1.008 : 1.0)
-                                        z: selected || mediaMouseArea.containsMouse ? 1 : 0
+                                        z: selected ? 1 : 0
 
-                                        Behavior on scale {
-                                            NumberAnimation { duration: theme.durationFast }
+                                        function navigate(offset, modifiers) {
+                                            const next = Math.max(0, Math.min(root.filteredFileCount - 1, index + offset))
+                                            if (modifiers & Qt.ShiftModifier) {
+                                                if (root.selectionAnchorPath.length === 0)
+                                                    root.selectionAnchorPath = delegateFilePath
+                                                root.selectVisibleEntry(next, modifiers)
+                                            }
+                                            mediaGrid.currentIndex = next
+                                            mediaGrid.positionViewAtIndex(next, GridView.Contain)
+                                            Qt.callLater(function() {
+                                                const card = mediaGrid.itemAtIndex(next)
+                                                if (card) card.forceActiveFocus()
+                                            })
                                         }
+                                        Keys.onReturnPressed: function(event) { root.selectVisibleEntry(index, event.modifiers) }
+                                        Keys.onEnterPressed: function(event) { root.selectVisibleEntry(index, event.modifiers) }
+                                        Keys.onSpacePressed: root.openPreview(index)
+                                        Keys.onLeftPressed: function(event) { navigate(-1, event.modifiers) }
+                                        Keys.onRightPressed: function(event) { navigate(1, event.modifiers) }
+                                        Keys.onUpPressed: function(event) { navigate(-mediaGrid.columns, event.modifiers) }
+                                        Keys.onDownPressed: function(event) { navigate(mediaGrid.columns, event.modifiers) }
 
-                                        Keys.onReturnPressed: root.toggleSelection(delegateFilePath)
-                                        Keys.onEnterPressed: root.toggleSelection(delegateFilePath)
-                                        Keys.onSpacePressed: root.toggleSelection(delegateFilePath)
-
-                                        Rectangle {
-                                            id: previewFrame
-                                            anchors.top: parent.top
-                                            anchors.left: parent.left
-                                            anchors.right: parent.right
-                                            readonly property real cardAspectRatio: mediaGrid.compactPreviewAspectRatio
-                                            height: Math.max(mediaGrid.compactPreviewMinimumHeight, width * cardAspectRatio)
-                                            radius: theme.radius12
-                                            color: selected
-                                                   ? theme.alpha(theme.accentWarm500, 0.12)
-                                                   : (mediaMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.92) : theme.alpha(theme.ink900, 0.84))
-                                            clip: true
-                                            border.width: selected || importMediaCard.activeFocus ? 2 : 1
-                                            border.color: importMediaCard.activeFocus
-                                                          ? theme.alpha(theme.focusRing, 0.92)
-                                                          : selected
-                                                            ? theme.alpha(theme.accentWarm300, 0.9)
-                                                            : (mediaMouseArea.containsMouse ? theme.alpha(theme.lineStrong, 0.34) : theme.alpha(theme.lineSoft, 0.16))
-
-                                            Behavior on color {
-                                                ColorAnimation { duration: theme.durationFast }
-                                            }
-
-                                            Behavior on border.color {
-                                                ColorAnimation { duration: theme.durationFast }
-                                            }
-
-                                            Image {
-                                                id: previewImage
-                                                anchors.fill: parent
-                                                source: delegateIsVideo ? "" : delegateFileUrl
-                                                fillMode: Image.PreserveAspectCrop
-                                                asynchronous: true
-                                                cache: true
-                                                sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
-                                                sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
-                                                visible: !delegateIsVideo && status === Image.Ready
-                                            }
-
-                                            Rectangle {
-                                                anchors.fill: parent
-                                                gradient: Gradient {
-                                                    GradientStop { position: 0.0; color: selected ? theme.alpha(theme.accentWarm400, 0.06) : theme.alpha(theme.accentCool500, 0.03) }
-                                                    GradientStop { position: 1.0; color: theme.alpha(theme.ink950, 0.14) }
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                anchors.fill: parent
-                                                color: theme.alpha(theme.ink950, mediaMouseArea.containsMouse ? 0.06 : (selected ? 0.04 : 0.0))
-                                            }
-
-                                            Rectangle {
-                                                anchors.fill: parent
-                                                visible: importMediaCard.activeFocus
-                                                color: theme.alpha(theme.focusFill, 0.14)
-                                            }
-
-                                            Rectangle {
-                                                anchors.fill: parent
-                                                visible: delegateIsVideo || previewImage.status !== Image.Ready
-                                                color: theme.alpha(theme.ink900, 0.88)
-
-                                                Column {
-                                                    anchors.centerIn: parent
-                                                    spacing: theme.space4
-
-                                                    Label {
-                                                        anchors.horizontalCenter: parent.horizontalCenter
-                                                        text: delegateIsVideo ? "VIDEO" : delegateExtension
-                                                        color: theme.accentWarm300
-                                                        font.family: theme.fontMono
-                                                        font.pixelSize: theme.typeSection
-                                                        font.weight: Font.DemiBold
-                                                    }
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                anchors.top: parent.top
-                                                anchors.right: parent.right
-                                                anchors.margins: theme.space8
-                                                width: 24
-                                                height: 24
-                                                radius: theme.radius6
-                                                color: selected ? theme.accentWarm400 : theme.alpha(theme.ink900, 0.72)
-                                                border.width: theme.hairlineWidth
-                                                border.color: selected
-                                                              ? theme.alpha(theme.accentWarm300, 0.92)
-                                                              : theme.alpha(theme.lineStrong, 0.42)
-
-                                                AppIcon {
-                                                    anchors.centerIn: parent
-                                                    name: selected ? "check" : "plus"
-                                                    color: selected ? theme.ink950 : theme.textMain
-                                                    width: 14
-                                                    height: width
-                                                }
-                                            }
-                                        }
-
-                                        ColumnLayout {
-                                            id: infoColumn
-                                            anchors.top: previewFrame.bottom
-                                            anchors.topMargin: theme.space4
-                                            anchors.left: parent.left
-                                            anchors.right: parent.right
-                                            spacing: theme.space2
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: delegateFileName
-                                                color: theme.textStrong
-                                                font.family: theme.fontUi
-                                                font.pixelSize: theme.typeCaption
-                                                font.weight: Font.Medium
-                                                fontSizeMode: Text.HorizontalFit
-                                                minimumPixelSize: theme.typeMicro
-                                                elide: Text.ElideNone
-                                            }
-
-                                            RowLayout {
-                                                Layout.fillWidth: true
-                                                spacing: theme.space6
-
-                                                Label {
-                                                    text: delegateExtension
-                                                    color: theme.textFaint
-                                                    font.family: theme.fontMono
-                                                    font.pixelSize: theme.typeMicro
-                                                }
-
-                                                Label {
-                                                    id: folderPathLabel
-                                                    Layout.fillWidth: true
-                                                    visible: root.sourceRootIsFileSelection
-                                                    text: importMediaCard.delegateFolderLabel
-                                                    color: theme.textMuted
-                                                    font.family: theme.fontMono
-                                                    font.pixelSize: theme.typeMicro
-                                                    elide: Text.ElideLeft
-                                                    horizontalAlignment: Text.AlignRight
-                                                    HoverHandler { id: folderPathHover }
-                                                    AppToolTip {
-                                                        targetItem: folderPathLabel
-                                                        visible: folderPathHover.hovered
-                                                        text: folderPathLabel.text
-                                                    }
-                                                }
-
-                                                Item { Layout.fillWidth: true }
-
-                                                Label {
-                                                    text: selected ? "Picked" : ""
-                                                    visible: selected
-                                                    color: theme.success
-                                                    font.family: theme.fontUi
-                                                    font.pixelSize: theme.typeMicro
-                                                    font.weight: Font.Medium
-                                                }
-                                            }
-                                        }
-
-                                        MouseArea {
-                                            id: mediaMouseArea
+                                        ImportImageTile {
+                                            objectName: "importMediaTile_" + String(importMediaCard.index)
                                             anchors.fill: parent
-                                            hoverEnabled: true
-                                            onClicked: {
+                                            activeFocusOnTab: false
+                                            Keys.enabled: false
+                                            filePath: importMediaCard.delegateFilePath
+                                            fileName: importMediaCard.delegateFileName
+                                            fileUrl: importMediaCard.delegateFileUrl
+                                            isVideo: importMediaCard.delegateIsVideo
+                                            extension: importMediaCard.delegateExtension
+                                            detailText: ""
+                                            selected: importMediaCard.selected
+                                            partiallySelected: importMediaCard.partiallySelected
+                                            contextualSelection: true
+                                            selectionFocus: importMediaCard.activeFocus
+                                            onSelectionRequested: function(filePath, modifiers) {
                                                 importMediaCard.forceActiveFocus()
-                                                root.toggleSelection(delegateFilePath)
+                                                root.selectVisibleEntry(importMediaCard.index, modifiers)
                                             }
                                         }
                                     }
@@ -1731,7 +2590,7 @@ Rectangle {
 
                                     Label {
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        text: root.mediaQuickFilter === "all" ? "No media" : ("No " + root.mediaFilterLabel().toLowerCase())
+                                        text: root.filenameQuery.length > 0 ? "No matching filenames" : root.mediaQuickFilter === "all" ? "No media" : ("No " + root.mediaFilterLabel().toLowerCase())
                                         color: theme.textStrong
                                         font.family: theme.fontDisplay
                                         font.pixelSize: theme.typePageTitle
@@ -1741,7 +2600,7 @@ Rectangle {
                                     Label {
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         text: root.mediaQuickFilter === "all"
-                                              ? "No supported media in this folder. Choose another folder or select files directly."
+                                              ? "No supported media in this folder. Choose another folder from Sources or select files directly."
                                               : "Try another filter or show all supported media."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
@@ -1760,46 +2619,40 @@ Rectangle {
                                             text: "Choose Files"
                                             iconName: "media"
                                             compact: true
+                                            tone: "secondary"
                                             tooltipText: root.supportedImportTypesText()
                                             onClicked: root.browseForFiles()
-                                        }
-
-                                        ActionButton {
-                                            text: "Choose Folder"
-                                            iconName: "folder"
-                                            compact: true
-                                            onClicked: root.browseForSource()
                                         }
                                     }
 
                                     ActionButton {
-                                        visible: root.mediaQuickFilter !== "all"
+                                        visible: root.mediaQuickFilter !== "all" || root.filenameQuery.length > 0
                                         iconName: "media"
                                         text: "Show All"
                                         compact: true
-                                        onClicked: root.mediaQuickFilter = "all"
+                                        onClicked: { root.filenameQuery = ""; root.mediaQuickFilter = "all" }
                                     }
                                 }
 
                                 Column {
                                     objectName: "importNoSourceState"
-                                    readonly property string visibilityRole: "contextual|no-source-pick-left"
+                                    readonly property string visibilityRole: "contextual|no-source-choose-folder-or-files"
                                     visible: !root.hasSource
                                     anchors.centerIn: parent
-                                    spacing: theme.space10
+                                    width: Math.max(1, Math.min(theme.scaled(520), parent.width - theme.space16 * 2))
+                                    spacing: theme.space12
 
                                     Rectangle {
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        width: 46
-                                        height: 46
-                                        radius: theme.radius16
-                                        color: theme.alpha(theme.ink800, 0.9)
-                                        border.width: theme.hairlineWidth
-                                        border.color: theme.alpha(theme.lineSoft, 0.2)
+                                        width: 38
+                                        height: 38
+                                        radius: theme.radius4
+                                        color: theme.alpha(theme.ink800, 0.5)
+                                        border.width: 0
 
                                         AppIcon {
                                             anchors.centerIn: parent
-                                            name: "source"
+                                            name: "folder"
                                             color: theme.textStrong
                                             implicitWidth: 18
                                             implicitHeight: 18
@@ -1808,7 +2661,7 @@ Rectangle {
 
                                     Label {
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        text: "No source"
+                                        text: "Bring your photos in"
                                         color: theme.textStrong
                                         font.family: theme.fontDisplay
                                         font.pixelSize: theme.typePageTitle
@@ -1816,83 +2669,160 @@ Rectangle {
                                     }
 
                                     Label {
+                                        width: parent.width
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        text: "Pick one on the left."
+                                        text: root.importMode === "managed"
+                                              ? "Drop a folder here or choose one in Sources. Select individual files below."
+                                              : "Drop a folder here or choose one in Sources. Originals stay where they are."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
                                         font.pixelSize: theme.typeBody
+                                        wrapMode: Text.WordWrap
+                                        horizontalAlignment: Text.AlignHCenter
+                                    }
+
+                                    Row {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        spacing: theme.space8
+
+                                        ActionButton {
+                                            objectName: "importNoSourceChooseFolderButton"
+                                            text: "Choose Folder"
+                                            iconName: "folder"
+                                            tone: "primary"
+                                            compact: true
+                                            onClicked: root.browseForSource()
+                                        }
+
+                                        ActionButton {
+                                            objectName: "importNoSourceChooseFilesButton"
+                                            text: "Choose Files"
+                                            iconName: "media"
+                                            tone: "secondary"
+                                            compact: true
+                                            tooltipText: root.supportedImportTypesText()
+                                            onClicked: root.browseForFiles()
+                                        }
                                     }
                                 }
                             }
-                        }
                     }
                 }
             }
         }
 
+            }
+
         BrandPanel {
             objectName: "importDestinationPanel"
             readonly property string visibilityRole: "contextual|import-preflight-mode-destination-problems-project-confirm-cancel"
+            Layout.minimumHeight: 0
+            clip: true
             visible: root.importProjectChooserOpen
-            Layout.preferredWidth: root.width < theme.scaled(1120) ? 0 : (visible ? theme.scaled(390) : 0)
-            Layout.minimumWidth: root.width < theme.scaled(1120) ? 0 : theme.scaled(340)
-            Layout.fillWidth: root.width < theme.scaled(1120) && visible
+            Layout.preferredWidth: visible ? parent.width : 0
+            Layout.minimumWidth: 0
+            Layout.fillWidth: true
             Layout.fillHeight: true
             title: "Destination"
             subtitle: ""
             accent: theme.accentWarm400
             headerVisible: false
 
-            Rectangle {
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 visible: root.importProjectChooserOpen
-                radius: theme.radius12
-                color: theme.alpha(theme.ink950, 0.22)
-                border.width: theme.hairlineWidth
-                border.color: theme.alpha(theme.lineSoft, 0.18)
-                clip: true
+                spacing: theme.space16
 
+                Rectangle {
+                    objectName: "importReviewHero"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: root.width >= theme.scaled(1000)
+                    color: theme.mediaCanvas
+                    readonly property string previewPath: {
+                        const stagedPhoto = root.pendingImportPaths.find(function(path) { return !root.isVideoFile(path) })
+                        if (stagedPhoto) return stagedPhoto
+                        if (root.pendingImportKind !== "folder") return ""
+                        const firstPhoto = root.filteredFileEntries.find(function(entry) { return !root.isVideoFile(entry.filePath) })
+                        return firstPhoto ? firstPhoto.filePath : ""
+                    }
+                    Image {
+                        id: reviewHeroImage
+                        anchors.fill: parent
+                        anchors.margins: theme.space12
+                        source: parent.visible && parent.previewPath.length > 0 ? catalogAssets.originalPreviewSource(parent.previewPath) : ""
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                    }
+                    AppIcon {
+                        anchors.centerIn: parent
+                        visible: reviewHeroImage.status !== Image.Ready && reviewHeroImage.status !== Image.Loading
+                        name: "image"
+                        color: theme.textFaint
+                        width: theme.scaled(48)
+                        height: width
+                    }
+                    OpticalActivityIndicator {
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.margins: theme.space14
+                        width: theme.scaled(18)
+                        height: width
+                        active: reviewHeroImage.status === Image.Loading
+                        visible: active
+                    }
+                }
                 ScrollView {
                     id: importPreflightScroll
-                    anchors.fill: parent
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: theme.scaled(420)
+                    Layout.maximumWidth: root.width >= theme.scaled(1000) ? theme.scaled(460) : theme.scaled(620)
+                    Layout.alignment: Qt.AlignHCenter
                     clip: true
                     contentWidth: availableWidth
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                    ColumnLayout {
+                    GridLayout {
                         id: projectPickerColumn
                         x: theme.space12
                         width: Math.max(1, importPreflightScroll.availableWidth - (theme.space12 * 2))
-                        spacing: theme.space10
+                        columns: 1
+                        uniformCellWidths: true
+                        columnSpacing: theme.space16
+                        rowSpacing: theme.space10
 
                     RowLayout {
+                        Layout.row: 0
+                        Layout.column: 0
                         Layout.fillWidth: true
+                        Layout.columnSpan: 1
                         spacing: theme.space2
 
                         Label {
-                            text: "Import Preflight"
+                            Layout.fillWidth: true
+                            text: "Review & destination"
                             color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeBody
+                            font.family: theme.fontDisplay
+                            font.pixelSize: theme.typeTitle
                             font.weight: Font.DemiBold
                         }
-
-                        Item { Layout.fillWidth: true }
-
                         ActionButton {
-                            text: "Back"
-                            iconName: "chevron-left"
+                            objectName: "importReviewSelectionToggle"
+                            text: root.reviewSelectionExpanded ? "Hide photos" : "Review photos"
                             compact: true
-                            onClicked: root.importProjectChooserOpen = false
+                            visible: root.pendingImportKind === "selection" && root.pendingImportPaths.length > 0
+                            onClicked: root.reviewSelectionExpanded = !root.reviewSelectionExpanded
                         }
                     }
 
                     Label {
+                        Layout.row: 1
+                        Layout.column: 0
                         Layout.fillWidth: true
-                        text: root.pendingImportKind === "folder"
-                              ? "Review this folder before anything changes."
-                              : "Review the selected files before anything changes."
+                        Layout.columnSpan: 1
+                        text: root.pendingImportKind === "folder" ? "Folder import" : root.selectionMixText() + " selected"
                         color: theme.textMuted
                         font.family: theme.fontUi
                         font.pixelSize: theme.typeCaption
@@ -1900,55 +2830,150 @@ Rectangle {
                     }
 
                     ColumnLayout {
+                        objectName: "importReviewBatchStrip"
+                        Layout.row: 2
+                        Layout.column: 0
+                        Layout.columnSpan: 1
                         Layout.fillWidth: true
+                        visible: root.reviewSelectionExpanded && root.pendingImportKind === "selection" && root.pendingImportPaths.length > 0
                         spacing: theme.space6
-
-                        Label {
-                            text: "Workflow"
-                            color: theme.textFaint
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeMicro
-                            font.weight: Font.Medium
-                        }
+                        implicitHeight: theme.scaled(62)
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space6
-
-                            ActionButton {
-                                objectName: "importPersonalWorkflowButton"
-                                Layout.fillWidth: true
-                                text: "Personal"
-                                iconName: "media"
-                                active: root.workflowProfile === "personal"
-                                onClicked: root.workflowProfile = "personal"
+                            spacing: theme.space8
+                            Repeater {
+                                model: root.pendingImportPaths.slice(0, root.width < theme.scaled(1120) ? 4 : 7)
+                                delegate: Rectangle {
+                                    id: batchThumbnail
+                                    required property string modelData
+                                    Layout.preferredWidth: theme.scaled(80)
+                                    Layout.preferredHeight: theme.scaled(62)
+                                    radius: theme.radius4
+                                    color: theme.mediaCanvas
+                                    clip: true
+                                    Accessible.name: "Preview " + root.fileNameForPath(modelData)
+                                    Accessible.role: Accessible.Button
+                                    activeFocusOnTab: true
+                                    HoverHandler { id: batchHover; cursorShape: Qt.PointingHandCursor }
+                                    AppToolTip {
+                                        targetItem: batchThumbnail
+                                        visible: (batchHover.hovered || batchThumbnail.activeFocus) && !mediaPreviewDialog.opened
+                                        text: root.fileNameForPath(batchThumbnail.modelData)
+                                    }
+                                    Image {
+                                        anchors.fill: parent
+                                        anchors.margins: theme.space2
+                                        source: root.isVideoFile(batchThumbnail.modelData) ? "" : root.fileUrlForPath(batchThumbnail.modelData)
+                                        sourceSize.width: theme.scaled(160)
+                                        sourceSize.height: theme.scaled(124)
+                                        fillMode: Image.PreserveAspectFit
+                                        asynchronous: true
+                                    }
+                                    AppIcon {
+                                        anchors.centerIn: parent
+                                        visible: root.isVideoFile(batchThumbnail.modelData)
+                                        name: "video"
+                                        implicitWidth: theme.scaled(20)
+                                        implicitHeight: theme.scaled(20)
+                                        color: theme.textMuted
+                                    }
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: "transparent"
+                                        border.width: batchThumbnail.activeFocus ? theme.focusBorderWidth : 0
+                                        border.color: theme.focusRing
+                                        radius: theme.radius4
+                                    }
+                                    Keys.onReturnPressed: root.openReviewPreview(modelData)
+                                    Keys.onSpacePressed: root.openReviewPreview(modelData)
+                                    TapHandler { onTapped: root.openReviewPreview(batchThumbnail.modelData) }
+                                }
                             }
-
-                            ActionButton {
-                                objectName: "importStudioWorkflowButton"
-                                Layout.fillWidth: true
-                                text: "Studio"
-                                iconName: "settings"
-                                active: root.workflowProfile === "studio"
-                                onClicked: root.workflowProfile = "studio"
+                            Label {
+                                visible: root.pendingImportPaths.length > (root.width < theme.scaled(1120) ? 4 : 7)
+                                text: "+" + (root.pendingImportPaths.length - (root.width < theme.scaled(1120) ? 4 : 7)) + " more"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeMicro
                             }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.workflowProfile === "personal"
-                                  ? "Defaults: managed copy, date + camera folders, keep RAW + JPEG, skip duplicates. Optional originals backup is verified after copying."
-                                  : "Control file handling, duplicate behavior, destination, and project assignment."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeMicro
-                            wrapMode: Text.WordWrap
+                            Item { Layout.fillWidth: true }
                         }
                     }
 
                     ColumnLayout {
+                        objectName: "importProjectTargetSection"
+                        Layout.row: 3
+                        Layout.column: 0
                         Layout.fillWidth: true
-                        visible: root.workflowProfile === "studio"
+                        spacing: theme.space6
+
+                        Label {
+                            text: "Collection"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            font.weight: Font.DemiBold
+                        }
+
+                        ToneComboBox {
+                            objectName: "importProjectTargetPicker"
+                            Layout.fillWidth: true
+                            accessibleLabel: "Import destination project"
+                            model: root.projectOptionLabels
+                            currentIndex: Math.max(0, root.projectOptionValues.indexOf(root.projectTarget))
+                            onActivated: function(index) {
+                                root.projectTarget = root.projectOptionValues[index]
+                            }
+                        }
+
+                        ActionButton {
+                            objectName: "importNewProjectButton"
+                            text: root.newProjectEntryOpen ? "Cancel new project" : "New project…"
+                            iconName: "plus"
+                            compact: true
+                            embedded: true
+                            onClicked: {
+                                root.newProjectEntryOpen = !root.newProjectEntryOpen
+                                if (root.newProjectEntryOpen)
+                                    newProjectField.forceActiveFocus()
+                            }
+                        }
+
+                        RowLayout {
+                            visible: root.newProjectEntryOpen
+                            Layout.fillWidth: true
+                            spacing: theme.space6
+
+                            ToneTextField {
+                                id: newProjectField
+                                objectName: "importNewProjectField"
+                                Layout.fillWidth: true
+                                placeholderText: "New project name"
+                                onAccepted: {
+                                    root.createProjectAndSelect(text)
+                                    text = ""
+                                }
+                            }
+
+                            ActionButton {
+                                text: "Create"
+                                iconName: "plus"
+                                compact: true
+                                enabled: newProjectField.text.trim().length > 0
+                                onClicked: {
+                                    root.createProjectAndSelect(newProjectField.text)
+                                    newProjectField.text = ""
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.row: 9
+                        Layout.column: 0
+                        Layout.fillWidth: true
+                        visible: root.workflowProfile === "studio" && root.advancedImportOptionsOpen
                         spacing: theme.space6
 
                         Label {
@@ -2036,26 +3061,29 @@ Rectangle {
                     }
 
                     ColumnLayout {
+                        Layout.row: 4
+                        Layout.column: 0
                         Layout.fillWidth: true
-                        visible: root.workflowProfile === "studio"
+                        visible: true
                         spacing: theme.space6
 
                         Label {
-                            text: "Import mode"
-                            color: theme.textFaint
+                            text: "Original files"
+                            color: theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: theme.typeMicro
-                            font.weight: Font.Medium
+                            font.pixelSize: theme.typeCaption
+                            font.weight: Font.DemiBold
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
+                            visible: true
                             spacing: theme.space6
 
                             ActionButton {
                                 objectName: "importManagedModeButton"
                                 Layout.fillWidth: true
-                                text: "Managed Copy"
+                                text: "Copy to Library"
                                 iconName: "save"
                                 active: root.importMode === "managed"
                                 onClicked: root.importMode = "managed"
@@ -2064,29 +3092,76 @@ Rectangle {
                             ActionButton {
                                 objectName: "importReferencedModeButton"
                                 Layout.fillWidth: true
-                                text: "Leave in Place"
+                                text: "Keep in place"
                                 iconName: "source"
                                 active: root.importMode === "referenced"
-                                onClicked: root.importMode = "referenced"
+                                onClicked: {
+                                    root.workflowProfile = "studio"
+                                    root.importMode = "referenced"
+                                }
                             }
                         }
 
                         Label {
                             objectName: "importModeOutcomeLabel"
                             Layout.fillWidth: true
-                            text: catalogAssets.importPreflightBusy
-                                  ? "Checking files… " + catalogAssets.importPreflightScannedCount + " scanned"
-                                  : root.importPreflight.outcomeText || "Choose how Looksy should keep these originals."
+                            text: root.importMode === "managed" ? "Originals stay untouched." : "Originals stay in their current location."
+                            Accessible.description: root.importPreflight.outcomeText || ""
                             color: theme.textMain
                             font.family: theme.fontUi
-                            font.pixelSize: theme.typeMicro
+                            font.pixelSize: theme.typeCaption
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        }
+
+                        Label {
+                            objectName: "importFileHandlingSummaryLabel"
+                            Layout.fillWidth: true
+                            visible: root.advancedImportOptionsOpen
+                            text: (root.importMode === "referenced" ? "Link originals" : root.organizationTemplate === "source" ? "Keep source folders" : "Organize by date & camera")
+                                  + " · " + (root.duplicatePolicy === "replace" ? "Replace matching files" : "Skip existing files")
+                            Accessible.description: root.importAdvancedPolicySummaryText()
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                objectName: "importStudioWorkflowButton"
+                                text: "File handling"
+                                iconName: "settings"
+                                embedded: true
+                                compact: true
+                                tooltipText: root.importAdvancedPolicySummaryText()
+                                onClicked: {
+                                    root.workflowProfile = "studio"
+                                    root.advancedImportOptionsOpen = !root.advancedImportOptionsOpen
+                                }
+                            }
+
+                            ActionButton {
+                                objectName: "importPersonalWorkflowButton"
+                                text: "Use defaults"
+                                embedded: true
+                                compact: true
+                                visible: root.workflowProfile === "studio"
+                                onClicked: {
+                                    root.workflowProfile = "personal"
+                                    root.advancedImportOptionsOpen = false
+                                }
+                            }
                         }
                     }
 
                     ColumnLayout {
+                        Layout.row: 10
+                        Layout.column: 0
                         Layout.fillWidth: true
-                        visible: root.workflowProfile === "studio" && root.importMode === "managed"
+                        visible: root.workflowProfile === "studio" && root.advancedImportOptionsOpen && root.importMode === "managed"
                         spacing: theme.space6
 
                         Label {
@@ -2120,8 +3195,10 @@ Rectangle {
                     }
 
                     ColumnLayout {
+                        Layout.row: 11
+                        Layout.column: 0
                         Layout.fillWidth: true
-                        visible: root.workflowProfile === "studio"
+                        visible: root.workflowProfile === "studio" && root.advancedImportOptionsOpen
                         spacing: theme.space6
 
                         Label {
@@ -2162,80 +3239,189 @@ Rectangle {
                         }
                     }
 
+                    ColumnLayout {
+                        objectName: "importAdvancedFilePolicySection"
+                        Layout.row: 12
+                        Layout.column: 0
+                        Layout.columnSpan: 1
+                        Layout.fillWidth: true
+                        visible: root.workflowProfile === "studio" && root.advancedImportOptionsOpen
+                        spacing: theme.space6
+
+                        Label {
+                            objectName: "importFilenamePolicyLabel"
+                            Layout.fillWidth: true
+                            text: "Keep original filenames"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.importMode === "managed"
+                                  ? (appShell.originalsBackupEnabled
+                                     ? "Originals backup · On · " + root.fileNameForPath(appShell.originalsBackupLocation)
+                                     : "Originals backup · Off")
+                                  : "Originals backup is used with Managed Copy; originals stay in place here."
+                            color: appShell.originalsBackupEnabled && root.importMode === "managed"
+                                   ? theme.textMuted : theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            Accessible.description: appShell.originalsBackupEnabled
+                                                     ? appShell.originalsBackupLocation
+                                                     : "An additional originals copy is not configured."
+                        }
+
+                        ActionButton {
+                            objectName: "importBackupOptionsButton"
+                            compact: true
+                            text: "Backup options…"
+                            tooltipText: "Choose an originals backup folder or turn off the backup."
+                            enabled: !appShell.photoLibraryMigrationRunning && !root.hasActiveImportJobs()
+                            disabledReason: "Wait for import activity and Photo Library migration to finish before changing backup settings."
+                            onClicked: importStorageDialog.open()
+                        }
+                    }
+
                     Rectangle {
                         objectName: "importPreflightFacts"
+                        Layout.row: 5
+                        Layout.column: 0
                         Layout.fillWidth: true
+                        Layout.columnSpan: 1
                         implicitHeight: preflightFactsColumn.implicitHeight + (theme.space10 * 2)
-                        radius: theme.radius10
-                        color: theme.alpha(theme.ink900, 0.78)
-                        border.width: theme.hairlineWidth
-                        border.color: theme.alpha(theme.lineSoft, 0.18)
+                        radius: 0
+                        color: "transparent"
+                        border.width: 0
 
-                        ColumnLayout {
+                        GridLayout {
                             id: preflightFactsColumn
                             anchors.fill: parent
                             anchors.margins: theme.space10
-                            spacing: theme.space4
+                            columns: 1
+                            uniformCellWidths: true
+                            columnSpacing: theme.space16
+                            rowSpacing: theme.space12
 
-                            Label {
+                            RowLayout {
                                 Layout.fillWidth: true
-                                text: "Source · " + (root.importPreflight.sourcePath || root.pendingImportRootPath)
-                                color: theme.textMain
-                                font.family: theme.fontMono
-                                font.pixelSize: theme.typeMicro
-                                wrapMode: Text.WrapAnywhere
+                                Layout.columnSpan: 1
+                                spacing: theme.space8
+                            Label {
+                                objectName: "importPreflightReadiness"
+                                Layout.fillWidth: true
+                                text: catalogAssets.importPreflightBusy
+                                      ? "Checking files… " + catalogAssets.importPreflightScannedCount + " scanned"
+                                      : root.importPreflight.ok
+                                        ? (root.importPreflight.importableCount || 0) + " files ready to import"
+                                        : root.importPreflightBlockerCount > 0 ? "Resolve issues before importing" : "No importable media"
+                                color: root.importPreflightBlockerCount > 0 ? theme.error : theme.textStrong
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeBody
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            }
+
+                                ActionButton {
+                                    objectName: "importReviewDuplicatesButton"
+                                    text: "Compare matches…"
+                                    visible: (root.importPreflight.duplicateCount || 0) > 0
+                                    embedded: true
+                                    compact: true
+                                    enabled: root.duplicateReviewMatches.length > 0
+                                    onClicked: { root.duplicateReviewIndex = 0; duplicateReviewDialog.open() }
+                                }
+                                ActionButton {
+                                    objectName: "importReviewPathsButton"
+                                    text: root.reviewPathsExpanded ? "Less" : "Details"
+                                    compact: true
+                                    embedded: true
+                                    onClicked: root.reviewPathsExpanded = !root.reviewPathsExpanded
+                                }
                             }
 
                             Label {
                                 Layout.fillWidth: true
+                                Layout.columnSpan: 1
+                                visible: root.preflightExceptionsText().length > 0
+                                text: root.preflightExceptionsText()
+                                color: root.importPreflightBlockerCount > 0 ? theme.error : theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            }
+
+                            ReviewLocation {
+                                visible: root.reviewPathsExpanded
+                                caption: "Source"
+                                path: root.importPreflight.sourcePath || root.pendingImportRootPath
+                                summary: path === "/" ? "Computer" : ""
+                            }
+
+                            ReviewLocation {
+                                visible: root.reviewPathsExpanded
+                                caption: root.importMode === "referenced" ? "Storage" : "Destination"
+                                path: root.importPreflight.destinationPath || ""
+                                summary: root.importMode === "referenced" ? "Files stay in their current location" : "Photo Library"
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: root.reviewPathsExpanded || !!root.importPreflight.backupEnabled
                                 text: root.importPreflight.backupEnabled
-                                      ? "Backup · " + (root.importPreflight.backupDestinationPath || "Checking…")
-                                      : "Backup · Not configured"
-                                color: root.importPreflight.backupEnabled ? theme.success : theme.warning
-                                font.family: theme.fontMono
-                                font.pixelSize: theme.typeMicro
-                                wrapMode: Text.WrapAnywhere
+                                      ? "Second copy · " + (root.reviewPathsExpanded
+                                          ? (root.importPreflight.backupDestinationPath || "Checking…")
+                                          : (root.fileNameForPath(root.importPreflight.backupDestinationPath || "") || "Checking…"))
+                                      : "Second copy · Not configured"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                Accessible.description: root.importPreflight.backupDestinationPath || ""
                             }
 
                             Label {
                                 Layout.fillWidth: true
+                                visible: root.reviewPathsExpanded || !!root.importPreflight.backupEnabled
                                 text: root.importPreflight.backupEnabled
                                       ? "Primary " + (root.importPreflight.primaryEstimatedDiskText || "0 B") +
                                         " · Backup " + (root.importPreflight.backupEstimatedDiskText || "0 B") +
-                                        " · Verified with " + (root.importPreflight.copyVerification || "SHA-256")
-                                      : "Primary " + (root.importPreflight.primaryEstimatedDiskText || "0 B") +
-                                        " · Add an originals backup in Preferences for a second verified copy."
+                                        " · Verified by " + (root.importPreflight.copyVerification || "SHA-256")
+                                      : "Primary copy " + (root.importPreflight.primaryEstimatedDiskText || "0 B")
                                 color: theme.textMuted
                                 font.family: theme.fontUi
                                 font.pixelSize: theme.typeMicro
                                 wrapMode: Text.WordWrap
                             }
 
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Destination · " + (root.importPreflight.destinationPath || "Checking…")
-                                color: theme.textMain
-                                font.family: theme.fontMono
-                                font.pixelSize: theme.typeMicro
-                                wrapMode: Text.WrapAnywhere
-                            }
 
                             Label {
                                 Layout.fillWidth: true
-                                text: (root.importPreflight.importableCount || 0) + " ready · " +
-                                      (root.importPreflight.photoCount || 0) + " photos · " +
-                                      (root.importPreflight.videoCount || 0) + " videos · " +
-                                      (root.importPreflight.audioCount || 0) + " audio"
+                                visible: root.pendingImportKind === "folder"
+                                text: [
+                                    (root.importPreflight.photoCount || 0) > 0
+                                        ? root.importPreflight.photoCount + (root.importPreflight.photoCount === 1 ? " photo" : " photos") : "",
+                                    (root.importPreflight.videoCount || 0) > 0
+                                        ? root.importPreflight.videoCount + (root.importPreflight.videoCount === 1 ? " video" : " videos") : "",
+                                    (root.importPreflight.audioCount || 0) > 0
+                                        ? root.importPreflight.audioCount + (root.importPreflight.audioCount === 1 ? " audio file" : " audio files") : ""
+                                ].filter(function(part) { return part.length > 0 }).join(" · ")
                                 color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: theme.typeMicro
+                                font.pixelSize: theme.typeCaption
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             }
 
                             Label {
                                 Layout.fillWidth: true
-                                text: "Selected " + (root.importPreflight.selectedSizeText || "0 B") +
-                                      " · Additional disk " + (root.importPreflight.estimatedDiskText || "0 B")
+                                text: root.importMode === "referenced"
+                                      ? (root.importPreflight.selectedSizeText || "0 B") + " selected · No file copy required"
+                                      : root.reviewPathsExpanded ? "Selected " + (root.importPreflight.selectedSizeText || "0 B") +
+                                        " · Additional disk " + (root.importPreflight.estimatedDiskText || "0 B")
+                                      : (root.importPreflight.estimatedDiskText || "0 B") + " disk space required"
                                 color: theme.textMuted
                                 font.family: theme.fontUi
                                 font.pixelSize: theme.typeMicro
@@ -2244,6 +3430,7 @@ Rectangle {
 
                             Label {
                                 Layout.fillWidth: true
+                                visible: (root.importPreflight.rawJpegPairCount || 0) > 0
                                 text: "RAW + JPEG pairs · " + (root.importPreflight.rawJpegPairCount || 0)
                                 color: theme.textMuted
                                 font.family: theme.fontUi
@@ -2252,19 +3439,22 @@ Rectangle {
 
                             Label {
                                 Layout.fillWidth: true
-                                text: root.importPreflight.organizationText || "Preserve source folders and filenames; no renaming."
+                                Layout.columnSpan: 1
+                                visible: root.importMode === "managed" && root.advancedImportOptionsOpen
+                                text: root.importPreflight.organizationText || "Keep source folders and original filenames."
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: theme.typeMicro
+                                font.pixelSize: theme.typeCaption
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             }
                         }
                     }
 
                     ColumnLayout {
+                        Layout.row: 7
+                        Layout.column: 0
                         Layout.fillWidth: true
                         visible: (root.importPreflight.duplicateCount || 0) > 0
-                                 && root.workflowProfile === "studio"
                         spacing: theme.space6
 
                         Label {
@@ -2297,206 +3487,183 @@ Rectangle {
                         }
                     }
 
-                    Repeater {
-                        model: root.importPreflight.issues || []
-
-                        delegate: Rectangle {
-                            required property var modelData
-
-                            Layout.fillWidth: true
-                            implicitHeight: importIssueColumn.implicitHeight + (theme.space8 * 2)
-                            radius: theme.radius8
-                            color: modelData.severity === "error"
-                                   ? theme.alpha(theme.error, 0.1)
-                                   : theme.alpha(theme.warning, 0.08)
-                            border.width: theme.hairlineWidth
-                            border.color: modelData.severity === "error"
-                                          ? theme.alpha(theme.error, 0.28)
-                                          : theme.alpha(theme.warning, 0.24)
-
-                            ColumnLayout {
-                                id: importIssueColumn
-                                anchors.fill: parent
-                                anchors.margins: theme.space8
-                                spacing: theme.space2
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.title || "Import issue"
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: theme.typeMicro
-                                    font.weight: Font.DemiBold
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.detail || ""
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: theme.typeMicro
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                }
-                            }
-                        }
-                    }
-
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        visible: root.projectTarget.length > 0
-                        implicitHeight: currentProjectRow.implicitHeight + (theme.space8 * 2)
-                        radius: theme.radius10
-                        color: theme.alpha(theme.accentWarm400, 0.1)
-                        border.width: theme.hairlineWidth
-                        border.color: theme.alpha(theme.accentWarm400, 0.22)
-
-                        RowLayout {
-                            id: currentProjectRow
-                            anchors.fill: parent
-                            anchors.margins: theme.space8
-                            spacing: theme.space8
-
-                            AppIcon {
-                                name: "grid"
-                                color: theme.accentWarm300
-                                implicitWidth: 14
-                                implicitHeight: 14
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: root.projectTarget
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: theme.typeCaption
-                                font.weight: Font.Medium
-                                fontSizeMode: Text.HorizontalFit
-                                minimumPixelSize: theme.typeMicro
-                                elide: Text.ElideNone
-                            }
-                        }
-                    }
-
                     ColumnLayout {
+                        Layout.row: 8
+                        Layout.column: 0
                         Layout.fillWidth: true
+                        Layout.columnSpan: 1
+                        visible: (root.importPreflight.issues || []).length > 0
                         spacing: theme.space6
 
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Photo Library"
-                            iconName: "library"
-                            active: root.projectTarget.length === 0
-                            onClicked: root.projectTarget = ""
-                        }
-
                         Label {
-                            visible: catalogAssets.projectNames.length > 0
-                            text: "Projects"
-                            color: theme.textFaint
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeMicro
-                            font.weight: Font.Medium
-                        }
-
-                        Repeater {
-                            model: catalogAssets.projectNames
-
-                            delegate: ActionButton {
-                                required property string modelData
-
-                                Layout.fillWidth: true
-                                text: modelData
-                                iconName: "grid"
-                                active: root.projectTarget === modelData
-                                onClicked: root.projectTarget = modelData
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        visible: catalogAssets.projectNames.length === 0
-                        implicitHeight: 44
-                        radius: theme.radius10
-                        color: theme.alpha(theme.ink900, 0.76)
-                        border.width: theme.hairlineWidth
-                        border.color: theme.alpha(theme.lineSoft, 0.14)
-
-                        Label {
-                            anchors.centerIn: parent
-                            text: "No projects yet"
+                            text: "Review issues"
                             color: theme.textMuted
                             font.family: theme.fontUi
                             font.pixelSize: theme.typeCaption
+                            font.weight: Font.DemiBold
                         }
-                    }
 
-                    ToneTextField {
-                        id: newProjectField
-                        Layout.fillWidth: true
-                        placeholderText: "Create new project"
-                        onAccepted: {
-                            root.createProjectAndSelect(text)
-                            text = ""
-                        }
-                    }
+                        Repeater {
+                            model: root.importPreflight.issues || []
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: theme.space8
+                            delegate: Rectangle {
+                                required property var modelData
 
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "New Project"
-                            iconName: "plus"
-                            enabled: newProjectField.text.trim().length > 0
-                            onClicked: {
-                                root.createProjectAndSelect(newProjectField.text)
-                                newProjectField.text = ""
+                                Layout.fillWidth: true
+                                implicitHeight: importIssueColumn.implicitHeight + (theme.space8 * 2)
+                                radius: theme.radius4
+                                color: modelData.severity === "error"
+                                       ? theme.alpha(theme.error, 0.1)
+                                       : theme.alpha(theme.warning, 0.08)
+                                border.width: theme.hairlineWidth
+                                border.color: modelData.severity === "error"
+                                              ? theme.alpha(theme.error, 0.28)
+                                              : theme.alpha(theme.warning, 0.24)
+
+                                ColumnLayout {
+                                    id: importIssueColumn
+                                    anchors.fill: parent
+                                    anchors.margins: theme.space8
+                                    spacing: theme.space2
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: modelData.title || "Import issue"
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeMicro
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: modelData.detail || ""
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeMicro
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    }
+                                }
                             }
                         }
+                    }
 
-                        ActionButton {
-                            text: ""
-                            iconName: "delete"
-                            showText: false
-                            compact: true
-                            tooltipText: "Clear project"
-                            enabled: root.projectTarget.length > 0
-                            onClicked: root.projectTarget = ""
+
+
+                    }
+                }
+            }
+
+        }
+        }
+
+        GridLayout {
+            id: importPersistentActionBar
+            objectName: "importPersistentActionBar"
+            readonly property string visibilityRole: "always-visible|destination-change-backup-status-one-primary-import-selected-count"
+            Layout.fillWidth: true
+            columns: root.width < theme.scaled(600) ? 1 : 2
+            columnSpacing: theme.space12
+            rowSpacing: theme.space8
+
+            ColumnLayout {
+                objectName: "importDestinationSummary"
+                Layout.row: 0
+                Layout.column: 0
+                Layout.fillWidth: true
+                spacing: theme.space2
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.space6
+
+                    Label {
+                        text: root.importMode === "referenced" ? "Storage" : "Destination"
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: Font.DemiBold
+                    }
+
+                    Label {
+                        id: importDestinationNameLabel
+                        objectName: "importDestinationNameLabel"
+                        Layout.fillWidth: true
+                        text: root.importMode === "referenced" ? "Keep originals in place" : "Photo Library"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: Font.Medium
+                        wrapMode: Text.NoWrap
+                        elide: Text.ElideMiddle
+                        Accessible.name: "Photo Library destination"
+                        Accessible.description: appShell.photoLibraryLocation
+
+                        HoverHandler { id: importDestinationHover }
+                        AppToolTip {
+                            targetItem: importDestinationNameLabel
+                            visible: importDestinationHover.hovered && appShell.photoLibraryLocation.length > 0
+                            text: appShell.photoLibraryLocation
                         }
                     }
+                }
 
-                    }
+                Label {
+                    objectName: "importBackupDestinationSummaryLabel"
+                    Layout.fillWidth: true
+                    visible: appShell.originalsBackupEnabled && root.importMode === "managed"
+                    text: root.importMode === "referenced" ? "No files copied" : "Backup · " + (appShell.originalsBackupEnabled
+                          ? (root.fileNameForPath(appShell.originalsBackupLocation) || "Configured")
+                          : "Off")
+                    color: appShell.originalsBackupEnabled ? theme.textMuted : theme.textFaint
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    Accessible.description: appShell.originalsBackupEnabled
+                                             ? appShell.originalsBackupLocation
+                                             : "An additional originals copy is not configured."
                 }
             }
 
             RowLayout {
-                objectName: "importPreflightPrimaryActions"
+                objectName: "importPersistentActionControls"
+                Layout.row: root.width < theme.scaled(600) ? 1 : 0
+                Layout.column: root.width < theme.scaled(600) ? 0 : 1
                 Layout.fillWidth: true
+                Layout.alignment: Qt.AlignRight
                 spacing: theme.space8
 
                 ActionButton {
-                    Layout.fillWidth: true
+                    objectName: "importDestinationChangeButton"
+                    compact: true
+                    text: "Storage…"
+                    tooltipText: "Choose the Photo Library or originals backup folder."
+                    enabled: !appShell.photoLibraryMigrationRunning && !root.hasActiveImportJobs()
+                    disabledReason: "Wait for import activity and Photo Library migration to finish before changing storage."
+                    onClicked: importStorageDialog.open()
+                }
+
+                ActionButton {
+                    objectName: "importReviewCancelButton"
+                    compact: true
+                    visible: root.importProjectChooserOpen
                     text: "Cancel"
+                    tooltipText: "Return to the source and photo selection."
                     onClicked: root.importProjectChooserOpen = false
                 }
 
                 ActionButton {
-                    objectName: "importPreflightConfirmButton"
-                    Layout.fillWidth: true
-                    text: catalogAssets.importPreflightBusy ? "Checking files…" : root.importPreflight.importableCount
-                          ? "Import " + root.importPreflight.importableCount +
-                            (root.importPreflight.backupEnabled ? " with Backup" : "")
-                          : "Import"
+                    objectName: "importPersistentPrimaryButton"
+                    Layout.minimumWidth: theme.scaled(204)
+                    text: root.persistentImportActionText()
+                    accessibleName: root.persistentImportActionText()
                     iconName: "save"
                     tone: "primary"
-                    enabled: root.canConfirmImport
-                    onClicked: root.confirmSelectedImport()
+                    enabled: root.canActivatePersistentImport
+                    disabledReason: root.persistentImportDisabledReason()
+                    onClicked: root.activatePersistentImportAction()
                 }
             }
-        }
     }
 }
 }

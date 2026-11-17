@@ -234,6 +234,7 @@ EditRecipeState merge_edit_recipe_state_by_groups(
     merged.radial_mask_radius_y = source.radial_mask_radius_y;
     merged.radial_mask_rotation = source.radial_mask_rotation;
     merged.mask_stack = source.mask_stack;
+    merged.selection_state = source.selection_state;
   }
 
   if (normalized_groups.contains(QStringLiteral("presets"))) {
@@ -242,6 +243,8 @@ EditRecipeState merge_edit_recipe_state_by_groups(
 
   if (normalized_groups.contains(QStringLiteral("layers"))) {
     merged.layers = source.layers;
+    merged.document_layer_style_light_angle =
+        source.document_layer_style_light_angle;
   }
 
   if (normalized_groups.contains(QStringLiteral("history"))) {

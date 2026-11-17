@@ -1,0 +1,92 @@
+[
+  {
+    "campaign": "02",
+    "source": "marketing/campaigns/looksi-launch-2026-11-16/v2/campaign02/videos/hero.mp4",
+    "mtime_ns": 1794869219008903477,
+    "sha256": "984ab701b16b3fbfc008bb405bf3359a22cf5c67b9623de3cd5b603747544b04",
+    "snapshot": "/private/tmp/looksi-round2-review/campaign02-hero.mp4",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video",
+          "width": 1080,
+          "height": 1920,
+          "color_range": "tv",
+          "color_space": "bt709",
+          "r_frame_rate": "30/1",
+          "nb_read_frames": "1260"
+        },
+        {
+          "codec_type": "audio",
+          "r_frame_rate": "0/0",
+          "nb_read_frames": "3938"
+        }
+      ],
+      "format": {
+        "duration": "42.000000"
+      }
+    }
+  },
+  {
+    "campaign": "03",
+    "source": "marketing/campaigns/looksi-launch-2026-11-16/v2/campaign03/videos/hero.mp4",
+    "mtime_ns": 1794869277901607336,
+    "sha256": "115a357602f7f3fe6b5ddc38a4cf0df68f4d8d358407286ef13deeaf8e292ec1",
+    "snapshot": "/private/tmp/looksi-round2-review/campaign03-hero.mp4",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video",
+          "width": 1080,
+          "height": 1920,
+          "color_range": "tv",
+          "color_space": "bt709",
+          "r_frame_rate": "30/1",
+          "nb_read_frames": "990"
+        },
+        {
+          "codec_type": "audio",
+          "r_frame_rate": "0/0",
+          "nb_read_frames": "3094"
+        }
+      ],
+      "format": {
+        "duration": "33.000000"
+      }
+    }
+  },
+  {
+    "campaign": "05",
+    "source": "marketing/campaigns/looksi-launch-2026-11-16/v2/campaign05/videos/hero.mp4",
+    "mtime_ns": 1794869320149884835,
+    "sha256": "912af38cf185dab2bcc771a02badce4addf93780c6b37c3989f2c2db0aa99a40",
+    "snapshot": "/private/tmp/looksi-round2-review/campaign05-hero.mp4",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video",
+          "width": 1080,
+          "height": 1920,
+          "color_range": "tv",
+          "color_space": "bt709",
+          "r_frame_rate": "30/1",
+          "nb_read_frames": "1080"
+        },
+        {
+          "codec_type": "audio",
+          "r_frame_rate": "0/0",
+          "nb_read_frames": "3375"
+        }
+      ],
+      "format": {
+        "duration": "36.000000"
+      }
+    }
+  }
+]

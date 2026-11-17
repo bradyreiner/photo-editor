@@ -40,6 +40,7 @@ Rectangle {
     Accessible.name: title
     Accessible.description: detail
     Accessible.role: Accessible.Button
+    Accessible.onPressAction: if (root.actionable && root.enabled) root.activated()
     Keys.onReturnPressed: if (actionable) root.activated()
     Keys.onEnterPressed: if (actionable) root.activated()
     Keys.onSpacePressed: if (actionable) root.activated()
@@ -108,8 +109,8 @@ Rectangle {
                 visible: root.detail.length > 0
                 text: root.detail
                 color: theme.textFaint
-                font.family: theme.fontMono
-                font.pixelSize: 9
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone

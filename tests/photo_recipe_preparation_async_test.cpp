@@ -122,6 +122,39 @@ bool make_png(const QString& path) {
   return image.save(path, "PNG");
 }
 
+bool busy_journal_retry_preserves_local_edits(const QTemporaryDir& root,
+                                             const QString& image_path) {
+  configure_runtime(root.filePath(QStringLiteral("busy-journal-retry")));
+  auto owner = std::make_unique<EditorRecipeSaveJournal>();
+  EditorRecipeSaveCheckpoint recovered;
+  QString error;
+  if (!owner->open(AppBootstrap::appDataLocation(), EditorRecipeSaveJournal::currentAuthority(),
+                   &recovered, &error)) return false;
+  recovered.pending = {snapshot("same-photo", image_path, 0.1),
+                       snapshot("other-window-photo", image_path, 0.2)};
+  if (!owner->write(recovered, &error)) return false;
+  EditorPreviewController waiting;
+  EditorPreviewControllerTestAccess::pause(waiting, true);
+  if (EditorPreviewControllerTestAccess::initializeJournal(waiting)) return false;
+  EditorPreviewControllerTestAccess::enqueue(waiting, snapshot("same-photo", image_path, 0.8));
+  EditorPreviewControllerTestAccess::enqueue(waiting, snapshot("local-photo", image_path, 0.3));
+  if (EditorPreviewControllerTestAccess::initializeJournal(waiting)) return false;
+  owner.reset();
+  if (!EditorPreviewControllerTestAccess::initializeJournal(waiting) ||
+      !EditorPreviewControllerTestAccess::checkpointWrites(waiting)) return false;
+  const auto merged = EditorPreviewControllerTestAccess::checkpoint(waiting);
+  if (!require(has_pending(merged, "same-photo", 0.8) &&
+                   has_pending(merged, "other-window-photo", 0.2) &&
+                   has_pending(merged, "local-photo", 0.3),
+               "Lock retry must preserve the latest local edits and unrelated recovered edits")) return false;
+  EditorRecipeSaveCheckpoint durable;
+  return recover_checkpoint_copy(EditorPreviewControllerTestAccess::journalPath(waiting),
+      root.filePath(QStringLiteral("busy-journal-durable")), &durable, &error) &&
+      has_pending(durable, "same-photo", 0.8) &&
+      has_pending(durable, "other-window-photo", 0.2) &&
+      has_pending(durable, "local-photo", 0.3);
+}
+
 bool paused_preparation_keeps_durable_latest_edits(const QTemporaryDir& root,
                                                    const QString& image_path) {
   const auto app_root = root.filePath(QStringLiteral("paused"));
@@ -385,7 +418,8 @@ int main(int argc, char** argv) {
   if (!root.isValid()) return 1;
   const auto image_path = root.filePath(QStringLiteral("source.png"));
   if (!make_png(image_path)) return 1;
-  if (!paused_preparation_keeps_durable_latest_edits(root, image_path) ||
+  if (!busy_journal_retry_preserves_local_edits(root, image_path) ||
+      !paused_preparation_keeps_durable_latest_edits(root, image_path) ||
       !quarantine_invalid_and_schedule_unrelated_work(root, image_path) ||
       !destroying_controller_during_preparation_is_safe(root, image_path) ||
       !owned_revision_is_admitted_before_helper_launch(root, image_path) ||

@@ -529,6 +529,267 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
+  {
+    const auto prepared_patch = [](int patch_x, int patch_y, int patch_width,
+                                    int patch_height, double center_x,
+                                    double center_y, double radius_x,
+                                    double radius_y) {
+      LocalMask retouch;
+      retouch.id = "prepared-component-heal";
+      retouch.name = "Prepared component repair";
+      retouch.kind = "rectangle";
+      retouch.retouch_mode = "heal";
+      retouch.remove_strength = 100.0;
+      retouch.center_x = center_x;
+      retouch.center_y = center_y;
+      retouch.radius_x = radius_x;
+      retouch.radius_y = radius_y;
+      retouch.feather = 0.0;
+      retouch.inpaint_blend_amount = 1.0;
+      retouch.inpaint_color_match = 0.0;
+      retouch.inpaint_seam_feather = 0.0;
+      retouch.heal_color_blend = 1.0;
+      retouch.heal_texture_blend = 1.0;
+      retouch.inpaint_patch_x = patch_x;
+      retouch.inpaint_patch_y = patch_y;
+      retouch.inpaint_patch_width = patch_width;
+      retouch.inpaint_patch_height = patch_height;
+      retouch.inpaint_patch_pixels.assign(
+          static_cast<std::size_t>(patch_width * patch_height),
+          ColorPixel{0.92F, 0.04F, 0.02F, 0.95F});
+      return retouch;
+    };
+    const auto render = [](const ColorAdjustmentState& state, int width, int height) {
+      auto pixels = std::vector<ColorPixel>(
+          static_cast<std::size_t>(width) * static_cast<std::size_t>(height),
+          ColorPixel{0.0F, 0.0F, 0.0F, 0.0F});
+      if (!apply_color_layers_stage(&pixels, width, height, state)) {
+        return std::vector<ColorPixel>{};
+      }
+      return pixels;
+    };
+    const auto pixel_at = [](const std::vector<ColorPixel>& pixels, int width, int x, int y) {
+      return pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+                    static_cast<std::size_t>(x)];
+    };
+
+    // A prepared patch repairs only the group's private child composite. The
+    // group mask and opacity then control that repaired result, while a later
+    // opaque sibling remains on top and keeps its own authored color.
+    constexpr int masked_width = 9;
+    constexpr int masked_height = 9;
+    PhotoLayer group;
+    group.id = "retouch-group";
+    group.kind = "group";
+    group.opacity = 0.5;
+    group.mask_width = masked_width;
+    group.mask_height = masked_height;
+    group.mask_data.assign(
+        static_cast<std::size_t>(masked_width) * static_cast<std::size_t>(masked_height), 0);
+    group.mask_data[static_cast<std::size_t>(4 * masked_width + 4)] = 255;
+    group.mask_data[static_cast<std::size_t>(3 * masked_width + 4)] = 255;
+    group.component_retouch_masks = {
+        prepared_patch(3, 3, 3, 3, 0.5, 0.5, 0.2, 0.2)};
+    PhotoLayer child;
+    child.id = "retouch-group-child";
+    child.parent_id = group.id;
+    child.kind = "pixel";
+    child.pixel_width = masked_width;
+    child.pixel_height = masked_height;
+    child.pixels.assign(
+        static_cast<std::size_t>(masked_width) * static_cast<std::size_t>(masked_height),
+        ColorPixel{0.08F, 0.68F, 0.16F, 0.35F});
+    PhotoLayer opaque_sibling;
+    opaque_sibling.id = "retouch-overlap-sibling";
+    opaque_sibling.kind = "pixel";
+    opaque_sibling.pixel_width = masked_width;
+    opaque_sibling.pixel_height = masked_height;
+    opaque_sibling.pixels.assign(
+        static_cast<std::size_t>(masked_width) * static_cast<std::size_t>(masked_height),
+        ColorPixel{0.0F, 0.0F, 0.0F, 0.0F});
+    opaque_sibling.pixels[static_cast<std::size_t>(3 * masked_width + 4)] =
+        {0.05F, 0.22F, 0.91F, 1.0F};
+    ColorAdjustmentState masked_group_state;
+    masked_group_state.photo_layers = {group, child, opaque_sibling};
+    const auto masked_group_pixels = render(masked_group_state, masked_width, masked_height);
+    if (masked_group_pixels.empty()) {
+      std::cerr << "Prepared component retouch fixture should render\n";
+      return 1;
+    }
+    const auto repaired_masked = pixel_at(masked_group_pixels, masked_width, 4, 4);
+    const auto group_masked_out = pixel_at(masked_group_pixels, masked_width, 5, 4);
+    const auto sibling_over_repair = pixel_at(masked_group_pixels, masked_width, 4, 3);
+    if (repaired_masked.red < 0.90F || repaired_masked.green > 0.06F ||
+        repaired_masked.blue > 0.04F ||
+        std::abs(repaired_masked.alpha - 0.175F) > 2e-5F ||
+        group_masked_out.alpha > 1e-6F ||
+        difference(sibling_over_repair, {0.05F, 0.22F, 0.91F, 1.0F}) > 2e-6) {
+      std::cerr << "Prepared group repair must preserve child alpha, then obey group mask/opacity, "
+                   "without changing an overlapping opaque sibling; repaired_masked=("
+                << repaired_masked.red << ',' << repaired_masked.green << ','
+                << repaired_masked.blue << ',' << repaired_masked.alpha
+                << ") group_masked_out=(" << group_masked_out.red << ','
+                << group_masked_out.green << ',' << group_masked_out.blue << ','
+                << group_masked_out.alpha << ") sibling_over_repair=("
+                << sibling_over_repair.red << ',' << sibling_over_repair.green << ','
+                << sibling_over_repair.blue << ',' << sibling_over_repair.alpha << ")\n";
+      return 1;
+    }
+
+    // The component repair is authored in child coordinates. A translated,
+    // scaled, and rotated group must carry it with the rest of that private
+    // composite: source patch (8,12) maps near (10,10), while its old canvas
+    // location (8,12) no longer contains the repair.
+    constexpr int transformed_width = 25;
+    constexpr int transformed_height = 25;
+    PhotoLayer transformed_group;
+    transformed_group.id = "transformed-retouch-group";
+    transformed_group.kind = "group";
+    transformed_group.x = 3;
+    transformed_group.y = 2;
+    transformed_group.transform_scale = 0.8;
+    transformed_group.transform_rotation = 30.0;
+    transformed_group.component_retouch_masks = {
+        prepared_patch(6, 11, 5, 3, 8.0 / 24.0, 0.5, 0.12, 0.08)};
+    PhotoLayer transformed_child;
+    transformed_child.id = "transformed-retouch-child";
+    transformed_child.parent_id = transformed_group.id;
+    transformed_child.kind = "pixel";
+    transformed_child.pixel_width = transformed_width;
+    transformed_child.pixel_height = transformed_height;
+    transformed_child.pixels.assign(
+        static_cast<std::size_t>(transformed_width) * static_cast<std::size_t>(transformed_height),
+        ColorPixel{0.08F, 0.68F, 0.16F, 0.35F});
+    ColorAdjustmentState transformed_group_state;
+    transformed_group_state.photo_layers = {transformed_group, transformed_child};
+    const auto transformed_group_pixels = render(
+        transformed_group_state, transformed_width, transformed_height);
+    if (transformed_group_pixels.empty()) {
+      std::cerr << "Transformed prepared component retouch fixture should render\n";
+      return 1;
+    }
+    const auto transformed_repair = pixel_at(transformed_group_pixels, transformed_width, 10, 10);
+    const auto old_source_position = pixel_at(transformed_group_pixels, transformed_width, 8, 12);
+    if (transformed_repair.red < 0.80F || transformed_repair.green > 0.12F ||
+        transformed_repair.blue > 0.08F ||
+        std::abs(transformed_repair.alpha - 0.35F) > 2e-5F ||
+        old_source_position.green < 0.55F || old_source_position.red > 0.15F ||
+        std::abs(old_source_position.alpha - 0.35F) > 2e-5F) {
+      std::cerr << "Prepared component repair must follow the group's translation, scale, and rotation "
+                   "while preserving the partially transparent child alpha\n";
+      return 1;
+    }
+  }
+  {
+    // Mixed component operations are order-sensitive at one private target:
+    // clone samples the red source, while the prepared heal patch supplies blue.
+    constexpr int width = 9;
+    constexpr int height = 9;
+    constexpr int target_x = 4;
+    constexpr int target_y = 4;
+    constexpr int source_x = 2;
+    const auto target_index = static_cast<std::size_t>(target_y * width + target_x);
+    const auto source_index = static_cast<std::size_t>(target_y * width + source_x);
+
+    const BrushPoint dab{.x = 0.5, .y = 0.5, .size = 0.13, .flow = 1.0, .opacity = 1.0};
+    CloneStroke clone_stroke;
+    clone_stroke.points = {dab};
+    clone_stroke.circular = true;
+    clone_stroke.hardness = 1.0;
+    clone_stroke.feather = 0.0;
+    clone_stroke.source_x = static_cast<double>(source_x) / static_cast<double>(width - 1);
+    clone_stroke.source_y = 0.5;
+    clone_stroke.offset_x = static_cast<double>(source_x - target_x) /
+                            static_cast<double>(width - 1);
+    clone_stroke.offset_y = 0.0;
+    LocalMask clone;
+    clone.id = "component-clone-at-target";
+    clone.name = "Clone red source";
+    clone.kind = "brush";
+    clone.operation = "add";
+    clone.retouch_mode = "clone";
+    clone.clone_source_set = true;
+    clone.brush_points = {dab};
+    clone.clone_strokes = {clone_stroke};
+    clone.segmentation_width = width;
+    clone.segmentation_height = height;
+    clone.segmentation_mask.assign(static_cast<std::size_t>(width * height), 0);
+    clone.segmentation_mask[target_index] = 255;
+
+    LocalMask blue_patch;
+    blue_patch.id = "component-blue-prepared-heal";
+    blue_patch.name = "Prepared blue patch";
+    blue_patch.kind = "rectangle";
+    blue_patch.retouch_mode = "heal";
+    blue_patch.remove_strength = 100.0;
+    blue_patch.center_x = static_cast<double>(target_x) / static_cast<double>(width - 1);
+    blue_patch.center_y = static_cast<double>(target_y) / static_cast<double>(height - 1);
+    blue_patch.radius_x = 0.1;
+    blue_patch.radius_y = 0.1;
+    blue_patch.feather = 0.0;
+    blue_patch.heal_color_blend = 1.0;
+    blue_patch.heal_texture_blend = 1.0;
+    blue_patch.inpaint_blend_amount = 1.0;
+    blue_patch.inpaint_color_match = 0.0;
+    blue_patch.inpaint_seam_feather = 0.0;
+    blue_patch.inpaint_patch_x = target_x;
+    blue_patch.inpaint_patch_y = target_y;
+    blue_patch.inpaint_patch_width = 1;
+    blue_patch.inpaint_patch_height = 1;
+    blue_patch.inpaint_patch_pixels = {{0.02F, 0.04F, 0.96F, 0.98F}};
+
+    const auto render_component_operations = [&](std::vector<LocalMask> operations) {
+      for (std::size_t index = 0; index < operations.size(); ++index) {
+        operations[index].retouch_order = static_cast<int>(index);
+      }
+      PhotoLayer group;
+      group.id = "mixed-retouch-group";
+      group.kind = "group";
+      group.component_retouch_masks = std::move(operations);
+      PhotoLayer child;
+      child.id = "mixed-retouch-child";
+      child.parent_id = group.id;
+      child.kind = "pixel";
+      child.pixel_width = width;
+      child.pixel_height = height;
+      child.pixels.assign(static_cast<std::size_t>(width * height),
+                          ColorPixel{0.12F, 0.62F, 0.18F, 0.35F});
+      child.pixels[source_index] = {0.96F, 0.03F, 0.02F, 0.7F};
+      ColorAdjustmentState state;
+      state.photo_layers = {group, child};
+      auto pixels = std::vector<ColorPixel>(
+          static_cast<std::size_t>(width * height), ColorPixel{0.0F, 0.0F, 0.0F, 0.0F});
+      if (!apply_color_layers_stage(&pixels, width, height, state)) {
+        return std::vector<ColorPixel>{};
+      }
+      return pixels;
+    };
+
+    const auto clone_then_patch = render_component_operations({clone, blue_patch});
+    const auto patch_then_clone = render_component_operations({blue_patch, clone});
+    if (clone_then_patch.empty() || patch_then_clone.empty()) {
+      std::cerr << "Mixed component clone/prepared-heal fixtures should render\n";
+      return 1;
+    }
+    const auto clone_then_patch_target = clone_then_patch[target_index];
+    const auto patch_then_clone_target = patch_then_clone[target_index];
+    const auto clone_source_after = clone_then_patch[source_index];
+    if (clone_then_patch_target.blue < 0.90F || clone_then_patch_target.red > 0.08F ||
+        patch_then_clone_target.red < 0.88F || patch_then_clone_target.blue > 0.08F ||
+        std::abs(clone_then_patch_target.alpha - 0.35F) > 2e-5F ||
+        std::abs(patch_then_clone_target.alpha - 0.35F) > 2e-5F ||
+        difference(clone_source_after, {0.96F, 0.03F, 0.02F, 0.7F}) > 2e-6) {
+      std::cerr << "Component retouch order must be preserved: clone then prepared blue heal ends blue, "
+                   "prepared heal then clone ends red; targets=("
+                << clone_then_patch_target.red << ',' << clone_then_patch_target.green << ','
+                << clone_then_patch_target.blue << ',' << clone_then_patch_target.alpha << ")/ ("
+                << patch_then_clone_target.red << ',' << patch_then_clone_target.green << ','
+                << patch_then_clone_target.blue << ',' << patch_then_clone_target.alpha
+                << ") source=(" << clone_source_after.red << ',' << clone_source_after.green << ','
+                << clone_source_after.blue << ',' << clone_source_after.alpha << ")\n";
+      return 1;
+    }
+  }
   std::cout << "Independent straight-alpha layer cases=" << cases << " failures=" << failures << " worst=" << worst
             << " native=" << native << '\n';
   return ok ? 0 : 1;

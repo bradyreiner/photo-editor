@@ -1,0 +1,422 @@
+{
+  "schema": "looksy.native-timeline-lifecycle-request-examples/v1",
+  "status": "Examples only; never execute unsubstituted placeholders",
+  "liveSchemasRequired": true,
+  "warning": "Lifecycle operations must follow documented active-document/task guards. Root owns current editor recovery; no navigation or capability change is authorized by this file.",
+  "perCampaign": [
+    {
+      "campaign": "01",
+      "create": {
+        "tool": "timeline.create_draft",
+        "arguments": {
+          "settings": {
+            "timelineName": "LOOKSi C01 — I wanted to make this.",
+            "width": 1080,
+            "height": 1920,
+            "frameRate": 30,
+            "audioSampleRate": 48000,
+            "colorSpace": "Rec.709",
+            "dataLevels": "Legal",
+            "trackLayout": "creator_social"
+          }
+        }
+      },
+      "admit": {
+        "tool": "timeline.admit_task",
+        "arguments": {
+          "targetResourceId": "${CURRENT_RESOURCE_ID}",
+          "objective": "I wanted to make this. — author native editable Timeline objects",
+          "actions": [
+            {
+              "kind": "text",
+              "summary": "Create editable campaign titles and native graphic shapes."
+            },
+            {
+              "kind": "layers",
+              "summary": "Create and arrange native Timeline tracks and clips."
+            },
+            {
+              "kind": "media",
+              "summary": "Import only the listed raw/native source assets as individual clips."
+            },
+            {
+              "kind": "framing",
+              "summary": "Frame sources and animate native position, scale and opacity."
+            },
+            {
+              "kind": "audio",
+              "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+            },
+            {
+              "kind": "delivery",
+              "summary": "Save readback-verified native project and prepare native H.264 export."
+            }
+          ],
+          "assetPaths": [
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/nepal-mountain-working-copy.jpg",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign01/audio/01-original-letter-bed.wav"
+          ],
+          "outputDirectory": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign01/projects",
+          "confirmed": true
+        }
+      },
+      "nativeAuthoringPlan": "timeline-campaign01.commands.json",
+      "requiredBinding": [
+        "resourceId",
+        "taskId",
+        "startingDocumentHash"
+      ]
+    },
+    {
+      "campaign": "02",
+      "create": {
+        "tool": "timeline.create_draft",
+        "arguments": {
+          "settings": {
+            "timelineName": "LOOKSi C02 — NEPAL. In three forms.",
+            "width": 1080,
+            "height": 1920,
+            "frameRate": 30,
+            "audioSampleRate": 48000,
+            "colorSpace": "Rec.709",
+            "dataLevels": "Legal",
+            "trackLayout": "creator_social"
+          }
+        }
+      },
+      "admit": {
+        "tool": "timeline.admit_task",
+        "arguments": {
+          "targetResourceId": "${CURRENT_RESOURCE_ID}",
+          "objective": "NEPAL. In three forms. — author native editable Timeline objects",
+          "actions": [
+            {
+              "kind": "text",
+              "summary": "Create editable campaign titles and native graphic shapes."
+            },
+            {
+              "kind": "layers",
+              "summary": "Create and arrange native Timeline tracks and clips."
+            },
+            {
+              "kind": "media",
+              "summary": "Import only the listed raw/native source assets as individual clips."
+            },
+            {
+              "kind": "framing",
+              "summary": "Frame sources and animate native position, scale and opacity."
+            },
+            {
+              "kind": "audio",
+              "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+            },
+            {
+              "kind": "delivery",
+              "summary": "Save readback-verified native project and prepare native H.264 export."
+            }
+          ],
+          "assetPaths": [
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/archive/native-timeline-review-2026-11-02.mp4",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-01.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-02.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-03.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-04.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-05.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/boards/nepal-near-far-06.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign02/audio/original-score.wav"
+          ],
+          "outputDirectory": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign02/projects",
+          "confirmed": true
+        }
+      },
+      "nativeAuthoringPlan": "timeline-campaign02.commands.json",
+      "requiredBinding": [
+        "resourceId",
+        "taskId",
+        "startingDocumentHash"
+      ]
+    },
+    {
+      "campaign": "03",
+      "create": {
+        "tool": "timeline.create_draft",
+        "arguments": {
+          "settings": {
+            "timelineName": "LOOKSi C03 — Keep the gold. Keep the quiet blues.",
+            "width": 1080,
+            "height": 1920,
+            "frameRate": 30,
+            "audioSampleRate": 48000,
+            "colorSpace": "Rec.709",
+            "dataLevels": "Legal",
+            "trackLayout": "creator_social"
+          }
+        }
+      },
+      "admit": {
+        "tool": "timeline.admit_task",
+        "arguments": {
+          "targetResourceId": "${CURRENT_RESOURCE_ID}",
+          "objective": "Keep the gold. Keep the quiet blues. — author native editable Timeline objects",
+          "actions": [
+            {
+              "kind": "text",
+              "summary": "Create editable campaign titles and native graphic shapes."
+            },
+            {
+              "kind": "layers",
+              "summary": "Create and arrange native Timeline tracks and clips."
+            },
+            {
+              "kind": "media",
+              "summary": "Import only the listed raw/native source assets as individual clips."
+            },
+            {
+              "kind": "framing",
+              "summary": "Frame sources and animate native position, scale and opacity."
+            },
+            {
+              "kind": "audio",
+              "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+            },
+            {
+              "kind": "delivery",
+              "summary": "Save readback-verified native project and prepare native H.264 export."
+            }
+          ],
+          "assetPaths": [
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/baseline/nepal-mountain-working-copy-full-resolution.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign03/audio/original-score.wav"
+          ],
+          "outputDirectory": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign03/projects",
+          "confirmed": true
+        }
+      },
+      "nativeAuthoringPlan": "timeline-campaign03.commands.json",
+      "requiredBinding": [
+        "resourceId",
+        "taskId",
+        "startingDocumentHash"
+      ]
+    },
+    {
+      "campaign": "04",
+      "create": {
+        "tool": "timeline.create_draft",
+        "arguments": {
+          "settings": {
+            "timelineName": "LOOKSi C04 — The last tweak. Again.",
+            "width": 1080,
+            "height": 1920,
+            "frameRate": 30,
+            "audioSampleRate": 48000,
+            "colorSpace": "Rec.709",
+            "dataLevels": "Legal",
+            "trackLayout": "creator_social"
+          }
+        }
+      },
+      "admit": {
+        "tool": "timeline.admit_task",
+        "arguments": {
+          "targetResourceId": "${CURRENT_RESOURCE_ID}",
+          "objective": "The last tweak. Again. — author native editable Timeline objects",
+          "actions": [
+            {
+              "kind": "text",
+              "summary": "Create editable campaign titles and native graphic shapes."
+            },
+            {
+              "kind": "layers",
+              "summary": "Create and arrange native Timeline tracks and clips."
+            },
+            {
+              "kind": "media",
+              "summary": "Import only the listed raw/native source assets as individual clips."
+            },
+            {
+              "kind": "framing",
+              "summary": "Frame sources and animate native position, scale and opacity."
+            },
+            {
+              "kind": "audio",
+              "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+            },
+            {
+              "kind": "delivery",
+              "summary": "Save readback-verified native project and prepare native H.264 export."
+            }
+          ],
+          "assetPaths": [
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign04/audio/original-sound-design.wav"
+          ],
+          "outputDirectory": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign04/projects",
+          "confirmed": true
+        }
+      },
+      "nativeAuthoringPlan": "timeline-campaign04.commands.json",
+      "requiredBinding": [
+        "resourceId",
+        "taskId",
+        "startingDocumentHash"
+      ]
+    },
+    {
+      "campaign": "05",
+      "create": {
+        "tool": "timeline.create_draft",
+        "arguments": {
+          "settings": {
+            "timelineName": "LOOKSi C05 — Make room for your eye.",
+            "width": 1080,
+            "height": 1920,
+            "frameRate": 30,
+            "audioSampleRate": 48000,
+            "colorSpace": "Rec.709",
+            "dataLevels": "Legal",
+            "trackLayout": "creator_social"
+          }
+        }
+      },
+      "admit": {
+        "tool": "timeline.admit_task",
+        "arguments": {
+          "targetResourceId": "${CURRENT_RESOURCE_ID}",
+          "objective": "Make room for your eye. — author native editable Timeline objects",
+          "actions": [
+            {
+              "kind": "text",
+              "summary": "Create editable campaign titles and native graphic shapes."
+            },
+            {
+              "kind": "layers",
+              "summary": "Create and arrange native Timeline tracks and clips."
+            },
+            {
+              "kind": "media",
+              "summary": "Import only the listed raw/native source assets as individual clips."
+            },
+            {
+              "kind": "framing",
+              "summary": "Frame sources and animate native position, scale and opacity."
+            },
+            {
+              "kind": "audio",
+              "summary": "Place admitted audio source clips and author gain envelopes in Timeline."
+            },
+            {
+              "kind": "delivery",
+              "summary": "Save readback-verified native project and prepare native H.264 export."
+            }
+          ],
+          "assetPaths": [
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_4870.jpg",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_4969.jpg",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/sources/IMG_5077.jpg",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/media/exports/finish/nepal-mountain-working-copy-full-resolution-2.png",
+            "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/v2/campaign05/audio/original-score.wav"
+          ],
+          "outputDirectory": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/marketing/campaigns/looksi-launch-2026-11-16/native-rebuild/campaign05/projects",
+          "confirmed": true
+        }
+      },
+      "nativeAuthoringPlan": "timeline-campaign05.commands.json",
+      "requiredBinding": [
+        "resourceId",
+        "taskId",
+        "startingDocumentHash"
+      ]
+    }
+  ],
+  "readAndDeliveryExamples": [
+    {
+      "tool": "app.agent_guide",
+      "arguments": {
+        "workflow": "timeline"
+      }
+    },
+    {
+      "tool": "timeline.inspect_document",
+      "arguments": {}
+    },
+    {
+      "tool": "app.list_commands",
+      "arguments": {
+        "domain": "timeline",
+        "query": "createTimeline",
+        "offset": 0,
+        "limit": 64
+      }
+    },
+    {
+      "tool": "app.command_schema",
+      "arguments": {
+        "commandId": "timeline.action.createTimelineTitle"
+      }
+    },
+    {
+      "tool": "timeline.inspect_structure",
+      "arguments": {
+        "scope": "tracks",
+        "maxItems": 64,
+        "resourceId": "${CURRENT_RESOURCE_ID}",
+        "documentHash": "${CURRENT_DOCUMENT_HASH}"
+      }
+    },
+    {
+      "tool": "timeline.preview_at_time",
+      "arguments": {
+        "seconds": 9,
+        "resourceId": "${CURRENT_RESOURCE_ID}",
+        "documentHash": "${CURRENT_DOCUMENT_HASH}"
+      }
+    },
+    {
+      "tool": "timeline.capture_visible_proof",
+      "arguments": {}
+    },
+    {
+      "tool": "timeline.capture_visible_proof",
+      "arguments": {
+        "captureId": "${RETURNED_CAPTURE_ID}"
+      }
+    },
+    {
+      "tool": "timeline.inspect_used_media",
+      "arguments": {
+        "offset": 0,
+        "maxItems": 256,
+        "resourceId": "${CURRENT_RESOURCE_ID}",
+        "documentHash": "${CURRENT_DOCUMENT_HASH}"
+      }
+    },
+    {
+      "tool": "timeline.inspect_delivery_preflight",
+      "arguments": {
+        "preset": "instagram"
+      }
+    },
+    {
+      "tool": "timeline.export_h264",
+      "arguments": {
+        "requestId": "${NEW_CANONICAL_UUID}",
+        "confirmed": true,
+        "resourceId": "${CURRENT_RESOURCE_ID}",
+        "documentHash": "${CURRENT_DOCUMENT_HASH}"
+      }
+    },
+    {
+      "tool": "timeline.inspect_export",
+      "arguments": {
+        "requestId": "${SAME_EXPORTED_REQUEST_UUID}",
+        "resourceId": "${CURRENT_RESOURCE_ID}",
+        "documentHash": "${CURRENT_DOCUMENT_HASH}"
+      }
+    }
+  ],
+  "uncertainReplyRule": "Inspect current state/receipts. Do not replay create/import/edit or queue a new export request ID.",
+  "proofBoundary": "Preview seek verifies navigation, not decoded frame presentation. Visible proof requires an exposed native window. No example was invoked."
+}

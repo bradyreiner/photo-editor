@@ -130,8 +130,8 @@ class CommerceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_commerce(config, require_ready=True)
 
-    def test_source_platform_selection_is_apple_silicon(self):
-        self.assertEqual(self.config({}, require_ready=False)["supportedPlatforms"], ["mac-arm"])
+    def test_source_platform_selection_is_mac_and_windows(self):
+        self.assertEqual(self.config({}, require_ready=False)["supportedPlatforms"], ["mac-arm", "windows"])
 
     def test_arm_only_artifacts_require_correct_architecture_and_appcast(self):
         with tempfile.TemporaryDirectory() as folder:

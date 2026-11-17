@@ -7,9 +7,15 @@ import "." as Components
 
 RowLayout {
     id: root
+    property string rowKind: "photo-layer"
 
     property bool brushMode: false
     property bool showEditButton: true
+    property bool editActive: false
+    property bool showVisibilityButton: true
+    property bool visibilityEnabled: true
+    property bool showMenuButton: true
+    property bool rowHoveredOrFocused: false
     property bool hasMask: false
     property bool maskSelected: false
     property bool layerVisible: true
@@ -17,7 +23,12 @@ RowLayout {
     property int layerIndex: -1
     property color accent: theme.accentCool400
     property var menuItems: []
-    readonly property string actionZoneContract: "layer-row-action-zone:v6|component:LayerRowActionZone|normal-width:edit-visibility-more|brush-width:edit-more|edit:labeled|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-no-shift:true|no-elide:true"
+    property var menuItemsProvider: null
+    property string visibilityDisabledReason: ""
+    readonly property bool editActionVisible: root.showEditButton && !root.brushMode
+    readonly property bool actionsRevealed: root.rowHoveredOrFocused || editAction.activeFocus ||
+                                            visibilityAction.activeFocus || photoLayerMenuButton.activeFocus
+    readonly property string actionZoneContract: "layer-row-action-zone:v8|component:LayerRowActionZone|wide:edit-visibility-more|medium:edit-more|compact:more|brush:more|edit:labeled|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-focus-reveal:true|reserved-width:true|no-layout-shift:true|no-elide:true"
 
     signal editClicked()
     signal visibilityClicked()
@@ -26,26 +37,34 @@ RowLayout {
     Theme { id: theme }
 
     readonly property int editButtonWidth: theme.scaled(58)
-    readonly property int visibleActionCount: (root.showEditButton ? 1 : 0) +
-                                               (root.brushMode ? 0 : 1) + 1
-    Layout.preferredWidth: (root.showEditButton ? editButtonWidth : 0) +
-                           (root.brushMode ? 0 : theme.iconButtonSizeCompact) +
-                           theme.iconButtonSizeCompact +
+    readonly property int visibleActionCount: (root.editActionVisible ? 1 : 0) +
+                                               (!root.brushMode && root.showVisibilityButton ? 1 : 0) +
+                                               (root.showMenuButton ? 1 : 0)
+    Layout.preferredWidth: (root.editActionVisible ? editButtonWidth : 0) +
+                           (!root.brushMode && root.showVisibilityButton ? theme.iconButtonSizeCompact : 0) +
+                           (root.showMenuButton ? theme.iconButtonSizeCompact : 0) +
                            Math.max(0, visibleActionCount - 1) * theme.space4
     Layout.minimumWidth: Layout.preferredWidth
     Layout.maximumWidth: Layout.preferredWidth
     Layout.preferredHeight: theme.iconButtonSizeCompact
     spacing: theme.space4
+    opacity: actionsRevealed ? 1.0 : 0.0
+    enabled: actionsRevealed
+
+    Behavior on opacity {
+        NumberAnimation { duration: theme.durationFast; easing.type: Easing.OutCubic }
+    }
 
     Components.ToolButton {
+        id: editAction
         objectName: "photoLayerRowEditButton"
         Layout.preferredWidth: root.editButtonWidth
-        visible: root.showEditButton
+        visible: root.editActionVisible
         iconName: "edit"
         compact: true
         showLabel: true
         label: "Edit"
-        active: false
+        active: root.editActive
         enabled: root.layerIndex >= 0
         onClicked: root.editClicked()
     }
@@ -79,7 +98,8 @@ RowLayout {
             anchors.rightMargin: 5
             text: root.hasMask ? "MASK" : "NO"
             color: root.hasMask || root.maskSelected ? root.accent : theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 8
             font.weight: Font.DemiBold
             horizontalAlignment: Text.AlignHCenter
@@ -96,7 +116,8 @@ RowLayout {
         Layout.preferredWidth: 34
         text: root.layerOpacityPercent + "%"
         color: theme.textMain
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 9
         font.weight: Font.DemiBold
         horizontalAlignment: Text.AlignRight
@@ -106,28 +127,35 @@ RowLayout {
     }
 
     Components.ToolButton {
-        objectName: "photoLayerVisibilityButton"
-        visible: !root.brushMode
+        id: visibilityAction
+        objectName: root.rowKind === "base-image" ? "baseImageLayerVisibilityButton" : "photoLayerVisibilityButton"
+        visible: !root.brushMode && root.showVisibilityButton
+        enabled: root.layerIndex >= 0 && root.visibilityEnabled
         iconName: root.layerVisible ? "visible" : "hidden"
         compact: true
         label: root.layerVisible ? "Hide layer" : "Show layer"
         active: false
+        disabledReason: root.visibilityDisabledReason.length > 0
+                        ? root.visibilityDisabledReason : "Visibility is unavailable for this layer."
         onClicked: root.visibilityClicked()
     }
 
     Components.ToolButton {
+        id: photoLayerMenuButton
         objectName: "photoLayerRowMoreMenuButton"
+        visible: root.showMenuButton
         iconName: "menu"
         compact: true
         label: "Layer actions"
         enabled: root.layerIndex >= 0
-        onClicked: photoLayerRowMenu.open()
+        onClicked: photoLayerRowMenu.toggleFrom(photoLayerMenuButton)
     }
 
     LayerActionsMenu {
         id: photoLayerRowMenu
         objectName: "photoLayerRowActionsPopup"
         menuItems: root.menuItems
+        menuItemsProvider: root.menuItemsProvider
         onMenuItemTriggered: function(key) { root.menuItemTriggered(key) }
     }
 }

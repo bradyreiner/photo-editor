@@ -101,10 +101,37 @@ int main(int argc, char** argv) {
   const auto scaled = renderer->render(scaled_scene,*scaled_camera.camera,true);
   const int scale_error = maximum_error(optical.image,scaled.image,optical.image.rect());
   if (!scaled.error.isEmpty() || scale_error > 1) return fail("Equivalent scene units changed physical photo");
+  QVariantList extreme_measurements;
+  for (const double stop:{0.1,0.2,22.0}) {
+    auto extreme_settings=built.camera->physical->settings; extreme_settings.f_number=stop;
+    const auto extreme=make_gaussian_physical_camera(pose,{600,400},extreme_settings);
+    if (!extreme.camera) return fail("Extreme pupil conversion failed");
+    auto isolated=std::make_shared<GaussianSceneData>();
+    auto point=scene->points[1]; point.center_opacity[2]=1.05F;
+    isolated->points.push_back(point);
+    auto sharp_camera=*extreme.camera; sharp_camera.physical.reset(); sharp_camera.photo.lens.aperture_radius=0;
+    const auto reference=renderer->render(isolated,sharp_camera,true);
+    const auto photo=renderer->render(isolated,*extreme.camera,true);
+    const auto preview=renderer->render(isolated,*extreme.camera,false);
+    if (!reference.error.isEmpty() || !photo.error.isEmpty() || !preview.error.isEmpty() ||
+        read_gaussian_photo_texture(preview)!=photo.image) return fail("Extreme pupil native output failed");
+    double mean=0,second=0;
+    const auto pupil=gaussian_aperture_samples(extreme.camera->photo.lens);
+    const double count=static_cast<double>(pupil.size());
+    for (const auto sample:pupil) { mean+=sample.x()/count; second+=sample.x()*sample.x()/count; }
+    const double factor=extreme.camera->fx*(1.0-1.0/point.center_opacity[2]);
+    const double expected=(second-mean*mean)*factor*factor;
+    const double measured=moments(photo.image,300,40).variance-moments(reference.image,300,40).variance;
+    if (!std::isfinite(measured) || std::abs(measured-expected)>std::max(0.02,expected*0.02))
+      return fail("Extreme aperture spread differs from independent pupil prediction");
+    extreme_measurements.append(QVariantMap{{"fNumber",stop},{"predictedDefocusVariancePixels",expected},
+        {"measuredDefocusVariancePixels",measured}});
+  }
   const QVariantMap receipt{{"schema","framehouse-physical-camera-proof-v1"},{"passed",true},
       {"scope","synthetic-ideal-thin-lens-not-measured-lens-or-scene-calibration"},
       {"physicalInput",built.calibration},{"resolvedCamera",camera.description()},
       {"measurements",measurements},{"doubleFNumberVarianceRatio",narrow_variance/wide_variance},
+      {"extremeApertures",extreme_measurements},
       {"doubleResolutionVarianceRatio",large_variance/wide_variance},{"sceneScaleMaxCodeError",scale_error},
       {"focusedPlaneMaxCodeError",maximum_error(sharp.image,optical.image,{268,168,64,64})}};
   if (app.arguments().size() == 2) {

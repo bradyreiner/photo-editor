@@ -184,7 +184,7 @@ if [ "${create_tag}" -eq 1 ] && [ "${version_changed}" -eq 1 ]; then
   fail "VERSION was updated but is not committed. Commit the version bump, then rerun with --create-tag."
 fi
 
-for tool in cargo cmake cpack git; do
+for tool in cargo cmake cpack git python3; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     fail "${tool} is required"
   fi
@@ -211,6 +211,9 @@ case "${host_os}" in
     fail "this release script currently supports macOS packaging from this machine. Use scripts/package-windows-msix.ps1 on Windows for MSIX releases."
     ;;
 esac
+
+source "${SCRIPT_DIR}/build-lock.sh"
+acquire_build_lock "${build_dir}"
 
 if [ -z "${postgres_runtime_dir}" ]; then
   postgres_runtime_dir="$(detect_postgres_runtime_dir || true)"

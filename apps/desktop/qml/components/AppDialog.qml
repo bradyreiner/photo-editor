@@ -9,9 +9,9 @@ Dialog {
     readonly property real popupAvailableHeight: Math.max(1, root.Overlay.overlay
         ? root.Overlay.overlay.height - root.margins * 2 : parent ? parent.height - root.margins * 2 : 1080)
     readonly property string appDialogContract: "app-dialog:v1|surface:shared-neutral|header:shared|actions:shared|motion:shared|bounds:viewport|policies:owner-preserved"
-    readonly property int standardPopupPadding: dialogTheme.panelPaddingStandard
+    readonly property int standardPopupPadding: dialogTheme.popupPadding
     margins: dialogTheme.space12
-    padding: dialogTheme.panelPaddingStandard
+    padding: dialogTheme.popupPadding
     spacing: 0
     modal: true
     focus: true
@@ -35,9 +35,9 @@ Dialog {
         font.pixelSize: dialogTheme.typeDialogTitle
         font.weight: Font.DemiBold
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-        leftPadding: dialogTheme.panelPaddingStandard
-        rightPadding: dialogTheme.panelPaddingStandard
-        topPadding: dialogTheme.panelPaddingStandard
+        leftPadding: dialogTheme.popupPadding
+        rightPadding: dialogTheme.popupPadding
+        topPadding: dialogTheme.popupPadding
         bottomPadding: 0
     }
     footer: DialogButtonBox {
@@ -45,7 +45,7 @@ Dialog {
         standardButtons: root.standardButtons
         alignment: Qt.AlignRight
         spacing: dialogTheme.space8
-        padding: dialogTheme.panelPaddingStandard
+        padding: dialogTheme.popupPadding
         topPadding: 0
         background: Item {}
         delegate: ActionButton {

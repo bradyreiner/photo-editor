@@ -33,6 +33,7 @@
 #include "decoded_image_cache.h"
 #include "edit_adjustment_patch.h"
 #include "photo_point_text.h"
+#include "campaign_delivery.h"
 
 namespace {
 
@@ -415,11 +416,47 @@ int run_creative_ux_linked_text_test(const QDir& dir) {
   return EXIT_SUCCESS;
 }
 
+#include "campaign_delivery_workflow.inc"
+
 }  // namespace
 
 int main(int argc, char** argv) {
   qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
   QApplication app(argc, argv);
+
+  if (app.arguments().contains(QStringLiteral("--board-origin-reopen"))) {
+    const auto flag = app.arguments().indexOf(QStringLiteral("--board-origin-reopen"));
+    if (flag + 1 >= app.arguments().size()) return fail("Child reopen requires its parent-owned expectation marker");
+    const auto marker_path = app.arguments().at(flag + 1);
+    QFile marker(marker_path);
+    if (!marker.open(QIODevice::ReadOnly)) return fail("Read parent Board persistence expectations");
+    const auto expected = QJsonDocument::fromJson(marker.readAll()).object();
+    const auto fixture_root = expected.value("fixtureRoot").toString();
+    const auto parent_pid = expected.value("parentPid").toVariant().toLongLong();
+    if (expected.value("schema").toString() != "looksy-board-origin-child:v1" ||
+        parent_pid <= 0 || parent_pid == QCoreApplication::applicationPid() || fixture_root.isEmpty() ||
+        QFileInfo(marker_path).absoluteDir().canonicalPath() != QDir(fixture_root).canonicalPath() ||
+        QDir(qEnvironmentVariable("PHOTO_EDITOR_CAROUSEL_DOCUMENTS_PATH")).canonicalPath() !=
+            QDir(QDir(fixture_root).filePath("carousel-documents")).canonicalPath() ||
+        QDir(photo_editor::desktop::AppBootstrap::appDataLocation()).canonicalPath() != QDir(QDir(fixture_root).filePath("app-data")).canonicalPath())
+      return fail("Child Board reopen must inherit only its parent's isolated temporary runtime and distinct PID");
+    CarouselDocumentController reopened;
+    if (!reopened.loadDocument(expected.value("documentId").toString()) ||
+        reopened.savedDocumentId() != expected.value("documentId").toString() || reopened.slideCount() != 1 ||
+        reopened.documentArchived() != expected.value("archived").toBool())
+      return fail("New process reopens the exact archived/restored Board document");
+    const auto actual = reopened.editBoardPayload(0);
+    if (actual.value("boardId").toString() != expected.value("boardId").toString() ||
+        actual.value("imageId").toString() != expected.value("imageId").toString() ||
+        actual.value("adjustmentPatchJson").toString() != expected.value("boardRecipe").toString() ||
+        QJsonObject::fromVariantMap(reopened.photoOrigin()) != expected.value("origin").toObject())
+      return fail("New process preserves Board/image IDs, complete editable recipe and exact photo origin");
+    const QJsonObject receipt{{"schema", "looksy-board-origin-child:v1"}, {"status", "passed"},
+        {"parentPid", parent_pid}, {"childPid", QCoreApplication::applicationPid()},
+        {"documentId", reopened.savedDocumentId()}, {"archived", reopened.documentArchived()}};
+    std::cout << QJsonDocument(receipt).toJson(QJsonDocument::Compact).constData() << '\n';
+    return EXIT_SUCCESS;
+  }
 
   QTemporaryDir workspace;
   if (!workspace.isValid()) {
@@ -435,6 +472,223 @@ int main(int argc, char** argv) {
   qputenv(
       "PHOTO_EDITOR_APP_DATA_DIR",
       QFile::encodeName(dir.filePath(QStringLiteral("app-data"))));
+
+  if (app.arguments().contains(QStringLiteral("--delivery-formats"))) return run_campaign_delivery_workflow(dir);
+
+  if (app.arguments().contains(QStringLiteral("--async-document-load"))) {
+    qputenv("PHOTO_EDITOR_DATABASE_URL", QByteArrayLiteral("postgres://example/test"));
+    {
+      const auto make_saved_document = [](const QString& name, int slide_count) {
+        CarouselDocumentController source;
+        source.createCarouselWithSettings(QVariantMap{
+            {QStringLiteral("carouselName"), name},
+            {QStringLiteral("documentFormat"), QStringLiteral("custom")},
+            {QStringLiteral("customPixelWidth"), 320},
+            {QStringLiteral("customPixelHeight"), 240},
+            {QStringLiteral("slideCount"), slide_count},
+        });
+        if (!source.saveDocument(name)) return QString{};
+        return source.savedDocumentId();
+      };
+      const auto first_id = make_saved_document(QStringLiteral("Async Board A"), 2);
+      const auto second_id = make_saved_document(QStringLiteral("Async Board B"), 3);
+      if (first_id.isEmpty() || second_id.isEmpty() || first_id == second_id)
+        return fail("Async board loading fixture should persist two distinct documents");
+
+      CarouselDocumentController target;
+      target.createCarouselWithSettings(QVariantMap{
+          {QStringLiteral("carouselName"), QStringLiteral("Async Board Sentinel")},
+          {QStringLiteral("documentFormat"), QStringLiteral("custom")},
+          {QStringLiteral("customPixelWidth"), 320},
+          {QStringLiteral("customPixelHeight"), 240},
+          {QStringLiteral("slideCount"), 1},
+      });
+      if (!target.saveDocument(QStringLiteral("Async Board Sentinel")))
+        return fail("Async board loading fixture should persist its original document");
+
+      struct LoadEvent {
+        quint64 request_id = 0;
+        QString document_id;
+        bool success = false;
+        bool applied = false;
+      };
+      QVector<LoadEvent> events;
+      QObject::connect(&target, &CarouselDocumentController::documentLoadFinished,
+          &target, [&events](quint64 request_id, const QString& document_id,
+                             bool success, bool applied) {
+            events.push_back({request_id, document_id, success, applied});
+          });
+
+      const auto first_request = target.loadDocumentAsync(first_id);
+      const auto second_request = target.loadDocumentAsync(second_id);
+      if (first_request == 0 || second_request <= first_request ||
+          !wait_until([&events, first_request, second_request]() {
+            bool saw_first = false;
+            bool saw_second = false;
+            for (const auto& event : events) {
+              saw_first |= event.request_id == first_request;
+              saw_second |= event.request_id == second_request;
+            }
+            return saw_first && saw_second;
+          }, 30000)) {
+        return fail("Latest async board request should finish after rapidly superseding an earlier request");
+      }
+      bool first_discarded = false;
+      bool second_applied = false;
+      for (const auto& event : events) {
+        if (event.request_id == first_request)
+          first_discarded = !event.success && !event.applied;
+        if (event.request_id == second_request)
+          second_applied = event.document_id == second_id && event.success && event.applied;
+      }
+      if (!first_discarded || !second_applied || target.savedDocumentId() != second_id ||
+          target.documentName() != QStringLiteral("Async Board B") || target.slideCount() != 3 ||
+          target.documentDirty()) {
+        return fail("Rapid A-to-B async loading should discard stale A and atomically commit the clean B document");
+      }
+
+      const auto loaded_hash = target.documentContentHash();
+      const auto failed_request = target.loadDocumentAsync(QStringLiteral("missing-async-board-document"));
+      if (failed_request == 0 || !wait_until([&events, failed_request]() {
+            return std::any_of(events.cbegin(), events.cend(), [failed_request](const LoadEvent& event) {
+              return event.request_id == failed_request;
+            });
+          }, 30000)) {
+        return fail("Missing async board should complete with a failure result");
+      }
+      const auto failed_event = *std::find_if(events.cbegin(), events.cend(), [failed_request](const LoadEvent& event) {
+        return event.request_id == failed_request;
+      });
+      if (failed_event.success || failed_event.applied || target.savedDocumentId() != second_id ||
+          target.documentContentHash() != loaded_hash) {
+        return fail("Failed async fetch must leave the previously open document and its content intact");
+      }
+
+      const auto cancel_request = target.loadDocumentAsync(first_id);
+      if (cancel_request == 0 || !target.cancelDocumentLoad(cancel_request) ||
+          target.savedDocumentId() != second_id) {
+        return fail("Canceling async board loading should keep the previous document active");
+      }
+      const auto after_cancel_request = target.loadDocumentAsync(second_id);
+      if (after_cancel_request == 0 || !wait_until([&events, after_cancel_request]() {
+            return std::any_of(events.cbegin(), events.cend(), [after_cancel_request](const LoadEvent& event) {
+              return event.request_id == after_cancel_request && event.success && event.applied;
+            });
+          }, 30000) || target.savedDocumentId() != second_id || target.documentDirty()) {
+        return fail("A canceled request must not replace a later successfully loaded board");
+      }
+    }
+    return EXIT_SUCCESS;
+  }
+
+  if (app.arguments().contains(QStringLiteral("--board-origin"))) {
+    qputenv("PHOTO_EDITOR_DATABASE_URL", QByteArrayLiteral("postgres://example/test"));
+    const auto source = write_image(dir, QStringLiteral("origin.png"),
+        split_image(QSize(80, 50), QColor("#c09055"), QColor("#334477")));
+    CarouselDocumentController::RecipeState state;
+    state.exposure = 0.45;
+    state.raw_exposure = 0.7;
+    const auto patch = photo_editor::desktop::serialize_adjustment_patch_json(state,
+        photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    CarouselDocumentController controller;
+    int history_receipts = 0;
+    QObject::connect(&controller, &CarouselDocumentController::historyEntryRecorded,
+        [&history_receipts](const QString&, const QString&) { ++history_receipts; });
+    if (!controller.createBoardsFromEdit(source, "Source photo", patch, 80, 50, 1,
+            {{"kind", "catalog"}, {"assetId", "source-photo-id"}}))
+      return fail("Create a single Board with a durable source return context");
+    const auto id = controller.savedDocumentId();
+    const auto board = controller.editBoardPayload(0);
+    const auto origin = controller.photoOrigin();
+    const auto reopen_in_child = [&](bool archived_state) {
+      const auto marker_path = dir.filePath(archived_state ? "archived-child.json" : "restored-child.json");
+      const QJsonObject expected{{"schema", "looksy-board-origin-child:v1"}, {"fixtureRoot", dir.absolutePath()},
+          {"parentPid", QCoreApplication::applicationPid()}, {"documentId", id}, {"archived", archived_state},
+          {"boardId", board.value("boardId").toString()}, {"imageId", board.value("imageId").toString()},
+          {"boardRecipe", board.value("adjustmentPatchJson").toString()}, {"origin", QJsonObject::fromVariantMap(origin)}};
+      QFile marker(marker_path);
+      const auto bytes = QJsonDocument(expected).toJson(QJsonDocument::Compact);
+      if (!marker.open(QIODevice::WriteOnly) || marker.write(bytes) != bytes.size()) return false;
+      marker.close();
+      QProcess child;
+      child.start(QCoreApplication::applicationFilePath(), {"--board-origin-reopen", marker_path});
+      if (!child.waitForStarted(5000) || !child.waitForFinished(30000) ||
+          child.exitStatus() != QProcess::NormalExit || child.exitCode() != EXIT_SUCCESS) {
+        std::cerr << child.readAllStandardError().constData();
+        return false;
+      }
+      const auto receipt = QJsonDocument::fromJson(child.readAllStandardOutput().trimmed()).object();
+      if (receipt.value("status").toString() != "passed" || receipt.value("parentPid").toVariant().toLongLong() != QCoreApplication::applicationPid() ||
+          receipt.value("childPid").toVariant().toLongLong() == QCoreApplication::applicationPid() ||
+          receipt.value("childPid").toVariant().toLongLong() <= 0 || receipt.value("archived").toBool() != archived_state)
+        return false;
+      std::cout << QJsonDocument(receipt).toJson(QJsonDocument::Compact).constData() << '\n';
+      return true;
+    };
+    if (origin.value("assetId") != QStringLiteral("source-photo-id") ||
+        origin.value("filePath") != source || origin.value("adjustmentPatchJson") != patch ||
+        !origin.value("available").toBool() || origin.value("recipeRevision").toString().isEmpty())
+      return fail("Origin identifies the exact source and captures its independent working recipe revision");
+    if (!controller.removeEditBoard() || !controller.documentArchived() ||
+        controller.savedDocumentId() != id || !controller.canUndo() || history_receipts != 1)
+      return fail("Final Board deletion archives its content with a document-owned Undo entry");
+    for (const auto& recent : controller.recentDocuments())
+      if (recent.toMap().value("documentId") == id) return fail("Archived Boards must disappear from the saved collection");
+    CarouselDocumentController archived;
+    if (!archived.loadDocument(id) || !archived.documentArchived() || archived.photoOrigin().value("assetId") != origin.value("assetId"))
+      return fail("Saved archived state and photo origin survive a new controller");
+    if (!reopen_in_child(true)) return fail("Archived final-Board state survives a genuinely new process");
+    controller.undo();
+    if (controller.documentArchived() || controller.editBoardPayload(0).value("boardId") != board.value("boardId") ||
+        controller.photoOrigin().value("adjustmentPatchJson") != patch)
+      return fail("Main history owner can restore exact final Board identities and source context");
+    controller.redo();
+    if (!controller.documentArchived()) return fail("Redo restores the final-Board tombstone");
+    controller.undo();
+    if (!controller.saveDocument()) return fail("Save the restored final Board");
+    if (!reopen_in_child(false)) return fail("Delete then Undo then save persists exact restored state in a new process");
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(id) || restored.documentArchived() ||
+        restored.editBoardPayload(0).value("boardId") != board.value("boardId"))
+      return fail("Saving after Undo persists the exact restored Board");
+    if (!restored.addEditBoard(false) || !restored.removeEditBoard() || restored.slideCount() != 1 || restored.documentArchived())
+      return fail("Deleting one of several Boards selects a surviving Board without archiving");
+    const auto before_failure = restored.editBoardPayload(0);
+    QFile blocker(dir.filePath(QStringLiteral("save-blocker")));
+    if (!blocker.open(QIODevice::WriteOnly)) return fail("Create a deterministic save failure");
+    blocker.close();
+    qputenv("PHOTO_EDITOR_CAROUSEL_DOCUMENTS_PATH", QFile::encodeName(blocker.fileName()));
+    if (restored.removeEditBoard() || restored.documentArchived() ||
+        restored.editBoardPayload(0).value("boardId") != before_failure.value("boardId"))
+      return fail("Failed final deletion leaves the original Board and context intact");
+    qputenv("PHOTO_EDITOR_CAROUSEL_DOCUMENTS_PATH", QFile::encodeName(dir.filePath(QStringLiteral("carousel-documents"))));
+    const auto projection_failure_root = dir.filePath(QStringLiteral("projection-failure-documents"));
+    if (!QDir().mkpath(QDir(projection_failure_root).filePath(QStringLiteral("index.json"))))
+      return fail("Block only the rebuildable index while allowing atomic document writes");
+    qputenv("PHOTO_EDITOR_CAROUSEL_DOCUMENTS_PATH", QFile::encodeName(projection_failure_root));
+    CarouselDocumentController projection_failure;
+    if (!projection_failure.createBoardsFromEdit(source, "Projection failure", patch, 80, 50, 1) ||
+        projection_failure.recentDocuments().size() != 1 || !projection_failure.removeEditBoard())
+      return fail("A committed document remains discoverable and deletion succeeds when only its index projection fails");
+    CarouselDocumentController projection_reopened;
+    if (!projection_reopened.loadDocument(projection_failure.savedDocumentId()) || !projection_reopened.documentArchived() ||
+        !projection_reopened.recentDocuments().isEmpty())
+      return fail("Index failure cannot resurrect an atomically archived document on reopen");
+    projection_failure.undo();
+    if (!projection_failure.saveDocument() || projection_failure.recentDocuments().size() != 1)
+      return fail("The restored document is discoverable without a writable index projection");
+    qputenv("PHOTO_EDITOR_CAROUSEL_DOCUMENTS_PATH", QFile::encodeName(dir.filePath(QStringLiteral("carousel-documents"))));
+    if (!QFile::remove(source) || restored.photoOrigin().value("available").toBool() || restored.removeEditBoard())
+      return fail("A missing photo origin cannot archive the last Board or guess a replacement photo");
+    CarouselDocumentController canvas;
+    if (!canvas.createEditCanvas({{"name", "Standalone"}, {"width", 80}, {"height", 50}}) ||
+        !canvas.photoOrigin().isEmpty() || !canvas.removeEditBoard() || !canvas.documentArchived())
+      return fail("Standalone canvases archive without inventing a photo origin");
+    canvas.undo();
+    if (canvas.documentArchived() || !canvas.photoOrigin().isEmpty())
+      return fail("Standalone final-delete Undo retains standalone identity");
+    return EXIT_SUCCESS;
+  }
 
   if (app.arguments().contains(QStringLiteral("--creative-ux"))) {
     qputenv("PHOTO_EDITOR_DATABASE_URL", QByteArrayLiteral("postgres://example/test"));
@@ -5340,6 +5594,30 @@ int main(int argc, char** argv) {
             [](const QString& board_id) { return board_id.isEmpty(); })) {
       return fail("Edit-ready boards should each have a unique stable identity before reordering");
     }
+    int no_op_board_notifications = 0;
+    const auto count_no_op_board_notification = [&no_op_board_notifications]() {
+      ++no_op_board_notifications;
+    };
+    QObject::connect(&controller, &CarouselDocumentController::itemsChanged,
+        &controller, count_no_op_board_notification);
+    QObject::connect(&controller, &CarouselDocumentController::selectionChanged,
+        &controller, count_no_op_board_notification);
+    QObject::connect(&controller, &CarouselDocumentController::slidesChanged,
+        &controller, count_no_op_board_notification);
+    QObject::connect(&controller, &CarouselDocumentController::brandLintChanged,
+        &controller, count_no_op_board_notification);
+    QObject::connect(&controller, &CarouselDocumentController::preflightChanged,
+        &controller, count_no_op_board_notification);
+    QObject::connect(&controller, &CarouselDocumentController::exportSettingsChanged,
+        &controller, count_no_op_board_notification);
+    const auto no_op_document_hash = controller.documentContentHash();
+    const auto no_op_dirty_before = controller.documentDirty();
+    const auto no_op_payload = controller.editBoardPayload(controller.currentIndex());
+    if (no_op_payload.value(QStringLiteral("boardId")).toString() != original_board_ids.constLast() ||
+        no_op_board_notifications != 0 || controller.documentDirty() != no_op_dirty_before ||
+        controller.documentContentHash() != no_op_document_hash) {
+      return fail("Reopening the already active board should not fan out unchanged model notifications or alter the saved document");
+    }
     controller.selectSlide(1);
     controller.selectSlideRange(2);
     const auto selected_notifications_before_move = selection_notifications;
@@ -9773,6 +10051,7 @@ int main(int argc, char** argv) {
         diagnostics.value(QStringLiteral("staleRequestsDropped")).toInt() < 2 ||
         diagnostics.value(QStringLiteral("cacheBytes")).toLongLong() >
             diagnostics.value(QStringLiteral("cacheBudgetBytes")).toLongLong()) {
+      std::cerr << QJsonDocument::fromVariant(diagnostics).toJson(QJsonDocument::Compact).constData() << '\n';
       return fail("preview diagnostics should report only the affected board and all four timing stages");
     }
   }
@@ -12053,6 +12332,8 @@ int main(int argc, char** argv) {
     }
     controller.deleteBrandKit(release_brand_id);
   }
+
+
 
   return EXIT_SUCCESS;
 }

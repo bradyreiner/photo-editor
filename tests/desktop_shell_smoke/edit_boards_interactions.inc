@@ -1,8 +1,15 @@
+        const auto board_native_initial = native_window_foreground_sample(studio_window);
+        if (!native_pointer_proof || QGuiApplication::platformName() != QStringLiteral("cocoa") ||
+            !studio_window->isExposed() || !board_native_initial.value(QStringLiteral("qualified")).toBool())
+          return fail("Native Board lifecycle proof requires pointer input in an exposed, foreground-qualified Cocoa window");
         const auto choose_board_add = [&](int option) {
           if (!canvas_click(QStringLiteral("editCanvasAddBoardButtonPrimaryAction"))) return false;
           const auto row = QStringLiteral("editCanvasAddBoardButtonPopupItem") + QString::number(option);
-          if (!wait_for_condition([&] { return item_visible(find_named_item(studio_root, row)); }, 5000)) return false;
-          return canvas_click(row);
+          if (!wait_for_condition([&] { return item_visible(find_named_item(studio_root, row)); }, 5000) || !canvas_click(row)) return false;
+          return wait_for_condition([&] {
+            auto* popup = find_named_object(studio_root, QStringLiteral("editCanvasAddBoardButtonPopup"));
+            return !popup || !popup->property("visible").toBool();
+          }, 5000);
         };
         const auto board_dialog_closed = [&] {
           auto* dialog = find_named_object(studio_root, QStringLiteral("editBoardDialog"));
@@ -16,11 +23,68 @@
         const auto board_id = carousel_document.savedDocumentId();
         auto second_base = editor_preview.assetId();
         const auto second_source = studio_root->property("localEditorFilePath").toString();
+        const auto second_board_identity = carousel_document.slides().at(1).toMap().value("boardId");
         if (board_id.isEmpty() || editor_preview.photoLayerCount() != 0 || editor_preview.catalogRecipePersistenceEnabled() ||
             QImage(second_source).pixelColor(20,20).alpha() != 0 ||
             find_named_item(studio_root, QStringLiteral("carouselWorkspace")) ||
             find_named_item(studio_root, QStringLiteral("carouselBoardStrip")))
           return fail("Boards use the existing Edit tools, independent transparent base images and no Carousel UI");
+        auto* main_board_undo_action = find_named_object(studio_root, QStringLiteral("mainPhotoUndoAction"));
+        auto* studio_board_undo_shortcut = find_named_object(edit, QStringLiteral("undoEditShortcut"));
+        QSignalSpy main_board_undo_triggered(main_board_undo_action, SIGNAL(triggered(QObject*)));
+        QSignalSpy studio_board_undo_activated(studio_board_undo_shortcut, SIGNAL(activated()));
+        QSignalSpy studio_board_undo_ambiguous(studio_board_undo_shortcut, SIGNAL(activatedAmbiguously()));
+        const auto board_undo_diagnostic = [&](const QString& stage, int expected_board_count = 1) {
+          const auto qml_value = [&](const char* property) {
+            auto value = studio_root->property(property);
+            if (value.metaType().id() == qMetaTypeId<QJSValue>()) value = value.value<QJSValue>().toVariant();
+            return value;
+          };
+          const auto entries = qml_value("photoWorkflowUndoEntries").toList();
+          QVariantList tail;
+          for (qsizetype index = qMax<qsizetype>(0, entries.size() - 5); index < entries.size(); ++index) tail.append(entries.at(index));
+          auto* focus = studio_window->activeFocusItem();
+          const QJsonObject diagnostic{{"stage", stage}, {"boardCount", carousel_document.slideCount()},
+              {"expectedUndoBoardCount", expected_board_count}, {"currentBoardIndex", carousel_document.currentIndex()},
+              {"documentId", carousel_document.savedDocumentId()}, {"documentCanUndo", carousel_document.canUndo()},
+              {"documentUndoText", carousel_document.undoText()}, {"photoCanUndo", editor_preview.canUndo()},
+              {"photoUndoText", editor_preview.undoLabel()}, {"photoHistoryIndex", editor_preview.editHistoryCurrentIndex()},
+              {"receiptCount", entries.size()}, {"receiptTail", QJsonArray::fromVariantList(tail)},
+              {"pendingHistory", QJsonValue::fromVariant(qml_value("pendingPhotoWorkflowHistory"))},
+              {"switching", studio_root->property("switchingEditBoard").toBool()},
+              {"shellTransition", studio_root->property("workspaceTransitionActive").toBool()},
+              {"selectionSession", editor_preview.selectionEditSessionActive()},
+              {"textSession", edit->property("textEditSessionActive").toBool()},
+              {"mainActionEnabled", main_board_undo_action && main_board_undo_action->property("enabled").toBool()},
+              {"mainActionTriggerCount", main_board_undo_triggered.count()},
+              {"studioShortcutEnabled", studio_board_undo_shortcut && studio_board_undo_shortcut->property("enabled").toBool()},
+              {"studioShortcutActivationCount", studio_board_undo_activated.count()},
+              {"studioShortcutAmbiguousCount", studio_board_undo_ambiguous.count()},
+              {"undoModifierBits", static_cast<int>(QKeySequence(QKeySequence::Undo)[0].keyboardModifiers().toInt())},
+              {"undoSequence", QKeySequence(QKeySequence::Undo).toString(QKeySequence::PortableText)},
+              {"focusObject", focus ? focus->objectName() : QString{}},
+              {"focusType", focus ? QString::fromLatin1(focus->metaObject()->className()) : QString{}},
+              {"windowActive", studio_window->isActive()}, {"editorStatus", editor_preview.status()},
+              {"documentStatus", carousel_document.status()}};
+          std::cerr << "board_undo_diagnostic=" << QJsonDocument(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
+        };
+        board_undo_diagnostic(QStringLiteral("before-first-undo"));
+        canvas_shortcut(Qt::Key_Z);
+        if (!wait_for_condition([&] { return carousel_document.slideCount() == 1 &&
+              !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000)) {
+          board_undo_diagnostic(QStringLiteral("after-first-undo-failure"));
+          return fail("Main Undo removes the newly added Board before undoing photo content");
+        }
+        if (main_board_undo_triggered.count() != 1 || studio_board_undo_activated.count() != 0 ||
+            studio_board_undo_ambiguous.count() != 0) {
+          board_undo_diagnostic(QStringLiteral("after-first-undo-owner-failure"));
+          return fail("Hosted Edit must dispatch one main Undo action with no competing Studio shortcut or ambiguity");
+        }
+        canvas_shortcut(Qt::Key_Z, true);
+        if (!wait_for_condition([&] { return carousel_document.slideCount() == 2 &&
+              carousel_document.slides().at(1).toMap().value("boardId") == second_board_identity &&
+              editor_preview.assetId() == second_base && !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("Main Redo restores the exact added Board and its editing context");
         if (!QMetaObject::invokeMethod(studio_root,"activateEditBoard",Q_ARG(QVariant,QVariant(0))) || !wait_for_condition([&] {
               return carousel_document.currentIndex() == 0 && editor_preview.photoLayerCount() == 3 && !editor_preview.processing();
             }, 15000) || editor_preview.assetId() == second_base)
@@ -34,7 +98,22 @@
         canvas_shortcut(Qt::Key_Z, true);
         if (!wait_for_condition([&] { return editor_preview.photoLayerCount() == 4 && !editor_preview.processing(); }, 15000))
           return fail("Redo restores the active board's pasted layer");
+        // Pasted text starts at the same position as its source. Give the
+        // alignment action distinct starting centers so Undo cannot silently
+        // exercise the earlier paste instead of the action under test.
+        const auto unaligned_layers = editor_preview.photoLayers();
+        editor_preview.beginCoalescedEdit();
+        for (int index = 0; index < 3; ++index) {
+          const auto layer = unaligned_layers.at(index).toMap();
+          editor_preview.setPhotoLayerTransform(index, 20 + index * 170,
+              layer.value("y").toInt(), layer.value("scale").toDouble(), layer.value("rotation").toDouble());
+        }
+        editor_preview.endCoalescedEdit();
+        if (!wait_for_condition([&] { return !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("Distinct alignment fixture positions must settle");
         const auto before_alignment = editor_preview.currentAssetBoundAdjustmentPatchJson();
+        const auto alignment_before_layers = editor_preview.photoLayers();
+        const auto alignment_before_history_index = editor_preview.editHistoryCurrentIndex();
         edit->setProperty("selectedPhotoLayerIndices", QVariantList{0, 1, 2});
         process_layout_events(8);
         if (!canvas_click(QStringLiteral("photoLayerAlignSelectionButtonPrimaryAction")) ||
@@ -49,12 +128,38 @@
           return layer.value("x").toDouble() + layer.value("pixelWidth").toDouble() * layer.value("scale").toDouble() / 2;
         };
         if (!wait_for_condition([&] { return !editor_preview.processing() &&
+              editor_preview.currentAssetBoundAdjustmentPatchJson() != before_alignment &&
               std::abs(center_x(0)-center_x(1))<=1 && std::abs(center_x(0)-center_x(2))<=1; },15000))
           return fail("Align centers updates all selected layers");
+        const auto alignment_applied_recipe = editor_preview.currentAssetBoundAdjustmentPatchJson();
+        const auto alignment_applied_layers = editor_preview.photoLayers();
+        const auto alignment_undo_trigger_count = main_board_undo_triggered.count();
+        board_undo_diagnostic(QStringLiteral("before-alignment-undo"), 2);
         canvas_shortcut(Qt::Key_Z);
         if (!wait_for_condition([&] { return !editor_preview.processing() &&
-              editor_preview.currentAssetBoundAdjustmentPatchJson()==before_alignment; },15000))
+              editor_preview.currentAssetBoundAdjustmentPatchJson()==before_alignment; },15000)) {
+          const auto actual_recipe = editor_preview.currentAssetBoundAdjustmentPatchJson();
+          const auto write_alignment_artifact = [&](const QString& name, const QByteArray& bytes) {
+            QFile file(QDir(proof_dir).filePath(name));
+            if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size())
+              std::cerr << "Could not write alignment failure artifact " << name.toStdString() << '\n';
+          };
+          write_alignment_artifact(QStringLiteral("alignment-before-recipe.json"), before_alignment.toUtf8());
+          write_alignment_artifact(QStringLiteral("alignment-applied-recipe.json"), alignment_applied_recipe.toUtf8());
+          write_alignment_artifact(QStringLiteral("alignment-after-undo-recipe.json"), actual_recipe.toUtf8());
+          const QJsonObject layer_states{{"before", QJsonArray::fromVariantList(alignment_before_layers)},
+              {"applied", QJsonArray::fromVariantList(alignment_applied_layers)},
+              {"afterUndo", QJsonArray::fromVariantList(editor_preview.photoLayers())},
+              {"beforePhotoHistoryIndex", alignment_before_history_index},
+              {"afterPhotoHistoryIndex", editor_preview.editHistoryCurrentIndex()},
+              {"mainTriggerCountBeforeUndo", alignment_undo_trigger_count},
+              {"mainTriggerCountAfterUndo", main_board_undo_triggered.count()},
+              {"beforeRecipeSha256", QString::fromLatin1(QCryptographicHash::hash(before_alignment.toUtf8(), QCryptographicHash::Sha256).toHex())},
+              {"afterUndoRecipeSha256", QString::fromLatin1(QCryptographicHash::hash(actual_recipe.toUtf8(), QCryptographicHash::Sha256).toHex())}};
+          write_alignment_artifact(QStringLiteral("alignment-layer-states.json"), QJsonDocument(layer_states).toJson(QJsonDocument::Indented));
+          board_undo_diagnostic(QStringLiteral("after-alignment-undo-failure"), 2);
           return fail("One undo restores the entire alignment action");
+        }
         const auto distribution_layers = editor_preview.photoLayers();
         editor_preview.beginCoalescedEdit();
         for (int index=0;index<3;++index) {
@@ -86,10 +191,26 @@
           return fail("Restore the document after the temporary distribution fixture");
         edit->setProperty("selectedPhotoLayerIndices", QVariantList{0});
         const auto first_recipe = editor_preview.currentAssetBoundAdjustmentPatchJson();
-        if (!canvas_click(QStringLiteral("editCanvasBoardSelect1")) || !wait_for_condition([&] {
-              return editor_preview.assetId() == second_base && editor_preview.photoLayerCount() == 0 && !editor_preview.processing();
-            }, 15000) || !canvas_click(QStringLiteral("editRailShapesButton")))
+        const auto camera_zoom = canvas_viewport->property("zoom").toDouble();
+        const bool second_board_clicked = canvas_click(QStringLiteral("editCanvasBoardSelect1"));
+        const bool second_board_ready = wait_for_condition([&] {
+              return carousel_document.currentIndex() == 1 && editor_preview.assetId() == second_base &&
+                  editor_preview.photoLayerCount() == 0 && !editor_preview.processing();
+            }, 15000);
+        if (!second_board_clicked || !second_board_ready ||
+            canvas_viewport->property("zoom").toDouble() != camera_zoom)
+          return fail("One click enters the neighboring Board without resetting zoom");
+        const bool second_board_shapes = second_board_ready && canvas_click(QStringLiteral("editRailShapesButton"));
+        if (!second_board_shapes) {
+          std::cerr << "second-board clicked=" << second_board_clicked << " ready=" << second_board_ready
+                    << " shapes=" << second_board_shapes << " expected=" << second_base.toStdString()
+                    << " actual=" << editor_preview.assetId().toStdString() << " layers=" << editor_preview.photoLayerCount()
+                    << " index=" << carousel_document.currentIndex() << " count=" << carousel_document.slideCount()
+                    << " tool=" << edit->property("editTool").toString().toStdString()
+                    << " status=" << carousel_document.status().toStdString() << '\n';
+          studio_window->grabWindow().save(QDir(proof_dir).filePath(QStringLiteral("board-switch-failure.png")));
           return fail("Switching to Board 2 restores its independent empty layer stack");
+        }
         auto* board_shape = find_named_item(studio_root, QStringLiteral("photoShapeCreateOverlay"));
         if (!wait_for_condition([&] { return item_visible(board_shape) && !edit->property("editToolTransitionActive").toBool() &&
               !editor_preview.fullRenderRunning(); }, 15000)) return fail("The existing Edit shape tool activates on a board");
@@ -117,8 +238,23 @@
         if (!studio_window->activeFocusItem()) return fail("Board text creation focuses the existing Edit text editor");
         QCoreApplication::sendEvent(studio_window->activeFocusItem(), &board_text_input);
         if (!canvas_click(QStringLiteral("photoTextDoneButton")) || !wait_for_condition([&] {
-              return editor_preview.photoLayerCount() == 2 && !editor_preview.processing(); }, 15000) ||
-            !canvas_click(QStringLiteral("editRailPaintButton")) || !wait_for_condition([&] {
+              return editor_preview.photoLayerCount() == 2 && !editor_preview.processing() &&
+                  item_visible(find_named_item(studio_root, QStringLiteral("boardLayoutInspectorGroup"))) &&
+                  item_visible(find_named_item(studio_root, QStringLiteral("photoTypographyPanelContent"))) &&
+                  item_visible(find_named_item(studio_root, QStringLiteral("photoLayersInspectorGroup"))) &&
+                  !item_visible(find_named_item(studio_root, QStringLiteral("creativeToolsSurface"))) &&
+                  !item_visible(find_named_item(studio_root, QStringLiteral("photoLayerPropertiesPanel")));
+            }, 15000))
+          return fail("Selecting board text keeps the docked typography and layer panels available");
+        auto* board_layout_group = find_named_object(studio_root, QStringLiteral("boardLayoutInspectorGroup"));
+        if (!board_layout_group || board_layout_group->property("expanded").toBool() ||
+            !board_layout_group->setProperty("expanded", true) || !wait_for_condition([&] {
+              return item_visible(find_named_item(studio_root, QStringLiteral("boardPhotoControls"))) &&
+                  item_visible(find_named_item(studio_root, QStringLiteral("photoLayersInspectorGroup"))) &&
+                  item_visible(find_named_item(studio_root, QStringLiteral("photoTypographyPanelContent")));
+            }, 5000))
+          return fail("Expanding Board Layout keeps Layers and Typography visible together");
+        if (!canvas_click(QStringLiteral("editRailPaintButton")) || !wait_for_condition([&] {
               return !edit->property("editToolTransitionActive").toBool(); }, 5000))
           return fail("The same Edit text and paint controls work on Board 2");
         auto* board_paint = find_named_item(studio_root, QStringLiteral("photoPaintOverlay"));
@@ -317,6 +453,14 @@
               board_dialog_closed() && !editor_preview.processing() && !editor_preview.fullRenderRunning(); },15000) ||
             carousel_document.savedDocumentId()!=board_id || !carousel_document.slides().at(2).toMap().value("joinedPrevious").toBool())
           return fail("Deleting an independent board preserves the shared image and carousel document");
+        canvas_shortcut(Qt::Key_Z);
+        if (!wait_for_condition([&] { return carousel_document.slideCount() == 4 &&
+              board_dialog_closed() && !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("Main Undo restores an independent Board deletion instead of an unrelated photo edit");
+        canvas_shortcut(Qt::Key_Z, true);
+        if (!wait_for_condition([&] { return carousel_document.slideCount() == 3 &&
+              !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("Main Redo removes the restored independent Board atomically");
         if (!QMetaObject::invokeMethod(studio_root,"activateEditBoard",Q_ARG(QVariant,QVariant(2))) ||
             !wait_for_condition([&] { return !editor_preview.processing() && !editor_preview.fullRenderRunning(); },15000) ||
             !choose_board_action(2,QStringLiteral("remove")) || !wait_for_condition([&] { return item_visible(find_named_item(studio_root,QStringLiteral("editBoardDialogApply"))); },5000) ||
@@ -597,16 +741,29 @@
         if (!carousel_document.exportCarouselToDirectory(carousel_export_dir) ||
             QDir(carousel_export_dir).entryList({QStringLiteral("*.png")},QDir::Files).size()!=3)
           return fail("The live carousel exports three separate images");
+        const auto board_view_action = [&](const QString& action) {
+          if (!canvas_click(QStringLiteral("editViewMoreButtonPrimaryAction"))) return false;
+          auto* menu = find_named_object(studio_root, QStringLiteral("editViewMoreButtonPopup"));
+          if (!menu || !wait_for_condition([&] { return menu->property("opened").toBool(); }, 5000)) return false;
+          auto choices_value = menu->property("menuItems");
+          if (choices_value.metaType().id() == qMetaTypeId<QJSValue>()) choices_value = choices_value.value<QJSValue>().toVariant();
+          const auto choices = choices_value.toList();
+          for (qsizetype index = 0; index < choices.size(); ++index)
+            if (choices.at(index).toMap().value(QStringLiteral("key")).toString() == action)
+              return canvas_click(QStringLiteral("editViewMoreButtonPopupItem") + QString::number(index));
+          return false;
+        };
+        if (!board_view_action(QStringLiteral("all-boards"))) return fail("View menu exposes all boards");
         const auto overview_width = canvas_viewport->property("paintedContentWidth").toDouble();
-        if (!canvas_click(QStringLiteral("editBoardViewModeButton")) || !wait_for_condition([&] {
+        if (!board_view_action(QStringLiteral("fit")) || !wait_for_condition([&] {
               return canvas_viewport->property("boardFocusMode").toBool() &&
                   canvas_viewport->property("paintedContentWidth").toDouble() > overview_width * 1.5 &&
                   !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000) ||
             !board_paint->property("editable").toBool() ||
             !capture_visual_proof(studio_window, studio_root, proof_dir, QStringLiteral("edit-board-focused"), 1440, 900,
-                {QStringLiteral("editBoardViewModeButton"), QStringLiteral("editBoardDocumentStatus"), QStringLiteral("photoPaintOverlay")}, &studio_manifest) ||
-            !canvas_click(QStringLiteral("editBoardViewModeButton")) || canvas_viewport->property("boardFocusMode").toBool())
-          return fail("Focus board and All boards resize the canvas without changing the active paint tool or layer");
+                {QStringLiteral("editBoardDocumentStatus"), QStringLiteral("photoPaintOverlay")}, &studio_manifest) ||
+            !board_view_action(QStringLiteral("all-boards")) || canvas_viewport->property("boardFocusMode").toBool())
+          return fail("Fit active board and All boards retain the active paint tool and layer");
         if (!wait_for_condition([&] { return !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
           return fail("The overview settles before visual review");
         if (!wait_for_condition([&] {
@@ -622,11 +779,11 @@
           auto* zoom = find_named_item(studio_root, QStringLiteral("editZoomToolbar"));
           auto* actions = find_named_item(studio_root, QStringLiteral("editActionToolbar"));
           auto* create = find_named_item(studio_root, QStringLiteral("editNewCanvasButton"));
-          return item_visible(zoom) && item_visible(actions) && item_visible(create) &&
+          return item_visible(zoom) && item_visible(actions) && (!create || !item_visible(create) || create->isEnabled()) &&
               std::abs(scene_rect(zoom).top() - scene_rect(actions).top()) < 1 &&
               !scene_rect(zoom).intersects(scene_rect(actions)) &&
-              !scene_rect(actions).intersects(scene_rect(create)) &&
-              !scene_rect(zoom).intersects(scene_rect(create));
+              (!item_visible(create) || (!scene_rect(actions).intersects(scene_rect(create)) &&
+                                        !scene_rect(zoom).intersects(scene_rect(create))));
         };
         auto* shared_scope = find_named_item(studio_root, QStringLiteral("editBoardSharedLayersLabel"));
         if (!item_visible(shared_scope) || !shared_scope->property("text").toString().contains(QStringLiteral("Boards 2–3")) ||
@@ -634,9 +791,9 @@
           return fail("The shared brush stack labels its affected boards without duplicate properties or wrapped view controls");
         if (!capture_visual_proof(studio_window, studio_root, proof_dir, QStringLiteral("edit-board-stage"), 1440, 900,
               {QStringLiteral("editImageViewport"), QStringLiteral("editCanvasBoard0"), QStringLiteral("editCanvasBoard1"),
-               QStringLiteral("editCanvasAddBoardButton"), QStringLiteral("editRailPaintButton")}, &studio_manifest) ||
+               QStringLiteral("editRailPaintButton")}, &studio_manifest) ||
             !capture_visual_proof(studio_window, studio_root, proof_dir, QStringLiteral("edit-board-stage-compact"), 1100, 800,
-              {QStringLiteral("editImageViewport"), QStringLiteral("editCanvasBoard1"), QStringLiteral("editCanvasAddBoardButton")}, &studio_manifest))
+              {QStringLiteral("editImageViewport"), QStringLiteral("editCanvasBoard1")}, &studio_manifest))
           return fail("Capture the actual Edit canvas with direct board selection and existing tool UI");
         const auto visible_layer_menu_item = [&](const QString& text = QStringLiteral("Layer Properties…")) -> QQuickItem* {
           QList<QQuickItem*> pending{studio_window->contentItem()};
@@ -728,10 +885,12 @@
         const auto brush_target_before_scopes=board_paint->property("targetId");
         const bool scopes_before_more = edit->property("scopeDockVisible").toBool();
         const auto toggle_compact_scopes = [&] {
+          QQuickItem* scopes_item = nullptr;
           if (!canvas_click(QStringLiteral("editViewMoreButtonPrimaryAction")) || !wait_for_condition([&] {
-                return item_visible(find_named_item(studio_root, QStringLiteral("editViewMoreButtonPopupItem1"))); }, 5000))
+                scopes_item = visible_canvas_menu_item(QStringLiteral("editViewMoreButton"), QStringLiteral("scopes"));
+                return scopes_item != nullptr; }, 5000))
             return false;
-          return canvas_click(QStringLiteral("editViewMoreButtonPopupItem1"));
+          return canvas_click_item(scopes_item);
         };
         if (!board_toolbar_fits() || !item_visible(find_named_item(studio_root, QStringLiteral("editViewMoreButton"))))
           return fail("Compact view controls fit on one row");
@@ -740,12 +899,12 @@
         if (!wait_for_condition([&] {
               return edit->property("scopeDockVisible").toBool() != scopes_before_more &&
                   !edit->property("editToolTransitionActive").toBool() &&
-                  !item_visible(find_named_item(studio_root, QStringLiteral("editViewMoreButtonPopupItem1"))); }, 5000)) {
+                  !visible_canvas_menu_item(QStringLiteral("editViewMoreButton"), QStringLiteral("scopes")); }, 5000)) {
           std::cerr << "compact scopes before=" << scopes_before_more
                     << " after=" << edit->property("scopeDockVisible").toBool()
                     << " transition=" << edit->property("editToolTransitionActive").toBool() << '\n';
           capture_visual_proof(studio_window,studio_root,proof_dir,QStringLiteral("compact-menu-failure"),1100,800,
-              {QStringLiteral("editViewMoreButton"),QStringLiteral("editViewMoreButtonPopupItem1")},&studio_manifest);
+              {QStringLiteral("editViewMoreButton")},&studio_manifest);
           return fail("The compact Scopes command opens the dock and dismisses More");
         }
         if (!toggle_compact_scopes() || !wait_for_condition([&] {
@@ -776,4 +935,188 @@
           return fail("Reopening preserves the exact first-board recipe independently of other boards");
         if (carousel_document.slides().at(1).toMap().value("boardName").toString() != QStringLiteral("Detail board"))
           return fail("The renamed board survives saved reopening");
+        // The existing canvas document has no camera/source return identity.
+        // Exercise every removal through its visible production menu/dialog.
+        if (!carousel_document.photoOrigin().isEmpty()) return fail("A standalone canvas must not invent a photo origin");
+        while (carousel_document.slideCount() > 1) {
+          const auto count = carousel_document.slideCount();
+          if (!choose_board_action(count - 1, "remove") || !wait_for_condition([&] {
+                return item_visible(find_named_item(studio_root, "editBoardDialogApply")); }, 5000) ||
+              !canvas_click("editBoardDialogApply") || !wait_for_condition([&] {
+                return carousel_document.slideCount() == count - 1 && board_dialog_closed() &&
+                    !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+            return fail("Remove successive standalone Boards through their real menus");
+        }
+        const auto standalone_final_id = carousel_document.slides().front().toMap().value("boardId");
+        if (!choose_board_action(0, "remove") || !wait_for_condition([&] {
+              return item_visible(find_named_item(studio_root, "editBoardDialogApply")); }, 5000) ||
+            !canvas_click("editBoardDialogApply") || !wait_for_condition([&] {
+              return carousel_document.documentArchived() && !studio_root->property("editBoardsActive").toBool() &&
+                  studio_root->property("currentWorkspace").toInt() == 0 && board_dialog_closed(); }, 15000))
+          return fail("Final standalone Board deletion returns to the saved collection without opening a photo");
+        canvas_shortcut(Qt::Key_Z);
+        if (!wait_for_condition([&] { return !carousel_document.documentArchived() &&
+              studio_root->property("editBoardsActive").toBool() && studio_root->property("currentWorkspace").toInt() == 1 &&
+              carousel_document.slides().front().toMap().value("boardId") == standalone_final_id &&
+              !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("Main Undo from the collection restores the exact final standalone Board and context");
+
+        // A catalog photo is a separate source resource, not the selected Board
+        // image. Setup injection supplies the photo; all lifecycle actions below
+        // use the actual canvas plus, Board menus, Document menu and shortcuts.
+        if (!QMetaObject::invokeMethod(studio_root, "finishCarouselPhotoEdit", Q_ARG(QVariant, QVariant(true))))
+          return fail("Finish the standalone document before photo-origin setup");
+        const auto origin_source_path = runtime_root.filePath(QStringLiteral("board-origin-photo.png"));
+        if (!QFile::copy(drop_path, origin_source_path)) return fail("Retain the generated photo inside the disposable catalog's source root");
+        const auto origin_manifest_path = runtime_root.filePath(QStringLiteral("board-origin-photo-fixture.txt"));
+        QFile origin_manifest(origin_manifest_path);
+        if (!origin_manifest.open(QIODevice::WriteOnly) || origin_manifest.write(origin_source_path.toUtf8() + '\n') <= 0)
+          return fail("Write the generated Board source import manifest");
+        origin_manifest.close();
+        QProcess origin_import;
+        origin_import.start(photo_editor::desktop::AppBootstrap::helperProgram(QStringLiteral("import_catalog")),
+            photo_editor::desktop::AppBootstrap::helperArguments(QStringLiteral("import_catalog"),
+                {runtime_root.path(), QStringLiteral("board-origin-fixture"), QStringLiteral("Board return proof"),
+                 QStringLiteral("referenced"), origin_manifest_path}));
+        if (!origin_import.waitForStarted(5000) || !origin_import.waitForFinished(15000) ||
+            origin_import.exitStatus() != QProcess::NormalExit || origin_import.exitCode() != 0) {
+          std::cerr << origin_import.readAllStandardError().constData();
+          return fail("Register the generated Board source with a real disposable-catalog UUID");
+        }
+        catalog_assets.refresh();
+        if (!wait_for_condition([&] { return !catalog_assets.loading() && !catalog_assets.assetIdForFilePath(origin_source_path).isEmpty(); }, 15000))
+          return fail("Reload the generated Board source from the actual disposable catalog");
+        const auto origin_asset = make_asset(catalog_assets.assetIdForFilePath(origin_source_path), origin_source_path);
+        if (!catalog_assets.selectAssetById(origin_asset.asset_id, true)) return fail("Select the registered source photo for explicit activation");
+        if (!catalog_assets.assetRecipeReady(origin_asset.asset_id)) catalog_assets.requestAssetRecipes({origin_asset.asset_id});
+        if (!wait_for_condition([&] { return catalog_assets.selectedAssetId() == origin_asset.asset_id &&
+              catalog_assets.selectedRecipeReady() && !catalog_assets.loading(); }, 15000))
+          return fail("Hydrate the exact registered source recipe before explicit Edit activation");
+        if (!QMetaObject::invokeMethod(studio_root, "openSelectedPhotoInEdit") || !wait_for_condition([&] {
+              return editor_preview.assetId() == origin_asset.asset_id && !editor_preview.processing() &&
+                  !editor_preview.fullRenderRunning() && !studio_root->property("editBoardsActive").toBool() &&
+                  studio_root->property("openedCatalogFilePath").toString() == origin_source_path &&
+                  !studio_root->property("workspaceTransitionActive").toBool(); }, 15000))
+          return fail("Open the explicit catalog photo before creating Boards");
+        editor_preview.setExposure(0.35);
+        if (!wait_for_condition([&] { return !editor_preview.processing() && !editor_preview.fullRenderRunning() &&
+              !editor_preview.recipeSavePending(); }, 15000) || !editor_preview.recipeSaveError().isEmpty())
+          return fail("Settle the pre-Board source recipe");
+        const auto origin_recipe = editor_preview.currentAssetBoundAdjustmentPatchJson();
+        if (!choose_board_add(0) || !wait_for_condition([&] {
+              return studio_root->property("editBoardsActive").toBool() && carousel_document.slideCount() == 2 &&
+                  !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("The production canvas plus creates Boards from the current catalog photo");
+        const auto origin_document_id = carousel_document.savedDocumentId();
+        const auto source_board_id = carousel_document.slides().front().toMap().value("boardId");
+        if (carousel_document.photoOrigin().value("assetId") != origin_asset.asset_id ||
+            carousel_document.photoOrigin().value("adjustmentPatchJson") != origin_recipe)
+          return fail("Boards capture the exact source identity and independent pre-Board recipe");
+        if (!choose_board_action(1, "remove") || !wait_for_condition([&] {
+              return item_visible(find_named_item(studio_root, "editBoardDialogApply")); }, 5000) ||
+            !canvas_click("editBoardDialogApply") || !wait_for_condition([&] {
+              return carousel_document.slideCount() == 1 && !editor_preview.processing() &&
+                  !editor_preview.fullRenderRunning() && board_dialog_closed(); }, 15000))
+          return fail("Remove the added blank Board before returning to its source");
+        const auto return_to_photo = [&] {
+          QQuickItem* return_item = nullptr;
+          return canvas_click("editNewCanvasButtonPrimaryAction") && wait_for_condition([&] {
+              return_item = visible_canvas_menu_item("editNewCanvasButton", "return-to-photo");
+              return return_item != nullptr; }, 5000) && canvas_click_item(return_item);
+        };
+        if (!return_to_photo() || !wait_for_condition([&] { return !studio_root->property("editBoardsActive").toBool() &&
+              editor_preview.assetId() == origin_asset.asset_id && !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000) ||
+            editor_preview.currentAssetBoundAdjustmentPatchJson() != origin_recipe || carousel_document.documentArchived())
+          return fail("Document Return to photo preserves saved Boards and restores the exact source recipe");
+        editor_preview.setExposure(0.9);
+        if (!wait_for_condition([&] { return !editor_preview.processing() && !editor_preview.fullRenderRunning() &&
+              !editor_preview.recipeSavePending(); }, 15000) || !editor_preview.recipeSaveError().isEmpty())
+          return fail("Settle an independently newer source-photo edit");
+        const auto newer_source_recipe = editor_preview.currentAssetBoundAdjustmentPatchJson();
+        studio_root->setProperty("currentWorkspace", 0);
+        process_layout_events(8);
+        auto* library = find_named_item(studio_root, "libraryStudioWorkspace");
+        if (library) library->setProperty("libraryCollection", "boards");
+        const auto open_origin_boards = "libraryOpenBoardsButton" + origin_document_id;
+        if (!wait_for_condition([&] { return item_visible(find_named_item(studio_root, open_origin_boards)); }, 10000) ||
+            !canvas_click(open_origin_boards) || !wait_for_condition([&] {
+              return studio_root->property("editBoardsActive").toBool() && !editor_preview.processing() &&
+                  !editor_preview.fullRenderRunning() && !studio_root->property("workspaceTransitionActive").toBool(); }, 15000))
+          return fail("Reopen retained photo-origin Boards through the saved collection");
+        if (!return_to_photo() || !wait_for_condition([&] { return !studio_root->property("editBoardsActive").toBool() &&
+              editor_preview.assetId() == origin_asset.asset_id && !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000) ||
+            editor_preview.currentAssetBoundAdjustmentPatchJson() != newer_source_recipe)
+          return fail("Returning again cannot overwrite a newer source recipe with the captured snapshot");
+        // Keep more than 32 later Board edits, then cross back to the preceding
+        // source-photo edit. Losing old owner receipts would undo the wrong
+        // resource or disable history even though both native owners retain it.
+        studio_root->setProperty("currentWorkspace", 0);
+        process_layout_events(8);
+        if (!wait_for_condition([&] { return item_visible(find_named_item(studio_root, open_origin_boards)); }, 10000) ||
+            !canvas_click(open_origin_boards) || !wait_for_condition([&] {
+              return studio_root->property("editBoardsActive").toBool() && !editor_preview.processing() && !editor_preview.fullRenderRunning() &&
+                  !studio_root->property("workspaceTransitionActive").toBool(); }, 15000))
+          return fail("Open the retained Board for long chronological history proof");
+        const auto long_history_baseline = editor_preview.currentAssetBoundAdjustmentPatchJson();
+        for (int step = 0; step < 40; ++step) editor_preview.setExposure(0.36 + double(step) * 0.01);
+        if (!wait_for_condition([&] { return !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("Settle forty separately owned Board edit transactions");
+        for (int step = 0; step < 40; ++step) {
+          canvas_shortcut(Qt::Key_Z);
+          if (!wait_for_condition([&] { return !studio_root->property("switchingEditBoard").toBool() &&
+                !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+            return fail("Main Undo traverses every retained Board transaction beyond thirty-two receipts");
+        }
+        if (editor_preview.currentAssetBoundAdjustmentPatchJson() != long_history_baseline)
+          return fail("Forty main Undo commands restore the exact Board recipe baseline");
+        canvas_shortcut(Qt::Key_Z);
+        if (!wait_for_condition([&] { return !studio_root->property("editBoardsActive").toBool() &&
+              editor_preview.assetId() == origin_asset.asset_id && !editor_preview.processing() && !editor_preview.fullRenderRunning() &&
+              !editor_preview.recipeSavePending(); }, 15000) || !editor_preview.recipeSaveError().isEmpty() ||
+            editor_preview.currentAssetBoundAdjustmentPatchJson() != origin_recipe)
+          return fail("The next main Undo crosses owners and restores the preceding source-photo edit");
+        canvas_shortcut(Qt::Key_Z, true);
+        if (!wait_for_condition([&] { return !editor_preview.processing() && !editor_preview.fullRenderRunning() &&
+              !editor_preview.recipeSavePending() && editor_preview.currentAssetBoundAdjustmentPatchJson() == newer_source_recipe; }, 15000) ||
+            !editor_preview.recipeSaveError().isEmpty())
+          return fail("Main Redo restores the newer source recipe before returning to its Boards");
+        studio_root->setProperty("currentWorkspace", 0);
+        process_layout_events(8);
+        if (!wait_for_condition([&] { return item_visible(find_named_item(studio_root, open_origin_boards)); }, 10000) ||
+            !canvas_click(open_origin_boards) || !wait_for_condition([&] {
+              return studio_root->property("editBoardsActive").toBool() && !editor_preview.processing() && !editor_preview.fullRenderRunning() &&
+                  !studio_root->property("workspaceTransitionActive").toBool(); }, 15000) ||
+            !choose_board_action(0, "remove") || !wait_for_condition([&] {
+              return item_visible(find_named_item(studio_root, "editBoardDialogApply")); }, 5000) ||
+            !canvas_click("editBoardDialogApply") || !wait_for_condition([&] {
+              return carousel_document.documentArchived() && !studio_root->property("editBoardsActive").toBool() &&
+                  editor_preview.assetId() == origin_asset.asset_id && !editor_preview.processing() &&
+                  !editor_preview.fullRenderRunning() && board_dialog_closed(); }, 15000))
+          return fail("Deleting the final photo-origin Board returns to its exact source photo");
+        canvas_shortcut(Qt::Key_Z);
+        if (!wait_for_condition([&] { return !carousel_document.documentArchived() && studio_root->property("editBoardsActive").toBool() &&
+              carousel_document.slides().front().toMap().value("boardId") == source_board_id &&
+              carousel_document.savedDocumentId() == origin_document_id && !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000))
+          return fail("Main Undo after source return restores the exact final photo-origin Board");
+        canvas_shortcut(Qt::Key_Z, true);
+        if (!wait_for_condition([&] { return carousel_document.documentArchived() && !studio_root->property("editBoardsActive").toBool() &&
+              editor_preview.assetId() == origin_asset.asset_id && !editor_preview.processing() && !editor_preview.fullRenderRunning(); }, 15000) ||
+            editor_preview.currentAssetBoundAdjustmentPatchJson() != newer_source_recipe)
+          return fail("Main Redo archives that Board again and preserves the newer source photo edits");
+        const auto board_native_final = native_window_foreground_sample(studio_window);
+        if (QGuiApplication::platformName() != QStringLiteral("cocoa") || !studio_window->isExposed() ||
+            !board_native_final.value(QStringLiteral("qualified")).toBool())
+          return fail("Native Board workflow cannot qualify from an offscreen, hidden or unqualified foreground window");
+        QFile source_workflow_receipt(QDir(proof_dir).filePath("board-source-workflow.json"));
+        const QJsonObject source_workflow{{"schema", "looksy-board-source-workflow:v1"}, {"status", "passed"},
+            {"platform", QGuiApplication::platformName()}, {"windowExposed", studio_window->isExposed()},
+            {"foreground", QJsonObject::fromVariantMap(board_native_final)},
+            {"foregroundInitial", QJsonObject::fromVariantMap(board_native_initial)}, {"nativePointerInput", native_pointer_proof},
+            {"fixture", "generated-raster-photo"}, {"returnSource", true}, {"sourceRecipePreserved", true},
+            {"finalDeletion", true}, {"undoExact", true}, {"redoExact", true}, {"standaloneNoGuess", true},
+            {"newerSourcePreserved", true}, {"chronologicalBeyond32", true},
+            {"sourceAssetId", origin_asset.asset_id}, {"documentId", origin_document_id}};
+        if (!source_workflow_receipt.open(QIODevice::WriteOnly) ||
+            source_workflow_receipt.write(QJsonDocument(source_workflow).toJson(QJsonDocument::Indented)) <= 0)
+          return fail("Write native Board/source workflow receipt after all lifecycle assertions");
         std::cout << "Edit board stage: native plus menu, independent photos, live shared layers, cross-seam brush input, single-tile removal, separate exports and saved reopening passed\n";

@@ -282,7 +282,16 @@ struct ColorPlanExecutionOptions final {
   // Preview-only opt-in. Keep the CPU reference/export route unchanged and
   // materialize pixels for downstream proof, device transforms, and scopes.
   bool allow_metal_photographic_output = false;
+  // Interactive-preview opt-in for parallel CPU ICC device conversion. The
+  // default keeps the serial reference route for export and unrelated callers.
+  bool allow_parallel_cpu_device_transform = false;
 };
+[[nodiscard]] bool apply_cpu_icc_transform(
+    std::vector<ColorPixel>* pixels,
+    const CompiledIccTransform& transform,
+    CancellationToken cancellation = {},
+    bool allow_parallel = false,
+    bool* parallel_used = nullptr);
 [[nodiscard]] RenderExecutionResult
 execute_color_plan(
     RenderExecutor* executor,

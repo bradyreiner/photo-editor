@@ -17,11 +17,35 @@ Rectangle {
         category: "PhotoExport"
         property string lastDeliverySettingsJson: ""
         property bool previewVisible: true
-        property bool activityVisible: true
+        property bool activityVisible: false
     }
     property bool exportSettingsReady: false
     property bool exportPreviewVisible: true
-    property bool exportActivityVisible: true
+    property bool exportActivityVisible: false
+    readonly property bool compactDeliveryLayout: width < theme.scaled(860)
+    readonly property bool deliveryActivityNeedsAttention: {
+        if (!jobQueue)
+            return false
+        jobQueue.jobCount
+        jobQueue.status
+        const jobs = Array.from(jobQueue.jobsForCenter())
+        const jobNeedsAttention = jobs.some(function(job) {
+            return job.status === "Running" || job.status === "Canceling" ||
+                   job.status === "Failed" || job.status === "Save unconfirmed"
+        })
+        return jobQueue.activeJobCount > 0 || jobNeedsAttention || root.unconfirmedExports.length > 0 ||
+               exportJobs.admissionError.length > 0 || exportJobs.submissionError.length > 0 ||
+               jobQueue.historyError
+    }
+    readonly property bool deliveryHasFailures: {
+        if (!jobQueue) return false
+        jobQueue.jobCount; jobQueue.status
+        return Array.from(jobQueue.jobsForCenter()).some(function(job) {
+            return job.status === "Failed" || job.status === "Save unconfirmed"
+        }) || exportJobs.admissionError.length > 0 || exportJobs.submissionError.length > 0
+    }
+    readonly property bool exportActivityContextOpen: deliveryActivityNeedsAttention
+    readonly property bool exportActivityOpen: exportActivityVisible || exportActivityContextOpen
     onExportPreviewVisibleChanged: {
         if (exportSettingsReady) exportWorkspaceSettings.previewVisible = exportPreviewVisible
     }
@@ -34,7 +58,8 @@ Rectangle {
             { key: "show-main", label: "Show preview and activity", icon: "grid" },
             { key: "focus-settings", label: "Focus on settings", icon: "panel-right" },
             { key: "preview", label: "Photo preview", icon: "visible", checked: exportPreviewVisible },
-            { key: "activity", label: "Delivery activity", icon: "scope", checked: exportActivityVisible }
+            { key: "activity", label: "Keep delivery activity open", icon: "scope", checked: exportActivityVisible,
+              tooltip: "Active jobs and errors open Delivery activity automatically. This choice controls its idle visibility." }
         ]
     }
 
@@ -52,7 +77,8 @@ Rectangle {
     function comboIndexOfText(combo, value) {
         const requestedText = String(value)
         for (let index = 0; index < combo.count; ++index) {
-            if (String(combo.textAt(index)) === requestedText)
+            if (String(combo.valueAt(index)) === requestedText ||
+                    String(combo.textAt(index)) === requestedText)
                 return index
         }
         return -1
@@ -66,13 +92,13 @@ Rectangle {
             if (!root.exportSettingsReady)
                 return
             exportWorkspaceSettings.lastDeliverySettingsJson = JSON.stringify({
-                preset: presetCombo.currentText,
+                preset: presetCombo.currentValue,
                 jpegQuality: jpegQualityField.value,
                 maxEdge: maxEdgeField.value,
                 sharpening: sharpeningCombo.currentText,
                 colorSpace: colorSpaceCombo.currentText,
                 crop: cropConstraintCombo.currentText,
-                destination: destinationField.text,
+                destination: root.deliveryDestinationPath,
                 filenameTemplate: filenameTemplateField.text
             })
         }
@@ -81,6 +107,85 @@ Rectangle {
     function scheduleDeliverySettingsSave() {
         if (exportSettingsReady)
             saveDeliverySettingsTimer.restart()
+    }
+
+    function destinationMenuItems() {
+        return [
+            {
+                key: "edit-path",
+                label: "Edit full path",
+                icon: "edit",
+                enabled: deliveryDestinationPath.length > 0,
+                disabledReason: "Choose a destination folder before editing its path."
+            },
+            {
+                key: "copy-path",
+                label: "Copy full path",
+                icon: "copy",
+                enabled: deliveryDestinationPath.length > 0,
+                disabledReason: "Choose a destination folder before copying its path."
+            },
+            {
+                key: "reset-destination",
+                label: "Reset destination",
+                icon: "reset",
+                enabled: true,
+                tooltip: "Restore the default export folder."
+            }
+        ]
+    }
+
+    function handleDestinationMenuAction(key) {
+        if (key === "edit-path")
+            beginDestinationEdit(destinationEditButton.focusedMenuOpener())
+        else if (key === "copy-path")
+            appShell.copyTextToClipboard(deliveryDestinationPath)
+        else if (key === "reset-destination")
+            resetDestination()
+    }
+
+    function beginDestinationEdit(opener) {
+        destinationEditDraft = deliveryDestinationPath
+        destinationField.text = destinationEditDraft
+        destinationEditFocusTarget = opener || destinationEditButton.focusedMenuOpener()
+        destinationEditing = true
+        Qt.callLater(function() {
+            destinationField.forceActiveFocus()
+            destinationField.selectAll()
+        })
+    }
+
+    function cancelDestinationEdit() {
+        destinationEditing = false
+        destinationEditDraft = deliveryDestinationPath
+        destinationField.text = destinationEditDraft
+        returnDestinationEditFocus()
+    }
+
+    function returnDestinationEditFocus() {
+        const target = destinationEditFocusTarget || destinationEditButton.focusedMenuOpener()
+        destinationEditFocusTarget = null
+        Qt.callLater(function() {
+            if (target && target.visible && target.enabled)
+                target.forceActiveFocus(Qt.TabFocusReason)
+            else
+                destinationChangeButton.forceActiveFocus(Qt.TabFocusReason)
+        })
+    }
+
+    function commitDestinationEdit() {
+        deliveryDestinationPath = String(destinationEditDraft || "").trim()
+        destinationEditing = false
+        destinationEditDraft = deliveryDestinationPath
+        destinationField.text = destinationEditDraft
+        destinationField.focus = false
+        returnDestinationEditFocus()
+        scheduleDeliverySettingsSave()
+    }
+
+    function resetDestination() {
+        deliveryDestinationPath = exportJobs.defaultDestinationDirectory()
+        cancelDestinationEdit()
     }
 
     readonly property bool historyMutationsEnabled: jobQueue.historyMutationsEnabled
@@ -92,19 +197,28 @@ Rectangle {
     readonly property bool hasSingleSelection: catalogAssets.selectedAssetId.length > 0
                                                && catalogAssets.selectedFilePath.length > 0
     readonly property bool hasBatchSelection: catalogAssets.selectedAssetCount > 1
-    readonly property string exportVisibilityContract: "export-visibility:v2|always:config-panel-selection-preset-destination-primary-action-layout-menu|configurable:preview-queue-panel|contextual:preflight-batch-feedback-empty-queue-progress-errors|one-expansion:export-options-queue-management-destination-reset-clear-finished|hover-focus:queue-row-actions-remove-retry-cancel|diagnostic:job-errors-preflight-blockers-active-progress|preserve:functionality"
-    readonly property string exportSurfaceContract: "export-surfaces:v1|queue:jobs-and-progress|config:selection-preset-color-crop-destination|preflight:blockers-visible|primary-action:split-export|queue-management:menu|no-elide:true|no-overlap:true"
+    readonly property string exportVisibilityContract: "export-visibility:v3|always:config-panel-selection-preset-destination-primary-action-layout-menu|activity:idle-collapsed-active-or-errors-auto-open|activity-preference:persisted-user-choice-not-mutated-by-context|contextual:preflight-batch-feedback-empty-queue-progress-errors|one-expansion:export-options-queue-management-destination-reset-clear-finished|hover-focus:queue-row-actions-remove-retry-cancel|diagnostic:job-errors-preflight-blockers-active-progress|preserve:functionality"
+    readonly property string exportSurfaceContract: "export-surfaces:v4|queue:jobs-and-progress|config:selection-preset-destination|advanced:filename-color-crop|preset-summary:one-compact-line|destination:folder-name-change-overflow|paths:basename-tooltip-full|preflight:blockers-visible|primary-action:split-export|queue-management:menu|no-overlap:true"
     readonly property string exportActionContract: "export-actions:v3|split-button:true|primary:start-current-or-selected|clear:queue-management-only|menu:queue-current,queue-selected,browse-destination,reset-destination|cleanup-menu:clear-finished|disabled-reasons:true|preflight-aware:true|no-clutter:true|label-intent:start-export"
-    readonly property string exportActionHierarchyContract: "export-action-hierarchy:v3|primary:start-export-split|primary-menu-clean:true|secondary:queue-management-menu|clear:secondary-cleanup|retry:row-or-queue-menu|destination:secondary-menu|one-primary:true|clear-not-primary:true"
-    readonly property string exportWorkflowPolishContract: "export-workflow-polish:v1|first-glance:presets-selection-queue-settings-primary-action|close-inspection:preset-destination-preflight-progress-errors-output-summary|clutter:secondary-management-in-menus-row-actions-contextual|interaction:select-preset-destination-add-queue-start-retry-cancel-clear-reveal|text:no-elide-no-overlap|functionality:preserved"
-    readonly property string exportPageCompletionContract: "page-completion:v1|export|sidebar:presets-destinations|content:selected-assets-queue-progress|settings:preset-color-crop-destination-preflight|toolbar:add-assets-start-export-clear-queue|states:empty-ready-warning-blocked-running-complete-failed"
+    readonly property string exportActionHierarchyContract: "export-action-hierarchy:v4|primary:single-action-batch-alternative|primary-menu-clean:true|secondary:queue-management-menu|clear:secondary-cleanup|retry:row-or-queue-menu|destination:secondary-menu|one-primary:true|clear-not-primary:true"
+    readonly property string exportWorkflowPolishContract: "export-workflow-polish:v5|first-glance:photo-preset-destination-primary-action|advanced:filename-color-crop|preset:one-compact-line|destination:folder-name-change-overflow-full-path-edit-reset-copy|activity:idle-collapsed-active-errors-context-open|secondary:preview-queue-progress|inspection:preflight-errors-output-summary|paths:basename-at-rest-explicit-full-path-edit|text:ui-font-readable-full-path-access-no-overlap|functionality:preserved"
+    readonly property string exportPageCompletionContract: "page-completion:v5|export|leading:photo-activity|trailing:preset-destination-primary|advanced:filename-color-crop|preset:one-compact-line|secondary:preview-queue-progress|activity:idle-collapsed-active-errors-open|settings:preflight-errors-summary|actions:start-export-queue-retry-cancel-clear-reveal|destination:basename-change-overflow-edit-path-reset|states:empty-ready-warning-blocked-running-complete-failed"
     readonly property string deliveryExportContract: "delivery-export:v1|preflight:destination-filenames-collisions-missing-unsupported-unavailable|progress:per-item-overall-nonblocking|actions:pause-resume-cancel-retry-failed-reveal|summary:profile-dimensions-format-metadata-sharpening|collision:numbered-preserve-existing"
     readonly property string persistentRenderQueueContract: "persistent-render-queue:v1|jobs:asset-export-and-timeline-render|storage:job-store|ordering:priority-then-manual-order|actions:move-priority-pause-resume-cancel-retry-duplicate-reveal|recovery:explicit-confirmation|ui:progressive-row-menu"
     readonly property string backgroundExportContract: "background-export:v1|editing:concurrent|policies:playback-first-balanced-export-first|resources:thread-limit-and-os-priority-only|preview-quality:unchanged|output-settings:unchanged|default:playback-first|ui:progressive-row-menu"
     readonly property string offlineRecoveryContract: "offline-recovery:v1|surface:export|states:drive-offline,moved-file,permission-denied,permanently-missing|preserve:metadata-thumbnail-recipe-identity|actions:recheck-relink-selected-relink-all-mark-missing|default:relink-not-delete|blocked-jobs:auto-resume-after-relink"
     property bool offlineMissingConfirmationArmed: false
-    property alias deliveryDestinationPath: destinationField.text
+    property string deliveryDestinationPath: ""
+    property string destinationEditDraft: ""
+    property bool destinationEditing: false
+    property Item destinationEditFocusTarget: null
     property alias deliveryPresetIndex: presetCombo.currentIndex
+
+    onDeliveryDestinationPathChanged: {
+        if (!destinationEditing)
+            destinationEditDraft = deliveryDestinationPath
+        scheduleDeliverySettingsSave()
+    }
 
     signal presetManagementRequested(string action)
     signal assetActivated(string destination)
@@ -229,10 +343,16 @@ Rectangle {
     ]
 
     function fileNameFromPath(path) {
-        if (path.length === 0)
+        const normalizedPath = String(path || "").replace(/[\\/]+$/, "")
+        if (normalizedPath.length === 0)
             return "";
-        const parts = path.split("/");
-        return parts.length > 0 ? parts[parts.length - 1] : path;
+        const parts = normalizedPath.split(/[\\/]/);
+        return parts.length > 0 ? parts[parts.length - 1] : normalizedPath;
+    }
+
+    function folderNameFromPath(path) {
+        const folderName = fileNameFromPath(path)
+        return folderName.length > 0 ? folderName : String(path || "")
     }
 
     function baseNameFromPath(path) {
@@ -259,10 +379,10 @@ Rectangle {
         if (hasBatchSelection) {
             const items = preflight.items || []
             if (items.length > 0)
-                return "Preview: " + fileNameFromPath(String(items[0].outputPath || "Pending")) +
+                return "Example: " + fileNameFromPath(String(items[0].outputPath || "Pending")) +
                        (items.length > 1 ? "  •  +" + (items.length - 1) + " more" : "")
         }
-        return "Preview: " + fileNameFromPath(
+        return "Example: " + fileNameFromPath(
                    String(preflight.outputPath || "Choose a photo and destination"))
     }
 
@@ -283,7 +403,7 @@ Rectangle {
     }
 
     function currentPresetDetail() {
-        const presetName = presetCombo.currentText
+        const presetName = presetCombo.currentValue
         for (let i = 0; i < presetDetails.length; ++i) {
             if (presetDetails[i].name === presetName) {
                 const detail = Object.assign({}, presetDetails[i])
@@ -297,12 +417,14 @@ Rectangle {
         return presetDetails[0]
     }
 
-    readonly property bool jpegPreset: ["Web Proof", "Client Preview", "Quick Web"].indexOf(presetCombo.currentText) >= 0
+    readonly property bool jpegPreset: presetCombo.currentValue === "Web Proof" ||
+                                       presetCombo.currentValue === "Client Preview" ||
+                                       presetCombo.currentValue === "Quick Web"
 
     function deliveryPreset() {
         if (!jpegPreset)
-            return presetCombo.currentText
-        return presetCombo.currentText + "|quality=" + jpegQualityField.value + "|max-edge=" + maxEdgeField.value +
+            return presetCombo.currentValue
+        return presetCombo.currentValue + "|quality=" + jpegQualityField.value + "|max-edge=" + maxEdgeField.value +
                "|sharpen=" + String(sharpeningCombo.currentText || "Off").toLowerCase()
     }
 
@@ -408,6 +530,8 @@ Rectangle {
     }
 
     function buildSelectedAssetList() {
+        if (!catalogAssets.selectedAssetsRecipesReady)
+            return []
         let assets = []
         const colorSpace = colorSpaceCombo.currentText
         for (let index = 0; index < catalogAssets.assetCount; ++index) {
@@ -429,9 +553,41 @@ Rectangle {
         return assets
     }
 
+    function requestSelectedExportRecipes(retryErrors) {
+        if (catalogAssets.selectedAssetsRecipesReady)
+            return true
+        const pending = []
+        const selectedIds = catalogAssets.selectedAssetIds || []
+        for (let index = 0; index < selectedIds.length; ++index) {
+            const assetId = String(selectedIds[index] || "")
+            if (assetId.length === 0 || catalogAssets.assetRecipeReady(assetId) ||
+                    (!retryErrors && catalogAssets.assetRecipeLoadError(assetId).length > 0))
+                continue
+            pending.push(assetId)
+        }
+        if (pending.length > 0)
+            catalogAssets.requestAssetRecipes(pending)
+        return false
+    }
+
+    function selectedRecipeLoadFailed() {
+        const selectedIds = catalogAssets.selectedAssetIds || []
+        for (let index = 0; index < selectedIds.length; ++index) {
+            const assetId = String(selectedIds[index] || "")
+            if (!catalogAssets.assetRecipeReady(assetId) &&
+                    catalogAssets.assetRecipeLoadError(assetId).length > 0)
+                return true
+        }
+        return false
+    }
+
     function currentSubmissionAssetList() {
         if (!hasSingleSelection)
             return []
+        if (catalogAssets.selectedMediaType === "photo" && !catalogAssets.selectedRecipeReady) {
+            catalogAssets.requestAssetRecipes([catalogAssets.selectedAssetId])
+            return []
+        }
         return [{
             assetId: catalogAssets.selectedAssetId,
             mediaType: catalogAssets.selectedMediaType,
@@ -445,8 +601,10 @@ Rectangle {
     }
 
     function currentExportActionAvailable() {
-        if (!hasSingleSelection || destinationField.text.trim().length === 0 ||
+        if (destinationEditing || !hasSingleSelection || deliveryDestinationPath.trim().length === 0 ||
                 exportJobs.batchSubmissionBusy)
+            return false
+        if (catalogAssets.selectedMediaType === "photo" && !catalogAssets.selectedRecipeReady)
             return false
         const report = exportJobs.singlePreflight
         // The visible review may take longer than the user wants to wait. The
@@ -456,7 +614,12 @@ Rectangle {
     }
 
     function queueBatchExports() {
-        if (exportJobs.batchSubmissionBusy || exportJobs.preflightBusy || currentBatchPreflight().readyCount <= 0)
+        if (destinationEditing || exportJobs.batchSubmissionBusy || exportJobs.preflightBusy)
+            return
+        if (!requestSelectedExportRecipes(true)) {
+            return
+        }
+        if (currentBatchPreflight().readyCount <= 0)
             return
         const assets = buildSelectedAssetList()
         if (assets.length === 0)
@@ -465,7 +628,7 @@ Rectangle {
         const accepted = exportJobs.queueBatchExportAsync(
             assets,
             root.deliveryPreset(),
-            destinationField.text.trim(),
+            deliveryDestinationPath.trim(),
             cropPreset,
             0,
             0,
@@ -486,7 +649,7 @@ Rectangle {
             return
         const cropPreset = cropConstraintCombo.currentText === "Current" ? "" : cropConstraintCombo.currentText
         const accepted = exportJobs.queueBatchExportAsync(
-            assets, root.deliveryPreset(), destinationField.text.trim(), cropPreset, 0, 0, 0, 0)
+            assets, root.deliveryPreset(), deliveryDestinationPath.trim(), cropPreset, 0, 0, 0, 0)
         if (accepted) {
             batchQueuedFeedback.text = "Checking current export"
             batchQueuedFeedback.visible = true
@@ -500,8 +663,10 @@ Rectangle {
     readonly property var selectedDeliveryAssets: {
         catalogAssets.selectedAssetIds
         catalogAssets.assetCount
+        catalogAssets.selectedAssetsRecipesReady
         preflightCatalogRevision
-        return visible && catalogAssets.selectedAssetCount > 0 ? buildSelectedAssetList() : []
+        return visible && catalogAssets.selectedAssetCount > 0 && catalogAssets.selectedAssetsRecipesReady
+               ? buildSelectedAssetList() : []
     }
     readonly property var singleDeliveryAsset: ({
         mediaType: catalogAssets.selectedMediaType || "photo",
@@ -514,7 +679,7 @@ Rectangle {
         single: singleDeliveryAsset,
         assets: selectedDeliveryAssets,
         preset: deliveryPreset(),
-        destination: destinationField.text.trim(),
+        destination: deliveryDestinationPath.trim(),
         scopes: {
             histogramSamples: editorPreview.histogramSampleCount,
             shadowClip: editorPreview.histogramShadowClipCount,
@@ -525,6 +690,9 @@ Rectangle {
         }
     })
     function refreshExportPreflight(force) {
+        if (visible && exportSettingsReady && !requestSelectedExportRecipes(false)) {
+            return
+        }
         if (visible && exportSettingsReady && !exportJobs.batchSubmissionBusy)
             exportJobs.requestPreflight(exportPreflightInput, Boolean(force))
     }
@@ -549,6 +717,7 @@ Rectangle {
         target: catalogAssets
         function onPhotoRecipeChanged() { root.preflightCatalogRevision += 1 }
         function onSearchInputsChanged() { root.preflightCatalogRevision += 1 }
+        function onRecipeReadinessChanged() { root.preflightCatalogRevision += 1 }
     }
     Connections {
         target: exportJobs
@@ -583,11 +752,17 @@ Rectangle {
         const preflight = currentPreflight()
         const queueCount = jobQueue ? Number(jobQueue.jobCount || 0) : 0
         const activeProgress = root.activeJobProgress()
-        return "export-workflow-polish:v1" +
+        return "export-workflow-polish:v4" +
                "|selection:" + String(selectionMetrics.count) +
                "|single:" + String(hasSingleSelection) +
-               "|preset:" + String(presetCombo.currentText || "") +
-               "|destination:" + String(destinationField.text.trim().length > 0) +
+               "|preset:" + String(presetCombo.currentValue || "") +
+               "|destination:" + String(deliveryDestinationPath.trim().length > 0) +
+               "|destination-editing:" + String(destinationEditing) +
+               "|destination-draft-pending:" + String(destinationEditing &&
+                                                        destinationEditDraft !== deliveryDestinationPath) +
+               "|activity-preference:" + String(exportActivityVisible) +
+               "|activity-context-open:" + String(exportActivityContextOpen) +
+               "|activity-open:" + String(exportActivityOpen) +
                "|preflight-errors:" + String(preflight.errorCount || 0) +
                "|preflight-warnings:" + String(preflight.warningCount || 0) +
                "|queue:" + String(queueCount) +
@@ -606,12 +781,12 @@ Rectangle {
     function exportActionHierarchySignature() {
         const queueItems = root.queueManagementMenuItems()
         const actionItems = root.exportActionMenuItems()
-        return "export-action-hierarchy:v3" +
+        return "export-action-hierarchy:v4" +
                "|primary-visible:" + String(hasSingleSelection || hasBatchSelection) +
-               "|primary:start-export-split" +
+               "|primary:single-action-batch-alternative" +
                "|primary-menu-clean:" + String(actionItems.map(function(item) { return String(item.key || "") }).indexOf("clear-finished") < 0) +
                "|batch-split:" + String(hasBatchSelection) +
-               "|current-split:" + String(hasSingleSelection && !hasBatchSelection) +
+               "|current-action:" + String(hasSingleSelection && !hasBatchSelection) +
                "|secondary:queue-management-menu" +
                "|queue-menu:" + queueItems.map(function(item) { return String(item.key || "") }).join(",") +
                "|action-menu:" + actionItems.map(function(item) { return String(item.key || "") }).join(",") +
@@ -621,15 +796,25 @@ Rectangle {
     function exportDisabledReason(batch) {
         if (exportJobs.batchSubmissionBusy)
             return "Checking export request."
+        if (destinationEditing)
+            return "Finish editing the destination path before exporting."
         if (batch && exportJobs.preflightBusy)
             return "Checking export settings."
         if (batch) {
             if (selectionMetrics.count === 0)
                 return "Select images before queueing a batch export."
+            if (!catalogAssets.selectedAssetsRecipesReady)
+                return selectedRecipeLoadFailed()
+                       ? "A saved edit could not be loaded. Retry the affected photos in Library."
+                       : "Loading saved edit recipes for the selected photos."
         } else if (!hasSingleSelection) {
             return "Select one image before queueing an export."
+        } else if (catalogAssets.selectedMediaType === "photo" && !catalogAssets.selectedRecipeReady) {
+            return catalogAssets.assetRecipeLoadError(catalogAssets.selectedAssetId).length > 0
+                   ? "The saved edit could not be loaded. Retry this photo in Library."
+                   : "Loading the photo's saved edit recipe."
         }
-        if (destinationField.text.trim().length === 0)
+        if (deliveryDestinationPath.trim().length === 0)
             return "Choose an export destination first."
         if (batch && exportJobs.batchPreflight.ok === undefined)
             return "Preparing selected exports."
@@ -656,6 +841,18 @@ Rectangle {
         return reason
     }
 
+    function exportActionHint() {
+        const hint = exportActionGuidance()
+        if (hint.length === 0)
+            return ""
+        if (hasSingleSelection && !hasBatchSelection && Number(currentPreflight().errorCount || 0) > 0)
+            return "Review Preflight checks for the blocking issue."
+        if (hasBatchSelection && Number(currentBatchPreflight().blockedCount || 0) > 0 &&
+                hint === "No selected delivery item is ready to export.")
+            return "Review blocked files in Preflight checks."
+        return hint
+    }
+
     function chooseOfflineRecoveryFolder(selectedOnly) {
         const title = selectedOnly ? "Relink Selected Original" : "Relink All Offline Originals"
         const folderUrl = catalogAssets.pickFolder(title)
@@ -677,38 +874,16 @@ Rectangle {
     }
 
     function exportActionMenuItems() {
-        return [
-            {
-                key: "queue-current",
-                label: "Start Current Export",
-                icon: "export",
-                enabled: currentExportActionAvailable(),
-                disabledReason: exportDisabledReason(false),
-                tooltip: "Start the current export with the selected preset and destination."
-            },
-            {
-                key: "queue-selected",
-                label: "Start Selected Exports",
-                icon: "media",
-                enabled: selectionMetrics.count > 0 && destinationField.text.trim().length > 0 && currentBatchPreflight().readyCount > 0,
-                disabledReason: exportDisabledReason(true),
-                tooltip: "Start exports for every selected Library image with the current export settings."
-            },
-            {
-                key: "browse-destination",
-                label: "Choose Destination",
-                icon: "folder",
-                enabled: true,
-                tooltip: "Choose the folder where exports will be written."
-            },
-            {
-                key: "reset-destination",
-                label: "Reset Destination",
-                icon: "reset",
-                enabled: true,
-                tooltip: "Restore the default export folder."
-            }
-        ]
+        // Batch export is the primary action; its menu offers the single-photo
+        // alternative. Destination commands stay with the destination field.
+        return root.hasBatchSelection ? [{
+            key: "queue-current",
+            label: "Export current photo",
+            icon: "export",
+            enabled: currentExportActionAvailable(),
+            disabledReason: exportDisabledReason(false),
+            tooltip: "Export only the current photo with these settings."
+        }] : []
     }
 
     function queueManagementMenuItems() {
@@ -909,8 +1084,27 @@ Rectangle {
 
     function chooseDestinationFolder() {
         const selectedFolder = exportJobs.pickDestinationFolder()
-        if (selectedFolder.length > 0)
-            destinationField.text = selectedFolder
+        if (selectedFolder.length > 0) {
+            deliveryDestinationPath = selectedFolder
+            if (destinationEditing) {
+                destinationEditFocusTarget = destinationChangeButton
+                cancelDestinationEdit()
+            } else {
+                Qt.callLater(function() { destinationChangeButton.forceActiveFocus(Qt.TabFocusReason) })
+            }
+        }
+    }
+
+    function reviewFailedJob() {
+        const flickable = exportQueueScroll.contentItem
+        for (let index = 0; index < exportQueueRows.count; ++index) {
+            const row = exportQueueRows.itemAt(index)
+            if (!row || row.status !== "Failed") continue
+            if (flickable && flickable.contentY !== undefined)
+                flickable.contentY = Math.max(0, Math.min(row.y, flickable.contentHeight - flickable.height))
+            row.forceActiveFocus()
+            return
+        }
     }
 
     function handleExportMenuAction(key) {
@@ -921,7 +1115,7 @@ Rectangle {
         } else if (key === "browse-destination") {
             chooseDestinationFolder()
         } else if (key === "reset-destination") {
-            destinationField.text = exportJobs.defaultDestinationDirectory()
+            resetDestination()
         } else if (key === "clear-finished") {
             jobQueue.clearFinishedJobs()
         }
@@ -956,10 +1150,11 @@ Rectangle {
             if (String(saved.filenameTemplate || "").length > 0)
                 filenameTemplateField.text = String(saved.filenameTemplate)
             if (String(saved.destination || "").trim().length > 0)
-                destinationField.text = String(saved.destination)
+                deliveryDestinationPath = String(saved.destination)
         }
-        if (destinationField.text.length === 0)
-            destinationField.text = exportJobs.defaultDestinationDirectory()
+        if (deliveryDestinationPath.length === 0)
+            deliveryDestinationPath = exportJobs.defaultDestinationDirectory()
+        destinationEditDraft = deliveryDestinationPath
         exportSettingsReady = true
         refreshExportPreflight(true)
         scheduleDeliverySettingsSave()
@@ -968,13 +1163,13 @@ Rectangle {
     Connections {
         target: presetCombo
         function onCurrentIndexChanged() {
-            if (presetCombo.currentText === "Quick Web") {
+            if (presetCombo.currentValue === "Quick Web") {
                 jpegQualityField.value = 88
                 maxEdgeField.value = 1440
-            } else if (presetCombo.currentText === "Client Preview") {
+            } else if (presetCombo.currentValue === "Client Preview") {
                 jpegQualityField.value = 92
                 maxEdgeField.value = 2048
-            } else if (presetCombo.currentText === "Web Proof") {
+            } else if (presetCombo.currentValue === "Web Proof") {
                 jpegQualityField.value = 94
                 maxEdgeField.value = 2560
             }
@@ -1016,27 +1211,30 @@ Rectangle {
         onTriggered: batchQueuedFeedback.visible = false
     }
 
-    RowLayout {
+    GridLayout {
         objectName: "exportMainWorkspace"
-        readonly property string surfaceContract: "export-main-workspace:v2|preview:configurable|queue-panel:configurable|configuration-panel:always|primary-action:always|progress-contextual:true|failure-contextual:true|no-elide:true|no-overlap:true"
+        readonly property string surfaceContract: "export-main-workspace:v4|preview-queue:leading-column|settings:trailing-column|compact:stacked|preview:configurable|queue-panel:configurable|configuration-panel:always|progress-contextual:true|failure-contextual:true|paths:basename-tooltip-full|no-overlap:true"
         anchors.fill: parent
-        spacing: 14
+        columns: root.compactDeliveryLayout ? 1 : 2
+        columnSpacing: theme.space16
+        rowSpacing: 0
 
         ColumnLayout {
-            visible: root.exportPreviewVisible || root.exportActivityVisible
+            Layout.row: 0
+            Layout.column: 0
+            visible: root.exportPreviewVisible || root.exportActivityOpen
             Layout.fillWidth: visible
-            Layout.fillHeight: true
+            Layout.fillHeight: !root.compactDeliveryLayout
+            Layout.preferredHeight: root.compactDeliveryLayout ? Math.min(theme.scaled(220), root.height * 0.3) : -1
             spacing: 10
 
             BrandPanel {
                 objectName: "exportPreviewPanel"
-                visible: root.exportPreviewVisible
+                visible: root.exportPreviewVisible && (!root.compactDeliveryLayout || !root.exportActivityOpen)
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                title: root.hasSingleSelection ? root.currentSelectionLabel() : "Prepare your delivery"
-                subtitle: root.hasBatchSelection ? root.selectionSummaryText()
-                          : root.hasSingleSelection ? "Current edit · output settings are applied during export"
-                          : "Choose photos in Library to start a delivery"
+                title: root.hasSingleSelection ? root.currentSelectionLabel() : root.hasBatchSelection ? "Selected photos" : "Export"
+                subtitle: root.hasBatchSelection ? root.selectionSummaryText() : ""
 
                 Rectangle {
                     id: deliveryImageStage
@@ -1052,6 +1250,7 @@ Rectangle {
                     clip: true
 
                     Image {
+                        id: exportPreviewImage
                         objectName: "exportPhotoPreview"
                         anchors.fill: parent
                         anchors.margins: 12
@@ -1062,6 +1261,23 @@ Rectangle {
                                    ? editorPreview.displayPreviewSource : catalogAssets.selectedThumbnailSource)
                                 : ""
                         visible: root.hasSingleSelection && !deliveryImageStage.nativePreviewAvailable
+                    }
+                    OpticalActivityIndicator {
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 14
+                        width: 18
+                        height: 18
+                        visible: exportPreviewImage.visible && exportPreviewImage.status === Image.Loading
+                        active: visible
+                        Accessible.name: "Loading export preview"
+                    }
+                    Label {
+                        anchors.centerIn: parent
+                        visible: exportPreviewImage.visible && exportPreviewImage.status === Image.Error
+                        text: "Preview unavailable"
+                        color: theme.textMuted
+                        font.pixelSize: theme.typeCaption
                     }
                     EditorPreviewTextureItem {
                         objectName: "exportNativePhotoPreview"
@@ -1076,7 +1292,7 @@ Rectangle {
                         visible: !root.hasSingleSelection
                         spacing: 14
                         Label {
-                            text: "Choose the photographs you want to deliver"
+                            text: "Choose photos to export"
                             color: theme.textStrong
                             font.pixelSize: theme.typeSection
                         }
@@ -1091,19 +1307,19 @@ Rectangle {
         BrandPanel {
             id: deliveryActivityPanel
             objectName: "exportQueuePanel"
-            visible: root.exportActivityVisible
+            visible: root.exportActivityOpen
             readonly property string surfaceContract: "export-queue-panel:v1|queue-list:always|empty-state:contextual|management:one-expansion|row-actions:hover-focus|progress:contextual|errors:diagnostic|no-elide:true"
             Layout.fillWidth: true
-            Layout.fillHeight: !root.exportPreviewVisible
-            Layout.preferredHeight: jobQueue.jobCount > 1 || jobQueue.activeJobCount > 0 || root.unconfirmedExports.length > 0
-                                    ? 280 : jobQueue.jobCount > 0 ? 210 : 120
+            Layout.fillHeight: !root.exportPreviewVisible || root.compactDeliveryLayout
+            Layout.preferredHeight: root.deliveryHasFailures ? theme.scaled(260)
+                                    : jobQueue.jobCount > 1 || jobQueue.activeJobCount > 0 || root.unconfirmedExports.length > 0
+                                    ? theme.scaled(220) : jobQueue.jobCount > 0 ? theme.scaled(170) : theme.scaled(100)
             Layout.minimumHeight: 110
             headerVisible: false
             bodyMargin: theme.panelPadding
             bodySpacing: theme.gapControl
-            title: "Delivery activity"
-            subtitle: exportJobs.pendingAdmissionCount > 0 || exportJobs.admissionError.length > 0 || exportJobs.submissionError.length > 0
-                      ? exportJobs.status : jobQueue.status
+            title: "Activity"
+            subtitle: ""
 
             ActionButton {
                 objectName: "exportRetryAdmissionButton"
@@ -1132,10 +1348,23 @@ Rectangle {
                     accent: deliveryActivityPanel.accent
                 }
 
+                ActionButton {
+                    objectName: "exportReviewFailedJobsButton"
+                    text: "Review failed"
+                    iconName: "warning"
+                    compact: true
+                    visible: {
+                        jobQueue.jobCount
+                        jobQueue.status
+                        return Array.from(jobQueue.jobsForCenter()).some(function(job) { return job.status === "Failed" })
+                    }
+                    onClicked: root.reviewFailedJob()
+                }
+
                 MenuButton {
                     objectName: "exportQueueManagementMenuButton"
                     visible: jobQueue.jobCount > 0
-                    text: "Clear Done"
+                    text: "Clear finished"
                     iconName: "close"
                     tone: "secondary"
                     compact: true
@@ -1166,35 +1395,37 @@ Rectangle {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "Delivery  " + Number(exportOverallProgress.summary.terminal || 0) + " of " +
+                        text: Number(exportOverallProgress.summary.terminal || 0) + " of " +
                               Number(exportOverallProgress.summary.total || 0) + " finished"
                         color: theme.textMain
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                     }
 
                     Label {
                         text: Number(exportOverallProgress.summary.failed || 0) > 0
                               ? Number(exportOverallProgress.summary.failed) + " failed" : ""
                         color: theme.error
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                     }
                 }
 
-                LooksyLoadingScene {
-                    objectName: "exportDeliveryLoadingScene"
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredWidth: Math.min(280, parent.width)
-                    scene: "export"
-                    compact: true
+
+
+                ProgressStrip {
+                    objectName: "exportDeliveryProgressStrip"
+                    Layout.fillWidth: true
+                    visible: active || failed
                     active: Number(exportOverallProgress.summary.terminal || 0) < Number(exportOverallProgress.summary.total || 0)
-                    failed: !active && Number(exportOverallProgress.summary.failed || 0) > 0
+                    failed: Number(exportOverallProgress.summary.failed || 0) > 0
                     progress: Number(exportOverallProgress.summary.overallPercent || 0) / 100
                 }
             }
 
             ScrollView {
+                id: exportQueueScroll
+                objectName: "exportQueueScrollView"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
@@ -1260,6 +1491,7 @@ Rectangle {
                     }
 
                     Repeater {
+                        id: exportQueueRows
                         objectName: "exportQueueRepeater"
                         readonly property string visibilityRole: "always-visible|jobs-progress-retry-cancel-remove"
                         model: jobQueue
@@ -1353,12 +1585,14 @@ Rectangle {
 
         BrandPanel {
             objectName: "exportConfigurationPanel"
-            readonly property string surfaceContract: "export-configuration-panel:v1|selection:always|preset:always|color-space:always|crop:always|destination:always|preflight:contextual|primary-actions:always|no-elide:true|no-overlap:true"
-            Layout.preferredWidth: 400
-            Layout.fillWidth: !root.exportPreviewVisible && !root.exportActivityVisible
+            readonly property string surfaceContract: "export-configuration-panel:v4|selection:always|preset:always|color-space:more-options|crop:more-options|filename:more-options|destination:basename-at-rest-explicit-full-path-edit|preflight:contextual-path:basename-tooltip|primary-actions:always|no-overlap:true"
+            Layout.row: root.compactDeliveryLayout ? 1 : 0
+            Layout.column: root.compactDeliveryLayout ? 0 : 1
+            Layout.preferredWidth: root.compactDeliveryLayout ? -1 : theme.scaled(360)
+            Layout.fillWidth: root.compactDeliveryLayout || (!root.exportPreviewVisible && !root.exportActivityOpen)
             Layout.fillHeight: true
-            title: "Delivery settings"
-            subtitle: root.selectionSummaryText()
+            title: "Export photos"
+            subtitle: root.hasBatchSelection ? root.selectionSummaryText() : ""
 
             Item {
                 objectName: "exportSettingsPanel"
@@ -1371,7 +1605,7 @@ Rectangle {
                 objectName: "exportWorkspaceLayoutButton"
                 Layout.alignment: Qt.AlignRight
                 compact: true
-                text: "Layout"
+                text: "View"
                 iconName: "panel-right"
                 primaryOpensMenu: true
                 tooltipText: "Choose visible Export panels"
@@ -1382,7 +1616,7 @@ Rectangle {
             ScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.maximumWidth: root.exportPreviewVisible || root.exportActivityVisible ? 16777215 : 640
+                Layout.maximumWidth: root.exportPreviewVisible || root.exportActivityOpen ? 16777215 : 640
                 Layout.alignment: Qt.AlignHCenter
                 clip: true
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -1409,7 +1643,7 @@ Rectangle {
                         Label {
                             Layout.fillWidth: true
                             visible: selectionMetrics.videos > 0 || selectionMetrics.timelines > 0
-                            text: "Videos and timelines export as original copies regardless of preset."
+                            text: "Videos and timelines are copied as originals."
                             color: theme.textMuted
                             font.family: theme.fontUi
                             font.pixelSize: theme.typeCaption
@@ -1421,65 +1655,76 @@ Rectangle {
                         objectName: "exportPresetSection"
                         readonly property string visibilityRole: "always-visible|preset-summary-quality-format"
                         Layout.fillWidth: true
-                        title: "Format Preset"
+                        title: "Format & size"
 
                         ToneComboBox {
                             id: presetCombo
                             objectName: "exportPresetCombo"
                             Layout.fillWidth: true
-                            model: ["Full Resolution", "Archive TIFF", "OpenEXR Half", "ACES2065-1 OpenEXR", "ACEScg OpenEXR", "HDR PQ AVIF", "HDR HLG AVIF", "Web Proof", "Client Preview", "Quick Web", "Original Copy"]
+                            accessibleLabel: qsTr("Export preset")
+                            textRole: "label"
+                            valueRole: "value"
+                            model: [
+                                { label: "Full size PNG", value: "Full Resolution" },
+                                { label: "Archive TIFF", value: "Archive TIFF" },
+                                { label: "EXR Half", value: "OpenEXR Half" },
+                                { label: "ACES2065-1", value: "ACES2065-1 OpenEXR" },
+                                { label: "ACEScg", value: "ACEScg OpenEXR" },
+                                { label: "HDR PQ", value: "HDR PQ AVIF" },
+                                { label: "HDR HLG", value: "HDR HLG AVIF" },
+                                { label: "Web Proof", value: "Web Proof" },
+                                { label: "Client Preview", value: "Client Preview" },
+                                { label: "Quick Web", value: "Quick Web" },
+                                { label: "Original Copy", value: "Original Copy" }
+                            ]
                         }
 
                         ExportPresetSummary {
+                            visible: !root.jpegPreset
                             format: currentPresetDetail().format
                             bitDepth: currentPresetDetail().bitDepth
                             maxEdge: currentPresetDetail().maxEdge
                             quality: currentPresetDetail().quality
                             description: currentPresetDetail().description
+                            showDescription: false
+                            compactLine: true
                         }
 
-                        Label {
-                            objectName: "exportOutputKindGuidance"
-                            Layout.fillWidth: true
-                            text: selectionMetrics.videos > 0 || selectionMetrics.timelines > 0
-                                  ? "Photos render to image files; videos and timelines copy as originals. This does not save an editable project."
-                                  : "Rendered image files · your editable photo recipe and Carousel document stay in Library."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeCaption
-                            wrapMode: Text.WordWrap
-                        }
-
-                        RowLayout {
+                        GridLayout {
                             Layout.fillWidth: true
                             visible: root.jpegPreset
-                            spacing: 8
+                            columns: 2
+                            columnSpacing: theme.space12
+                            rowSpacing: theme.space6
 
                             Label {
+                                Layout.fillWidth: true
                                 text: "JPEG quality"
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeCaption
                             }
                             ToneSpinBox {
                                 id: jpegQualityField
                                 objectName: "exportJpegQualityField"
+                                Layout.preferredWidth: theme.scaled(112)
                                 accessibleLabel: qsTr("JPEG quality")
                                 from: 1
                                 to: 100
                                 value: 94
                                 valueUnit: "%"
                             }
-                            Item { Layout.fillWidth: true }
                             Label {
+                                Layout.fillWidth: true
                                 text: "Long edge"
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeCaption
                             }
                             ToneSpinBox {
                                 id: maxEdgeField
                                 objectName: "exportMaxEdgeField"
+                                Layout.preferredWidth: theme.scaled(112)
                                 accessibleLabel: qsTr("Maximum long edge")
                                 from: 0
                                 to: 100000
@@ -1496,7 +1741,7 @@ Rectangle {
                                 text: "Output sharpening"
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeMicro
                             }
                             ToneComboBox {
                                 id: sharpeningCombo
@@ -1505,17 +1750,149 @@ Rectangle {
                                 Layout.fillWidth: true
                                 model: ["Off", "Screen", "Print"]
                             }
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Applied after resizing"
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 9
-                                horizontalAlignment: Text.AlignRight
-                            }
                         }
                     }
 
+
+
+
+
+                    InspectorSection {
+                        objectName: "exportDestinationSection"
+                        readonly property string visibilityRole: "always-visible|folder-name-browse-reset|explicit-full-path-edit"
+                        Layout.fillWidth: true
+                        title: "Destination"
+
+                        RowLayout {
+                            objectName: "exportDestinationDisplayRow"
+                            Layout.fillWidth: true
+                            visible: !root.destinationEditing
+
+                            Label {
+                                id: destinationNameLabel
+                                objectName: "exportDestinationNameLabel"
+                                Layout.fillWidth: true
+                                text: root.folderNameFromPath(root.deliveryDestinationPath) || "Choose a folder"
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeControl
+                                wrapMode: Text.NoWrap
+                                elide: Text.ElideMiddle
+                                Accessible.name: "Export destination folder"
+                                Accessible.description: root.deliveryDestinationPath
+
+                                HoverHandler { id: destinationNameHover }
+                                AppToolTip {
+                                    targetItem: destinationNameLabel
+                                    visible: destinationNameHover.hovered && root.deliveryDestinationPath.length > 0
+                                    text: root.deliveryDestinationPath
+                                }
+                            }
+
+                            ActionButton {
+                                id: destinationChangeButton
+                                objectName: "exportDestinationChangeButton"
+                                compact: true
+                                text: "Change"
+                                tooltipText: "Choose a different export folder."
+                                onClicked: root.chooseDestinationFolder()
+                            }
+
+                            MenuButton {
+                                id: destinationEditButton
+                                objectName: "exportDestinationMoreMenuButton"
+                                primaryOpensMenu: true
+                                showMenuIndicator: false
+                                secondaryActionMenu: true
+                                compact: true
+                                text: "More"
+                                showText: false
+                                iconName: "more"
+                                tooltipText: "Destination options"
+                                menuTooltipText: "Destination options"
+                                menuItems: root.destinationMenuItems()
+                                menuWidth: 210
+                                onMenuItemTriggered: function(key) { root.handleDestinationMenuAction(key) }
+                            }
+                        }
+
+                        RowLayout {
+                            objectName: "exportDestinationEditRow"
+                            Layout.fillWidth: true
+                            visible: root.destinationEditing
+
+                            ToneTextField {
+                                id: destinationField
+                                objectName: "exportDestinationField"
+                                Layout.fillWidth: true
+                                text: ""
+                                placeholderText: root.folderNameFromPath(root.deliveryDestinationPath)
+                                Accessible.name: "Full export destination path"
+                                Accessible.description: "Full output path. Select and copy to reuse it. Press Return to apply or Escape to cancel."
+                                onTextChanged: {
+                                    if (root.destinationEditing)
+                                        root.destinationEditDraft = text
+                                }
+                                Keys.onEscapePressed: function(event) {
+                                    root.cancelDestinationEdit()
+                                    event.accepted = true
+                                }
+                                Keys.onReturnPressed: function(event) {
+                                    root.commitDestinationEdit()
+                                    event.accepted = true
+                                }
+                                Keys.onEnterPressed: function(event) {
+                                    root.commitDestinationEdit()
+                                    event.accepted = true
+                                }
+
+                                AppToolTip {
+                                    targetItem: destinationField
+                                    visible: destinationField.hovered && destinationField.text.length > 0
+                                    text: destinationField.text
+                                }
+                            }
+
+                            ColumnLayout {
+                                spacing: theme.space4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space6
+
+                                    ActionButton {
+                                        objectName: "exportDestinationDoneButton"
+                                        compact: true
+                                        text: "Done"
+                                        onClicked: root.commitDestinationEdit()
+                                    }
+
+                                    ActionButton {
+                                        objectName: "exportDestinationCancelButton"
+                                        compact: true
+                                        text: "Cancel"
+                                        onClicked: root.cancelDestinationEdit()
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Return applies this path · Escape cancels"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                }
+                            }
+                        }
+                    }
+                    InspectorSection {
+                        objectName: "exportAdvancedSection"
+                        Layout.fillWidth: true
+                        title: "More options"
+                        subtitle: ""
+                        expandable: true
+                        expanded: false
                     InspectorSection {
                         objectName: "exportFilenameSection"
                         Layout.fillWidth: true
@@ -1528,28 +1905,25 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "{name}"
                             placeholderText: "{name}_{sequence}"
+
+                            AppToolTip {
+                                targetItem: filenameTemplateField
+                                visible: filenameTemplateField.hovered
+                                text: "Use {name} and {sequence} in the filename pattern."
+                            }
                         }
 
                         Label {
                             objectName: "exportFilenamePreviewLabel"
                             Layout.fillWidth: true
                             text: root.filenamePreviewText()
-                            color: theme.textMain
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeLabel
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
                         }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Tokens: {name}, {sequence}"
-                            color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
-                        }
                     }
-
                     Item {
                         id: outputGeometryRow
                         Layout.fillWidth: true
@@ -1560,7 +1934,7 @@ Rectangle {
                             width: (outputGeometryRow.width - 12) / 2
                             height: implicitHeight
                             objectName: "exportColorSpaceSection"
-                            readonly property string visibilityRole: "always-visible|color-space-choice-explanation"
+                            readonly property string visibilityRole: "always-visible|color-space-choice"
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignTop
                             title: "Color space"
@@ -1572,23 +1946,6 @@ Rectangle {
                                 model: root.colorSpaceOptions
                             }
 
-                            Label {
-                                text: {
-                                    const choice = colorSpaceCombo.currentText
-                                    if (choice === "sRGB")
-                                        return "For web and general display."
-                                    if (choice === "Display P3")
-                                        return "For wide-gamut displays."
-                                    if (choice === "Adobe RGB")
-                                        return "For compatible print workflows."
-                                    return "Use each image’s color profile."
-                                }
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                            }
                         }
 
                         InspectorSection {
@@ -1611,38 +1968,8 @@ Rectangle {
                         }
 
                     }
-
-                    InspectorSection {
-                        objectName: "exportDestinationSection"
-                        readonly property string visibilityRole: "always-visible|destination-field-browse-reset"
-                        Layout.fillWidth: true
-                        title: "Destination"
-
-                        ToneTextField {
-                            id: destinationField
-                            objectName: "exportDestinationField"
-                            Layout.fillWidth: true
-                            placeholderText: exportJobs.defaultDestinationDirectory()
-                            Accessible.name: "Export destination"
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Browse"
-                                onClicked: root.chooseDestinationFolder()
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Reset"
-                                onClicked: destinationField.text = exportJobs.defaultDestinationDirectory()
-                            }
-                        }
                     }
+
 
                     InspectorSection {
                         id: exportPreflightSection
@@ -1650,7 +1977,7 @@ Rectangle {
                         readonly property string visibilityRole: "contextual|delivery-destination-filenames-collisions-blockers-profile-metadata-sharpening"
                         Layout.fillWidth: true
                         visible: root.hasSingleSelection || root.hasBatchSelection
-                        title: "Output details"
+                        title: "Preflight checks"
                         expandable: true
                         expanded: !exportJobs.preflightBusy &&
                                   Number(batch ? preflight.blockedCount : preflight.errorCount) > 0
@@ -1658,26 +1985,42 @@ Rectangle {
                         readonly property bool batch: root.hasBatchSelection
                         property var preflight: root.currentDeliveryPreflight()
 
+                        // The pinned delivery summary owns visible readiness.
+                        // Keep the named preflight probes for workflow automation
+                        // without repeating readiness and target names here.
+                        Label {
+                            objectName: "exportPreflightStatusLabel"
+                            visible: false
+                            Accessible.ignored: true
+                            text: (exportJobs.preflightBusy || exportJobs.batchSubmissionBusy) ? "Checking export settings" : exportPreflightSection.batch
+                                  ? (exportPreflightSection.preflight.blockedCount === 0
+                                     ? exportPreflightSection.preflight.readyCount + " ready"
+                                     : exportPreflightSection.preflight.blockedCount + " blocked")
+                                  : (exportPreflightSection.preflight.ok
+                                     ? "Ready"
+                                     : exportPreflightSection.preflight.errorCount + " blocking")
+                        }
+
+                        Label {
+                            id: exportPreflightDestinationLabel
+                            objectName: "exportPreflightDestinationLabel"
+                            visible: false
+                            Accessible.ignored: true
+                            readonly property string fullPath: exportPreflightSection.batch
+                                                                ? String(exportPreflightSection.preflight.destinationPath || "")
+                                                                : String(exportPreflightSection.preflight.outputPath || "")
+                            Accessible.description: fullPath
+                            text: exportPreflightSection.batch
+                                      ? "Folder  ·  " + (root.folderNameFromPath(fullPath) || "Choose a folder")
+                                      : (root.fileNameFromPath(fullPath) || "Choose a destination")
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 8
 
                             Label {
-                                objectName: "exportPreflightStatusLabel"
-                                text: (exportJobs.preflightBusy || exportJobs.batchSubmissionBusy) ? "Checking export settings" : exportPreflightSection.batch
-                                      ? (exportPreflightSection.preflight.blockedCount === 0
-                                         ? exportPreflightSection.preflight.readyCount + " ready"
-                                         : exportPreflightSection.preflight.blockedCount + " blocked")
-                                      : (exportPreflightSection.preflight.ok
-                                         ? "Ready"
-                                         : exportPreflightSection.preflight.errorCount + " blocking")
-                                color: exportPreflightSection.preflight.ok ? theme.accentCool400 : theme.accentWarm400
-                                font.family: theme.fontMono
-                                font.pixelSize: 11
-                                font.weight: Font.Medium
-                            }
-
-                            Label {
+                                objectName: "exportPreflightTechnicalSummary"
                                 Layout.fillWidth: true
                                 text: exportPreflightSection.batch
                                       ? exportPreflightSection.preflight.preset + "  •  " +
@@ -1692,27 +2035,11 @@ Rectangle {
                                          exportPreflightSection.preflight.estimatedPixelHeight
                                        : "Size pending")
                                 color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                                horizontalAlignment: Text.AlignRight
-                                fontSizeMode: Text.HorizontalFit
-                                minimumPixelSize: 8
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
                             }
-                        }
-
-                        Label {
-                            objectName: "exportPreflightDestinationLabel"
-                            Layout.fillWidth: true
-                            text: exportPreflightSection.batch
-                                  ? "Destination  " + String(exportPreflightSection.preflight.destinationPath || "Choose a folder")
-                                  : "Output  " + String(exportPreflightSection.preflight.outputPath || "Choose a destination")
-                            color: theme.textMain
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            maximumLineCount: 3
-                            elide: Text.ElideNone
                         }
 
                         Label {
@@ -1727,7 +2054,7 @@ Rectangle {
                             color: Number(exportPreflightSection.preflight.collisionCount || 0) > 0
                                    ? theme.warning : theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 10
+                            font.pixelSize: theme.typeMicro
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
                         }
@@ -1767,8 +2094,8 @@ Rectangle {
                                             text: String(exportBatchPreflightItem.modelData.outputFileName ||
                                                          exportBatchPreflightItem.modelData.displayLabel || "Export")
                                             color: theme.textMain
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 9
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeMicro
                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                             elide: Text.ElideNone
                                         }
@@ -1784,8 +2111,8 @@ Rectangle {
                                                   (String(exportBatchPreflightItem.modelData.outputColorSpace || "").length > 0
                                                    ? " · " + exportBatchPreflightItem.modelData.outputColorSpace : "")
                                             color: theme.textMuted
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 8
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeMicro
                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                             elide: Text.ElideNone
                                         }
@@ -1798,8 +2125,8 @@ Rectangle {
                                         color: Number(exportBatchPreflightItem.modelData.errorCount || 0) > 0
                                                ? theme.error
                                                : exportBatchPreflightItem.modelData.collision ? theme.warning : theme.accentCool400
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeMicro
                                         font.weight: Font.DemiBold
                                     }
                                 }
@@ -1811,8 +2138,8 @@ Rectangle {
                                      Boolean(exportPreflightSection.preflight.softProofEnabled)
                             text: "Soft proof " + exportPreflightSection.preflight.softProofProfile
                             color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             Layout.fillWidth: true
                         }
 
@@ -1833,7 +2160,7 @@ Rectangle {
                                   String(exportPreflightSection.preflight.sharpeningPolicy || "")
                             color: theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 9
+                            font.pixelSize: theme.typeMicro
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
                         }
@@ -1847,25 +2174,17 @@ Rectangle {
                 id: exportDeliveryReviewSummaryCard
                 objectName: "exportDeliveryReviewSummaryCard"
                 readonly property var summary: root.currentDeliveryPreflight()
-                readonly property var firstItem: root.hasBatchSelection && (summary.items || []).length > 0
-                                                     ? summary.items[0] : ({})
                 Layout.fillWidth: true
-                Layout.preferredHeight: deliverySummaryContent.implicitHeight + 20
-                visible: (root.hasSingleSelection || root.hasBatchSelection) &&
-                         !exportJobs.preflightBusy &&
-                         (root.hasBatchSelection ? exportJobs.batchPreflight.ok !== undefined
-                                                 : exportJobs.singlePreflight.ok !== undefined)
+                Layout.preferredHeight: deliverySummaryContent.implicitHeight + theme.space12
+                visible: root.hasSingleSelection || root.hasBatchSelection
                 radius: 6
-                color: theme.alpha(theme.ink900, 0.76)
-                border.width: 1
-                border.color: Number(root.hasBatchSelection ? summary.blockedCount : summary.errorCount) > 0
-                              ? theme.alpha(theme.error, 0.52)
-                              : theme.alpha(theme.interaction400, 0.32)
+                color: "transparent"
+                border.width: 0
 
                 ColumnLayout {
                     id: deliverySummaryContent
                     anchors.fill: parent
-                    anchors.margins: 10
+                    anchors.margins: theme.space6
                     spacing: 6
 
                     RowLayout {
@@ -1874,7 +2193,7 @@ Rectangle {
                         Label {
                             objectName: "exportDeliveryReviewSummaryStatus"
                             Layout.fillWidth: true
-                            text: root.hasBatchSelection
+                            text: exportJobs.preflightBusy ? "Checking export settings…" : root.hasBatchSelection
                                   ? Number(exportDeliveryReviewSummaryCard.summary.blockedCount || 0) > 0
                                     ? exportDeliveryReviewSummaryCard.summary.blockedCount + " blocked  •  " +
                                       exportDeliveryReviewSummaryCard.summary.readyCount + " ready"
@@ -1887,7 +2206,7 @@ Rectangle {
                                           : exportDeliveryReviewSummaryCard.summary.errorCount) > 0
                                    ? theme.error : theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 11
+                            font.pixelSize: theme.typeCaption
                             font.weight: Font.DemiBold
                         }
 
@@ -1895,29 +2214,39 @@ Rectangle {
                             text: Number(root.hasBatchSelection
                                          ? exportDeliveryReviewSummaryCard.summary.collisionCount
                                          : (exportDeliveryReviewSummaryCard.summary.collision ? 1 : 0)) > 0
-                                  ? "NUMBERED COPY" : "NO OVERWRITE"
+                                  ? "Numbered names" : "No overwrite"
                             color: theme.interaction400
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
                             font.weight: Font.DemiBold
                         }
                     }
 
                     Label {
+                        id: exportDeliveryReviewSummaryPath
                         objectName: "exportDeliveryReviewSummaryPath"
+                        readonly property string fullPath: root.hasBatchSelection
+                                                           ? String(exportDeliveryReviewSummaryCard.summary.destinationPath || "")
+                                                           : String(exportDeliveryReviewSummaryCard.summary.outputPath || "")
+                        Accessible.description: fullPath
                         Layout.fillWidth: true
                         text: root.hasBatchSelection
-                              ? String(exportDeliveryReviewSummaryCard.firstItem.outputFileName || "") +
-                                (Number(exportDeliveryReviewSummaryCard.summary.assetCount || 0) > 1
-                                 ? "  + " + (exportDeliveryReviewSummaryCard.summary.assetCount - 1) + " more" : "") +
-                                "  →  " + String(exportDeliveryReviewSummaryCard.summary.destinationPath || "")
-                              : String(exportDeliveryReviewSummaryCard.summary.outputPath || "").split(/[\\/]/).pop()
+                              ? Number(exportDeliveryReviewSummaryCard.summary.assetCount || 0) +
+                                (Number(exportDeliveryReviewSummaryCard.summary.assetCount || 0) === 1 ? " file" : " files") +
+                                "  →  " + root.folderNameFromPath(fullPath)
+                              : root.fileNameFromPath(fullPath)
                         color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        maximumLineCount: 2
-                        elide: Text.ElideNone
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        wrapMode: Text.NoWrap
+                        elide: Text.ElideMiddle
+
+                        HoverHandler { id: summaryPathHover }
+                        AppToolTip {
+                            targetItem: exportDeliveryReviewSummaryPath
+                            visible: summaryPathHover.hovered
+                            text: exportDeliveryReviewSummaryPath.fullPath
+                        }
                     }
                 }
             }
@@ -1929,7 +2258,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 color: theme.accentCool400
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: theme.typeCaption
                 font.weight: Font.Medium
             }
 
@@ -1937,13 +2266,13 @@ Rectangle {
                 objectName: "exportActionGuidanceRow"
                 Layout.fillWidth: true
                 visible: (root.hasSingleSelection || root.hasBatchSelection) &&
-                         root.exportActionGuidance().length > 0
+                         root.exportActionHint().length > 0
                 spacing: theme.space8
 
                 Label {
                     objectName: "exportActionGuidanceLabel"
                     Layout.fillWidth: true
-                    text: root.exportActionGuidance()
+                    text: root.exportActionHint()
                     color: exportJobs.preflightBusy || exportJobs.batchSubmissionBusy
                            ? theme.textMuted : theme.warning
                     font.family: theme.fontUi
@@ -1957,7 +2286,7 @@ Rectangle {
                 ActionButton {
                     id: exportBrowseBlockedDestinationButton
                     objectName: "exportBrowseBlockedDestinationButton"
-                    visible: root.exportActionGuidance().toLowerCase().indexOf("destination") >= 0
+                    visible: !root.destinationEditing && root.exportActionHint().toLowerCase().indexOf("destination") >= 0
                     text: "Change Folder"
                     iconName: "folder"
                     compact: true
@@ -1971,13 +2300,14 @@ Rectangle {
                 visible: hasBatchSelection
                 text: root.currentBatchPreflight().blockedCount > 0
                       ? "Start " + root.currentBatchPreflight().readyCount + " Ready"
-                      : "Start Selected"
+                      : "Export " + selectionMetrics.count + " photos"
                 tone: "primary"
                 iconName: "export"
                 tooltipText: root.currentBatchPreflight().blockedCount > 0
                              ? "Start ready exports now; blocked items remain in Delivery Review."
                              : "Start " + selectionMetrics.count + (selectionMetrics.count === 1 ? " selected export." : " selected exports.")
-                primaryEnabled: selectionMetrics.count > 0 && destinationField.text.trim().length > 0
+                primaryEnabled: !root.destinationEditing && selectionMetrics.count > 0 &&
+                                root.deliveryDestinationPath.trim().length > 0
                                 && root.currentBatchPreflight().readyCount > 0
                 disabledReason: root.exportActionGuidance()
                 menuItems: root.exportActionMenuItems()
@@ -1987,21 +2317,17 @@ Rectangle {
                 onMenuItemTriggered: function(key) { root.handleExportMenuAction(key) }
             }
 
-            SplitButton {
+            ActionButton {
                 objectName: "exportCurrentSplitButton"
                 Layout.fillWidth: true
                 visible: hasSingleSelection && !hasBatchSelection
-                text: "Start Export"
+                text: "Export photo"
                 tone: "primary"
                 iconName: "export"
                 tooltipText: "Start the current export with the selected preset and destination."
-                primaryEnabled: root.currentExportActionAvailable()
+                enabled: root.currentExportActionAvailable()
                 disabledReason: root.exportActionGuidance()
-                menuItems: root.exportActionMenuItems()
-                menuWidth: 210
-                menuTooltipText: "Export options"
                 onClicked: root.queueCurrentSelection()
-                onMenuItemTriggered: function(key) { root.handleExportMenuAction(key) }
             }
 
             ActionButton {

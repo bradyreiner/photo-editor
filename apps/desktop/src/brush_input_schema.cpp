@@ -99,13 +99,15 @@ QVariantMap brush_stroke_variant(
     int created_at_order) {
   QVariantList sample_values;
   sample_values.reserve(samples.size());
+  const auto composite_source=mask.value(QStringLiteral("brushCompositeSource")).toBool();
   for (const auto& sample : samples) {
-    sample_values.append(brush_point_variant(sample));
+    auto saved=sample;
+    if (composite_source) saved.erase=false;
+    sample_values.append(brush_point_variant(saved));
   }
 
   QVariantMap settings;
-  if (mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch"))
-    settings.insert(QStringLiteral("rasterVersion"), 2);
+  settings.insert(QStringLiteral("rasterVersion"), 2);
   settings.insert(QStringLiteral("preset"), mask.value(QStringLiteral("brushPreset")).toString());
   settings.insert(QStringLiteral("size"), mask.value(QStringLiteral("brushSize")).toDouble());
   settings.insert(QStringLiteral("flow"), mask.value(QStringLiteral("brushFlow")).toDouble());
@@ -142,7 +144,7 @@ QVariantMap brush_stroke_variant(
     settings.insert("cloneRotation",mask.value("cloneRotation",0.0));
   }
   const auto order = std::max(1, created_at_order);
-  const auto erase_stroke = !samples.isEmpty() &&
+  const auto erase_stroke = !composite_source && !samples.isEmpty() &&
                              std::all_of(samples.cbegin(), samples.cend(), [](const auto& sample) {
                                return sample.erase;
                              });
@@ -151,7 +153,8 @@ QVariantMap brush_stroke_variant(
   stroke.insert(QStringLiteral("createdAtOrder"), order);
   stroke.insert(
       QStringLiteral("operation"),
-      erase_stroke ? QStringLiteral("erase")
+      composite_source ? QStringLiteral("add")
+      : erase_stroke ? QStringLiteral("erase")
                    : normalized_mask_operation(mask.value(QStringLiteral("operation")).toString()));
   stroke.insert(QStringLiteral("sampleCount"), sample_values.size());
   stroke.insert(QStringLiteral("settings"), settings);

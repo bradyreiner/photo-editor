@@ -84,6 +84,8 @@
     auto* library_root = engine.rootObjects().constFirst();
     auto* library_window = qobject_cast<QQuickWindow*>(library_root);
     if (!library_window) return fail("Professional Library proof requires a native quick window");
+    library_window->resize(1440, 900);
+    process_layout_events(3);
     const auto catalog_recovery_hidden_for_fixture = [&]() {
       clear_fixture_catalog_error();
       process_layout_events(2);
@@ -150,6 +152,72 @@
       }
       return nullptr;
     };
+    const auto find_text_item_within = [](QQuickItem* parent, const QString& text) -> QQuickItem* {
+      if (!parent) return nullptr;
+      for (auto* object : parent->findChildren<QObject*>()) {
+        auto* item = qobject_cast<QQuickItem*>(object);
+        if (item && item->property("text").toString() == text) return item;
+      }
+      return nullptr;
+    };
+    const auto library_toolbar_groups_are_clear = [&]() {
+      auto* search = find_visible_library_item(QStringLiteral("studioLibrarySearchInput"));
+      auto* filter = find_visible_library_item(QStringLiteral("studioLibraryCompactFilterMenuButtonPrimaryAction"));
+      auto* selection = find_visible_library_item(QStringLiteral("studioLibrarySelectButton"));
+      auto* selection_divider = find_visible_library_item(QStringLiteral("librarySelectionGroupDivider"));
+      auto* grid = find_visible_library_item(QStringLiteral("studioLibraryGridButton"));
+      auto* survey = find_visible_library_item(QStringLiteral("studioLibrarySurveyButton"));
+      auto* cull = find_visible_library_item(QStringLiteral("studioLibraryCullButton"));
+      auto* sort = find_visible_library_item(QStringLiteral("studioLibrarySortMenuButton"));
+      auto* layout = find_visible_library_item(QStringLiteral("libraryWorkspaceLayoutButton"));
+      auto* import_divider = find_visible_library_item(QStringLiteral("libraryImportGroupDivider"));
+      auto* import = find_visible_library_item(QStringLiteral("studioLibraryImportButton"));
+      if (!search || !filter || !selection || !selection_divider || !grid || !survey || !cull ||
+          !sort || !layout || !import_divider || !import) return false;
+      const auto search_rect = scene_rect(search);
+      const auto filter_rect = scene_rect(filter);
+      const auto selection_rect = scene_rect(selection);
+      const auto selection_divider_rect = scene_rect(selection_divider);
+      const auto grid_rect = scene_rect(grid);
+      const auto survey_rect = scene_rect(survey);
+      const auto cull_rect = scene_rect(cull);
+      const auto sort_rect = scene_rect(sort);
+      const auto layout_rect = scene_rect(layout);
+      const auto import_divider_rect = scene_rect(import_divider);
+      const auto import_rect = scene_rect(import);
+      const auto same_row = [](const QRectF& first, const QRectF& second) {
+        return qAbs(first.center().y() - second.center().y()) <= 1.0;
+      };
+      return same_row(search_rect, filter_rect) && filter_rect.left() >= search_rect.right() - 1.0 &&
+             selection_rect.center().y() > search_rect.center().y() &&
+             same_row(selection_rect, selection_divider_rect) && same_row(selection_rect, grid_rect) &&
+             same_row(selection_rect, survey_rect) && same_row(selection_rect, cull_rect) &&
+             same_row(selection_rect, sort_rect) && same_row(selection_rect, layout_rect) &&
+             same_row(selection_rect, import_divider_rect) && same_row(selection_rect, import_rect) &&
+             selection_rect.right() <= selection_divider_rect.left() + 1.0 &&
+             selection_divider_rect.right() <= grid_rect.left() + 1.0 &&
+             cull_rect.right() <= sort_rect.left() + 1.0 &&
+             sort_rect.right() <= layout_rect.left() + 1.0 &&
+             layout_rect.right() <= import_divider_rect.left() + 1.0 &&
+             import_divider_rect.right() <= import_rect.left() + 1.0;
+    };
+    const auto library_project_row_is_left_aligned_and_counted = [&]() {
+      auto* row = find_visible_library_item(QStringLiteral("libraryNavigationProjectRow_Nepal Trip"));
+      auto* count = find_visible_library_item(QStringLiteral("libraryNavigationProjectCount_Nepal Trip"));
+      auto* name = find_text_item_within(row, QStringLiteral("Nepal Trip"));
+      if (!row || !count || !name || count->property("text").toString() != QStringLiteral("1"))
+        return false;
+      const auto row_rect = scene_rect(row);
+      const auto name_rect = scene_rect(name);
+      const auto count_rect = scene_rect(count);
+      const auto horizontal_alignment = name->property("horizontalAlignment").toInt();
+      const auto count_alignment = count->property("horizontalAlignment").toInt();
+      return horizontal_alignment == static_cast<int>(Qt::AlignLeft) &&
+             count_alignment == static_cast<int>(Qt::AlignRight) &&
+             contains_with_tolerance(row_rect, name_rect, 1.0) &&
+             contains_with_tolerance(row_rect, count_rect, 1.0) &&
+             name_rect.left() < count_rect.left() && name_rect.right() < count_rect.left();
+    };
     const auto log_library_controls = [&](const QString& object_name) {
       const auto items = find_named_items(library_root, object_name);
       std::cerr << "Library control " << object_name.toStdString() << " instances=" << items.size() << '\n';
@@ -207,23 +275,28 @@
       auto* content_item = target_window->contentItem();
       if (!item->contains(item_center) || !content_item ||
           !content_item->contains(content_item->mapFromScene(point))) return false;
-      if (native_pointer_proof) {
-        click_native_test_window(target_window, point.toPoint());
-        process_layout_events(3);
-        return true;
-      }
-      library_pointer_timestamp += static_cast<quint64>(QApplication::doubleClickInterval() + 1);
       const auto send_pointer = [&](QEvent::Type type, const QPointF& local_point) {
         const auto global = QPointF(target_window->mapToGlobal(local_point.toPoint()));
-        QMouseEvent event(type, local_point, global,
-                          Qt::LeftButton,
-                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
-                          Qt::NoModifier);
+        const auto event_button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+        const auto event_buttons = type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton;
+        QMouseEvent event(type, local_point, global, event_button, event_buttons, Qt::NoModifier);
         event.setTimestamp(library_pointer_timestamp);
         library_pointer_timestamp += 16;
         QCoreApplication::sendEvent(target_window, &event);
         process_layout_events(2);
       };
+      if (native_pointer_proof) {
+        // QTest::mouseClick does not guarantee that Qt Quick delivered a
+        // position change to the target first. Move onto the control so its
+        // hover and pointer routing are settled before the native click.
+        QTest::mouseMove(target_window, point.toPoint(), 10);
+        process_layout_events(3);
+        click_native_test_window(target_window, point.toPoint());
+        process_layout_events(3);
+        return true;
+      }
+      library_pointer_timestamp += static_cast<quint64>(QApplication::doubleClickInterval() + 1);
+      send_pointer(QEvent::MouseMove, point);
       send_pointer(QEvent::MouseButtonPress, point);
       send_pointer(QEvent::MouseButtonRelease, point);
       return true;
@@ -233,9 +306,10 @@
       return native_pointer_proof ? click_library_item(item) : send_activation_key(item);
     };
     const auto send_library_key = [&](int key) {
-      if (native_pointer_proof)
+      if (native_pointer_proof) {
+        activate_native_test_window(library_window);
         key_native_test_window(library_window, key, Qt::NoModifier);
-      else if (!send_window_key(library_window, key))
+      } else if (!send_window_key(library_window, key))
         return false;
       process_layout_events(3);
       return true;
@@ -420,23 +494,108 @@
       }
       return nullptr;
     };
-    const auto select_layout_menu_item = [&](const QString& key) {
-      auto* menu_button = find_named_item(library_root, QStringLiteral("libraryWorkspaceLayoutButton"));
-      auto* menu_trigger = find_visible_library_item(QStringLiteral("libraryWorkspaceLayoutButtonPrimaryAction"));
+    const auto exercise_compact_filter_menu = [&]() {
+      auto* filter_trigger = find_visible_library_item(
+          QStringLiteral("studioLibraryCompactFilterMenuButtonPrimaryAction"));
+      auto* popup = find_named_object(library_root,
+          QStringLiteral("studioLibraryCompactFilterMenuButtonPopup"));
+      if (!filter_trigger || !popup || !click_library_item(filter_trigger) ||
+          !wait_for_condition([&]() { return popup->property("visible").toBool(); }, 3000)) {
+        std::cerr << "Compact Library filters did not open: "
+                  << visual_child_at_diagnostic(filter_trigger).toStdString() << '\n';
+        return false;
+      }
+      auto* date_group = find_named_item(library_root, QStringLiteral("optionsGroup_date"));
+      auto* review_group = find_named_item(library_root, QStringLiteral("optionsGroup_review"));
+      auto* duplicate_group = find_named_item(library_root, QStringLiteral("optionsGroup_duplicates"));
+      auto* media_group = find_named_item(library_root, QStringLiteral("optionsGroup_media"));
+      auto* projects_group = find_named_item(library_root, QStringLiteral("optionsGroup_projects"));
+      const auto current_items_value = popup->property("currentItems");
+      const auto current_items = current_items_value.canConvert<QJSValue>()
+          ? current_items_value.value<QJSValue>().toVariant().toList() : current_items_value.toList();
+      if (popup->property("currentGroup").toString() != QStringLiteral("media") ||
+          current_items.isEmpty() || current_items.size() > 5 ||
+          !item_visible(media_group) || !item_visible(projects_group) ||
+          !item_visible(date_group) || !item_visible(review_group) || !item_visible(duplicate_group)) {
+        std::cerr << "Compact Library filter categories or bounded initial group are missing: media="
+                  << item_visible(media_group) << " projects=" << item_visible(projects_group)
+                  << " date=" << item_visible(date_group)
+                  << " review=" << item_visible(review_group)
+                  << " duplicates=" << item_visible(duplicate_group)
+                  << " currentGroup=" << popup->property("currentGroup").toString().toStdString()
+                  << " currentItems=" << current_items.size() << '\n';
+        return false;
+      }
+      if (!capture_library(QStringLiteral("professional-library-grouped-filters"), 1440, 900,
+                           {QStringLiteral("studioLibraryCompactFilterMenuButtonPopup")})) {
+        std::cerr << "Grouped Library filters should render for native review\n";
+        return false;
+      }
+      if (!click_library_item(filter_trigger) ||
+          !wait_for_condition([&]() {
+            return !popup->property("visible").toBool() && library_window->activeFocusItem() == filter_trigger;
+          }, 3000)) {
+        std::cerr << "Repeated Library filter opener click should close and restore focus\n";
+        return false;
+      }
+      if (!click_library_item(filter_trigger) ||
+          !wait_for_condition([&]() { return popup->property("visible").toBool(); }, 3000))
+        return false;
+      date_group = find_named_item(library_root, QStringLiteral("optionsGroup_date"));
+      if (!item_visible(date_group) || !click_library_item(date_group) ||
+          !wait_for_condition([&]() {
+            return popup->property("visible").toBool() &&
+                   popup->property("currentGroup").toString() == QStringLiteral("date");
+          }, 3000)) {
+        std::cerr << "Date category should switch the grouped Library filters\n";
+        return false;
+      }
+      if (!send_library_key(Qt::Key_Escape) ||
+          !wait_for_condition([&]() {
+            return !popup->property("visible").toBool() && library_window->activeFocusItem() == filter_trigger;
+          }, 3000)) {
+        std::cerr << "Escape should close Library filters and restore focus to their opener: visible="
+                  << popup->property("visible").toBool() << " focus="
+                  << (library_window->activeFocusItem() ? library_window->activeFocusItem()->objectName().toStdString() : "none") << '\n';
+        return false;
+      }
+
+      auto* workspace = find_named_item(library_root, QStringLiteral("libraryStudioWorkspace"));
+      QVariant layout_items_value;
+      if (!workspace || !QMetaObject::invokeMethod(
+                            workspace, "workspaceLayoutMenuItems", Q_RETURN_ARG(QVariant, layout_items_value)))
+        return false;
+      const auto layout_items = layout_items_value.canConvert<QJSValue>()
+          ? layout_items_value.value<QJSValue>().toVariant().toList() : layout_items_value.toList();
+      for (const auto& value : layout_items) {
+        const auto key = value.toMap().value(QStringLiteral("key")).toString();
+        if (key == QStringLiteral("grid-view") || key == QStringLiteral("survey-view") ||
+            key == QStringLiteral("cull-view") || key.startsWith(QStringLiteral("sort:")) ||
+            key == QStringLiteral("analyze-duplicates") || key == QStringLiteral("confirmed-duplicates")) {
+          std::cerr << "Library Layout still contains a view, sort, or duplicate action: "
+                    << key.toStdString() << '\n';
+          return false;
+        }
+      }
+      return true;
+    };
+    const auto select_sort_menu_item = [&](const QString& key) {
+      auto* menu_button = find_named_item(library_root, QStringLiteral("studioLibrarySortMenuButton"));
+      auto* menu_trigger = find_visible_library_item(QStringLiteral("studioLibrarySortMenuButtonPrimaryAction"));
       if (!menu_button || !item_visible(menu_trigger) || !menu_trigger->property("enabled").toBool()) {
-        std::cerr << "Layout menu trigger is missing, hidden, or disabled: "
+        std::cerr << "Sort menu trigger is missing, hidden, or disabled: "
                   << visual_child_at_diagnostic(menu_trigger).toStdString() << '\n';
         return false;
       }
       if (!click_library_item(menu_trigger)) {
-        std::cerr << "Layout trigger could not receive the native pointer click: "
+        std::cerr << "Sort trigger could not receive the native pointer click: "
                   << visual_child_at_diagnostic(menu_trigger).toStdString() << '\n';
         return false;
       }
-      const auto popup_name = QStringLiteral("libraryWorkspaceLayoutButtonPopup");
+      const auto popup_name = QStringLiteral("studioLibrarySortMenuButtonPopup");
       auto* popup = find_named_object(library_root, popup_name);
       if (!wait_for_condition([&]() { return popup && popup->property("visible").toBool(); }, 3000)) {
-        std::cerr << "Layout popup did not open after native click: "
+        std::cerr << "Sort popup did not open after native click: "
                   << visual_child_at_diagnostic(menu_trigger).toStdString() << '\n';
         return false;
       }
@@ -448,7 +607,7 @@
         auto* workspace = find_named_item(library_root, QStringLiteral("libraryStudioWorkspace"));
         QVariant menu_items_value;
         if (workspace && QMetaObject::invokeMethod(
-                             workspace, "workspaceLayoutMenuItems", Q_RETURN_ARG(QVariant, menu_items_value))) {
+                             workspace, "librarySortMenuItems", Q_RETURN_ARG(QVariant, menu_items_value))) {
           menu_items = variant_list(menu_items_value);
         }
       }
@@ -485,7 +644,7 @@
             return popup->property("currentFocusIndex").toInt() == item_index &&
                    contains_with_tolerance(scene_rect(menu_scroll), scene_rect(menu_item), 0.5);
           }, 3000)) {
-        std::cerr << "Layout option did not scroll into the popup viewport: index=" << item_index
+        std::cerr << "Sort option did not scroll into the popup viewport: index=" << item_index
                   << " focus=" << popup->property("currentFocusIndex").toInt()
                   << " row=" << scene_rect(menu_item).x() << ',' << scene_rect(menu_item).y() << ' '
                   << scene_rect(menu_item).width() << 'x' << scene_rect(menu_item).height()
@@ -494,7 +653,7 @@
         return false;
       }
       if (!click_library_item(menu_item)) {
-        std::cerr << "Layout option could not receive the native pointer click: "
+        std::cerr << "Sort option could not receive the native pointer click: "
                   << item_name.toStdString() << " "
                   << visual_child_at_diagnostic(menu_item).toStdString() << '\n';
         return false;
@@ -503,7 +662,7 @@
             return !popup->property("visible").toBool() &&
                    catalog_assets.sortOrder() == QStringLiteral("filename-asc");
           }, 3000)) {
-        std::cerr << "Layout option click did not apply filename sort: "
+        std::cerr << "Sort option click did not apply filename sort: "
                   << item_name.toStdString() << " popup=" << popup->property("visible").toBool()
                   << " sort=" << catalog_assets.sortOrder().toStdString() << " "
                   << visual_child_at_diagnostic(menu_item).toStdString() << '\n';
@@ -529,12 +688,62 @@
       }, 3000);
     };
 
+    if (!exercise_compact_filter_menu())
+      return fail("Compact Library filters should toggle, expose categories, restore focus, and keep Layout focused");
+    if (!library_toolbar_groups_are_clear()) {
+      return fail("Library search and filters should share a row; selection, view, sort, layout, and Import should remain grouped in order");
+    }
+    if (!library_project_row_is_left_aligned_and_counted()) {
+      return fail("Project navigation should left-align the project name and keep its photo count inside the row");
+    }
+    auto* preview_workspace = find_named_item(library_root, QStringLiteral("libraryStudioWorkspace"));
+    auto* preview_disclosure = find_named_item(library_root, QStringLiteral("libraryInspectorPreviewDisclosure"));
+    auto* preview_disclosure_header = find_named_item(library_root, QStringLiteral("libraryInspectorPreviewDisclosureHeader"));
+    auto* preview_image = find_named_item(library_root, QStringLiteral("libraryInspectorPreview"));
+    if (!preview_workspace || !preview_disclosure || !preview_disclosure_header || !item_visible(preview_image) ||
+        !preview_disclosure->property("expanded").toBool()) {
+      return fail("Library Inspector preview disclosure should start expanded with its preview visible");
+    }
+    if (!click_library_item(preview_disclosure_header))
+      return fail("Library Inspector preview disclosure header should receive its pointer click");
+    if (!wait_for_condition([&]() {
+          return !preview_disclosure->property("expanded").toBool() &&
+                 !preview_workspace->property("libraryInspectorPreviewExpanded").toBool() &&
+                 !item_visible(preview_image);
+        }, 3000)) {
+      return fail("Library Inspector preview disclosure should collapse after a pointer click");
+    }
+    if (!capture_library(QStringLiteral("professional-library-preview-collapsed"), 1440, 900,
+                         {QStringLiteral("libraryInspectorPanel"),
+                          QStringLiteral("libraryInspectorPreviewDisclosureHeader")})) {
+      return fail("Collapsed Library Inspector preview should capture with its disclosure visible");
+    }
+    if (!click_library_item(preview_disclosure_header))
+      return fail("Collapsed Library Inspector preview disclosure header should receive its restore click");
+    if (!wait_for_condition([&]() {
+          return preview_disclosure->property("expanded").toBool() &&
+                 preview_workspace->property("libraryInspectorPreviewExpanded").toBool() &&
+                 item_visible(preview_image);
+        }, 3000)) {
+      return fail("Library Inspector preview disclosure should restore after a pointer click");
+    }
+    if (!capture_library(QStringLiteral("professional-library-preview-restored"), 1440, 900,
+                         {QStringLiteral("libraryInspectorPanel"),
+                          QStringLiteral("libraryInspectorPreviewDisclosureHeader"),
+                          QStringLiteral("libraryInspectorPreview")}))
+      return fail("Restored Library Inspector preview should capture with its disclosure and image visible");
     if (catalog_assets.assetCount() != 3 ||
         !capture_library(QStringLiteral("professional-library-all-images-1440"), 1440, 900,
                          {QStringLiteral("libraryImagesCollectionButton"),
                           QStringLiteral("libraryNavigationPanel"),
                           QStringLiteral("libraryNavigationAllImagesButton"),
                           QStringLiteral("studioLibrarySearchInput"),
+                          QStringLiteral("studioLibraryCompactFilterMenuButtonPrimaryAction"),
+                          QStringLiteral("studioLibrarySelectButton"),
+                          QStringLiteral("studioLibraryGridButton"),
+                          QStringLiteral("studioLibrarySortMenuButton"),
+                          QStringLiteral("libraryImportGroupDivider"),
+                          QStringLiteral("studioLibraryImportButton"),
                           QStringLiteral("studioLibraryGalleryGrid"),
                           QStringLiteral("libraryInspectorPanel")}) ||
         !visible_named_items_do_not_overlap(
@@ -572,16 +781,6 @@
       return fail("The 900 by 700 Library should expose its compact drawer without overlapping navigation controls");
     }
 
-    if (!select_project_stage(1)) {
-      std::cerr << "Nepal Trip stage after selector: "
-                << library_workflow.stageForProject(QStringLiteral("Nepal Trip")).toStdString() << '\n';
-      return fail("The project workflow stage selector should persist Edit");
-    }
-    QJsonObject stage_interaction;
-    stage_interaction.insert(QStringLiteral("event"), QStringLiteral("project-stage-selection"));
-    stage_interaction.insert(QStringLiteral("method"), QStringLiteral("native-pointer-click"));
-    stage_interaction.insert(QStringLiteral("stage"), QStringLiteral("edit"));
-    library_manifest.push_back(stage_interaction);
     if (!activate_library_control(QStringLiteral("libraryNavigationProject_Nepal Trip")) ||
         !wait_for_condition([&]() {
           return library_workflow.activeDestination() == QStringLiteral("project:Nepal Trip") &&
@@ -600,11 +799,6 @@
       return fail("The compact navigation drawer and its Loader should finish closing after project selection");
     }
 
-    LibraryWorkflowController reopened_workflow(
-        runtime_root.filePath(QStringLiteral("library-workflow.json")), QStringLiteral("isolated-test-catalog"));
-    if (reopened_workflow.stageForProject(QStringLiteral("Nepal Trip")) != QStringLiteral("edit"))
-      return fail("Project stage should persist when the Library workflow controller is reopened");
-
     library_root->setProperty("width", 1440);
     library_root->setProperty("height", 900);
     if (!wait_for_condition([&]() {
@@ -613,6 +807,20 @@
         }, 5000)) {
       return fail("The full-width Library navigation should restore after the compact drawer proof");
     }
+    if (!select_project_stage(1)) {
+      std::cerr << "Nepal Trip stage after selector: "
+                << library_workflow.stageForProject(QStringLiteral("Nepal Trip")).toStdString() << '\n';
+      return fail("The selected project workflow stage selector should persist Edit");
+    }
+    QJsonObject stage_interaction;
+    stage_interaction.insert(QStringLiteral("event"), QStringLiteral("project-stage-selection"));
+    stage_interaction.insert(QStringLiteral("method"), QStringLiteral("native-pointer-click"));
+    stage_interaction.insert(QStringLiteral("stage"), QStringLiteral("edit"));
+    library_manifest.push_back(stage_interaction);
+    LibraryWorkflowController reopened_workflow_after_stage(
+        runtime_root.filePath(QStringLiteral("library-workflow.json")), QStringLiteral("isolated-test-catalog"));
+    if (reopened_workflow_after_stage.stageForProject(QStringLiteral("Nepal Trip")) != QStringLiteral("edit"))
+      return fail("Project stage should persist when the Library workflow controller is reopened");
 
     auto* metadata_panel = find_named_item(library_root, QStringLiteral("libraryMetadataPanel"));
     if (!item_visible(metadata_panel) || !metadata_panel->setProperty("expanded", true))
@@ -730,12 +938,12 @@
                 << " count=" << catalog_assets.assetCount() << '\n';
       return fail("Clicking All Images should clear the project filter and restore the full collection");
     }
-    if (!select_layout_menu_item(QStringLiteral("sort:filename-asc")) ||
+    if (!select_sort_menu_item(QStringLiteral("sort:filename-asc")) ||
         catalog_assets.sortOrder() != QStringLiteral("filename-asc") || catalog_assets.assetCount() != 3 ||
         catalog_assets.assetAt(0).value(QStringLiteral("assetId")).toString() != fixture_ids.at(0) ||
         catalog_assets.assetAt(1).value(QStringLiteral("assetId")).toString() != fixture_ids.at(1) ||
         catalog_assets.assetAt(2).value(QStringLiteral("assetId")).toString() != fixture_ids.at(2)) {
-      return fail("The Library Layout menu should sort all photos by filename");
+      return fail("The Library Sort menu should sort all photos by filename");
     }
     if (!type_library_text(QStringLiteral("studioLibrarySearchInput"), QStringLiteral("Nepal")) ||
         !wait_for_condition([&]() {

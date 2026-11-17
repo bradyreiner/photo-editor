@@ -90,7 +90,8 @@ ColumnLayout {
                                 Layout.fillWidth: true
                                 text: String(modelData.createdAt || "")
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                                 horizontalAlignment: Text.AlignRight
                                 elide: Text.ElideNone

@@ -1,0 +1,63 @@
+{
+  "contract": "looksy-agent-decision-provenance-v1",
+  "hardware": {
+    "chip": "Apple M4 Pro",
+    "model": "Mac16,8",
+    "memoryBytes": 51539607552
+  },
+  "weightsInIgnoredWorkspace": true,
+  "defaultModelChanged": false,
+  "activeEditorRestarted": false,
+  "clefDecisionAuthorityEnabled": false,
+  "files": {
+    "apps/desktop/src/agent_decision_frame.h": "2e5ed102e7a29140586d0fc9f03710c8cabcd8c61989d6713f321bf57e752689",
+    "apps/desktop/src/agent_decision_shadow.h": "c81bd3d159ec35ccf84906f9614a42efdc0f66317e8fb8d2468db304c5c2827b",
+    "scripts/agent-training/evaluate_decisions.py": "ae10f1595e29aa5065f5a736d5c869b926800849d639587f01a28df476fff0a9",
+    "scripts/agent-training/prepare_decision_cases.py": "ddc80aa89c01acd467612ef9f806015c64b18bdb0bce90b77d2ae49025782ea2",
+    "scripts/agent-training/test_decisions.py": "e09d1d65f7e360edf1bdd2bee55af7cc64447df8f4b47fe469ac0f70d1e6def6",
+    "scripts/agent-training/run-decision-comparison.sh": "6809a694f8b39037efe4fdbb7de4f32966a45da6aabbda6191bca54073d772a1",
+    "training/agent-decisions/frames.json": "f8fc90d964caf16a9745b24c873131a3177edf30c0175dec8197be46c77bcb43",
+    "training/agent-decisions/cases.json": "58733518eb8869a96f30b5bc59c22a5378682e06dfffe8dd9158b38ff67cbe19",
+    "training/agent-decisions/clef.lock.json": "1bccfbe059c3f8008758e80c99ce3f28875b55b9eaf5c074583b0ec5ebf65bb4",
+    ".photo-editor/agent-training/adapters/selected-editing-pilot/adapters.safetensors": "a8e3f5822ef031c2dfe8bbbf10a9b9369915dc88bb69553ad8d12d49fb0fd84b",
+    ".photo-editor/agent-training/results/decision-evaluator-executed.py": "b99a066e380bc42056567044d082a65e751ebfa4ac91a5013cd154d56fc24eed"
+  },
+  "clefCheckpoint": {
+    "repository": "mlx-community/clef-flash-4bit",
+    "revision": "b5adbe2c3a95200d4bf04a0727c8ec457157d5e1",
+    "verifiedFiles": [
+      "LICENSE",
+      "chat_template.jinja",
+      "clef_mlx.py",
+      "config.json",
+      "generation_config.json",
+      "joint_head.safetensors",
+      "joint_head_config.json",
+      "model-00001-of-00002.safetensors",
+      "model-00002-of-00002.safetensors",
+      "model.safetensors.index.json",
+      "processor_config.json",
+      "tokenizer.json",
+      "tokenizer_config.json"
+    ],
+    "verifiedFileCount": 13,
+    "bytes": 6213929815
+  },
+  "residentOllamaModelsDuringFinalComparison": [],
+  "verification": {
+    "nativeTests": 3,
+    "cpuTests": 7,
+    "productionAppBuild": "passed",
+    "unscoredReplayBothModels": "passed; 0 correctness labels",
+    "crossLanguageUnicodeNumericDigestCases": 9,
+    "pythonCompile": "passed",
+    "shellSyntax": "passed",
+    "diffCheck": "passed",
+    "scope": "focused contracts and text-state routing, not native interactive editing or visual quality"
+  },
+  "comparisonFiles": {
+    "training/agent-decisions/results/gemma.json": "66235b98dc844a0dfc3ba19d02c06b6cb90cf566d7d9d5e04018aeb438100ae3",
+    "training/agent-decisions/results/clef.json": "a28022c96bb1d4cf5a5758c8460b448350c7615776b410a9d255aebed0e9bda5",
+    "training/agent-decisions/results/comparison.json": "4b12584e22d0af11f077b5dd641a6da47a5980611825b85052ee95233e0d6114"
+  }
+}

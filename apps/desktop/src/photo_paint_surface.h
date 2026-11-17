@@ -7,8 +7,12 @@
 #include <QPainter>
 #include <QVariantMap>
 #include <QtEndian>
+#include <QtGui/qrgbafloat.h>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 namespace photo_editor::desktop {
 
@@ -20,7 +24,9 @@ inline QVariantMap empty_photo_paint_tiles(const QColorSpace& space) {
 
 inline QVariantMap photo_paint_target_identity(QVariantMap layer, bool include_content = true) {
   for (auto it=layer.begin();it!=layer.end();) {
-    if (it.key().startsWith(QStringLiteral("thumbnail"),Qt::CaseInsensitive)) it=layer.erase(it);
+    if (it.key().startsWith(QStringLiteral("thumbnail"),Qt::CaseInsensitive) ||
+        it.key() == QStringLiteral("displaySubtitle") || it.key() == QStringLiteral("kindLabel") ||
+        it.key() == QStringLiteral("layerAuditLabel")) it=layer.erase(it);
     else ++it;
   }
   if (!include_content) { layer.remove("paintTiles"); layer.remove("pixelData"); }
@@ -112,7 +118,7 @@ class PhotoPaintSurface final {
     return image;
   }
 
-  void store(int x, int y, const QImage& image) {
+  static QString encode_tile(const QImage& image) {
     QByteArray raw(reinterpret_cast<const char*>(image.constBits()), image.sizeInBytes());
 #if Q_BYTE_ORDER == Q_BIG_ENDIAN
     for (qsizetype i = 0; i < raw.size(); i += 4) {
@@ -120,7 +126,10 @@ class PhotoPaintSurface final {
       qToLittleEndian(value, raw.data() + i);
     }
 #endif
-    tiles.insert(key(x,y), QString::fromLatin1(qCompress(raw, 1).toBase64()));
+    return QString::fromLatin1(qCompress(raw, 1).toBase64());
+  }
+  void store(int x, int y, const QImage& image) {
+    tiles.insert(key(x,y), encode_tile(image));
   }
   QVariantMap snapshot() const {
     auto result = payload;
@@ -134,6 +143,8 @@ class PhotoPaintSurface final {
   QImage raster_region(QSize output, QRect region, QString* error = nullptr,
       const QVariantMap& draft = {}) const {
     if (!output.isValid()) output = size;
+    if (output != size)
+      return filtered_raster_region(output, region, error, draft);
     QImage image(region.size(), QImage::Format_RGBA32FPx4_Premultiplied);
     if (image.isNull()) { if (error) *error = QStringLiteral("Paint raster allocation failed."); return {}; }
     image.setColorSpace(color_space);
@@ -164,6 +175,134 @@ class PhotoPaintSurface final {
       painter.drawImage(tile_rect(x,y).topLeft(), patch);
     }
     painter.end();
+    return image;
+  }
+
+ private:
+  struct SampleKernel final {
+    int first = 0;
+    std::vector<double> weights;
+  };
+
+  static SampleKernel sample_kernel(int destination, int source_extent, int output_extent) {
+    SampleKernel kernel;
+    if (destination < 0 || destination >= output_extent) return kernel;
+    const auto scale = static_cast<double>(source_extent) / output_extent;
+    if (scale > 1.0) {
+      const auto begin = static_cast<double>(destination) * scale;
+      const auto end = static_cast<double>(destination + 1) * scale;
+      kernel.first = std::max(0, static_cast<int>(std::floor(begin)));
+      const auto last = std::min(source_extent, static_cast<int>(std::ceil(end)));
+      kernel.weights.reserve(static_cast<std::size_t>(last - kernel.first));
+      for (auto source = kernel.first; source < last; ++source)
+        kernel.weights.push_back(std::max(0.0,
+            std::min(end, static_cast<double>(source + 1)) -
+            std::max(begin, static_cast<double>(source))) / scale);
+    } else {
+      const auto center = (static_cast<double>(destination) + 0.5) * scale - 0.5;
+      const auto first = static_cast<int>(std::floor(center));
+      kernel.first = std::clamp(first, 0, source_extent - 1);
+      const auto last = std::clamp(first + 1, 0, source_extent - 1);
+      if (last == kernel.first) kernel.weights = {1.0};
+      else kernel.weights = {1.0 - (center - first), center - first};
+    }
+    return kernel;
+  }
+
+  QImage filtered_raster_region(QSize output, QRect region, QString* error,
+      const QVariantMap& draft) const {
+    QImage image(region.size(), QImage::Format_RGBA32FPx4_Premultiplied);
+    if (image.isNull()) {
+      if (error) *error = QStringLiteral("Paint raster allocation failed.");
+      return {};
+    }
+    image.setColorSpace(color_space);
+    image.fill(Qt::transparent);
+    // One source-pixel footprint for every output pixel, independent of tile
+    // boundaries and regional rendering. QPainter's smooth image transform is
+    // bilinear when minifying; it can miss painted/erased pixels entirely.
+    // Integrate premultiplied linear RGBA instead, so transparent holes, signed
+    // colors and HDR energy survive thumbnail and preview reductions alike.
+    std::vector<SampleKernel> horizontal, vertical;
+    horizontal.reserve(static_cast<std::size_t>(region.width()));
+    vertical.reserve(static_cast<std::size_t>(region.height()));
+    for (int x = region.left(); x <= region.right(); ++x)
+      horizontal.push_back(sample_kernel(x, size.width(), output.width()));
+    for (int y = region.top(); y <= region.bottom(); ++y)
+      vertical.push_back(sample_kernel(y, size.height(), output.height()));
+
+    auto names = tiles.keys();
+    for (auto it = draft.cbegin(); it != draft.cend(); ++it)
+      if (!tiles.contains(it.key())) names.append(it.key());
+    if (!legacy.isNull()) {
+      // Legacy pixels fill only tiles which have no authoritative replacement.
+      const auto source_left = std::max(0, static_cast<int>(std::floor(
+          static_cast<double>(region.left()) * size.width() / output.width())) - 1);
+      const auto source_top = std::max(0, static_cast<int>(std::floor(
+          static_cast<double>(region.top()) * size.height() / output.height())) - 1);
+      const auto source_right = std::min(size.width(), static_cast<int>(std::ceil(
+          static_cast<double>(region.right() + 1) * size.width() / output.width())) + 1);
+      const auto source_bottom = std::min(size.height(), static_cast<int>(std::ceil(
+          static_cast<double>(region.bottom() + 1) * size.height() / output.height())) + 1);
+      for (int y = source_top / kPhotoPaintTileEdge; y * kPhotoPaintTileEdge < source_bottom; ++y)
+        for (int x = source_left / kPhotoPaintTileEdge; x * kPhotoPaintTileEdge < source_right; ++x) {
+          const auto name = key(x, y);
+          if (!tiles.contains(name) && !draft.contains(name)) names.append(name);
+        }
+    }
+    const auto margin_x = static_cast<int>(std::ceil(std::max(
+        1.0, 0.5 * output.width() / size.width()))) + 1;
+    const auto margin_y = static_cast<int>(std::ceil(std::max(
+        1.0, 0.5 * output.height() / size.height()))) + 1;
+    for (const auto& name : names) {
+      const auto parts = name.split(',');
+      const auto tx = parts.value(0).toInt(), ty = parts.value(1).toInt();
+      const auto source_rect = tile_rect(tx, ty);
+      const auto left = static_cast<int>(std::floor(
+          source_rect.left() * static_cast<double>(output.width()) / size.width())) - margin_x;
+      const auto top = static_cast<int>(std::floor(
+          source_rect.top() * static_cast<double>(output.height()) / size.height())) - margin_y;
+      const auto right = static_cast<int>(std::ceil(
+          (source_rect.right() + 1) * static_cast<double>(output.width()) / size.width())) + margin_x;
+      const auto bottom = static_cast<int>(std::ceil(
+          (source_rect.bottom() + 1) * static_cast<double>(output.height()) / size.height())) + margin_y;
+      const auto destination = QRect(QPoint(left, top), QPoint(right, bottom))
+          .intersected(region).intersected(QRect(QPoint(), output));
+      if (destination.isEmpty()) continue;
+      auto patch = draft.contains(name) ? draft.value(name).value<QImage>() : tile(tx, ty, error);
+      if (patch.isNull() || patch.size() != source_rect.size()) {
+        if (error && error->isEmpty()) *error = QStringLiteral("Invalid paint draft tile.");
+        return {};
+      }
+      if (patch.format() != QImage::Format_RGBA32FPx4_Premultiplied)
+        patch = patch.convertToFormat(QImage::Format_RGBA32FPx4_Premultiplied);
+      for (int y = destination.top(); y <= destination.bottom(); ++y) {
+        const auto& ky = vertical[static_cast<std::size_t>(y - region.top())];
+        auto* output_row = reinterpret_cast<QRgbaFloat32*>(image.scanLine(y - region.top()));
+        for (int x = destination.left(); x <= destination.right(); ++x) {
+          const auto& kx = horizontal[static_cast<std::size_t>(x - region.left())];
+          double red = 0, green = 0, blue = 0, alpha = 0;
+          const auto y_begin = std::max(ky.first, source_rect.top());
+          const auto y_end = std::min(ky.first + static_cast<int>(ky.weights.size()), source_rect.bottom() + 1);
+          const auto x_begin = std::max(kx.first, source_rect.left());
+          const auto x_end = std::min(kx.first + static_cast<int>(kx.weights.size()), source_rect.right() + 1);
+          for (int sy = y_begin; sy < y_end; ++sy) {
+            const auto* row = reinterpret_cast<const QRgbaFloat32*>(patch.constScanLine(sy - source_rect.top()));
+            const auto wy = ky.weights[static_cast<std::size_t>(sy - ky.first)];
+            for (int sx = x_begin; sx < x_end; ++sx) {
+              const auto weight = wy * kx.weights[static_cast<std::size_t>(sx - kx.first)];
+              const auto& pixel = row[sx - source_rect.left()];
+              red += weight * pixel.red(); green += weight * pixel.green();
+              blue += weight * pixel.blue(); alpha += weight * pixel.alpha();
+            }
+          }
+          auto& pixel = output_row[x - region.left()];
+          pixel = QRgbaFloat32{pixel.red() + static_cast<float>(red),
+              pixel.green() + static_cast<float>(green), pixel.blue() + static_cast<float>(blue),
+              pixel.alpha() + static_cast<float>(alpha)};
+        }
+      }
+    }
     return image;
   }
 };

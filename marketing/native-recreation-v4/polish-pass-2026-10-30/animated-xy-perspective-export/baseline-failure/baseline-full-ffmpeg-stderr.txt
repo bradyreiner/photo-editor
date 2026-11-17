@@ -1,0 +1,35 @@
+ffmpeg version 8.0.1 Copyright (c) 2000-2025 the FFmpeg developers
+  built with Apple clang version 17.0.0 (clang-1700.4.4.1)
+  configuration: --prefix=/opt/homebrew/Cellar/ffmpeg/8.0.1 --enable-shared --enable-pthreads --enable-version3 --cc=clang --host-cflags= --host-ldflags= --enable-ffplay --enable-gnutls --enable-gpl --enable-libaom --enable-libaribb24 --enable-libbluray --enable-libdav1d --enable-libharfbuzz --enable-libjxl --enable-libmp3lame --enable-libopus --enable-librav1e --enable-librist --enable-librubberband --enable-libsnappy --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libtesseract --enable-libtheora --enable-libvidstab --enable-libvmaf --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libxvid --enable-lzma --enable-libfontconfig --enable-libfreetype --enable-frei0r --enable-libass --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-libspeex --enable-libsoxr --enable-libzmq --enable-libzimg --disable-libjack --disable-indev=jack --enable-videotoolbox --enable-audiotoolbox --enable-neon
+  libavutil      60.  8.100 / 60.  8.100
+  libavcodec     62. 11.100 / 62. 11.100
+  libavformat    62.  3.100 / 62.  3.100
+  libavdevice    62.  1.100 / 62.  1.100
+  libavfilter    11.  4.100 / 11.  4.100
+  libswscale      9.  1.100 /  9.  1.100
+  libswresample   6.  1.100 /  6.  1.100
+Input #0, lavfi, from 'color=c=black@0.0:s=160x90:r=30.000000,format=rgba,format=rgba':
+  Duration: N/A, start: 0.000000, bitrate: N/A
+  Stream #0:0: Video: wrapped_avframe, rgba, 160x90 [SAR 1:1 DAR 16:9], 30 fps, 30 tbr, 30 tbn
+Input #1, png_pipe, from '/var/folders/qx/ck73lj3j7fl5tk_glls1rrq40000gn/T/qt_temp-qVUBkb/animated-xy-perspective-source.png':
+  Duration: N/A, bitrate: N/A
+  Stream #1:0: Video: png, rgba(pc, gbr/unknown/unknown), 160x90 [SAR 3780:3780 DAR 16:9], 30 fps, 30 tbr, 30 tbn
+Input #2, lavfi, from 'anullsrc=channel_layout=stereo:sample_rate=48000':
+  Duration: N/A, start: 0.000000, bitrate: 768 kb/s
+  Stream #2:0: Audio: pcm_u8, 48000 Hz, stereo, u8, 768 kb/s
+Stream mapping:
+  Stream #0:0 (wrapped_avframe) -> format:default
+  Stream #1:0 (png) -> scale:default
+  Stream #2:0 (pcm_u8) -> asetpts:default
+  setparams:default -> Stream #0:0 (png)
+Press [q] to stop, [?] for help
+[Parsed_perspective_12 @ 0x794c621c0] [Eval @ 0x16cecd8e0] Undefined constant or missing '(' in 't+0.00000000)-0.00000000)/1.96666667)))))'
+[fc#0 @ 0x794c54000] Error while filtering: Invalid argument
+[fc#0 @ 0x794c54000] Task finished with error code: -22 (Invalid argument)
+[fc#0 @ 0x794c54000] Terminating thread with return code -22 (Invalid argument)
+[vost#0:0/png @ 0x794ce4000] [enc:png @ 0x7951209a0] Could not open encoder before EOF
+[vost#0:0/png @ 0x794ce4000] Task finished with error code: -22 (Invalid argument)
+[vost#0:0/png @ 0x794ce4000] Terminating thread with return code -22 (Invalid argument)
+[out#0/image2 @ 0x794c60cc0] Nothing was written into output file, because at least one of its streams received no packets.
+frame=    0 fps=0.0 q=0.0 Lsize=       0KiB time=N/A bitrate=N/A speed=N/A elapsed=0:00:00.00    
+Conversion failed!

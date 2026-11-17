@@ -156,28 +156,32 @@ Item {
                         text: "Cull photos"
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 18
+                        font.pixelSize: theme.typeDialogTitle
                         font.weight: Font.DemiBold
                     }
 
                     Label {
                         objectName: "libraryCullProgressLabel"
                         Layout.fillWidth: true
-                        text: root.catalogAssets
-                              ? (root.catalogAssets.selectedIndex + 1) + " of " + root.catalogAssets.assetCount +
-                                " visible · " + root.catalogAssets.visibleUnmarkedCount + " unmarked"
-                              : "Library unavailable"
+                        text: !root.catalogAssets ? "Library unavailable"
+                              : root.catalogAssets.assetCount === 0
+                                ? (root.catalogAssets.loading ? "Loading photos…" : "No photos in this view")
+                                : (root.catalogAssets.selectedIndex + 1) + " of " + root.catalogAssets.assetCount +
+                                  " photos · " + root.catalogAssets.visibleUnmarkedCount + " unmarked"
                         color: theme.textMuted
                         font.family: theme.fontUi
-                        font.pixelSize: 11
+                        font.pixelSize: theme.typeCaption
                         elide: Text.ElideNone
                     }
                 }
 
                 ColumnLayout {
                     objectName: "libraryCullProgress"
-                    Layout.preferredWidth: root.width < 720 ? 120 : root.width < 960 ? 148 : 188
-                    Layout.minimumWidth: root.width < 720 ? 108 : 132
+                    visible: root.catalogAssets && root.catalogAssets.assetCount > 0
+                    Layout.preferredWidth: root.width < theme.scaled(720)
+                                           ? theme.scaled(120)
+                                           : root.width < theme.scaled(960) ? theme.scaled(148) : theme.scaled(188)
+                    Layout.minimumWidth: root.width < theme.scaled(720) ? theme.scaled(108) : theme.scaled(132)
                     spacing: 5
 
                     RowLayout {
@@ -187,7 +191,7 @@ Item {
                             text: "Review progress"
                             color: theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 10
+                            font.pixelSize: theme.typeMicro
                         }
                         Label {
                             text: root.catalogAssets
@@ -196,7 +200,7 @@ Item {
                                   : ""
                             color: theme.textMain
                             font.family: theme.fontUi
-                            font.pixelSize: 10
+                            font.pixelSize: theme.typeMicro
                         }
                     }
 
@@ -218,10 +222,11 @@ Item {
 
                 MiniButton {
                     objectName: "libraryCullUnmarkedButton"
+                    visible: root.catalogAssets && root.catalogAssets.assetCount > 0
                     text: root.catalogAssets ? "Unmarked " + root.catalogAssets.visibleUnmarkedCount : "Unmarked"
                     iconName: "filter"
                     role: "secondary"
-                    labelVisible: root.width >= 940
+                    labelVisible: root.width >= theme.scaled(940)
                     a11yName: "Toggle unmarked photos"
                     active: root.catalogAssets && root.catalogAssets.reviewFilter === "unmarked"
                     tooltip: active ? "Show all review states" : "Show only photos that still need a pick or reject"
@@ -230,12 +235,12 @@ Item {
 
                 MiniButton {
                     objectName: "libraryCullResumeButton"
-                    visible: root.resumeAssetId.length > 0 &&
+                    visible: root.catalogAssets && root.catalogAssets.assetCount > 0 && root.resumeAssetId.length > 0 &&
                              String(root.selectedAsset.assetId || "") !== root.resumeAssetId
                     text: "Resume"
                     iconName: "history"
                     role: "secondary"
-                    labelVisible: root.width >= 940
+                    labelVisible: root.width >= theme.scaled(940)
                     a11yName: "Resume the last reviewed photo"
                     tooltip: "Return to the last reviewed photo from this shoot"
                     onClicked: root.resumeRequested()
@@ -243,10 +248,11 @@ Item {
 
                 MiniButton {
                     objectName: "libraryCullCompareButton"
+                    visible: root.catalogAssets && root.catalogAssets.assetCount > 0
                     text: "Compare"
                     iconName: "compare"
                     role: "secondary"
-                    labelVisible: root.width >= 940
+                    labelVisible: root.width >= theme.scaled(940)
                     a11yName: "Compare candidates"
                     active: root.compareMode
                     enabled: root.candidates.length === 2
@@ -263,6 +269,7 @@ Item {
                 objectName: "libraryCullReviewRow"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                visible: root.catalogAssets && root.catalogAssets.assetCount > 0
                 spacing: 10
 
                 Rectangle {
@@ -270,7 +277,7 @@ Item {
                     objectName: "libraryCullViewer"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumWidth: 260
+                    Layout.minimumWidth: theme.scaled(260)
                     radius: theme.radius10
                     color: theme.mediaCanvas
                     clip: true
@@ -281,13 +288,13 @@ Item {
                         clip: true
                         visible: !root.compareMode
 
-                        Image {
+                        ColorManagedImage {
                             id: heroImage
                             objectName: "libraryCullOriginalImage"
                             asynchronous: true
                             cache: false
                             fillMode: Image.PreserveAspectFit
-                            source: root.normalizedImagePath(root.selectedAsset)
+                            imageSource: root.normalizedImagePath(root.selectedAsset)
 
                             readonly property real fitScale: implicitWidth > 0 && implicitHeight > 0
                                                              ? Math.min(imageViewport.width / implicitWidth,
@@ -308,12 +315,12 @@ Item {
                             }
                         }
 
-                        Image {
+                        ColorManagedImage {
                             objectName: "libraryCullCachedPreviewImage"
                             anchors.centerIn: parent
                             width: Math.max(1, parent.width - 32)
                             height: Math.max(1, parent.height - 32)
-                            source: String(root.selectedAsset.thumbnailSource || root.catalogAssets.selectedThumbnailSource || "")
+                            imageSource: String(root.selectedAsset.thumbnailSource || root.catalogAssets.selectedThumbnailSource || "")
                             fillMode: Image.PreserveAspectFit
                             asynchronous: true
                             cache: true
@@ -338,7 +345,7 @@ Item {
                                   : "No preview available"
                             color: theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 13
+                            font.pixelSize: theme.typeBody
                         }
 
                         DragHandler {
@@ -387,13 +394,13 @@ Item {
                                 color: theme.mediaCanvas
                                 clip: true
 
-                                Image {
+                                ColorManagedImage {
                                     id: candidateImage
                                     objectName: candidatePane.index === 0 ? "libraryCullCompareImageLeft" : "libraryCullCompareImageRight"
                                     asynchronous: true
                                     cache: false
                                     fillMode: Image.PreserveAspectFit
-                                    source: root.normalizedImagePath(candidatePane.modelData)
+                                    imageSource: root.normalizedImagePath(candidatePane.modelData)
 
                                     readonly property real fitScale: implicitWidth > 0 && implicitHeight > 0
                                                                      ? Math.min(parent.width / implicitWidth,
@@ -409,11 +416,11 @@ Item {
                                     y: (parent.height - height) / 2 + root.panY
                                 }
 
-                                Image {
+                                ColorManagedImage {
                                     anchors.centerIn: parent
                                     width: Math.max(1, parent.width - 24)
                                     height: Math.max(1, parent.height - 48)
-                                    source: String(candidatePane.modelData.thumbnailSource || "")
+                                    imageSource: String(candidatePane.modelData.thumbnailSource || "")
                                     asynchronous: true
                                     cache: true
                                     fillMode: Image.PreserveAspectFit
@@ -424,15 +431,15 @@ Item {
                                     anchors.left: parent.left
                                     anchors.right: parent.right
                                     anchors.bottom: parent.bottom
-                                    height: 48
+                                    height: compareFooterContent.implicitHeight + theme.space16
                                     color: theme.alpha(theme.ink950, 0.86)
                                     border.width: theme.chromeBorderWidth
                                     border.color: theme.alpha(theme.lineSoft, 0.50)
 
                                     ColumnLayout {
+                                        id: compareFooterContent
                                         anchors.fill: parent
-                                        anchors.leftMargin: 10
-                                        anchors.rightMargin: 10
+                                        anchors.margins: theme.space8
                                         spacing: 2
 
                                         Label {
@@ -445,8 +452,9 @@ Item {
                                             }
                                             color: theme.textStrong
                                             font.family: theme.fontUi
-                                            font.pixelSize: 10
-                                            elide: Text.ElideMiddle
+                                            font.pixelSize: theme.typeCaption
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            elide: Text.ElideNone
                                         }
                                         Label {
                                             Layout.fillWidth: true
@@ -460,7 +468,8 @@ Item {
                                                        : "Cached preview")
                                             color: theme.textMuted
                                             font.family: theme.fontUi
-                                            font.pixelSize: 9
+                                            font.pixelSize: theme.typeMicro
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                         }
                                     }
                                 }
@@ -520,7 +529,7 @@ Item {
                                   : root.imageQualityLabel
                             color: theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 10
+                            font.pixelSize: theme.typeMicro
                         }
                     }
 
@@ -585,10 +594,12 @@ Item {
                             text: root.selectedName
                             color: theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 12
+                            font.pixelSize: theme.typeCaption
                             font.weight: Font.DemiBold
-                            elide: Text.ElideMiddle
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
                             horizontalAlignment: Text.AlignHCenter
+                            Accessible.description: root.selectedAsset.filePath || root.selectedName
                         }
                         Label {
                             Layout.fillWidth: true
@@ -598,8 +609,9 @@ Item {
                                    ? " · " + String(root.selectedAsset.lensModel) : "")
                             color: theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 9
+                            font.pixelSize: theme.typeMicro
                             elide: Text.ElideNone
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             horizontalAlignment: Text.AlignHCenter
                         }
                     }
@@ -607,9 +619,9 @@ Item {
 
                 ColumnLayout {
                     objectName: "libraryCullActionPanel"
-                    Layout.preferredWidth: 170
-                    Layout.minimumWidth: 170
-                    Layout.maximumWidth: 170
+                    Layout.preferredWidth: theme.scaled(170)
+                    Layout.minimumWidth: theme.scaled(170)
+                    Layout.maximumWidth: theme.scaled(170)
                     Layout.fillHeight: true
                     spacing: 8
 
@@ -618,7 +630,7 @@ Item {
                         color: root.selectedReviewState === "Picked" ? theme.success
                                : root.selectedReviewState === "Rejected" ? theme.error : theme.textMuted
                         font.family: theme.fontUi
-                        font.pixelSize: 13
+                        font.pixelSize: theme.typeBody
                         font.weight: Font.DemiBold
                     }
 
@@ -627,12 +639,21 @@ Item {
                         text: "P picks · X rejects · U clears review\n0–5 sets stars · ←/→ moves"
                         color: theme.textMuted
                         font.family: theme.fontUi
-                        font.pixelSize: 10
+                        font.pixelSize: theme.typeCaption
                         wrapMode: Text.WordWrap
                         elide: Text.ElideNone
                     }
 
                     Item { Layout.fillHeight: true }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Mark"
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        font.weight: Font.DemiBold
+                    }
 
                     MiniButton {
                         objectName: "libraryCullPickButton"
@@ -656,6 +677,16 @@ Item {
                         enabled: root.catalogAssets && root.catalogAssets.selectedIndex >= 0
                         onClicked: root.reviewActionRequested("reject")
                     }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Rating"
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        font.weight: Font.DemiBold
+                    }
+
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 2
@@ -671,7 +702,7 @@ Item {
                                 Layout.minimumHeight: 26
                                 Layout.maximumHeight: 26
                                 square: true
-                                iconName: index === 0 ? "minus" : "star"
+                                iconName: index === 0 ? "minus" : Number(root.selectedAsset.rating || 0) >= index ? "star-gold" : "star"
                                 a11yName: index === 0 ? "Set rating to zero stars" : "Set rating to " + index + " stars"
                                 role: "icon"
                                 active: index > 0 && Number(root.selectedAsset.rating || 0) >= index
@@ -696,10 +727,10 @@ Item {
                         objectName: "libraryCullAutoAdvanceButton"
                         Layout.fillWidth: true
                         text: root.autoAdvance ? "Auto advance on" : "Auto advance off"
-                        iconName: root.autoAdvance ? "next" : "pause"
+                        iconName: root.autoAdvance ? "pause" : "play"
                         role: "secondary"
                         active: root.autoAdvance
-                        labelVisible: root.width >= 620
+                        labelVisible: root.width >= theme.scaled(620)
                         a11yName: root.autoAdvance ? "Auto advance on" : "Auto advance off"
                         tooltip: "Move to the next photo after a review mark or rating"
                         onClicked: root.autoAdvanceToggleRequested()
@@ -707,16 +738,60 @@ Item {
                 }
             }
 
+            ColumnLayout {
+                objectName: "libraryCullEmptyState"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: root.catalogAssets && root.catalogAssets.assetCount === 0
+                spacing: theme.space8
+
+                Item { Layout.fillHeight: true }
+
+                OpticalActivityIndicator {
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: theme.scaled(28)
+                    Layout.preferredHeight: theme.scaled(28)
+                    active: root.catalogAssets && root.catalogAssets.loading
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.catalogAssets && root.catalogAssets.loading ? "Loading photos…" : "No photos to review"
+                    color: theme.textStrong
+                    font.family: theme.fontDisplay
+                    font.pixelSize: theme.typePageTitle
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Label {
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.maximumWidth: theme.scaled(460)
+                    text: root.catalogAssets && root.catalogAssets.loading
+                          ? "Your current Library view is loading."
+                          : "Add or select photos in Library, then return here to mark picks, rejects, and ratings."
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeBody
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Item { Layout.fillHeight: true }
+            }
+
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
                 color: theme.alpha(theme.lineSoft, 0.58)
+                visible: root.catalogAssets && root.catalogAssets.assetCount > 0
             }
 
             RowLayout {
                 objectName: "libraryCullFilmstripNavigation"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 102
+                Layout.preferredHeight: theme.scaled(102)
+                visible: root.catalogAssets && root.catalogAssets.assetCount > 0
                 spacing: 8
 
                 MiniButton {
@@ -749,7 +824,7 @@ Item {
                         required property int rating
                         required property bool picked
                         required property bool rejected
-                        width: 112
+                        width: theme.scaled(112)
                         height: ListView.view.height
                         radius: theme.radius8
                         color: root.catalogAssets && root.catalogAssets.selectedIndex === index
@@ -759,11 +834,11 @@ Item {
                                       ? theme.accentWarm400 : theme.alpha(theme.lineSoft, 0.52)
                         clip: true
 
-                        Image {
+                        ColorManagedImage {
                             id: filmstripThumb
                             anchors.fill: parent
                             anchors.margins: 2
-                            source: filmstripTile.thumbnailSource
+                            imageSource: filmstripTile.thumbnailSource
                             sourceSize: Qt.size(240, 180)
                             asynchronous: true
                             cache: true
@@ -777,8 +852,9 @@ Item {
                             height: 20
                             text: String(filmstripTile.index + 1)
                             color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
+                            font.pixelSize: theme.typeMicro
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                             background: Rectangle { color: theme.alpha(theme.ink950, 0.80) }
@@ -803,9 +879,9 @@ Item {
                             Repeater {
                                 model: Math.min(5, filmstripTile.rating)
                                 AppIcon {
-                                    width: 8
-                                    height: 8
-                                    name: "star"
+                                    width: theme.scaled(14)
+                                    height: theme.scaled(14)
+                                    name: "star-gold"
                                     color: theme.accentWarm400
                                 }
                             }

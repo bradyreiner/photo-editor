@@ -10,7 +10,7 @@
       auto* combine_subtract = find_named_item(studio_root, QStringLiteral("maskCombineSubtractButton"));
       auto* combine_add = find_named_item(studio_root, QStringLiteral("maskCombineAddButton"));
       auto* selection_done = find_named_item(studio_root, QStringLiteral("maskCreationDoneButton"));
-      auto* draw_menu = find_named_item(studio_root, QStringLiteral("maskBrushShapeMenuButton"));
+      auto* draw_menu = find_named_item(studio_root, QStringLiteral("selectionAllToolsHeader"));
       auto* object_source = find_named_item(studio_root, QStringLiteral("selectionSource_object"));
       auto* subject_source = find_named_item(studio_root, QStringLiteral("selectionSource_subject"));
       if (!object_source || !subject_source || !click_studio_item(object_source) ||
@@ -84,7 +84,7 @@
               QStringLiteral("selection-sidebar-%1-%2").arg(density).arg(size.width()), size.width(), size.height(),
               {QStringLiteral("creativeToolsSurface"), QStringLiteral("creativeSelectionSourcesHost"),
                QStringLiteral("selectionSource_object"), QStringLiteral("selectionSource_subject"),
-               QStringLiteral("maskCreationToolbar"), QStringLiteral("maskBrushShapeMenuButton")}, &studio_manifest))
+               QStringLiteral("maskCreationToolbar"), QStringLiteral("selectionAllToolsHeader")}, &studio_manifest))
           return fail("Selection controls should render at every supported density");
         }
       }
@@ -98,6 +98,10 @@
               1440, 900, {QStringLiteral("creativeSelectionRefineGroup"), QStringLiteral("maskFirstFeatherSlider")},
               &studio_manifest) || !click_studio_item(refine_group->childItems().constFirst()))
         return fail("Feather and edge refinement should expand in the selection panel");
+      auto* all_selection_tools = find_named_item(studio_root, QStringLiteral("selectionAllTools"));
+      if (!all_selection_tools || (!all_selection_tools->property("expanded").toBool() &&
+          !click_studio_item(find_named_item(studio_root, QStringLiteral("selectionAllToolsHeader")))))
+        return fail("More tools should reveal the organized selection catalog");
       auto* polygon_source = find_named_item(studio_root, QStringLiteral("selectionSource_polygon"));
       auto* polygon_controls = find_named_item(studio_root, QStringLiteral("polygonToolHud"));
       if (!polygon_source || !polygon_controls || !click_studio_item(polygon_source) ||

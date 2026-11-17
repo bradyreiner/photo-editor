@@ -2025,6 +2025,13 @@ int main(int argc, char** argv) {
       fake_messages.isEmpty()
           ? QString{}
           : fake_messages.first().toObject().value(QStringLiteral("content")).toString();
+  if (!fake_system_prompt.contains(QStringLiteral("looksy-workmanship-v1")) ||
+      !fake_system_prompt.contains(QStringLiteral("Creative workflow")) ||
+      !fake_system_prompt.contains(QStringLiteral("cannot_complete_safely")) ||
+      fake_system_prompt.contains(QStringLiteral("Qt AbsoluteSpacing")) ||
+      ollama_plan.prompt_audit.value(QStringLiteral("promptComponents")).toMap()
+          .value(QStringLiteral("workmanshipGuidanceMode")).toString() != QStringLiteral("photo_intent"))
+    return fail("Photo intent turns must retain creative/scope/completion guidance without irrelevant construction mechanics");
   const auto fake_user_message = fake_messages.size() >= 2 ? fake_messages.at(1).toObject() : QJsonObject{};
   const auto fake_user_prompt = fake_user_message.value(QStringLiteral("content")).toString();
   const auto fake_ollama_request_ok =
@@ -4688,6 +4695,24 @@ int main(int argc, char** argv) {
   const auto generic_typography_payload = fake_ollama_server_available
       ? fake_ollama_server.lastRequestForPath(QStringLiteral("/api/chat"))
       : read_json_file(fake_ollama_request_path);
+  {
+    QTemporaryDir decision_capture;
+    const auto old_shadow_directory = qgetenv("PHOTO_EDITOR_AGENT_DECISION_SHADOW_DIR");
+    qputenv("PHOTO_EDITOR_AGENT_DECISION_SHADOW_DIR", decision_capture.path().toUtf8());
+    const auto calls_before = fake_ollama_server.requestsForPath(QStringLiteral("/api/chat")).size();
+    const auto shadow_plan = photo_editor::desktop::plan_agent_recipe_patch(generic_typography_request);
+    if (old_shadow_directory.isNull()) qunsetenv("PHOTO_EDITOR_AGENT_DECISION_SHADOW_DIR");
+    else qputenv("PHOTO_EDITOR_AGENT_DECISION_SHADOW_DIR", old_shadow_directory);
+    const auto shadow_audit = shadow_plan.prompt_audit.value(QStringLiteral("decisionShadow")).toMap();
+    const auto shadow_payload = fake_ollama_server_available
+        ? fake_ollama_server.lastRequestForPath(QStringLiteral("/api/chat"))
+        : read_json_file(fake_ollama_request_path);
+    if (!shadow_plan.ok || shadow_plan.tool_call_plan != generic_typography_plan.tool_call_plan ||
+        shadow_payload != generic_typography_payload || !shadow_audit.value(QStringLiteral("captured")).toBool() ||
+        shadow_audit.value(QStringLiteral("extraInferenceCalls")).toInt() != 0 ||
+        (fake_ollama_server_available && fake_ollama_server.requestsForPath(QStringLiteral("/api/chat")).size() != calls_before + 1))
+      return fail("Decision shadow capture must preserve the real planner payload and result without an extra model call");
+  }
   const auto generic_typography_branch = schema_branch_for_tool_operation(
       generic_typography_payload.value(QStringLiteral("format")).toObject(),
       QStringLiteral("photo.edit_composition"), QStringLiteral("typography"));
@@ -8288,6 +8313,13 @@ int main(int argc, char** argv) {
   qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
 
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_RUN_LIVE_OLLAMA_SMOKE")) {
+    const auto source_override = qEnvironmentVariable("PHOTO_EDITOR_LIVE_OLLAMA_SOURCE_PATH").trimmed();
+    const auto live_source_path = source_override.isEmpty() ? fast_highlight_path : source_override;
+    QFile live_source_file(live_source_path);
+    if (!live_source_file.open(QIODevice::ReadOnly) || QImage(live_source_path).isNull())
+      return fail("live Ollama source must be a readable image");
+    const auto live_source_hash = QString::fromLatin1(QCryptographicHash::hash(
+        live_source_file.readAll(), QCryptographicHash::Sha256).toHex());
     const auto live_app_data_root =
         qEnvironmentVariable("PHOTO_EDITOR_LIVE_OLLAMA_APP_DATA_DIR").trimmed();
     const auto live_model_id =
@@ -8319,7 +8351,7 @@ int main(int argc, char** argv) {
     live_request.style = warm_style;
     live_request.asset = QVariantMap{
         {QStringLiteral("assetId"), QStringLiteral("live-runtime-smoke")},
-        {QStringLiteral("filePath"), fast_highlight_path},
+        {QStringLiteral("filePath"), live_source_path},
     };
     live_request.current_adjustment_patch_json = QStringLiteral(
         "{\"kind\":\"photo-editor-adjustment-patch\",\"version\":1,"
@@ -8383,7 +8415,7 @@ int main(int argc, char** argv) {
     critique_request.asset = live_request.asset;
     // This smoke fixture is explicitly the proof under review, not a fallback
     // from a missing production after image to an original photograph.
-    critique_request.asset.insert(QStringLiteral("proofImagePath"), fast_highlight_path);
+    critique_request.asset.insert(QStringLiteral("proofImagePath"), live_source_path);
     critique_request.user_instructions = live_request.user_instructions;
     critique_request.validation_report = QVariantMap{
         {QStringLiteral("ok"), true},
@@ -8419,6 +8451,9 @@ int main(int argc, char** argv) {
     }
 
     const QVariantMap live_receipt{
+        {QStringLiteral("sourceSha256"), live_source_hash},
+        {QStringLiteral("fixtureKind"), source_override.isEmpty()
+             ? QStringLiteral("synthetic-smoke") : QStringLiteral("source-image-override")},
         {QStringLiteral("contract"),
          QStringLiteral("agent-live-local-runtime-smoke-v1")},
         {QStringLiteral("modelId"), live_model_id},

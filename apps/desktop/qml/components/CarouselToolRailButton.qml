@@ -65,13 +65,15 @@ Button {
     objectName: "carouselToolRail" + toolValue.charAt(0).toUpperCase() +
                 toolValue.slice(1) + "Button"
     padding: 0
-    implicitHeight: 40
+    implicitHeight: root.compactLabelMode ? theme.scaled(44) : theme.railButtonSize
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
     Accessible.name: toolLabel + " tool, shortcut " + toolKey
-    Accessible.description: toolActive
-                            ? "Selected tool. Open the menu for variants and related actions."
-                            : "Press to select. Open the menu for variants and related actions."
+    Accessible.description: carouselToolMenu.visible
+                            ? "Tool menu open. Choose a variant or related action."
+                            : toolActive
+                              ? "Selected tool. Open the menu for variants and related actions."
+                              : "Press to select. Open the menu for variants and related actions."
     Accessible.role: Accessible.Button
     Accessible.checked: toolActive
     AppToolTip {
@@ -83,13 +85,15 @@ Button {
         text: root.toolLabel + " (" + root.toolKey + ") - menu has variants and related actions"
     }
     onClicked: root.toolSelected(toolValue)
-    onPressAndHold: carouselToolMenu.open()
+    onPressAndHold: carouselToolMenu.toggleTransient(root)
 
     MouseArea {
+        id: carouselToolRightClickArea
+        objectName: "carouselToolRightClickArea_" + root.toolValue
         anchors.fill: parent
         acceptedButtons: Qt.RightButton
         hoverEnabled: false
-        onClicked: carouselToolMenu.open()
+        onClicked: carouselToolMenu.toggleTransient(carouselToolRightClickArea, root)
     }
 
     background: CommandButtonSurface {
@@ -100,15 +104,15 @@ Button {
         interactiveEnabled: root.enabled
         fillColor: theme.commandFill("secondary", root.toolActive, root.hovered, root.down,
                                      root.enabled, true)
-        borderWidth: theme.commandBorderWidth(root.visualFocus)
-        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
+        focused: root.visualFocus
     }
 
     contentItem: Item {
         AppIcon {
+                objectName: "sharedCommandIcon"
             visible: root.toolIconName(root.toolValue).length > 0
             anchors.horizontalCenter: parent.horizontalCenter
-            y: root.compactLabelMode ? 5 : Math.round((parent.height - height) / 2)
+            y: root.compactLabelMode ? theme.scaled(5) : Math.round((parent.height - height) / 2)
             width: theme.scaled(18)
             height: width
             name: root.toolIconName(root.toolValue)
@@ -120,27 +124,28 @@ Button {
             anchors.centerIn: parent
             text: root.toolGlyph(root.toolValue)
             color: root.toolActive ? theme.accentWarm300 : theme.textMain
-            font.family: theme.fontMono
-            font.pixelSize: 13
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
+            font.pixelSize: theme.typeControl
             font.weight: Font.Bold
             maximumLineCount: 1
             elide: Text.ElideNone
         }
 
         Text {
+            objectName: "sharedCommandCaption"
             visible: root.compactLabelMode
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.rightMargin: root.compactLabelMode ? theme.scaled(14) : 0
             anchors.bottom: parent.bottom
-            anchors.bottomMargin: 3
+            anchors.bottomMargin: theme.space4
             text: root.toolLabel
             color: root.toolActive ? theme.accentWarm300 : theme.textMuted
             font.family: theme.fontUi
             font.pixelSize: theme.typeMicro
             font.weight: root.toolActive ? Font.DemiBold : Font.Normal
-            fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: theme.typeMicro
+            fontSizeMode: Text.FixedSize
             horizontalAlignment: Text.AlignHCenter
             maximumLineCount: 1
             elide: Text.ElideNone
@@ -163,6 +168,7 @@ Button {
             border.color: theme.alpha(theme.accentWarm300, 0.64)
 
             AppIcon {
+                objectName: "sharedCommandIcon"
                 anchors.centerIn: parent
                 width: 7
                 height: 7
@@ -172,17 +178,21 @@ Button {
         }
 
         MouseArea {
+            id: carouselToolMenuHotspot
+            objectName: "carouselToolMenuHotspot_" + root.toolValue
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             width: 18
             height: 18
             cursorShape: Qt.PointingHandCursor
-            onClicked: carouselToolMenu.open()
+            onClicked: carouselToolMenu.toggleTransient(carouselToolMenuHotspot, root)
         }
     }
 
     AppPopup {
         id: carouselToolMenu
+        objectName: "carouselToolMenu_" + root.toolValue
+        transientMenu: true
 
         property var menuModel: root.menuItems || []
         property int currentFocusIndex: -1
@@ -277,6 +287,7 @@ Button {
 
                 delegate: PopupMenuRow {
                     id: carouselToolMenuItem
+                    onDismissRequested: carouselToolMenu.closeTransient(true)
                     previousItem: index > 0 ? carouselToolMenu.menuModel[index - 1] : ({})
                     accent: theme.accentWarm400
                     labelMaxLines: 2
@@ -284,7 +295,7 @@ Button {
                     onFocusIndexRequested: function(itemIndex) { carouselToolMenu.currentFocusIndex = itemIndex }
                     onActivated: function(key) {
                         root.menuItemTriggered(root.toolValue, key)
-                        carouselToolMenu.close()
+                        carouselToolMenu.closeTransient(true)
                     }
                     onNavigateRequested: function(direction) { carouselToolMenu.focusNextMenuItem(direction) }
                     onFirstRequested: carouselToolMenu.focusMenuItem(carouselToolMenu.firstEnabledIndex())

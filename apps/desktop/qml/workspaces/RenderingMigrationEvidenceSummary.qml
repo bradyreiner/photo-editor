@@ -20,7 +20,8 @@ Label {
             " highlight"
           : "Preparing settled perceptual and clipping evidence…"
     color: ready ? readyColor : pendingColor
-    font.family: theme.fontMono
+    font.family: theme.fontNumeric
+    font.features: theme.numericFontFeatures
     font.pixelSize: 9
     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
 }

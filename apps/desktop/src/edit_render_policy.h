@@ -25,6 +25,9 @@ inline constexpr int kMaximumInteractivePreviewEdge = 6144;
 // They need exact settled/full work even when invoked outside a QML gesture.
 [[nodiscard]] inline bool is_local_mask_coverage_operation(const QString& operation) {
   static const QStringList operations{
+      "mask_stack", "invert_layer_mask", "paint_layer_mask", "invert_selection",
+      "load_selection", "transform_selection", "path_selection",
+      "attach_layer_mask", "copy_layer_mask", "delete_layer_selection",
       "active_mask_operation", "active_mask_enabled", "active_mask_solo",
       "active_mask_opacity", "active_mask_density", "active_mask_inverted",
       "active_mask_blend_mode", "active_mask_selection_expand", "active_mask_selection_smooth",

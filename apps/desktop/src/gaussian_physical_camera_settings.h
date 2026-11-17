@@ -20,7 +20,7 @@ struct GaussianPhysicalCameraSettings {
         std::isfinite(sensor_width_mm) && sensor_width_mm >= 1 && sensor_width_mm <= 300 &&
         std::isfinite(sensor_height_mm) && sensor_height_mm >= 1 && sensor_height_mm <= 300 &&
         std::isfinite(focal_length_mm) && focal_length_mm >= 1 && focal_length_mm <= 2000 &&
-        std::isfinite(f_number) && f_number >= 0.5 && f_number <= 128 &&
+        std::isfinite(f_number) && f_number >= 0.1 && f_number <= 128 &&
         std::isfinite(focus_distance_m) && focus_distance_m > focal_length_mm / 1000 && focus_distance_m <= 1e8;
   }
   QVariantMap description() const {

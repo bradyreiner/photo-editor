@@ -1,5 +1,7 @@
 # Framehouse: Spectrum design direction
 
+Application chrome follows the [enforced style contract](../../ui-style-contract.md). Its current palette, geometry, borders, and spacing take precedence over historical examples in this document.
+
 Date: 2026-09-19. Status: rejected visual direction, not implemented in the native app. This document is an exploration record, not an approved implementation plan. User feedback: the concepts are weaker than the existing design. Re-establish the visual direction before adopting these prescriptions; subtle caustic completion animations remain requested.
 
 ## Intent

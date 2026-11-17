@@ -680,7 +680,8 @@ Rectangle {
                 visible: Boolean(root.selection.cutoutEnabled)
                 text: "Inspect edge"
                 color: theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 9
             }
 
@@ -899,7 +900,7 @@ Rectangle {
         if (normalized === "serif")
             return "Georgia"
         if (normalized === "mono")
-            return theme.fontMono
+            return theme.fontCreativeMono
         if (normalized === "system")
             return theme.fontUi
         return Qt.platform.os === "osx" ? "Avenir Next" : theme.fontDisplay
@@ -1765,13 +1766,13 @@ Rectangle {
             ]
         }
         return [
-            { key: "tool:shape", label: "Shape Tool", icon: "geometry", checked: root.activeTool === "shape", tooltip: "Click the board to place the default shape." },
-            { key: "shape:rectangle", label: "Add Rectangle", icon: "geometry", tooltip: "Add a rectangle shape layer." },
-            { key: "shape:ellipse", label: "Add Oval", icon: "geometry", tooltip: "Add an oval shape layer." },
-            { key: "shape:triangle", label: "Add Triangle", icon: "geometry", tooltip: "Add a triangle shape layer." },
-            { key: "shape:diamond", label: "Add Diamond", icon: "geometry", tooltip: "Add a diamond shape layer." },
-            { key: "shape:star", label: "Add Star", icon: "geometry", tooltip: "Add a star shape layer." },
-            { key: "shape:hexagon", label: "Add Hexagon", icon: "geometry", tooltip: "Add a hexagon shape layer." },
+            { key: "tool:shape", label: "Shape Tool", icon: "shape-tool", checked: root.activeTool === "shape", tooltip: "Click the board to place the default shape." },
+            { key: "shape:rectangle", label: "Add Rectangle", icon: "rectangle", tooltip: "Add a rectangle shape layer." },
+            { key: "shape:ellipse", label: "Add Oval", icon: "ellipse", tooltip: "Add an oval shape layer." },
+            { key: "shape:triangle", label: "Add Triangle", icon: "triangle", tooltip: "Add a triangle shape layer." },
+            { key: "shape:diamond", label: "Add Diamond", icon: "keyframe", tooltip: "Add a diamond shape layer." },
+            { key: "shape:star", label: "Add Star", icon: "star", tooltip: "Add a star shape layer." },
+            { key: "shape:hexagon", label: "Add Hexagon", icon: "hexagon", tooltip: "Add a hexagon shape layer." },
             { key: "shape:line", label: "Add Line", icon: "minus", tooltip: "Add a line shape layer." },
             { key: "shape:arrow", label: "Add Arrow", icon: "move-forward", tooltip: "Add an arrow shape layer." }
         ]
@@ -3143,7 +3144,8 @@ Rectangle {
                         Label {
                             text: "Aspect"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -3166,6 +3168,7 @@ Rectangle {
                         spacing: 6
 
                         ToneTextField {
+                            numericEntry: true
                             Layout.fillWidth: true
                             text: String(root.setupCustomWidth)
                             placeholderText: "Width px"
@@ -3176,10 +3179,12 @@ Rectangle {
                         Label {
                             text: "×"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                         }
 
                         ToneTextField {
+                            numericEntry: true
                             Layout.fillWidth: true
                             text: String(root.setupCustomHeight)
                             placeholderText: "Height px"
@@ -3195,7 +3200,8 @@ Rectangle {
                         Label {
                             text: "Slides"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -3257,7 +3263,8 @@ Rectangle {
                         Label {
                             text: "Profile"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -3283,7 +3290,8 @@ Rectangle {
                         Label {
                             text: "Background"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -3307,7 +3315,8 @@ Rectangle {
                         Label {
                             text: "Template"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -3351,7 +3360,8 @@ Rectangle {
                                    + "  •  " + (w * root.setupSlideCount) + " x " + h + " px"
                         }
                         color: theme.textFaint
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 10
                     }
 
@@ -3435,7 +3445,8 @@ Rectangle {
                         visible: recentCarouselList.count === 0
                         text: "No saved carousels yet."
                         color: theme.textMuted
-                        font.family: theme.fontMono
+                        font.family: theme.fontNumeric
+                        font.features: theme.numericFontFeatures
                         font.pixelSize: 11
                         horizontalAlignment: Text.AlignHCenter
                     }
@@ -3497,74 +3508,32 @@ Rectangle {
                     color: theme.alpha(theme.lineSoft, 0.24)
                 }
 
-                Rectangle {
-                    id: popupTooltipAnchor5
+                ActionButton {
+                    objectName: "carouselSnapToggleButton"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 28
-                    radius: 6
-                    color: root.snappingEnabled
-                           ? theme.alpha(theme.accentCool500, 0.2)
-                           : snapHover.containsMouse ? theme.alpha(theme.ink800, 0.8) : "transparent"
-                    border.width: root.snappingEnabled ? 1 : 0
-                    border.color: theme.alpha(theme.accentCool400, 0.5)
-
-                    AppIcon {
-                        anchors.centerIn: parent
-                        width: 14
-                        height: 14
-                        name: "snap"
-                        color: root.snappingEnabled ? theme.accentCool300 : theme.textMuted
-                    }
-
-                    MouseArea {
-                        id: snapHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: carouselDocument.setLayoutSetting("snappingEnabled", !root.snappingEnabled)
-                    }
-
-                    AppToolTip {
-                        targetItem: popupTooltipAnchor5
-                        visible: snapHover.containsMouse
-                        text: root.snappingEnabled ? "Snapping On" : "Snapping Off"
-                        delay: 400
-                    }
+                    compact: true
+                    showText: false
+                    iconName: "snap"
+                    checkable: true
+                    checked: root.snappingEnabled
+                    active: root.snappingEnabled
+                    accessibleName: "Snapping"
+                    tooltipText: root.snappingEnabled ? "Snapping on" : "Snapping off"
+                    onClicked: carouselDocument.setLayoutSetting("snappingEnabled", !root.snappingEnabled)
                 }
 
-                Rectangle {
-                    id: popupTooltipAnchor6
+                ActionButton {
+                    objectName: "carouselGuidesToggleButton"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 28
-                    radius: 6
-                    color: root.guidesEnabled
-                           ? theme.alpha(theme.accentCool500, 0.2)
-                           : guidesHover.containsMouse ? theme.alpha(theme.ink800, 0.8) : "transparent"
-                    border.width: root.guidesEnabled ? 1 : 0
-                    border.color: theme.alpha(theme.accentCool400, 0.5)
-
-                    AppIcon {
-                        anchors.centerIn: parent
-                        width: 14
-                        height: 14
-                        name: "grid"
-                        color: root.guidesEnabled ? theme.accentCool300 : theme.textMuted
-                    }
-
-                    MouseArea {
-                        id: guidesHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: carouselDocument.setLayoutSetting("guidesEnabled", !root.guidesEnabled)
-                    }
-
-                    AppToolTip {
-                        targetItem: popupTooltipAnchor6
-                        visible: guidesHover.containsMouse
-                        text: root.guidesEnabled ? "Guides On" : "Guides Off"
-                        delay: 400
-                    }
+                    compact: true
+                    showText: false
+                    iconName: "grid"
+                    checkable: true
+                    checked: root.guidesEnabled
+                    active: root.guidesEnabled
+                    accessibleName: "Guides"
+                    tooltipText: root.guidesEnabled ? "Guides on" : "Guides off"
+                    onClicked: carouselDocument.setLayoutSetting("guidesEnabled", !root.guidesEnabled)
                 }
 
                 Item {
@@ -3589,240 +3558,269 @@ Rectangle {
                 anchors.margins: root.compactWorkspace ? 6 : theme.panelPadding
                 spacing: root.compactWorkspace ? 6 : theme.gapPanel
 
-                RowLayout {
+                ColumnLayout {
                     objectName: "carouselHeaderBar"
-                    readonly property string visibilityRole: "always-visible|document-name-format-save-export-status"
+                    readonly property string visibilityRole: "document-identity-save-export|editing-commands|resource-issues"
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: theme.gapDense
 
-                    ToneTextField {
-                        id: documentNameField
-                        objectName: "carouselDocumentNameField"
-                        visible: !root.compactWorkspace
+                    RowLayout {
                         Layout.fillWidth: true
-                        Layout.minimumWidth: visible ? 160 : 0
-                        Layout.maximumWidth: visible ? (root.wideWorkspace ? 360 : 320) : 0
-                        text: carouselDocument.documentName
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 18
-                        font.weight: Font.DemiBold
-                        selectByMouse: true
-                        onActiveFocusChanged: {
-                            if (!activeFocus) cursorPosition = 0
+                        spacing: theme.gapControl
+
+                        ToneTextField {
+                            id: documentNameField
+                            objectName: "carouselDocumentNameField"
+                            accessibleLabel: "Carousel document name"
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: theme.scaled(root.compactWorkspace ? 112 : 160)
+                            Layout.maximumWidth: theme.scaled(root.compactWorkspace ? 200 : (root.wideWorkspace ? 360 : 320))
+                            text: carouselDocument.documentName
+                            color: theme.textStrong
+                            font.family: theme.fontDisplay
+                            font.pixelSize: root.compactWorkspace ? theme.typeSection : 18
+                            font.weight: Font.DemiBold
+                            selectByMouse: true
+                            onActiveFocusChanged: {
+                                if (!activeFocus) cursorPosition = 0
+                            }
+                            onTextChanged: {
+                                if (!activeFocus) cursorPosition = 0
+                            }
+                            background: InputFieldSurface { inputControl: parent }
+                            AppToolTip {
+                                targetItem: documentNameField
+                                visible: documentNameField.hovered && carouselDocument.documentName.length > 0
+                                text: carouselDocument.documentName
+                            }
+                            onEditingFinished: {
+                                if (text.trim().length > 0)
+                                    carouselDocument.documentName = text.trim()
+                                else
+                                    text = carouselDocument.documentName
+                            }
                         }
-                        onTextChanged: {
-                            if (!activeFocus) cursorPosition = 0
+
+                        Label {
+                            visible: !root.condensedHeader
+                            text: carouselDocument.documentFormat.toUpperCase() + "  " + documentPixelLabel()
+                            color: theme.textFaint
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
+                            font.pixelSize: 10
                         }
-                        background: Rectangle {
+
+                        Item { Layout.fillWidth: true }
+
+                        StatusChip {
+                            objectName: "carouselDocumentSaveState"
+                            visible: carouselDocument.hasActiveCarousel
+                            compact: true
+                            text: carouselDocument.saveState
+                            tone: carouselDocument.saveState === "Save failed" ? "error"
+                                  : carouselDocument.saveState === "Unsaved" ? "warning"
+                                  : carouselDocument.saveState === "Saved" ||
+                                    carouselDocument.saveState === "Autosaved" ? "success"
+                                  : "info"
+                            busy: carouselDocument.saveState === "Saving"
+                            detailText: carouselDocument.saveError.length > 0
+                                        ? carouselDocument.saveError
+                                        : carouselDocument.lastSavedAt.length > 0
+                                          ? (carouselDocument.saveState === "Autosaved" ? "Last autosaved " : "Last saved ") + carouselDocument.lastSavedAt
+                                          : "This document has not been saved yet."
+                            minimumReadableWidth: 78
+                            maximumReadableWidth: 116
+                        }
+
+                        Rectangle {
+                            visible: carouselDocument.exportBusy
+                            Layout.preferredWidth: 8
+                            Layout.preferredHeight: 8
                             radius: 4
-                            color: documentNameField.activeFocus
-                                   ? theme.alpha(theme.ink850, 0.9)
-                                   : "transparent"
-                            border.width: documentNameField.activeFocus ? 1 : 0
-                            border.color: theme.alpha(theme.accentWarm400, 0.4)
+                            color: theme.warning
+
+                            SequentialAnimation on opacity {
+                                loops: Animation.Infinite
+                                OpacityAnimator { from: 1.0; to: 0.3; duration: 600 }
+                                OpacityAnimator { from: 0.3; to: 1.0; duration: 600 }
+                            }
                         }
-                        onEditingFinished: {
-                            if (text.trim().length > 0)
-                                carouselDocument.documentName = text.trim()
-                            else
-                                text = carouselDocument.documentName
+
+                        ActionButton {
+                            compact: true
+                            showText: !root.compactWorkspace
+                            iconName: "save"
+                            text: "Save"
+                            tooltipText: "Save the current carousel document."
+                            onClicked: root.runCarouselCommand("save.document")
                         }
-                    }
 
-                    Label {
-                        visible: !root.condensedHeader
-                        text: carouselDocument.documentFormat.toUpperCase() + "  " + documentPixelLabel()
-                        color: theme.textFaint
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    ActionButton {
-                        objectName: "editBoardPhotoToolsButton"
-                        visible: root.integratedEdit
-                        compact: true
-                        text: "Photo tools"
-                        iconName: "edit"
-                        enabled: root.selectedPhotoEditable
-                        tooltipText: "Edit this board's photo and its layers."
-                        onClicked: root.editSelectedPhoto()
-                    }
-
-                    StatusChip {
-                        objectName: "carouselDocumentSaveState"
-                        visible: carouselDocument.hasActiveCarousel
-                        compact: true
-                        text: carouselDocument.saveState
-                        tone: carouselDocument.saveState === "Save failed" ? "error"
-                              : carouselDocument.saveState === "Unsaved" ? "warning"
-                              : carouselDocument.saveState === "Saved" ||
-                                carouselDocument.saveState === "Autosaved" ? "success"
-                              : "info"
-                        busy: carouselDocument.saveState === "Saving"
-                        detailText: carouselDocument.saveError.length > 0
-                                    ? carouselDocument.saveError
-                                    : carouselDocument.lastSavedAt.length > 0
-                                      ? (carouselDocument.saveState === "Autosaved" ? "Last autosaved " : "Last saved ") + carouselDocument.lastSavedAt
-                                      : "This document has not been saved yet."
-                        minimumReadableWidth: 78
-                        maximumReadableWidth: 116
-                    }
-
-                    ActionButton {
-                        objectName: "carouselStatusDetailsButton"
-                        visible: carouselDocument.statusNotices.length > 0
-                        compact: true
-                        showText: !root.compactWorkspace
-                        iconName: "warning"
-                        tone: "warning"
-                        text: carouselDocument.statusNotices.length +
-                              (carouselDocument.statusNotices.length === 1 ? " Issue" : " Issues")
-                        accessibleName: "Open " + carouselDocument.statusNotices.length +
-                                        " retained Carousel issues"
-                        tooltipText: "Open retained Carousel failures and recovery actions."
-                        onClicked: carouselStatusNoticesDialog.open()
-                    }
-
-                    ActionButton {
-                        objectName: "carouselRelinkMissingMediaButton"
-                        visible: carouselDocument.missingMediaCount > 0
-                        compact: true
-                        showText: !root.compactWorkspace
-                        iconName: "source"
-                        tone: "warning"
-                        text: "Relink " + carouselDocument.missingMediaCount + " Missing"
-                        tooltipText: "Compare stored source metadata and batch relink missing media."
-                        onClicked: carouselRelinkDialog.open()
-                    }
-
-                    ActionButton {
-                        objectName: "carouselResolveMissingFontsButton"
-                        visible: carouselDocument.missingFontEntries.length > 0
-                        compact: true
-                        showText: !root.compactWorkspace
-                        iconName: "edit"
-                        tone: "warning"
-                        text: "Resolve " + carouselDocument.missingFontEntries.length + " Font Layer" +
-                              (carouselDocument.missingFontEntries.length === 1 ? "" : "s")
-                        tooltipText: "Inspect exact affected layers and preview an installed replacement."
-                        onClicked: carouselFontRecoveryDialog.open()
-                    }
-
-                    Rectangle {
-                        visible: carouselDocument.exportBusy
-                        Layout.preferredWidth: 8
-                        Layout.preferredHeight: 8
-                        radius: 4
-                        color: theme.warning
-
-                        SequentialAnimation on opacity {
-                            loops: Animation.Infinite
-                            OpacityAnimator { from: 1.0; to: 0.3; duration: 600 }
-                            OpacityAnimator { from: 0.3; to: 1.0; duration: 600 }
+                        MenuButton {
+                            compact: true
+                            showText: !root.compactWorkspace
+                            text: "Export"
+                            objectName: "carouselOpenExportButton"
+                            iconName: "export"
+                            tone: "primary"
+                            tooltipText: carouselDocument.exportBusy ? "View export progress." : "Export this carousel."
+                            menuItems: root.carouselExportMenuItems()
+                            menuWidth: 190
+                            onClicked: root.runCarouselCommand("export.open")
+                            onMenuItemTriggered: root.handleCarouselExportMenuAction(key)
                         }
                     }
 
-                    ActionButton {
-                        compact: true
-                        showText: false
-                        iconName: "undo"
-                        enabled: carouselDocument.canUndo
-                        tooltipText: carouselDocument.canUndo ? "Undo " + carouselDocument.undoText : "Nothing to undo"
-                        disabledReason: "Nothing to undo"
-                        onClicked: carouselDocument.undo()
+                    Flow {
+                        objectName: "carouselEditingCommandBar"
+                        Layout.fillWidth: true
+                        spacing: theme.gapDense
+                        readonly property string visibilityRole: "editing-tools-inspection-layout"
+
+                        ActionButton {
+                            objectName: "editBoardPhotoToolsButton"
+                            visible: root.integratedEdit
+                            compact: true
+                            text: "Photo tools"
+                            iconName: "edit"
+                            enabled: root.selectedPhotoEditable
+                            tooltipText: "Edit this board's photo and its layers."
+                            onClicked: root.editSelectedPhoto()
+                        }
+
+                        ActionButton {
+                            compact: true
+                            showText: false
+                            iconName: "undo"
+                            enabled: carouselDocument.canUndo
+                            tooltipText: carouselDocument.canUndo ? "Undo " + carouselDocument.undoText : "Nothing to undo"
+                            disabledReason: "Nothing to undo"
+                            onClicked: carouselDocument.undo()
+                        }
+
+                        ActionButton {
+                            compact: true
+                            showText: false
+                            iconName: "redo"
+                            enabled: carouselDocument.canRedo
+                            tooltipText: carouselDocument.canRedo ? "Redo " + carouselDocument.redoText : "Nothing to redo"
+                            disabledReason: "Nothing to redo"
+                            onClicked: carouselDocument.redo()
+                        }
+
+                        MenuButton {
+                            objectName: "carouselColorInspectionMenu"
+                            compact: true
+                            text: root.condensedHeader ? "Inspect"
+                                  : root.carouselInspectionModeActive
+                                  ? "Inspect: " + root.carouselInspectionModeLabel(root.carouselInspectionMode)
+                                  : "Inspect"
+                            iconName: "visible"
+                            tone: root.carouselInspectionModeActive ? "warning" : "secondary"
+                            active: root.carouselInspectionModeActive
+                            primaryOpensMenu: true
+                            tooltipText: root.carouselInspectionModeActive
+                                         ? "Canvas-only " + root.carouselInspectionModeLabel(root.carouselInspectionMode) + " inspection is active. This never exports."
+                                         : "Inspect authored artwork with color-vision or grayscale simulation."
+                            menuTooltipText: "Choose a canvas inspection mode"
+                            menuItems: root.carouselInspectionMenuItems()
+                            menuWidth: 250
+                            onMenuItemTriggered: root.runCarouselCommand(key)
+                        }
+
+                        ActionButton {
+                            objectName: "carouselCommandPaletteButton"
+                            compact: true
+                            showText: !root.condensedHeader
+                            text: "Commands"
+                            visible: !root.integratedEdit
+                            iconName: "search"
+                            tooltipText: "Search Carousel commands (Ctrl/Meta+K)."
+                            onClicked: root.openCarouselCommandPalette()
+                        }
+
+                        MenuButton {
+                            id: carouselLayoutButton
+                            objectName: "carouselLayoutButton"
+                            compact: true
+                            showText: !root.condensedHeader && !root.integratedEdit
+                            text: "Layout"
+                            iconName: "panel-right"
+                            primaryOpensMenu: true
+                            tooltipText: "Choose visible Carousel panels"
+                            menuItems: root.carouselLayoutMenuItems()
+                            onMenuItemTriggered: function(key) { root.handleCarouselLayoutMenu(key) }
+                        }
+
+                        ActionButton {
+                            id: carouselCompactInspectorButton
+                            objectName: "carouselCompactInspectorButton"
+                            visible: root.compactWorkspace && root.carouselInspectorVisible
+                            compact: true
+                            showText: false
+                            text: "Inspector"
+                            iconName: "settings"
+                            active: carouselCompactInspectorDrawer.opened
+                            tooltipText: "Open the Carousel inspector."
+                            onClicked: carouselCompactInspectorDrawer.open()
+                        }
                     }
 
-                    ActionButton {
-                        compact: true
-                        showText: false
-                        iconName: "redo"
-                        enabled: carouselDocument.canRedo
-                        tooltipText: carouselDocument.canRedo ? "Redo " + carouselDocument.redoText : "Nothing to redo"
-                        disabledReason: "Nothing to redo"
-                        onClicked: carouselDocument.redo()
-                    }
+                    Flow {
+                        objectName: "carouselResourceIssuesBar"
+                        Layout.fillWidth: true
+                        visible: carouselDocument.statusNotices.length > 0 ||
+                                 carouselDocument.missingMediaCount > 0 ||
+                                 carouselDocument.missingFontEntries.length > 0
+                        spacing: theme.gapDense
 
-                    MenuButton {
-                        objectName: "carouselColorInspectionMenu"
-                        compact: true
-                        text: root.condensedHeader ? "Inspect"
-                              : root.carouselInspectionModeActive
-                              ? "Inspect: " + root.carouselInspectionModeLabel(root.carouselInspectionMode)
-                              : "Inspect"
-                        iconName: "visible"
-                        tone: root.carouselInspectionModeActive ? "warning" : "secondary"
-                        active: root.carouselInspectionModeActive
-                        primaryOpensMenu: true
-                        tooltipText: root.carouselInspectionModeActive
-                                     ? "Canvas-only " + root.carouselInspectionModeLabel(root.carouselInspectionMode) + " inspection is active. This never exports."
-                                     : "Inspect authored artwork with color-vision or grayscale simulation."
-                        menuTooltipText: "Choose a canvas inspection mode"
-                        menuItems: root.carouselInspectionMenuItems()
-                        menuWidth: 250
-                        onMenuItemTriggered: root.runCarouselCommand(key)
-                    }
+                        Label {
+                            visible: parent.visible
+                            text: "Needs attention"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            verticalAlignment: Text.AlignVCenter
+                        }
 
-                    ActionButton {
-                        objectName: "carouselCommandPaletteButton"
-                        compact: true
-                        showText: !root.condensedHeader
-                        text: "Commands"
-                        visible: !root.integratedEdit
-                        iconName: "search"
-                        tooltipText: "Search Carousel commands (Ctrl/Meta+K)."
-                        onClicked: root.openCarouselCommandPalette()
-                    }
+                        ActionButton {
+                            objectName: "carouselStatusDetailsButton"
+                            visible: carouselDocument.statusNotices.length > 0
+                            compact: true
+                            showText: !root.compactWorkspace
+                            iconName: "warning"
+                            tone: "warning"
+                            text: carouselDocument.statusNotices.length +
+                                  (carouselDocument.statusNotices.length === 1 ? " Issue" : " Issues")
+                            accessibleName: "Open " + carouselDocument.statusNotices.length +
+                                            " retained Carousel issues"
+                            tooltipText: "Open retained Carousel failures and recovery actions."
+                            onClicked: carouselStatusNoticesDialog.open()
+                        }
 
-                    MenuButton {
-                        id: carouselLayoutButton
-                        objectName: "carouselLayoutButton"
-                        compact: true
-                        showText: !root.condensedHeader && !root.integratedEdit
-                        text: "Layout"
-                        iconName: "panel-right"
-                        primaryOpensMenu: true
-                        tooltipText: "Choose visible Carousel panels"
-                        menuItems: root.carouselLayoutMenuItems()
-                        onMenuItemTriggered: function(key) { root.handleCarouselLayoutMenu(key) }
-                    }
+                        ActionButton {
+                            objectName: "carouselRelinkMissingMediaButton"
+                            visible: carouselDocument.missingMediaCount > 0
+                            compact: true
+                            showText: !root.compactWorkspace
+                            iconName: "source"
+                            tone: "warning"
+                            text: "Relink " + carouselDocument.missingMediaCount + " missing media"
+                            tooltipText: "Compare stored source metadata and batch relink missing media."
+                            onClicked: carouselRelinkDialog.open()
+                        }
 
-                    ActionButton {
-                        id: carouselCompactInspectorButton
-                        objectName: "carouselCompactInspectorButton"
-                        visible: root.compactWorkspace && root.carouselInspectorVisible
-                        compact: true
-                        showText: false
-                        text: "Inspector"
-                        iconName: "settings"
-                        active: carouselCompactInspectorDrawer.opened
-                        tooltipText: "Open the Carousel inspector."
-                        onClicked: carouselCompactInspectorDrawer.open()
-                    }
-
-                    ActionButton {
-                        compact: true
-                        showText: !root.compactWorkspace
-                        iconName: "save"
-                        text: "Save"
-                        tooltipText: "Save the current carousel document."
-                        onClicked: root.runCarouselCommand("save.document")
-                    }
-
-                    MenuButton {
-                        compact: true
-                        showText: !root.compactWorkspace
-                        text: "Export"
-                        objectName: "carouselOpenExportButton"
-                        iconName: "export"
-                        tone: "primary"
-                        tooltipText: carouselDocument.exportBusy ? "View export progress." : "Export this carousel."
-                        menuItems: root.carouselExportMenuItems()
-                        menuWidth: 190
-                        onClicked: root.runCarouselCommand("export.open")
-                        onMenuItemTriggered: root.handleCarouselExportMenuAction(key)
+                        ActionButton {
+                            objectName: "carouselResolveMissingFontsButton"
+                            visible: carouselDocument.missingFontEntries.length > 0
+                            compact: true
+                            showText: !root.compactWorkspace
+                            iconName: "edit"
+                            tone: "warning"
+                            text: "Resolve " + carouselDocument.missingFontEntries.length + " missing font layer" +
+                                  (carouselDocument.missingFontEntries.length === 1 ? "" : "s")
+                            tooltipText: "Inspect exact affected layers and preview an installed replacement."
+                            onClicked: carouselFontRecoveryDialog.open()
+                        }
                     }
                 }
 
@@ -4141,7 +4139,8 @@ Rectangle {
                                                 height: Math.max(0, slotRegion.slotLabelReserveHeight - 12)
                                                 text: modelData.label
                                                 color: slotRegion.isActive ? theme.textStrong : "#8a7360"
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: 10
                                                 fontSizeMode: Text.HorizontalFit
                                                 minimumPixelSize: 8
@@ -4450,7 +4449,8 @@ Rectangle {
                                                 Layout.fillWidth: true
                                                 text: "Empty board"
                                                 color: theme.textMuted
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: 9
                                                 font.weight: Font.DemiBold
                                                 font.capitalization: Font.AllUppercase
@@ -4468,7 +4468,7 @@ Rectangle {
                                                     model: [
                                                         { label: "Add media", icon: "media", action: "media" },
                                                         { label: "Add text", icon: "edit", action: "text" },
-                                                        { label: "Add shape", icon: "geometry", action: "shape" },
+                                                        { label: "Add shape", icon: "shape-tool", action: "shape" },
                                                         { label: "Paste", icon: "paste", action: "paste" },
                                                         { label: "Apply template", icon: "grid", action: "template" }
                                                     ]
@@ -4516,7 +4516,7 @@ Rectangle {
                                                 tooltipText: "Add text or a shape, paste a copied design, or apply a template."
                                                 menuItems: [
                                                     { key: "text", label: "Add text", icon: "edit" },
-                                                    { key: "shape", label: "Add shape", icon: "geometry" },
+                                                    { key: "shape", label: "Add shape", icon: "shape-tool" },
                                                     { key: "paste", label: "Paste", icon: "paste",
                                                       enabled: carouselDocument.canPaste,
                                                       disabledReason: "Copy a Carousel board or component before pasting." },
@@ -4711,7 +4711,8 @@ Rectangle {
                                             anchors.margins: 6
                                             text: "FEED GRID CROP"
                                             color: theme.warning
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 8
                                             font.weight: Font.Bold
                                         }
@@ -4732,7 +4733,8 @@ Rectangle {
                                             anchors.margins: 6
                                             text: "PROFILE HEADER CROP"
                                             color: theme.selectionAccent
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 8
                                             font.weight: Font.Bold
                                         }
@@ -4752,7 +4754,8 @@ Rectangle {
                                             anchors.centerIn: parent
                                             text: "AVATAR"
                                             color: theme.textStrong
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 7
                                             font.weight: Font.Bold
                                         }
@@ -4775,7 +4778,8 @@ Rectangle {
                                             width: parent.width - 14
                                             text: "CAPTION / ACCOUNT / AUDIO"
                                             color: theme.warning
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 8
                                             font.weight: Font.Bold
                                             wrapMode: Text.WordWrap
@@ -4814,7 +4818,8 @@ Rectangle {
                                             anchors.bottomMargin: 3
                                             text: "LIKE / COMMENT"
                                             color: theme.warning
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 7
                                             font.weight: Font.Bold
                                         }
@@ -4847,7 +4852,8 @@ Rectangle {
                                         visible: String(platformPreviewOverlay.profile.cropKind || "") === "full-frame"
                                         text: "REFERENCE UI — NOT EXPORTED"
                                         color: theme.warning
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 8
                                         font.weight: Font.Bold
                                     }
@@ -4887,7 +4893,8 @@ Rectangle {
                                             y: 1
                                             text: index * root.rulerStep()
                                             color: theme.textMuted
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 8
                                         }
                                     }
@@ -4937,7 +4944,8 @@ Rectangle {
                                             rotation: -90
                                             transformOrigin: Item.TopLeft
                                             color: theme.textMuted
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 8
                                         }
                                     }
@@ -4984,7 +4992,8 @@ Rectangle {
                                             anchors.centerIn: parent
                                             text: modelData.label
                                             color: theme.textStrong
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 10
                                         }
                                     }
@@ -5032,7 +5041,8 @@ Rectangle {
                                             anchors.centerIn: parent
                                             text: Math.round(Number(modelData.position || 0)) + " px"
                                             color: theme.textStrong
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: 9
                                         }
                                     }
@@ -5218,7 +5228,8 @@ Rectangle {
                                         text: (selection.constraintStackAxis === "horizontal" ? "Horizontal" : "Vertical") +
                                               " stack · " + Number(selection.constraintStackCount || 0)
                                         color: theme.textStrong
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 9
                                         elide: Text.ElideNone
                                     }
@@ -5265,7 +5276,8 @@ Rectangle {
                                         anchors.centerIn: parent
                                         text: (selection.isObjectGroup ? "Group" : "Selection") + " · " + selection.selectedCount
                                         color: theme.textStrong
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 9
                                     }
                                 }
@@ -5603,7 +5615,8 @@ Rectangle {
                                                     anchors.margins: 8
                                                     text: "Crop · arrows 1 px · Shift + arrows 10 px · Esc done"
                                                     color: "#ffffff"
-                                                    font.family: theme.fontMono
+                                                    font.family: theme.fontNumeric
+                                                    font.features: theme.numericFontFeatures
                                                     font.pixelSize: Math.max(9, 10 * root.stripScale)
                                                     padding: 5
                                                     background: Rectangle {
@@ -5721,7 +5734,8 @@ Rectangle {
                                                     anchors.margins: 10
                                                     text: modelData.displayLabel
                                                     color: "#eef4f6"
-                                                    font.family: theme.fontMono
+                                                    font.family: theme.fontNumeric
+                                                    font.features: theme.numericFontFeatures
                                                     font.pixelSize: Math.max(10, Math.round(11 * root.stripScale / 0.2))
                                                     horizontalAlignment: Text.AlignHCenter
                                                     fontSizeMode: Text.HorizontalFit
@@ -6061,7 +6075,8 @@ Rectangle {
                                     anchors.centerIn: parent
                                     text: (index + 1).toString()
                                     color: index === carouselDocument.currentIndex ? theme.textStrong : theme.textFaint
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: 10
                                     font.weight: index === carouselDocument.currentIndex ? Font.DemiBold : Font.Normal
                                 }
@@ -6194,7 +6209,8 @@ Rectangle {
                         Label {
                             text: Math.round(root.composerZoom * 100) + "%"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -6207,7 +6223,8 @@ Rectangle {
                         Label {
                             text: "Fit"
                             color: zoomFitHover.containsMouse ? theme.textStrong : theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
 
                             MouseArea {
@@ -6261,7 +6278,8 @@ Rectangle {
                                       ? carouselDocument.selectedSlideCount + " selected"
                                       : carouselDocument.slideCount + " total"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 10
                             }
 
@@ -6295,7 +6313,8 @@ Rectangle {
                                 Layout.alignment: Qt.AlignHCenter
                                 text: carouselDocument.slideCount
                                 color: theme.textStrong
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 10
                             }
 
@@ -6514,12 +6533,7 @@ Rectangle {
                             font.family: theme.fontUi
                             font.pixelSize: 11
                             onTextEdited: root.templateNameDraft = text
-                            background: Rectangle {
-                                radius: 5
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                         }
 
                         RowLayout {
@@ -6677,14 +6691,7 @@ Rectangle {
                             font.family: theme.fontUi
                             font.pixelSize: 11
                             selectByMouse: true
-                            background: Rectangle {
-                                radius: 5
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: boardNameField.activeFocus
-                                              ? theme.alpha(theme.accentWarm400, 0.78)
-                                              : theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             onEditingFinished: carouselDocument.setCurrentSlideName(text)
                         }
 
@@ -6733,7 +6740,8 @@ Rectangle {
                                 horizontalAlignment: Text.AlignHCenter
                                 text: (carouselDocument.currentIndex + 1) + " / " + carouselDocument.slideCount
                                 color: theme.textMain
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 11
                             }
 
@@ -6871,12 +6879,7 @@ Rectangle {
                             font.family: theme.fontUi
                             font.pixelSize: 11
                             onTextEdited: root.templateNameDraft = text
-                            background: Rectangle {
-                                radius: 5
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                         }
 
                         RowLayout {
@@ -6918,7 +6921,8 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: "MY TEMPLATES · " + carouselDocument.userTemplates.length
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                             }
 
@@ -6960,7 +6964,8 @@ Rectangle {
                                                 visible: String(modelData.previewSource || "").length === 0
                                                 text: String(modelData.kind || "board") === "component" ? "C" : "T"
                                                 color: theme.textMuted
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: 11
                                             }
                                         }
@@ -6980,7 +6985,8 @@ Rectangle {
                                                 Layout.fillWidth: true
                                                 text: String(modelData.category || "My Templates") + " · " + Number(modelData.itemCount || 0) + " layers"
                                                 color: theme.textFaint
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: 8
                                             }
                                         }
@@ -7011,7 +7017,9 @@ Rectangle {
                                         ConfirmActionButton {
                                             Layout.preferredWidth: 34
                                             compact: true
-                                            text: "×"
+                                            text: "Delete template"
+                                            iconName: "delete"
+                                            showText: false
                                             helperText: "Delete template"
                                             onConfirmed: carouselDocument.deleteUserTemplate(String(modelData.templateId || ""))
                                         }
@@ -7024,7 +7032,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "Background"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -7098,14 +7107,10 @@ Rectangle {
                             Layout.preferredHeight: 26
                             color: theme.textStrong
                             font.pixelSize: 11
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             placeholderText: "#fbf7f1"
-                            background: Rectangle {
-                                radius: 4
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             onEditingFinished: {
                                 if (selection.backgroundKind === "solid") {
                                     carouselDocument.setCurrentSlideBackgroundColor(text)
@@ -7132,14 +7137,10 @@ Rectangle {
                             visible: selection.backgroundKind !== "solid"
                             color: theme.textStrong
                             font.pixelSize: 11
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             placeholderText: "#ffffff"
-                            background: Rectangle {
-                                radius: 4
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             onEditingFinished: {
                                 carouselDocument.setCurrentSlideBackgroundGradient(
                                             selection.backgroundKind,
@@ -7205,7 +7206,8 @@ Rectangle {
                                       ? "Following " + String(selection.brandColorTokenId || "")
                                       : "Local color"
                                 color: selection.followsBrandColorToken ? theme.accentCool300 : theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
@@ -7257,7 +7259,8 @@ Rectangle {
                                       ? "Following " + String(selection.brandTypographyTokenId || "")
                                       : "Local typography"
                                 color: selection.followsBrandTypographyToken ? theme.accentCool300 : theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
@@ -7293,7 +7296,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "Message"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                         }
 
@@ -7324,7 +7328,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "Media intent"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                         }
 
@@ -7355,7 +7360,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "Source or caption reference"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                         }
 
@@ -7386,7 +7392,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "Alt text"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                         }
 
@@ -7416,7 +7423,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "Plain-language board description"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                         }
 
@@ -7602,7 +7610,8 @@ Rectangle {
                                     Layout.fillWidth: true
                                     text: root.filteredTemplateLibraryEntries().length + " matching"
                                     color: theme.textFaint
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: 9
                                     elide: Text.ElideNone
                                 }
@@ -7749,7 +7758,8 @@ Rectangle {
                                                     visible: String(modelData.previewSource || "").length === 0
                                                     text: String(modelData.entryKind) === "component" ? "C" : "B"
                                                     color: theme.textMuted
-                                                    font.family: theme.fontMono
+                                                    font.family: theme.fontNumeric
+                                                    font.features: theme.numericFontFeatures
                                                     font.pixelSize: 10
                                                 }
                                             }
@@ -7770,7 +7780,8 @@ Rectangle {
                                                         anchors.centerIn: parent
                                                         text: sequenceRolePreview.index + 1
                                                         color: sequenceRolePreview.index % 3 === 1 ? "#ffffff" : "#171717"
-                                                        font.family: theme.fontMono
+                                                        font.family: theme.fontNumeric
+                                                        font.features: theme.numericFontFeatures
                                                         font.pixelSize: 8
                                                     }
                                                     AppToolTip {
@@ -7795,7 +7806,8 @@ Rectangle {
                                                       : Number(modelData.itemCount || 0) + " layers · "
                                                         + String(modelData.category || "Custom")
                                                 color: theme.textFaint
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: 8
                                                 wrapMode: Text.WordWrap
                                                 elide: Text.ElideNone
@@ -7923,7 +7935,8 @@ Rectangle {
                                               + Number(carouselDocument.componentInstanceState.localOverrideCount || 0)
                                               + " locally changed"
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 8
                                         elide: Text.ElideNone
                                     }
@@ -8039,7 +8052,8 @@ Rectangle {
                                                       + " editable layers · "
                                                       + String(reusableComponentCard.modelData.category || "Custom")
                                                 color: theme.textFaint
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: 8
                                                 elide: Text.ElideNone
                                             }
@@ -8238,7 +8252,9 @@ Rectangle {
                                         ConfirmActionButton {
                                             Layout.preferredWidth: 32
                                             compact: true
-                                            text: "×"
+                                            text: "Delete brand kit"
+                                            iconName: "delete"
+                                            showText: false
                                             helperText: "Delete brand kit"
                                             onConfirmed: carouselDocument.deleteBrandKit(String(modelData.brandId || ""))
                                         }
@@ -8733,7 +8749,8 @@ Rectangle {
                                         Layout.fillWidth: true
                                         text: Number(versionRow.modelData.boardCount || 0) + " boards"
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeCaption
                                     }
                                     RowLayout {
@@ -8910,7 +8927,8 @@ Rectangle {
                                         text: Number(recipeRow.modelData.columns || 4) + " × " + Number(recipeRow.modelData.rows || 4) +
                                               " · " + Number(recipeRow.modelData.guideCount || 0) + " guides"
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeCaption
                                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                     }
@@ -9294,7 +9312,8 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: "Arrow " + Number(root.layoutSettings.nudgeStep || 1) + " px  •  Shift " + Number(root.layoutSettings.largeNudgeStep || 10) + " px"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 8
                                 wrapMode: Text.WordWrap
                             }
@@ -9493,7 +9512,8 @@ Rectangle {
                             Label {
                                 text: selection.hasMultipleSelection ? selection.selectedCount + " layers" : "Anchor"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                             }
 
@@ -9524,7 +9544,8 @@ Rectangle {
                             Label {
                                 text: "X px"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 10
                             }
 
@@ -9534,17 +9555,13 @@ Rectangle {
                                 Layout.preferredHeight: 26
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
                                 placeholderText: "+24, *1.2, =-10"
-                                background: Rectangle {
-                                    radius: 4
-                                    color: theme.alpha(theme.ink850, 0.9)
-                                    border.width: 1
-                                    border.color: transformXField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
-                                }
+                                background: InputFieldSurface { inputControl: parent }
                                 onEditingFinished: {
                                     root.applyTransformField("x", text)
                                 }
@@ -9553,7 +9570,8 @@ Rectangle {
                             Label {
                                 text: "Y px"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 10
                             }
 
@@ -9563,17 +9581,13 @@ Rectangle {
                                 Layout.preferredHeight: 26
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
                                 placeholderText: "+24, *1.2, =-10"
-                                background: Rectangle {
-                                    radius: 4
-                                    color: theme.alpha(theme.ink850, 0.9)
-                                    border.width: 1
-                                    border.color: transformYField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
-                                }
+                                background: InputFieldSurface { inputControl: parent }
                                 onEditingFinished: {
                                     root.applyTransformField("y", text)
                                 }
@@ -9582,7 +9596,8 @@ Rectangle {
                             Label {
                                 text: "R °"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 10
                             }
 
@@ -9592,17 +9607,13 @@ Rectangle {
                                 Layout.preferredHeight: 26
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
                                 placeholderText: "+15, *2, =-45"
-                                background: Rectangle {
-                                    radius: 4
-                                    color: theme.alpha(theme.ink850, 0.9)
-                                    border.width: 1
-                                    border.color: transformRotationField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
-                                }
+                                background: InputFieldSurface { inputControl: parent }
                                 onEditingFinished: {
                                     root.applyTransformField("rotation", text)
                                 }
@@ -9616,7 +9627,8 @@ Rectangle {
                             Label {
                                 text: "W px"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 10
                             }
 
@@ -9626,17 +9638,13 @@ Rectangle {
                                 Layout.preferredHeight: 26
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
                                 placeholderText: "+24, *1.2"
-                                background: Rectangle {
-                                    radius: 4
-                                    color: theme.alpha(theme.ink850, 0.9)
-                                    border.width: 1
-                                    border.color: transformWidthField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
-                                }
+                                background: InputFieldSurface { inputControl: parent }
                                 onEditingFinished: {
                                     root.applyTransformField("width", text)
                                 }
@@ -9658,7 +9666,8 @@ Rectangle {
                             Label {
                                 text: "H px"
                                 color: theme.textFaint
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 10
                             }
 
@@ -9668,17 +9677,13 @@ Rectangle {
                                 Layout.preferredHeight: 26
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
                                 placeholderText: "+24, *1.2"
-                                background: Rectangle {
-                                    radius: 4
-                                    color: theme.alpha(theme.ink850, 0.9)
-                                    border.width: 1
-                                    border.color: transformHeightField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
-                                }
+                                background: InputFieldSurface { inputControl: parent }
                                 onEditingFinished: {
                                     root.applyTransformField("height", text)
                                 }
@@ -10422,7 +10427,7 @@ Rectangle {
                             ActionButton {
                                 Layout.fillWidth: true
                                 compact: true
-                                iconText: "B"
+                                iconName: "send-back"
                                 showText: false
                                 tooltipText: "Send to Back"
                                 enabled: selection.hasSelection
@@ -10452,7 +10457,7 @@ Rectangle {
                             ActionButton {
                                 Layout.fillWidth: true
                                 compact: true
-                                iconText: "F"
+                                iconName: "bring-front"
                                 showText: false
                                 tooltipText: "Bring to Front"
                                 enabled: selection.hasSelection
@@ -10654,7 +10659,8 @@ Rectangle {
                             Layout.fillWidth: true
                             text: "Fill"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -10700,14 +10706,10 @@ Rectangle {
                             Layout.preferredHeight: 26
                             color: theme.textStrong
                             font.pixelSize: 11
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             placeholderText: "#ffffff"
-                            background: Rectangle {
-                                radius: 4
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             onEditingFinished: {
                                 if (selection.isShape)
                                     carouselDocument.setSelectedShapeFillColor(text)
@@ -10726,7 +10728,8 @@ Rectangle {
                             visible: String(selection.fillKind || "solid") !== "solid"
                             text: "Second"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 10
                         }
 
@@ -10757,14 +10760,10 @@ Rectangle {
                             visible: String(selection.fillKind || "solid") !== "solid"
                             color: theme.textStrong
                             font.pixelSize: 11
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             placeholderText: "#69cad8"
-                            background: Rectangle {
-                                radius: 4
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             onEditingFinished: {
                                 if (selection.isShape)
                                     carouselDocument.setSelectedShapeSecondaryFillColor(text)
@@ -10784,14 +10783,10 @@ Rectangle {
                             Layout.preferredHeight: 26
                             color: theme.textStrong
                             font.pixelSize: 11
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             placeholderText: "#1e1a17"
-                            background: Rectangle {
-                                radius: 4
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             onEditingFinished: {
                                 if (selection.isShape)
                                     carouselDocument.setSelectedShapeStrokeColor(text)
@@ -11204,12 +11199,7 @@ Rectangle {
                             color: theme.textStrong
                             placeholderText: "Enter text"
                             selectByMouse: true
-                            background: Rectangle {
-                                radius: theme.radiusControl
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.5)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             property string editingItemId: ""
                             property bool syncingText: false
                             function syncFromSelection() {
@@ -11470,12 +11460,7 @@ Rectangle {
                                             color: theme.textStrong
                                             font.family: theme.fontUi
                                             font.pixelSize: 10
-                                            background: Rectangle {
-                                                radius: 4
-                                                color: theme.alpha(theme.ink850, 0.9)
-                                                border.width: 1
-                                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                                            }
+                                            background: InputFieldSurface { inputControl: parent }
                                             onEditingFinished: carouselDocument.setDocumentVariable(
                                                                    modelData.key, text)
 
@@ -11536,7 +11521,8 @@ Rectangle {
                                     Label {
                                         text: "Resolved on board " + Number(selection.slideNumber || 1)
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 9
                                     }
 
@@ -11706,7 +11692,8 @@ Rectangle {
                                 text: "Visible value: " + String(selection.resolvedText || "") +
                                       " · updates when boards are reordered"
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
@@ -11838,7 +11825,8 @@ Rectangle {
                                               String((carouselDocument.textStylePreview.style || {}).fontWeight || "") + " · " +
                                               String((carouselDocument.textStylePreview.style || {}).color || "")
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: 9
                                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                         elide: Text.ElideNone
@@ -11917,14 +11905,10 @@ Rectangle {
                             Layout.preferredHeight: 26
                             color: theme.textStrong
                             font.pixelSize: 11
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             placeholderText: "#1e1a17"
-                            background: Rectangle {
-                                radius: 4
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.4)
-                            }
+                            background: InputFieldSurface { inputControl: parent }
                             onEditingFinished: {
                                 if (selection.isText)
                                     carouselDocument.setSelectedTextColor(text)
@@ -11992,7 +11976,8 @@ Rectangle {
                                           "box " + Math.round(Number(root.selectedTextContrast.backgroundTreatmentOpacity || 0) * 100) + "% · " +
                                           "stroke " + Number(root.selectedTextContrast.strokeWidth || 0).toFixed(1) + " px"
                                     color: theme.textMuted
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: 9
                                     wrapMode: Text.WordWrap
                                     elide: Text.ElideNone
@@ -12527,7 +12512,8 @@ Rectangle {
                                 text: Number(carouselDocument.preflightIssueState.currentIndex || 0) + 1 + " / " +
                                       Number(carouselDocument.preflightIssueState.totalCount || 0)
                                 color: theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: 9
                             }
                         }
@@ -12634,7 +12620,8 @@ Rectangle {
                                   " · " + Number(carouselDocument.previewDiagnostics.boardsRendered || 0) +
                                   " board(s)"
                             color: theme.textMuted
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
@@ -12647,7 +12634,8 @@ Rectangle {
                                   " ms · Render " + Number(carouselDocument.previewDiagnostics.renderMs || 0).toFixed(2) +
                                   " ms · Publish " + Number(carouselDocument.previewDiagnostics.publishMs || 0).toFixed(2) + " ms"
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
@@ -12663,7 +12651,8 @@ Rectangle {
                                   " MB · stale requests dropped " +
                                   Number(carouselDocument.previewDiagnostics.staleRequestsDropped || 0)
                             color: theme.textFaint
-                            font.family: theme.fontMono
+                            font.family: theme.fontNumeric
+                            font.features: theme.numericFontFeatures
                             font.pixelSize: 9
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
@@ -12698,10 +12687,6 @@ Rectangle {
                 carouselLayoutButton.forceActiveFocus()
         }
 
-        background: PopupSurface {
-            radius: 0
-            shadowColor: "transparent"
-        }
 
         contentItem: Item {
             id: carouselCompactInspectorHost

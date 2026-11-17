@@ -76,6 +76,29 @@ using StageClock = std::chrono::steady_clock;
 
 [[nodiscard, maybe_unused]] std::string metal_color_pipeline_incompatibility_reason_impl(
     const ColorAdjustmentState& state) {
+  if (!state.post_composite_retouch_masks.empty()) {
+    return "component_post_composite_retouch_requires_cpu";
+  }
+  if (std::any_of(state.photo_layers.begin(), state.photo_layers.end(), [](const auto& layer) {
+        return !layer.component_retouch_masks.empty();
+      })) {
+    return "component_group_retouch_requires_cpu";
+  }
+  if (std::any_of(state.photo_layers.begin(), state.photo_layers.end(), [](const auto& layer) {
+        if (!layer.enabled || layer.opacity <= 0.0) return false;
+        if (!layer.style_error.empty() || layer.style_stack.version != kLayerStyleStackVersion) return true;
+        if (!layer.style_stack.enabled) return false;
+        return std::any_of(layer.style_stack.operations.begin(), layer.style_stack.operations.end(),
+            [](const auto& operation) {
+              return !std::isfinite(operation.opacity) || operation.opacity < 0.0 ||
+                  operation.opacity > 1.0 || (operation.enabled && operation.opacity > 0.0);
+            });
+      })) {
+    return "layer_styles_require_cpu";
+  }
+  if (std::any_of(state.photo_layers.begin(), state.photo_layers.end(), [](const auto& layer) {
+        return layer.enabled && layer.opacity > 0 && layer.blend_if.enabled;
+      })) return "layer_blend_if_requires_cpu";
   if (state.color_pipeline.camera_dcp_profile_asset.ready() &&
       state.color_pipeline.camera_dcp_profile_asset.profile
           ->profile_gain_table_map.configured()) {
@@ -257,9 +280,24 @@ bool apply_color_photographic_output_stage(
         display_referred_text_layers.begin(),
         display_referred_text_layers.end());
     for (auto& layer : display_text_layers) {
-      if (layer.kind != "text" || !layer.parent_id.empty() ||
+      const auto group = layer.kind == "group";
+      auto parent = layer.parent_id;
+      auto valid_parent = true;
+      for (std::size_t depth = 0; !parent.empty(); ++depth) {
+        const auto found = std::find_if(display_text_layers.begin(), display_text_layers.end(),
+            [&](const PhotoLayer& candidate) { return candidate.id == parent && candidate.kind == "group"; });
+        if (depth >= 64U || found == display_text_layers.end() || found->id == layer.id) {
+          valid_parent = false;
+          break;
+        }
+        parent = found->parent_id;
+      }
+      if ((layer.kind != "text" && !group) || !valid_parent ||
           layer.blend_mode != "normal" || layer.clipping_mask ||
+          layer.blend_if.enabled || layer.copy_base_image || layer.erase_base_image ||
           !layer.effects.empty() || !layer.effect_masks.empty() ||
+          (group && (std::abs(layer.opacity - 1.0) > 1e-9 ||
+                     !layer.mask_data.empty() || layer.mask_width > 0 || layer.mask_height > 0)) ||
           ((layer.mask_width > 0 || layer.mask_height > 0 ||
             !layer.mask_data.empty()) &&
            (layer.mask_width <= 0 || layer.mask_height <= 0 ||
@@ -269,18 +307,17 @@ bool apply_color_photographic_output_stage(
             static_cast<std::int64_t>(layer.mask_width) * height !=
                 static_cast<std::int64_t>(layer.mask_height) * width)) ||
           !layer.text_material.empty() ||
-          layer.pixel_width <= 0 || layer.pixel_height <= 0 ||
+          (!group && (layer.pixel_width <= 0 || layer.pixel_height <= 0 ||
           layer.pixels.size() != static_cast<std::size_t>(layer.pixel_width) *
-                                     static_cast<std::size_t>(layer.pixel_height)) {
+                                     static_cast<std::size_t>(layer.pixel_height)))) {
         if (telemetry != nullptr) {
           telemetry->failure_reason =
               "Display-referred text layer exceeded the compiled plain-text policy.";
         }
         return false;
       }
-      for (auto& pixel : layer.pixels) {
-        pixel = apply_rgb_matrix(pixel, working_to_display);
-      }
+      if (!group)
+        for (auto& pixel : layer.pixels) pixel = apply_rgb_matrix(pixel, working_to_display);
     }
 
     ColorAdjustmentState display_state;
@@ -310,9 +347,10 @@ bool apply_color_photographic_output_stage(
           "eligible-sdr-top-text-suffix";
       telemetry->display_referred_text_eligibility_reason = "applied";
       telemetry->display_referred_text_layer_count =
-          static_cast<std::int64_t>(display_referred_text_layers.size());
+          static_cast<std::int64_t>(std::count_if(display_text_layers.begin(), display_text_layers.end(),
+              [](const PhotoLayer& layer) { return layer.kind == "text"; }));
       telemetry->display_referred_text_applied_layer_count =
-          static_cast<std::int64_t>(display_referred_text_layers.size());
+          telemetry->display_referred_text_layer_count;
     }
   }
   if (cancellation.cancelled() || !finite_color_stage_surface(*pixels)) {
@@ -545,7 +583,8 @@ ColorPrefixStageContext prepare_color_prefix_stage_context(
           decoded_pixels,
           width,
           height,
-          state.input_transform);
+          state.input_transform,
+          state.color_pipeline.input_transform_recipe.highlight_headroom);
   context.prepared = true;
   return context;
 }
@@ -566,7 +605,9 @@ bool apply_color_normalize_raw_stage(
   const auto timer = StageClock::now();
   if (!context->prepared) {
     context->highlight_reconstruction =
-        analyze_highlight_reconstruction(*pixels, width, height, state.input_transform);
+        analyze_highlight_reconstruction(
+            *pixels, width, height, state.input_transform,
+            state.color_pipeline.input_transform_recipe.highlight_headroom);
     context->prepared = true;
   }
   if (telemetry != nullptr) {
@@ -592,7 +633,9 @@ bool apply_color_normalize_raw_stage(
       (*pixels)[index] = apply_normalize_raw_stage(
           (*pixels)[index],
           input_stage,
-          color_context);
+          color_context,
+          (static_cast<double>(x) + 0.5) / static_cast<double>(width),
+          (static_cast<double>(y) + 0.5) / static_cast<double>(height));
     }
   });
   if (telemetry != nullptr) {

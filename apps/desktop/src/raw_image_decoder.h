@@ -13,6 +13,8 @@ struct RawDecodeSettings final {
   bool input_transform_enabled = true;
   QString input_color_profile = QStringLiteral("Embedded");
   QString demosaic_quality = QStringLiteral("Balanced");
+  // Both camera-linear and decoder-characterized output defer EV to the
+  // engine's float scene-exposure stage; no decoder integer clipping owns EV.
   double exposure = 0.0;
   double hot_dead_pixel_cleanup_amount = 0.0;
   double false_color_suppression_amount = 0.0;

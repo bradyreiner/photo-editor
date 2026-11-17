@@ -1,8 +1,11 @@
 #include "catalog_asset_model.h"
+#include "edit_recipe_mask_schema.h"
 #include "editor_preview_controller.h"
 #include "edit_adjustment_patch.h"
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
+#include "render_plan_store.h"
+#include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 #include <QColorSpace>
 #include <QFile>
 #include <QFileInfo>
@@ -14,10 +17,198 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QThreadPool>
+#include <atomic>
 #include <iostream>
 #include <memory>
 
+namespace photo_editor::desktop {
+RenderResult render_preview_request_for_test(const RenderRequest& request);
+}
+
 namespace {
+
+int verify_export_session_guard(const QByteArray& main_qml) {
+  const auto function = [&main_qml](const QByteArray& name) {
+    const auto start = main_qml.indexOf("    function " + name + "(");
+    const auto end = start < 0 ? -1 : main_qml.indexOf("\n    }", start);
+    return start < 0 || end < 0 ? QByteArray{} : main_qml.mid(start, end + 6 - start);
+  };
+  const auto resolve = function("resolvePhotoNavigation");
+  const auto queue = function("queueExportFromMenu");
+  const auto reset = function("resetCurrentPhotoEdits");
+  if (resolve.isEmpty() || queue.isEmpty() || reset.isEmpty()) return 1;
+  QQmlEngine engine;
+  QQmlComponent component(&engine);
+  component.setData(R"qml(import QtQml
+QtObject {
+    id: window
+    property bool photoWorkspaceActive: true
+    property int currentWorkspace: 1
+    property int timelineWorkspaceIndex: 3
+    property int exportWorkspaceIndex: 4
+    property bool editorUsesLocalAsset: false
+    property string localEditorFilePath: "/synthetic/canvas.png"
+    property bool editBoardsActive: false
+    property string openedCatalogFilePath: "/synthetic/source.png"
+    property var pendingPhotoWorkflowHistory: null
+    property int snapshots: 0
+    property int pickerCalls: 0
+    property int queued: 0
+    property int transitions: 0
+    property int notices: 0
+    property string queuedRecipe: ""
+    property QtObject editorPreview: QtObject {
+        property bool photoPaintBusy: false
+        property bool brushStrokeActive: false
+        property bool selectionEditSessionActive: false
+        property bool selectionEditSessionDirty: false
+        property bool hasAsset: true
+        property string recipe: "before-session"
+        property int originalResets: 0
+        property int boardResets: 0
+        property int selectionFinishes: 0
+        property string recipeBeforeReset: ""
+        property bool photoExportBusy: false
+        property string photoExportError: ""
+        property int directExports: 0
+        property string exportedRecipe: ""
+        property string exportPath: ""
+        function startFlattenedPhotoExport(path) {
+            directExports++
+            exportedRecipe = recipe
+            exportPath = path
+            photoExportBusy = true
+            return true
+        }
+        function finishSelectionEditSession() { selectionFinishes++; selectionEditSessionActive = false; return true }
+        function revertPhotoToOriginal() { originalResets++; recipeBeforeReset = recipe; recipe = "original"; return true }
+        function resetAdjustments() { boardResets++; recipeBeforeReset = recipe; recipe = "board-reset" }
+    }
+    property QtObject textSession: QtObject {
+        property bool dirty: false
+        property bool rejectCommit: false
+        property int commits: 0
+        function resolveTextSession() {
+            if (rejectCommit) return false
+            if (dirty) {
+                commits++
+                dirty = false
+                window.editorPreview.recipe = "committed-session"
+            }
+            return true
+        }
+    }
+    property var editWorkspaceLoader: ({item: textSession})
+    property QtObject catalogAssets: QtObject {
+        property string selectedAssetId: "synthetic-source"
+        property string selectedMediaType: "photo"
+        property bool selectedRecipeReady: true
+        function requestAssetRecipes(ids) { throw new Error("Unexpected catalog request") }
+    }
+    property string pendingMenuExportAssetId: ""
+    property QtObject exportJobs: QtObject {
+        function pickDestinationFolder(title) { window.pickerCalls++; return "/synthetic/exports" }
+        function queueExport(id, media, label, path, preview, recipe, preset, destination) {
+            window.queued++
+            window.queuedRecipe = recipe
+            return true
+        }
+    }
+    function showPhotoRecipeNotice(text, error) { notices++ }
+    function currentSelectionLabel() { return "Rain / painted canvas" }
+    function currentExportPayload() {
+        snapshots++
+        return {assetId: "synthetic-source", mediaType: "photo", displayLabel: "Source", sourcePath: openedCatalogFilePath,
+            editedPreviewSource: "", adjustmentPatchJson: editorPreview.recipe}
+    }
+    function switchToWorkspaceIndex(index) { transitions++ }
+    function openContextualExport(value) { throw new Error("Unexpected Timeline export") }
+)qml" + resolve + "\n" + queue + "\n" + reset + "\n}", QUrl::fromLocalFile(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/tests/export-session-guard-fixture.qml")));
+  std::unique_ptr<QObject> fixture(component.create());
+  if (!fixture) { std::cerr << component.errorString().toStdString(); return 1; }
+  auto* preview = fixture->property("editorPreview").value<QObject*>();
+  auto* text = fixture->property("textSession").value<QObject*>();
+  if (!preview || !text) return 1;
+  const auto invoke = [&] { return QMetaObject::invokeMethod(fixture.get(), "queueExportFromMenu"); };
+  const auto untouched_queue = [&] { return fixture->property("snapshots").toInt() == 0 &&
+      fixture->property("pickerCalls").toInt() == 0 && fixture->property("queued").toInt() == 0 &&
+      fixture->property("transitions").toInt() == 0; };
+  preview->setProperty("selectionEditSessionActive", true);
+  preview->setProperty("selectionEditSessionDirty", true);
+  text->setProperty("dirty", true);
+  if (!invoke() || !untouched_queue() || text->property("commits").toInt() != 0 ||
+      preview->property("recipe").toString() != "before-session") {
+    std::cerr << "Dirty selection must block export before text commit, snapshot, picker or queue\n"; return 1;
+  }
+  preview->setProperty("selectionEditSessionActive", false);
+  preview->setProperty("selectionEditSessionDirty", false);
+  text->setProperty("rejectCommit", true);
+  if (!invoke() || !untouched_queue() || !text->property("dirty").toBool()) {
+    std::cerr << "Rejected text commit must retain the draft and block every export side effect\n"; return 1;
+  }
+  text->setProperty("rejectCommit", false);
+  if (!invoke() || text->property("commits").toInt() != 1 || text->property("dirty").toBool() ||
+      fixture->property("snapshots").toInt() != 1 || fixture->property("pickerCalls").toInt() != 1 ||
+      fixture->property("queued").toInt() != 1 || fixture->property("transitions").toInt() != 1 ||
+      fixture->property("queuedRecipe").toString() != "committed-session") {
+    std::cerr << "Valid text must commit once before the exported recipe snapshot and queue admission\n"; return 1;
+  }
+  if (!invoke() || text->property("commits").toInt() != 1 || fixture->property("queued").toInt() != 2) {
+    std::cerr << "Repeated export cannot publish an unchanged text session twice\n"; return 1;
+  }
+  const auto reset_now = [&] { return QMetaObject::invokeMethod(fixture.get(), "resetCurrentPhotoEdits"); };
+  text->setProperty("dirty", true);
+  text->setProperty("rejectCommit", true);
+  if (!reset_now() || preview->property("originalResets").toInt() != 0 || !text->property("dirty").toBool()) {
+    std::cerr << "Rejected text must block global original reset and retain its draft\n"; return 1;
+  }
+  text->setProperty("rejectCommit", false);
+  preview->setProperty("selectionEditSessionActive", true);
+  preview->setProperty("selectionEditSessionDirty", true);
+  fixture->setProperty("editBoardsActive", true);
+  if (!reset_now() || preview->property("boardResets").toInt() != 0 || text->property("commits").toInt() != 1) {
+    std::cerr << "Dirty selection must block Board-image reset before committing unrelated text\n"; return 1;
+  }
+  preview->setProperty("selectionEditSessionActive", false);
+  preview->setProperty("selectionEditSessionDirty", false);
+  fixture->setProperty("pendingPhotoWorkflowHistory", QVariantMap{{"pending", true}});
+  if (!reset_now() || preview->property("boardResets").toInt() != 0 || text->property("commits").toInt() != 1) {
+    std::cerr << "Pending workflow history must block Board-image reset\n"; return 1;
+  }
+  fixture->setProperty("pendingPhotoWorkflowHistory", QVariant());
+  preview->setProperty("selectionEditSessionActive", true);
+  if (!reset_now() || preview->property("boardResets").toInt() != 1 ||
+      preview->property("selectionFinishes").toInt() != 1 || preview->property("selectionEditSessionActive").toBool() ||
+      text->property("commits").toInt() != 2 || preview->property("recipeBeforeReset").toString() != "committed-session") {
+    std::cerr << "Board reset must finish a clean selection and commit valid text exactly once before mutation\n"; return 1;
+  }
+  fixture->setProperty("editBoardsActive", false);
+  if (!reset_now() || preview->property("originalResets").toInt() != 1 || text->property("commits").toInt() != 2) {
+    std::cerr << "Whole-photo reset must use original restore without a duplicate text commit\n"; return 1;
+  }
+  fixture->setProperty("editorUsesLocalAsset", true);
+  text->setProperty("dirty", true);
+  text->setProperty("rejectCommit", true);
+  const auto picker_before_canvas = fixture->property("pickerCalls").toInt();
+  if (!invoke() || preview->property("directExports").toInt() != 0 ||
+      fixture->property("pickerCalls").toInt() != picker_before_canvas) return 1;
+  text->setProperty("rejectCommit", false);
+  if (!invoke() || preview->property("directExports").toInt() != 1 ||
+      preview->property("exportedRecipe").toString() != "committed-session" ||
+      !preview->property("exportPath").toString().startsWith("/synthetic/exports/Rain _ painted canvas-") ||
+      fixture->property("queued").toInt() != 2 || fixture->property("snapshots").toInt() != 2 ||
+      fixture->property("pickerCalls").toInt() != picker_before_canvas + 1) {
+    std::cerr << "Local canvas must export committed editor pixels without a queued catalog recipe\n"; return 1;
+  }
+  if (!invoke() || preview->property("directExports").toInt() != 1 ||
+      fixture->property("pickerCalls").toInt() != picker_before_canvas + 1) {
+    std::cerr << "Busy canvas export must not open another picker or repeat the snapshot\n"; return 1;
+  }
+  std::cout << "Main canvas export: committed pixels, sanitized new PNG, no catalog queue, single flight\n";
+  std::cout << "Main export session guard: dirty selection/rejected text cause zero export side effects; valid text commits once before snapshot\n";
+  std::cout << "Main reset session guard: rejected text, dirty selection and pending history block reset; clean sessions resolve once before scoped mutation\n";
+  return 0;
+}
 
 int run_recipe_handoff_benchmark(
     const photo_editor::desktop::EditRecipeState& recipe,
@@ -62,6 +253,16 @@ int run_recipe_handoff_benchmark(
   if (!catalog.selectAssetById(item.asset_id, true)) return 1;
   // Photo selection requests this canonical projection before editor handoff.
   if (catalog.selectedAdjustmentPatchJson() != large_patch) return 1;
+
+  constexpr int projection_iterations = 16;
+  QElapsedTimer projection_timer;
+  projection_timer.start();
+  for (int iteration = 0; iteration < projection_iterations; ++iteration) {
+    if (catalog.selectedAdjustmentPatchJson() != large_patch) return 1;
+  }
+  const auto projection_ms = static_cast<double>(projection_timer.nsecsElapsed()) / 1.0e6;
+  std::cout << "recipe_projection_benchmark iterations=" << projection_iterations
+            << " mean_ms=" << projection_ms / projection_iterations << '\n';
 
   constexpr int unchanged_iterations = 40;
   QElapsedTimer timer;
@@ -132,11 +333,76 @@ int main(int argc, char** argv) {
   const auto source = app.arguments().size() > 1 && !app.arguments()[1].startsWith("--")
       ? app.arguments()[1] : fixture;
   if (!QFileInfo::exists(source)) return 2;
+  if (app.arguments().contains(QStringLiteral("--cropped-native-preview-only"))) {
+    using namespace photo_editor::pipeline;
+    if (!metal::shared_metal_pipeline_backend().available()) return 2;
+    const auto is_raw = raw_image_supported(source);
+    const auto dimensions = is_raw ? raw_image_size(source) : QImage(source).size();
+    EditRecipeState state;
+    state.preview_color_space = QStringLiteral("sRGB");
+    state.preview_output_mode = QStringLiteral("Reference Display Target");
+    state.crop_rect_x = 0.2;
+    state.crop_rect_y = 0.15;
+    state.crop_rect_width = 0.6;
+    state.crop_rect_height = 0.7;
+    for (int pass = 0; pass < 2; ++pass) {
+      state.exposure = pass == 0 ? 0.0 : 0.5;
+      RenderRequest request;
+      request.source_asset_id = QStringLiteral("cropped-native-preview-regression");
+      request.file_path = source;
+      request.state = state;
+      request.render_reason = pass == 0 ? QStringLiteral("crop_change") : QStringLiteral("edit_change");
+      request.dirty_domain = pass == 0 ? QStringLiteral("geometry_transform") : QStringLiteral("global_tone_color");
+      request.use_in_memory_preview = true;
+      request.allow_native_srgb_surface = true;
+      request.require_cpu_preview_image = false;
+      request.require_canonical_render_plan = true;
+      request.recipe_cache_identity = QStringLiteral("crop-native-%1").arg(pass);
+      request.adjusted_recipe_cache_identity = request.recipe_cache_identity + QStringLiteral(":adjusted");
+      request.max_edge = 640;
+      request.generation = pass + 1;
+      request.latest_generation = std::make_shared<std::atomic<int>>(pass + 1);
+      const auto admission = RenderPlanStore::shared().admit(
+          request.source_asset_id, source, state, dimensions,
+          RenderPurpose::SettledPreview, DisplayRenderingTarget::SrgbSimulation);
+      if (!admission.admitted) return 3;
+      request.canonical_render_plan = admission.plan;
+      const auto result = render_preview_request_for_test(request);
+      // Publication may intentionally return CPU-readable display pixels even
+      // when working adjustments execute on Metal. Both must remain usable.
+      const auto publishable = result.texture_upload_surface != nullptr || !result.preview_image.isNull();
+      if (!result.success || result.cancelled || !result.failure_stage.isEmpty() ||
+          !result.failure_detail.isEmpty() || !publishable ||
+          (!is_raw && pass == 1 && result.backend != QStringLiteral("metal"))) {
+        std::cerr << "Cropped native preview failed: " << result.failure_stage.toStdString()
+                  << " " << result.failure_detail.toStdString()
+                  << " status=" << result.status.toStdString()
+                  << " backend=" << result.backend.toStdString()
+                  << " fallback=" << result.fallback_reason.toStdString()
+                  << " image=" << result.preview_image.width() << 'x' << result.preview_image.height()
+                  << " success=" << result.success << " cancelled=" << result.cancelled
+                  << " plan=" << result.canonical_plan_error.toStdString() << '\n';
+        return 1;
+      }
+      std::cout << "Cropped preview passed: " << request.dirty_domain.toStdString()
+                << " backend=" << result.backend.toStdString()
+                << " native_surface=" << (result.texture_upload_surface != nullptr)
+                << " fallback=" << result.fallback_reason.toStdString() << '\n';
+    }
+    return 0;
+  }
+  if (app.arguments().contains(QStringLiteral("--recipe-projection-benchmark"))) {
+    EditRecipeState benchmark_recipe;
+    benchmark_recipe.mask_stack = {default_mask_definition(QStringLiteral("brush"))};
+    return run_recipe_handoff_benchmark(benchmark_recipe, source);
+  }
 
   // Exercise the function from Main.qml, not a second implementation of it.
   QFile main_source(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/apps/desktop/qml/Main.qml"));
   if (!main_source.open(QIODevice::ReadOnly)) return 2;
   const auto main_qml = main_source.readAll();
+  if (verify_export_session_guard(main_qml) != 0) return 1;
+  if (app.arguments().contains(QStringLiteral("--export-session-guard-only"))) return 0;
   const auto start = main_qml.indexOf("    function syncEditorRecipeToCatalog(nextAssetId) {");
   const auto end = start < 0 ? -1 : main_qml.indexOf("\n    }", start);
   if (start < 0 || end < 0) return 2;

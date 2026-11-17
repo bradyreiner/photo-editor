@@ -51,6 +51,7 @@ class BrushLivePreviewItem : public QQuickItem {
   bool immediate_ = false;
   QColor tint_ = QColor(94, 149, 211);
   BrushLivePreviewRaster immediate_raster_;
+  QImage immediate_display_image_;
   qsizetype immediate_point_count_ = 0;
   int immediate_revision_ = 0;
   int texture_immediate_revision_ = -1;
@@ -59,6 +60,7 @@ class BrushLivePreviewItem : public QQuickItem {
   QPointer<EditorPreviewController> controller_;
   quint64 native_texture_handle_ = 0;
   QSize native_texture_size_;
+  QRectF native_texture_rect_ = QRectF(0, 0, 1, 1);
   int native_texture_revision_ = 0;
   bool native_texture_available_ = false;
   quint64 scene_graph_texture_handle_ = 0;

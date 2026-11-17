@@ -28,6 +28,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -72,6 +73,14 @@ struct WorkingImage final {
     return retained_surface->surface.valid()
                ? retained_surface->surface.backing
                : std::shared_ptr<const photo_editor::pipeline::RenderSurfaceBacking>{};
+  }
+
+  [[nodiscard]] std::optional<photo_editor::pipeline::RenderSurfaceDescriptor>
+  retainedDescriptor() const {
+    if (retained_surface == nullptr) return std::nullopt;
+    const std::scoped_lock lock(retained_surface->mutex);
+    return retained_surface->surface.valid()
+        ? std::optional{retained_surface->surface.descriptor} : std::nullopt;
   }
 
   [[nodiscard]] bool ensureCpuPixels(

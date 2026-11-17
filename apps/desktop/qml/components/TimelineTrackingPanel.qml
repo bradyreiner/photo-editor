@@ -11,7 +11,11 @@ Components.GlassSurface {
     required property var timelineDocument
     required property var currentClip
     required property var motionTrackSources
-    property var sceneTrackSources: timelineDocument.sceneTrackSources || []
+    required property bool trackingPanelActive
+    property var sceneTrackSources: []
+    readonly property var surfaceTrackSourceRows: trackingPanelActive
+                                                   ? (timelineDocument.surfaceTrackSources || [])
+                                                   : []
     property string sceneSourceClipId: ""
     property var scenePointIds: []
     required property bool seedSelectionActive
@@ -83,7 +87,7 @@ Components.GlassSurface {
     readonly property bool hasSurfaceAttachment: currentClip && currentClip.sceneAttachmentEnabled === true && String(currentClip.sceneAttachment && currentClip.sceneAttachment.mode || "") === "surface2d"
     readonly property bool hasSceneAttachment: currentClip && currentClip.sceneAttachmentEnabled === true && !root.hasSurfaceAttachment
     readonly property int selectedSurfaceSourceIndex: {
-        const rows = timelineDocument.surfaceTrackSources || [];
+        const rows = surfaceTrackSourceRows || [];
         for (let index = 0; index < rows.length; ++index) {
             if (String(rows[index].clipId || "") === selectedSurfaceSourceClipId)
                 return index;
@@ -102,7 +106,7 @@ Components.GlassSurface {
         const sourceId = String(sceneAttachment.sourceClipId || "")
         if (!sourceId)
             return false
-        const rows = (timelineDocument.sceneTrackSources || []).concat(timelineDocument.surfaceTrackSources || [])
+        const rows = (sceneTrackSources || []).concat(surfaceTrackSourceRows || [])
         for (let index = 0; index < rows.length; ++index)
             if (String(rows[index].clipId || "") === sourceId)
                 return rows[index].occlusionAvailable === true
@@ -125,7 +129,7 @@ Components.GlassSurface {
         if (selectedSurfaceSourceIndex >= 0)
             return;
         const currentId = String(currentClip && currentClip.clipId || "");
-        const rows = timelineDocument.surfaceTrackSources || [];
+        const rows = surfaceTrackSourceRows || [];
         for (let index = 0; index < rows.length; ++index) {
             if (String(rows[index].clipId || "") === currentId) {
                 selectedSurfaceSourceClipId = currentId;
@@ -156,7 +160,10 @@ Components.GlassSurface {
         return next;
     }
 
-    onCurrentClipChanged: surfaceExclusionBoxes = (currentSurfaceSeed.exclusions || []).slice(0)
+    onCurrentClipChanged: {
+        surfaceExclusionBoxes = (currentSurfaceSeed.exclusions || []).slice(0)
+        setSurfaceSourceFromCurrentClip()
+    }
 
     function setSceneSourceFromCurrentClip() {
         if (selectedSceneSourceIndex >= 0)
@@ -197,9 +204,15 @@ Components.GlassSurface {
     }
 
     onMotionTrackSourcesChanged: setSourceFromCurrentClip()
-    Connections {
-        target: root.timelineDocument
-        function onClipsChanged() { root.setSurfaceSourceFromCurrentClip() }
+    onSurfaceTrackSourceRowsChanged: {
+        if (trackingPanelActive)
+            setSurfaceSourceFromCurrentClip()
+    }
+    onTrackingPanelActiveChanged: {
+        if (trackingPanelActive) {
+            setSurfaceSourceFromCurrentClip()
+            setSceneSourceFromCurrentClip()
+        }
     }
     onSceneTrackSourcesChanged: setSceneSourceFromCurrentClip()
     Component.onCompleted: {
@@ -264,7 +277,7 @@ Components.GlassSurface {
                     wrapMode: Text.Wrap
                 }
 
-                RowLayout {
+                Flow {
                     Layout.fillWidth: true
                     spacing: root.theme.space6
                     Components.ActionButton {
@@ -299,13 +312,13 @@ Components.GlassSurface {
                     Components.ToneComboBox {
                         objectName: "timelineSurfaceTrackSourceCombo"
                         Layout.fillWidth: true
-                        model: root.timelineDocument.surfaceTrackSources || []
+                        model: root.surfaceTrackSourceRows || []
                         textRole: "displayLabel"
                         accessibleLabel: "Surface tracking source"
                         currentIndex: root.selectedSurfaceSourceIndex
                         enabled: count > 0 && !root.timelineDocument.trackingBusy
                         onActivated: function(index) {
-                            const rows = root.timelineDocument.surfaceTrackSources || [];
+                            const rows = root.surfaceTrackSourceRows || [];
                             if (index >= 0 && index < rows.length)
                                 root.selectedSurfaceSourceClipId = String(rows[index].clipId || "");
                         }
@@ -337,7 +350,7 @@ Components.GlassSurface {
                     text: {
                         if (root.selectedSurfaceSourceIndex < 0)
                             return "Track a source surface to make it available for attachment.";
-                        const source = root.timelineDocument.surfaceTrackSources[root.selectedSurfaceSourceIndex];
+                        const source = root.surfaceTrackSourceRows[root.selectedSurfaceSourceIndex];
                         return "Confidence " + Math.round(Number(source.minConfidence || 0) * 100) + "% min · " + Math.round(Number(source.meanErrorPx || 0) * 10) / 10 + " px fit error · " + Number(source.sampleCount || 0) + " samples";
                     }
                     color: root.theme.textMuted
@@ -916,7 +929,8 @@ Components.GlassSurface {
                 Label {
                     text: "SEED REGION · SOURCE %"
                     color: root.theme.textMuted
-                    font.family: root.theme.fontMono
+                    font.family: root.theme.fontNumeric
+                    font.features: root.theme.numericFontFeatures
                     font.pixelSize: root.theme.typeMicro
                 }
 
@@ -955,7 +969,8 @@ Components.GlassSurface {
                                 Layout.preferredWidth: root.theme.scaled(18)
                                 text: String(modelData.label)
                                 color: root.theme.textMuted
-                                font.family: root.theme.fontMono
+                                font.family: root.theme.fontNumeric
+                                font.features: root.theme.numericFontFeatures
                                 font.pixelSize: root.theme.typeCaption
                             }
 

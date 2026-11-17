@@ -42,23 +42,23 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 2
 
-            Text {
+            BodyLabel {
                 Layout.fillWidth: true
                 text: root.title
                 color: theme.textMain
-                font.family: theme.fontMono
-                font.pixelSize: 10
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeBody
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone
             }
 
-            Text {
+            BodyLabel {
                 Layout.fillWidth: true
                 text: root.detail
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone
@@ -73,15 +73,13 @@ Rectangle {
             implicitWidth: Math.max(54, statusLabel.implicitWidth + 14)
             implicitHeight: 24
 
-            Text {
+            Label {
                 id: statusLabel
                 anchors.centerIn: parent
                 text: root.statusText
                 color: root.statusColor
-                font.family: theme.fontMono
-                font.pixelSize: 9
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 7
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
                 elide: Text.ElideNone
             }
         }

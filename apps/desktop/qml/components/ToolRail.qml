@@ -469,6 +469,7 @@ Item {
 
                             delegate: PopupMenuRow {
                                 id: menuItem
+                                onDismissRequested: railMenuPopup.closeTransient(true)
                                 previousItem: index > 0 ? toolDelegate.toolMenuItems[index - 1] : ({})
                                 accent: root.accent
                                 labelMaxLines: root.menuItemMaxLines

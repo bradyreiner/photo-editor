@@ -385,7 +385,8 @@ AppDialog {
                           + (root.aspectRatioText(selectedPreview.sourceSize.width, selectedPreview.sourceSize.height).length > 0 ? " aspect" : "")
                     visible: text.length > 0
                     color: root.theme.textMuted
-                    font.family: root.theme.fontMono
+                    font.family: root.theme.fontNumeric
+                    font.features: root.theme.numericFontFeatures
                     font.pixelSize: 10
                 }
 
@@ -404,7 +405,8 @@ AppDialog {
                     text: root.selectedDurationText
                     visible: text.length > 0
                     color: root.theme.textMuted
-                    font.family: root.theme.fontMono
+                    font.family: root.theme.fontNumeric
+                    font.features: root.theme.numericFontFeatures
                     font.pixelSize: 10
                 }
 

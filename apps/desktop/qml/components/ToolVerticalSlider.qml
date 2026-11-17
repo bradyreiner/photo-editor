@@ -66,13 +66,20 @@ Slider {
     handle: Rectangle {
         x: root.leftPadding + (root.availableWidth - width) / 2
         y: root.topPadding + (1 - root.visualPosition) * (root.availableHeight - height)
-        width: root.pressed || root.visualFocus ? root.handleSize + theme.scaled(2) : root.handleSize
+        width: root.handleSize + theme.scaled(2)
         height: width
         radius: width / 2
-        color: root.enabled ? theme.textStrong : theme.textFaint
-        border.width: root.visualFocus ? theme.focusBorderWidth : theme.hairlineWidth
-        border.color: root.visualFocus ? theme.focusRing : theme.ink950
+        color: "transparent"
 
+        Rectangle {
+            anchors.centerIn: parent
+            width: root.pressed || root.visualFocus ? root.handleSize + theme.scaled(2) : root.handleSize
+            height: width
+            radius: width / 2
+            color: root.enabled ? theme.textStrong : theme.textFaint
+            border.width: root.visualFocus ? theme.focusBorderWidth : theme.hairlineWidth
+            border.color: root.visualFocus ? theme.focusRing : theme.ink950
+        }
         Rectangle {
             anchors.centerIn: parent
             width: parent.width + theme.scaled(8)

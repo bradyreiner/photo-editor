@@ -1,0 +1,48 @@
+{
+  "title": "Make room for your eye.",
+  "role": "The photographic manifesto",
+  "duration_seconds": 36,
+  "fps": 30,
+  "dimensions": [
+    1080,
+    1920
+  ],
+  "sources": "../media/provenance.json",
+  "scene_plan": [
+    {
+      "start": 0,
+      "end": 4,
+      "title": "A way of seeing"
+    },
+    {
+      "start": 4,
+      "end": 9,
+      "title": "The light you noticed"
+    },
+    {
+      "start": 9,
+      "end": 15,
+      "title": "Color and feeling"
+    },
+    {
+      "start": 15,
+      "end": 21,
+      "title": "The product moment"
+    },
+    {
+      "start": 21,
+      "end": 28,
+      "title": "The work takes shape"
+    },
+    {
+      "start": 28,
+      "end": 36,
+      "title": "A personal signature"
+    }
+  ],
+  "audio": "Original sample-free sine/harmonic synthesis with authored scene accents; archived source audio muted.",
+  "source_scope": "Original source photography + genuine dated product recording and actual board export; procedural light is campaign art.",
+  "public_caption": "It starts with something you notice: light, color, a moment you want to keep. I\u2019m building LOOKSi, a photo and video editor, to make room for the way people see. The film brings together original Nepal photographs, actual board exports and a dated native tone-curve recording. The light interlude is original campaign artwork. Follow the build. Bring your eye.",
+  "alt_text": "Make room for your eye. Photo + video. A tool I\u2019m building around the work.",
+  "remaining": "Creative review, media publication permissions and current placement check. Optional continuous current-build demo and founder narration are tracked separately."
+}

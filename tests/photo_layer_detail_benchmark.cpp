@@ -23,8 +23,9 @@ int main(int argc, char** argv) {
   const std::string requested_mode = argv[5];
   const bool content = requested_mode.starts_with("content-");
   const std::string mode = content ? requested_mode.substr(8) : requested_mode;
+  const bool blend_case = mode == "blend-multiply" || mode == "blend-screen" || mode == "blend-soft-light";
   const bool compositing_only = content && (mode == "plain" || mode == "rotated" ||
-      mode == "emboss" || mode == "glass" || mode == "glass-rotated");
+      mode == "emboss" || mode == "glass" || mode == "glass-rotated" || blend_case);
   const int mask_mode = std::stoi(argv[6]);
   const bool masked = mask_mode == 1;
   if (width < 1 || height < 1 || width > 10000 || height > 10000 || repeats < 1 || repeats > 10 ||
@@ -82,6 +83,10 @@ int main(int argc, char** argv) {
       layer.text_material = mode == "emboss" ? "soft_emboss" : "frosted_glass";
       layer.text_material_blur = 3;
     }
+  }
+  if (blend_case) {
+    layer.blend_mode = mode == "blend-multiply" ? "multiply"
+        : mode == "blend-screen" ? "screen" : "soft-light";
   }
   ColorAdjustmentState state;
   if (masked) {

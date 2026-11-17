@@ -1,0 +1,50 @@
+{
+  "contract": "looksy-gemma-editing-qlora-pilot-v1",
+  "baseModel": "/Users/bradyreiner/projects/PersonalProjects/photo-editor/.photo-editor/agent-training/base/gemma4-26b-a4b-4bit",
+  "targetModules": [
+    "language_model.model.layers.29.self_attn.o_proj",
+    "language_model.model.layers.29.self_attn.q_proj",
+    "language_model.model.layers.28.self_attn.o_proj",
+    "language_model.model.layers.28.self_attn.q_proj",
+    "language_model.model.layers.27.self_attn.o_proj",
+    "language_model.model.layers.27.self_attn.q_proj",
+    "language_model.model.layers.26.self_attn.o_proj",
+    "language_model.model.layers.26.self_attn.q_proj",
+    "language_model.model.layers.25.self_attn.o_proj",
+    "language_model.model.layers.25.self_attn.q_proj",
+    "language_model.model.layers.24.self_attn.o_proj",
+    "language_model.model.layers.24.self_attn.q_proj"
+  ],
+  "rank": 8,
+  "alpha": 16,
+  "iterations": 100,
+  "learningRate": 5e-05,
+  "seed": 42,
+  "maxSequenceLength": 1536,
+  "trainableParameters": 729088,
+  "causalTrainingGuard": "gemma4 batch-one right-padded text; derive model attention masks, retain padding/completion loss masks",
+  "validationBatchesPerCheck": 4,
+  "visionWeightsFrozen": true,
+  "expertsFrozen": true,
+  "baseWeightsFrozen": true,
+  "corpus": {
+    "contract": "looksy-editing-workflow-corpus-v1",
+    "source": "schema-checked synthetic next-action cases",
+    "scope": "workflow mechanics; no image training or photographic-quality labels",
+    "schemaSha256": "8e640e4164a950c5b05e4fdc90eb93639c11f16fc7b9dc3348bd14d12061e2be",
+    "splits": {
+      "train": {
+        "rows": 144,
+        "sha256": "6261bdb76e620662599381759eec0e9c16b224bc1dcc01cfeb41efc32e5f758b"
+      },
+      "valid": {
+        "rows": 24,
+        "sha256": "586aa527b0489daa9d0397e72827c3526afdaa1993423dfc444ce10ec9abcb51"
+      },
+      "test": {
+        "rows": 24,
+        "sha256": "1f5aabbf0e9465d29539d62800f1d991ffd2a33b2f2fcec265f34fdf951b4825"
+      }
+    }
+  }
+}

@@ -2,10 +2,12 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import PhotoEditor
 
 Rectangle {
     id: root
 
+    property bool embeddedDockHeader: false
     required property var theme
     property var scopeData: ({})
     property var audioPhaseData: ({})
@@ -14,7 +16,8 @@ Rectangle {
     property bool compact: false
     property string activeScope: "waveform"
     property string placement: compact ? "docked" : "window"
-    readonly property string timelineScopesPanelContract: "timeline-scopes-panel:v1|video:waveform-vectorscope-rgb-parade-histogram|audio:decoded-post-processing-phase-points-correlation|source:captured-actual-program|analysis:bounded-480x270-worker-latest-wins|updates:four-fps-live-freeze-manual|layout:one-calm-docked-all-five-popout|chrome:shared-dark-borderless"
+    readonly property bool narrowDock: compact && width < theme.scaled(520)
+    readonly property string timelineScopesPanelContract: "timeline-scopes-panel:v1|video:waveform-vectorscope-rgb-parade-histogram|audio:decoded-post-processing-phase-points-correlation|source:captured-actual-program|analysis:bounded-480x270-worker-latest-wins|updates:bounded-fifteen-fps-live-freeze-manual|layout:one-calm-docked-all-five-popout|chrome:shared-dark-borderless|responsive:compact-icon-actions-and-scope-menu-under-520-wide-tabs"
     readonly property var scopeKinds: [
         {"key": "waveform", "label": "Waveform", "icon": "scope"},
         {"key": "vectorscope", "label": "Vectorscope", "icon": "scope"},
@@ -45,6 +48,20 @@ Rectangle {
         return "Waveform"
     }
 
+    function scopeMenuItems() {
+        return root.scopeKinds.map(function(kind) {
+            const key = String(kind.key || "waveform")
+            const label = String(kind.label || "Waveform")
+            return {
+                "key": key,
+                "label": label,
+                "icon": String(kind.icon || "scope"),
+                "checked": root.activeScope === key,
+                "tooltip": "Show " + label + " in the Program scopes."
+            }
+        })
+    }
+
     component ScopeTile: Rectangle {
         id: tile
         required property string kind
@@ -67,7 +84,8 @@ Rectangle {
             anchors.topMargin: root.theme.space6
             text: tile.readableLabel.toUpperCase()
             color: root.theme.textMuted
-            font.family: root.theme.fontMono
+            font.family: root.theme.fontNumeric
+            font.features: root.theme.numericFontFeatures
             font.pixelSize: root.theme.typeMicro
             font.weight: Font.DemiBold
             z: 2
@@ -87,11 +105,28 @@ Rectangle {
             }
             color: Number(root.audioPhaseData.correlation || 0) < -0.25
                    ? root.theme.error : root.theme.textMuted
-            font.family: root.theme.fontMono
+            font.family: root.theme.fontNumeric
+            font.features: root.theme.numericFontFeatures
             font.pixelSize: root.theme.typeMicro
             z: 2
         }
 
+        ScopePlotItem {
+            objectName: tile.objectName + "NativePlot"
+            anchors.fill: parent
+            anchors.leftMargin: root.theme.space8 + (tile.kind === "vectorscope" ? 0 : 21)
+            anchors.rightMargin: root.theme.space8
+            anchors.topMargin: root.theme.scaled(24)
+            anchors.bottomMargin: root.theme.space8
+            visible: tile.kind === "waveform" || tile.kind === "parade" || tile.kind === "vectorscope"
+            frame: ({red: root.scopeData.densityRed || [], green: root.scopeData.densityGreen || [],
+                blue: root.scopeData.densityBlue || [], luma: root.scopeData.densityLuma || [],
+                columns: root.scopeData.waveformColumns || 96, levels: root.scopeData.waveformLevels || 64,
+                vectors: root.scopeData.vectorscopePoints || []})
+            options: ({mode: tile.kind === "parade" ? "Parade" : tile.kind === "vectorscope" ? "Vectorscope" : "Waveform",
+                rgb: true, luma: true, trace: false, gain: 1,
+                palette: [root.theme.signalRed, root.theme.vectorGreen, root.theme.signalCyan, root.theme.polar]})
+        }
         Canvas {
             id: scopeCanvas
             objectName: tile.objectName + "Canvas"
@@ -123,38 +158,13 @@ Rectangle {
                 }
                 if (labels) {
                     context.fillStyle = root.theme.alpha(root.theme.textFaint, 0.72)
-                    context.font = "8px \"" + root.theme.fontMono + "\""
+                    context.font = "8px \"" + root.theme.fontNumeric + "\""
                     context.textAlign = "left"
                     context.textBaseline = "middle"
                     const levels = [["100", 0], ["75", 0.25], ["50", 0.5], ["25", 0.75], ["0", 1]]
                     for (let labelIndex = 0; labelIndex < levels.length; ++labelIndex)
                         context.fillText(levels[labelIndex][0], 1,
                                          top + levels[labelIndex][1] * plotHeight)
-                }
-                context.restore()
-            }
-
-            function drawDensity(context, data, color, left, top, plotWidth, plotHeight, alphaScale) {
-                const columns = Math.max(1, Number(root.scopeData.waveformColumns || 96))
-                const levels = Math.max(1, Number(root.scopeData.waveformLevels || 64))
-                if (!data || data.length < columns * levels)
-                    return
-                const cellWidth = plotWidth / columns
-                const cellHeight = plotHeight / levels
-                context.save()
-                context.globalCompositeOperation = "lighter"
-                for (let column = 0; column < columns; ++column) {
-                    for (let level = 0; level < levels; ++level) {
-                        const density = bounded(data[column * levels + level])
-                        if (density < 0.018)
-                            continue
-                        context.fillStyle = root.theme.alpha(color,
-                            Math.min(0.82, Math.pow(density, 0.72) * alphaScale))
-                        context.fillRect(left + column * cellWidth,
-                                         top + plotHeight - (level + 1) * cellHeight,
-                                         Math.max(1, cellWidth + 0.2),
-                                         Math.max(1, cellHeight + 0.2))
-                    }
                 }
                 context.restore()
             }
@@ -204,12 +214,6 @@ Rectangle {
             function drawWaveform(context) {
                 const labelWidth = 21
                 drawGrid(context, labelWidth, 0, width - labelWidth, height, true)
-                drawDensity(context, root.scopeData.densityLuma || [], root.theme.polar,
-                            labelWidth, 0, width - labelWidth, height, 0.55)
-                drawDensity(context, root.scopeData.densityBlue || [], root.theme.signalCyan,
-                            labelWidth, 0, width - labelWidth, height, 0.16)
-                drawDensity(context, root.scopeData.densityRed || [], root.theme.signalRed,
-                            labelWidth, 0, width - labelWidth, height, 0.14)
                 drawTrace(context, root.scopeData.waveformLuma || [], root.theme.polar,
                           labelWidth, 0, width - labelWidth, height, 0.62)
             }
@@ -226,8 +230,6 @@ Rectangle {
                 ]
                 for (let channel = 0; channel < channels.length; ++channel) {
                     const left = labelWidth + channel * (segment + gap)
-                    drawDensity(context, channels[channel][0], channels[channel][2],
-                                left, 0, segment, height, 0.72)
                     drawTrace(context, channels[channel][1], channels[channel][2],
                               left, 0, segment, height, 0.72)
                 }
@@ -251,26 +253,13 @@ Rectangle {
                     ["R", -0.36, -0.28], ["Mg", 0.30, -0.32], ["B", 0.42, 0.16],
                     ["Cy", 0.30, 0.34], ["G", -0.36, 0.30], ["Yl", -0.43, -0.02]
                 ]
-                context.font = "8px \"" + root.theme.fontMono + "\""
+                context.font = "8px \"" + root.theme.fontNumeric + "\""
                 context.textAlign = "center"
                 context.textBaseline = "middle"
                 context.fillStyle = root.theme.alpha(root.theme.textFaint, 0.68)
                 for (let target = 0; target < targets.length; ++target)
                     context.fillText(targets[target][0], centerX + targets[target][1] * radius * 1.8,
                                      centerY + targets[target][2] * radius * 1.8)
-                context.restore()
-                const points = root.scopeData.vectorscopePoints || []
-                context.save()
-                context.globalCompositeOperation = "lighter"
-                for (let index = 0; index < points.length; ++index) {
-                    const point = points[index] || ({})
-                    context.fillStyle = Qt.rgba(Number(point.red || 0.7),
-                                                Number(point.green || 0.7),
-                                                Number(point.blue || 0.7), 0.12)
-                    context.fillRect(centerX + (bounded(point.x) - 0.5) * radius * 2 - 0.7,
-                                     centerY + (bounded(point.y) - 0.5) * radius * 2 - 0.7,
-                                     1.5, 1.5)
-                }
                 context.restore()
             }
 
@@ -346,19 +335,25 @@ Rectangle {
             spacing: root.theme.space6
 
             Label {
+                Layout.fillWidth: root.narrowDock
+                Layout.minimumWidth: root.narrowDock ? theme.scaled(48) : 0
                 text: root.compact ? root.scopeLabel(root.activeScope) : "Program Scopes"
                 color: root.theme.textStrong
                 font.family: root.theme.fontUi
                 font.pixelSize: root.theme.typeSection
                 font.weight: Font.DemiBold
+                elide: root.narrowDock ? Text.ElideRight : Text.ElideNone
             }
 
             StatusChip {
                 objectName: "timelineScopesStatusChip"
-                text: root.frozen ? "FROZEN" : root.busy ? "ANALYZING" : "LIVE · 4 FPS"
+                text: root.narrowDock
+                      ? (root.frozen ? "Frozen" : root.busy ? "Busy" : "Live")
+                      : (root.frozen ? "FROZEN" : root.busy ? "ANALYZING" : "LIVE · 4 FPS")
                 tone: root.frozen ? "warning" : root.busy ? "info" : "success"
                 busy: root.busy && !root.frozen
                 compact: true
+                minimumReadableWidth: root.narrowDock ? 64 : 72
                 tooltipText: root.frozen
                              ? "Scopes are holding the last completed frame."
                              : "Video scopes analyze a bounded Program capture on a worker thread."
@@ -372,15 +367,17 @@ Rectangle {
                         + " sample · " + Number(root.scopeData.elapsedMs || 0) + " ms worker"
                       : "Waiting for Program frame"
                 color: root.theme.textFaint
-                font.family: root.theme.fontMono
+                font.family: root.theme.fontNumeric
+                font.features: root.theme.numericFontFeatures
                 font.pixelSize: root.theme.typeMicro
             }
 
-            Item { Layout.fillWidth: root.compact }
+            Item { Layout.fillWidth: root.compact && !root.narrowDock }
 
             ActionButton {
                 objectName: "timelineScopesFreezeButton"
                 text: root.frozen ? "Resume" : "Freeze"
+                showText: !root.narrowDock
                 iconName: root.frozen ? "play" : "pause"
                 compact: true
                 active: root.frozen
@@ -391,6 +388,7 @@ Rectangle {
             ActionButton {
                 objectName: "timelineScopesRefreshButton"
                 text: "Refresh"
+                showText: !root.narrowDock
                 iconName: "reset"
                 compact: true
                 tooltipText: "Analyze the current Program frame now."
@@ -400,6 +398,7 @@ Rectangle {
             ActionButton {
                 objectName: "timelineScopesDetachButton"
                 text: root.compact ? "Pop Out" : "Dock"
+                showText: !root.narrowDock
                 iconName: root.compact ? "fullscreen" : "panel-bottom"
                 compact: true
                 tooltipText: root.compact ? "Open all five scopes in a tool window." : "Return scopes below Program."
@@ -408,7 +407,9 @@ Rectangle {
 
             ActionButton {
                 objectName: "timelineScopesCloseButton"
+                visible: !root.embeddedDockHeader
                 text: "Close"
+                showText: !root.narrowDock
                 iconName: "close"
                 compact: true
                 tooltipText: "Close Program scopes."
@@ -418,7 +419,7 @@ Rectangle {
 
         RowLayout {
             objectName: "timelineScopesDockSelector"
-            visible: root.compact
+            visible: root.compact && !root.narrowDock
             Layout.fillWidth: true
             spacing: root.theme.space4
 
@@ -434,6 +435,22 @@ Rectangle {
                     onClicked: root.activeScopeChangeRequested(String(modelData.key))
                 }
             }
+        }
+
+        MenuButton {
+            objectName: "timelineScopesCompactSelector"
+            visible: root.narrowDock
+            Layout.fillWidth: true
+            text: root.scopeLabel(root.activeScope)
+            iconName: "scope"
+            compact: true
+            primaryOpensMenu: true
+            accessibleName: "Select Program scope"
+            tooltipText: "Choose a Program scope."
+            menuTooltipText: "Choose a Program scope."
+            menuWidth: theme.scaled(240)
+            menuItems: root.scopeMenuItems()
+            onMenuItemTriggered: function(key) { root.activeScopeChangeRequested(key) }
         }
 
         ScopeTile {

@@ -10,41 +10,61 @@ Rectangle {
     property bool actionEnabled: false
     property string actionLabel: "Add"
     property string previewSource: ""
+    property var exampleController: null
     property bool favorite: false
     property bool compatible: true
     property bool recent: false
+
     readonly property string effectName: String(modelData.name || "")
     readonly property string effectCategory: String(modelData.category || "")
     readonly property string effectDescription: String(modelData.description || "")
     readonly property string effectIcon: String(modelData.iconName || "effects")
     readonly property bool rendererAvailable: modelData.available !== false
     readonly property bool effectAvailable: rendererAvailable && compatible
-    readonly property string timelineEffectLibraryRowContract: "timeline-effect-library-row:v2|drag:true|add:true|favorite:true|recent:true|compatible:true|thumbnail:bounded-live-current-source|thumbnail-size:144x88-max|animation:none|keyboard:true|hover:true|readable-text:true|no-elide:true"
-    readonly property string readableTextContract: "readable-text:v1|ellipsis:none|title-wrap:true|description-wrap:true|tooltip-full:true|accessibility-full:true"
+    readonly property string sharedType: String(modelData.sharedPhotoType || "")
+    readonly property string exampleSource: sharedType.length > 0 && exampleController
+            && typeof exampleController.effectExampleThumbnailSource === "function"
+            ? exampleController.effectExampleThumbnailSource(sharedType, false) : ""
+    readonly property string timelineEffectLibraryRowContract: "timeline-effect-library-row:v5|row-height:30|thumbnail:32x22-cached-engine-examples|thumbnail-source:72x48-max|legacy-only-live-shader:true|drag:true|add:true|favorite:true|recent:true|compatible:true|animation:none|keyboard:true|hover:true|readable-text:true|tooltip-disclosed:true"
+    readonly property string readableTextContract: "readable-text:v1|title-single-line:true|tooltip-full:true|accessibility-full:true"
 
     signal addRequested(string effectName)
     signal favoriteToggleRequested(string effectName)
 
     Theme { id: theme }
 
+    readonly property real compactRowHeight: theme.scaled(30)
+    objectName: "timelineEffectLibraryRow-" + effectName
     width: ListView.view ? ListView.view.width : 280
-    height: 88
-    radius: theme.radius8
+    height: compactRowHeight
+    radius: theme.scaled(3)
     color: effectHover.hovered || activeFocus
-           ? theme.alpha(theme.ink850, 0.96)
-           : theme.alpha(theme.ink900, 0.88)
-    border.width: activeFocus ? theme.focusBorderWidth : 0
-    border.color: activeFocus ? theme.alpha(theme.focusRing, 0.9) : "transparent"
+           ? theme.alpha(theme.ink800, 0.94)
+           : theme.alpha(theme.ink900, 0.48)
+    border.width: activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
+    border.color: activeFocus ? theme.alpha(theme.focusRing, 0.9)
+                               : effectHover.hovered ? theme.alpha(theme.lineSoft, 0.8)
+                                                     : "transparent"
     clip: true
     activeFocusOnTab: true
     Accessible.name: effectName
     Accessible.description: effectCategory + ". " + effectDescription
                             + (favorite ? " Favorite." : "")
+                            + (recent ? " Recently used." : "")
                             + (effectAvailable ? " Compatible." : " Unavailable for this clip.")
     Accessible.role: Accessible.ListItem
-    Keys.onReturnPressed: if (actionEnabled) root.addRequested(root.effectName)
-    Keys.onEnterPressed: if (actionEnabled) root.addRequested(root.effectName)
-    Keys.onSpacePressed: if (actionEnabled) root.addRequested(root.effectName)
+    Keys.onReturnPressed: function(event) {
+        if (actionEnabled && effectAvailable) root.addRequested(effectName)
+        event.accepted = true
+    }
+    Keys.onEnterPressed: function(event) {
+        if (actionEnabled && effectAvailable) root.addRequested(effectName)
+        event.accepted = true
+    }
+    Keys.onSpacePressed: function(event) {
+        if (actionEnabled && effectAvailable) root.addRequested(effectName)
+        event.accepted = true
+    }
 
     property string libraryType: "effect"
     property string libraryName: effectName
@@ -57,28 +77,93 @@ Rectangle {
     Drag.keys: ["effect"]
 
     AppToolTip {
-        id: sharedTooltip1
+        id: effectTip
         targetItem: root
-        visible: root.visible && (effectHover.hovered && titleLabel.contentHeight > titleLabel.height + 1)
+        visible: root.visible && effectHover.hovered
         delay: 350
         timeout: 3600
-        text: root.effectName + (root.effectCategory.length > 0 ? " - " + root.effectCategory : "")
+        text: root.effectName
+                + (root.effectCategory.length > 0 ? " · " + root.effectCategory : "")
+                + (root.effectDescription.length > 0 ? "\n" + root.effectDescription : "")
+        implicitWidth: root.exampleSource.length > 0 ? theme.scaled(300)
+                                                    : preferredTextWidth + leftPadding + rightPadding
+        implicitHeight: exampleContent.implicitHeight + topPadding + bottomPadding
+        contentItem: Column {
+            id: exampleContent
+            width: effectTip.availableWidth
+            spacing: theme.space6
+            Row {
+                visible: root.exampleSource.length > 0
+                width: parent.width
+                spacing: theme.space4
+                Repeater {
+                    model: ["Original", root.effectName]
+                    Column {
+                        required property int index
+                        required property string modelData
+                        width: (exampleContent.width - theme.space4) / 2
+                        spacing: theme.space2
+                        Image {
+                            width: parent.width
+                            height: width * 0.675
+                            source: effectTip.visible && root.exampleSource.length > 0
+                                    ? (parent.index === 0
+                                       ? root.exampleController.exampleThumbnailOriginalSource()
+                                       : root.exampleSource) : ""
+                            asynchronous: true
+                            cache: true
+                            fillMode: Image.PreserveAspectCrop
+                            sourceSize.width: 320
+                            sourceSize.height: 216
+                        }
+                        Text {
+                            text: parent.modelData
+                            width: parent.width
+                            elide: Text.ElideRight
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeMicro
+                        }
+                    }
+                }
+            }
+            Text {
+                text: effectTip.text
+                width: parent.width
+                wrapMode: Text.Wrap
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+            }
+            Text {
+                visible: root.exampleSource.length > 0
+                text: qsTr("Example image · adjust the result in Controls")
+                width: parent.width
+                wrapMode: Text.Wrap
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
+            }
+        }
     }
+
     HoverHandler { id: effectHover }
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: theme.space8
-        spacing: theme.space8
+        anchors.leftMargin: theme.space3
+        anchors.rightMargin: theme.space2
+        spacing: theme.space3
 
         Rectangle {
-            id: effectThumbnail
             objectName: "timelineEffectLiveThumbnail"
-            Layout.preferredWidth: theme.scaled(52)
-            Layout.preferredHeight: theme.scaled(44)
-            radius: theme.radius4
+            Layout.preferredWidth: theme.scaled(32)
+            Layout.preferredHeight: theme.scaled(22)
+            Layout.alignment: Qt.AlignVCenter
+            radius: theme.scaled(2)
             color: theme.alpha(theme.ink950, 0.92)
-            border.width: 0
+            border.color: theme.alpha(theme.lineSoft, 0.45)
+            border.width: theme.hairlineWidth
             clip: true
 
             Rectangle {
@@ -93,19 +178,22 @@ Rectangle {
             Image {
                 id: thumbnailImage
                 anchors.fill: parent
-                visible: false
-                source: root.previewSource
+                visible: root.sharedType.length > 0
+                source: root.sharedType.length > 0 ? root.exampleSource : root.previewSource
                 asynchronous: true
                 cache: true
                 fillMode: Image.PreserveAspectCrop
-                sourceSize.width: 144
-                sourceSize.height: 88
+                sourceSize.width: 72
+                sourceSize.height: 48
             }
 
-            MultiEffect {
+            Loader {
+                objectName: "timelineEffectLegacyThumbnailShader"
                 anchors.fill: parent
+                active: root.sharedType.length === 0 && root.previewSource.length > 0
+                        && thumbnailImage.status === Image.Ready
+                sourceComponent: MultiEffect {
                 source: thumbnailImage
-                visible: root.previewSource.length > 0 && thumbnailImage.status === Image.Ready
                 autoPaddingEnabled: false
                 brightness: root.effectName === "Exposure" ? 0.24
                             : root.effectName === "Fade" ? 0.08
@@ -120,98 +208,79 @@ Rectangle {
                 blurEnabled: root.effectName === "Blur"
                 blur: root.effectName === "Blur" ? 0.58 : 0
                 blurMax: 16
+                }
             }
 
             AppIcon {
                 anchors.centerIn: parent
-                visible: root.previewSource.length === 0 || thumbnailImage.status !== Image.Ready
+                visible: thumbnailImage.source.toString().length === 0 || thumbnailImage.status !== Image.Ready
                 name: root.effectIcon
                 color: root.effectAvailable ? theme.accentCool300 : theme.textFaint
-                implicitWidth: theme.space14
-                implicitHeight: theme.space14
+                implicitWidth: theme.space12
+                implicitHeight: theme.space12
             }
         }
 
-        ColumnLayout {
+        Label {
+            id: titleLabel
             Layout.fillWidth: true
-            spacing: theme.space2
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: theme.space6
-
-                Label {
-                    id: titleLabel
-                    Layout.fillWidth: true
-                    text: root.effectName
-                    color: theme.textStrong
-                    font.family: theme.fontUi
-                    font.pixelSize: theme.typeBody
-                    font.weight: Font.Medium
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    maximumLineCount: 2
-                    elide: Text.ElideNone
-                }
-
-                Label {
-                    text: root.effectCategory
-                    visible: text.length > 0 && root.width >= 400
-                    color: theme.textFaint
-                    font.family: theme.fontMono
-                    font.pixelSize: theme.typeCaption
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 7
-                    elide: Text.ElideNone
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: root.effectDescription
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                maximumLineCount: 2
-                elide: Text.ElideNone
-            }
+            text: root.effectName
+            color: root.effectAvailable ? theme.textStrong : theme.textMuted
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeCaption
+            font.weight: Font.Medium
+            elide: Text.ElideRight
+            Accessible.name: root.effectName
         }
 
-        ColumnLayout {
-            Layout.preferredWidth: theme.scaled(64)
-            Layout.maximumWidth: theme.scaled(64)
-            spacing: 4
-            ActionButton {
-                objectName: "timelineEffectFavoriteButton"
-                Layout.alignment: Qt.AlignRight
-                Layout.preferredWidth: theme.controlHeightDense
-                showText: false
-                iconName: "star"
-                compact: true
-                active: root.favorite
-                enabled: root.rendererAvailable
-                tooltipText: root.favorite ? "Remove " + root.effectName + " from favorites."
-                                           : "Add " + root.effectName + " to favorites."
-                onClicked: root.favoriteToggleRequested(root.effectName)
-            }
-    
-            ActionButton {
-                text: root.actionLabel
-                compact: true
-                enabled: root.actionEnabled && root.effectAvailable
-                tooltipText: root.actionEnabled
-                             ? (root.effectAvailable
-                                ? "Add this effect to the selected clip."
-                                : root.rendererAvailable
-                                  ? "This effect is not compatible with the selected media type."
-                                  : "This effect is unavailable in the current renderer.")
-                             : root.actionLabel === "Added"
-                               ? "This effect is already in the selected clip's stack."
-                               : "Select a clip before adding effects."
-                onClicked: root.addRequested(root.effectName)
-            }
+        AppIcon {
+            visible: root.recent
+            name: "clock"
+            color: theme.textFaint
+            implicitWidth: theme.space12
+            implicitHeight: theme.space12
+            Accessible.name: qsTr("Recently used")
         }
 
+        ActionButton {
+            objectName: "timelineEffectFavoriteButton"
+            Layout.preferredWidth: theme.controlHeightDense
+            Layout.preferredHeight: theme.controlHeightDense
+            showText: false
+            iconName: "star"
+            compact: true
+            Accessible.name: root.favorite
+                             ? qsTr("Remove %1 from favorites").arg(root.effectName)
+                             : qsTr("Add %1 to favorites").arg(root.effectName)
+            active: root.favorite
+            enabled: root.rendererAvailable
+            tooltipText: root.favorite ? qsTr("Remove %1 from favorites.").arg(root.effectName)
+                                       : qsTr("Add %1 to favorites.").arg(root.effectName)
+            onClicked: root.favoriteToggleRequested(root.effectName)
+        }
+
+        ActionButton {
+            objectName: "timelineEffectAddButton"
+            Layout.preferredWidth: theme.controlHeightDense
+            Layout.preferredHeight: theme.controlHeightDense
+            showText: false
+            iconName: root.actionLabel === "Added" ? "check" : "plus"
+            compact: true
+            Accessible.name: root.actionLabel === "Added"
+                             ? qsTr("%1 is already applied").arg(root.effectName)
+                             : qsTr("Add %1 effect").arg(root.effectName)
+            enabled: root.actionEnabled && root.effectAvailable
+            tooltipText: root.actionEnabled
+                         ? (root.effectAvailable
+                            ? qsTr("Add %1 to the selected clip.").arg(root.effectName)
+                            : root.rendererAvailable
+                              ? qsTr("%1 is not compatible with the selected media type.").arg(root.effectName)
+                              : qsTr("%1 is unavailable in the current renderer.").arg(root.effectName))
+                         : root.actionLabel === "Added"
+                           ? qsTr("%1 is already in the effect stack.").arg(root.effectName)
+                           : qsTr("Select a clip before adding effects.")
+            onClicked: root.addRequested(root.effectName)
+        }
     }
 
     DragHandler {

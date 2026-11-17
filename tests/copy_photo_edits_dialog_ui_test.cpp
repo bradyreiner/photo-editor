@@ -1,5 +1,8 @@
 #include "qml_popup_wait.h"
+#include "qml_style_policy.h"
 #include <QAccessible>
+#include <QQmlContext>
+#include <QQmlPropertyMap>
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -43,6 +46,9 @@ int main(int argc, char** argv) {
   QAccessible::setActive(true);
 
   QQmlEngine engine;
+  QQmlPropertyMap settings;
+  settings.insert(QStringLiteral("interfaceScale"), qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_LARGE_TYPE") ? 2.0 : 1.0);
+  engine.rootContext()->setContextProperty(QStringLiteral("appShell"), &settings);
   QQmlComponent component(
       &engine,
       QUrl::fromLocalFile(QStringLiteral(
@@ -73,6 +79,14 @@ int main(int argc, char** argv) {
 
   auto* dialog_content = qvariant_cast<QQuickItem*>(dialog->property("contentItem"));
   auto* dialog_background = qvariant_cast<QQuickItem*>(dialog->property("background"));
+  const auto style_issues = qml_popup_style_violations(dialog.get());
+  if (!style_issues.isEmpty()) {
+    std::cerr << style_issues.join('\n').toStdString() << '\n';
+    return fail("Copy Edits must obey the shared readability policy");
+  }
+  auto* confirm = find_visual_child(dialog_content, QStringLiteral("copyPhotoEditsConfirm"));
+  if (!confirm || !dialog_background->boundingRect().contains(confirm->mapRectToItem(dialog_background, confirm->boundingRect())))
+    return fail("Copy Edits confirmation must remain inside the popup at every scale");
   auto* dialog_accessible = QAccessible::queryAccessibleInterface(dialog_background);
   auto* first_group = find_visual_child(dialog_content, QStringLiteral("copyPhotoEditsGroup_tone"));
   auto* first_group_accessible = QAccessible::queryAccessibleInterface(first_group);
@@ -110,6 +124,16 @@ int main(int argc, char** argv) {
       return fail("Copy Edits focus outline should contain its rendered labels");
     }
   }
+
+  auto* last_group = find_visual_child(dialog_content, QStringLiteral("copyPhotoEditsGroup_masks"));
+  auto* group_scroll = find_visual_child(dialog_content, QStringLiteral("copyPhotoEditsGroupScroll"));
+  if (!last_group || !group_scroll) return fail("Copy Edits must retain every group in its bounded list");
+  last_group->forceActiveFocus(Qt::TabFocusReason);
+  settle(dialog.get());
+  if (!group_scroll->boundingRect().adjusted(-1, -1, 1, 1).contains(last_group->mapRectToItem(group_scroll, last_group->boundingRect())))
+    return fail("Keyboard focus must scroll the final Copy Edits group fully into view");
+  first_group->forceActiveFocus(Qt::TabFocusReason);
+  settle(dialog.get());
 
   const auto output = qEnvironmentVariable("PHOTO_EDITOR_TEST_COPY_EDITS_IMAGE");
   if (!output.isEmpty() && !window.grabWindow().save(output))

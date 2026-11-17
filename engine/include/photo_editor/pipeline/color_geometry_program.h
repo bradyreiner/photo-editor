@@ -37,6 +37,22 @@ struct CompiledGeometryStageProgram final {
     int width,
     int height);
 
+// Output pixel centers to pre-geometry sample centers, before edge extension.
+// Pointer hit testing and overlay placement must use the renderer's pixel-aspect math.
+struct GeometrySampleCoordinates final {
+  float x = 0.0F;
+  float y = 0.0F;
+  float dx = 0.0F;
+  float dy = 0.0F;
+  float radius_squared = 0.0F;
+  float radius = 0.0F;
+};
+
+[[nodiscard]] GeometrySampleCoordinates geometry_sample_coordinates(
+    const CompiledGeometryStageProgram& program,
+    float x,
+    float y);
+
 [[nodiscard]] bool apply_compiled_geometry_stage_program(
     std::vector<ColorPixel>* pixels,
     const CompiledGeometryStageProgram& program);

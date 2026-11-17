@@ -19,10 +19,13 @@ Item {
     property real layerY: 0
     property real layerWidth: 0
     property real layerHeight: 0
+    property string layerId: ""
+    property string gestureLayerId: ""
     property real layerScale: 1
     property real layerRotation: 0
     property bool textBoxResize: false
     property bool moveSelection: false
+    property var pickForMove: null
     property bool snappingEnabled: true
     property var snapTargetsX: [{ position: 0, label: "Left edge" }, { position: canvasWidth / 2, label: "Center" }, { position: canvasWidth, label: "Right edge" }]
     property var snapTargetsY: [{ position: 0, label: "Top edge" }, { position: canvasHeight / 2, label: "Center" }, { position: canvasHeight, label: "Bottom edge" }]
@@ -39,23 +42,60 @@ Item {
     signal layerPickRequested(real viewportX, real viewportY, int modifiers)
     signal interactionStarted()
     signal interactionFinished()
+    signal textGestureMoveEdited(int deltaX, int deltaY, bool finalCommit)
+    signal textGestureBoxEdited(int x, int y, int width, int height, bool finalCommit)
 
     visible: active && canvasWidth > 0 && canvasHeight > 0 && layerWidth > 0 && layerHeight > 0
     enabled: visible && !locked
+    onVisibleChanged: {
+        if (!visible && interactionActive) {
+            if (locked) discardTextGestureAndEnd()
+            else endInteraction()
+        }
+    }
+    onEnabledChanged: {
+        if (!enabled && interactionActive) {
+            if (locked) discardTextGestureAndEnd()
+            else endInteraction()
+        }
+    }
+    onLockedChanged: if (locked && interactionActive) discardTextGestureAndEnd()
 
     readonly property real viewportScaleX: canvasWidth > 0 && imageWidth > 0 ? imageWidth / canvasWidth : 1
     readonly property real viewportScaleY: canvasHeight > 0 && imageHeight > 0 ? imageHeight / canvasHeight : 1
     readonly property real viewportScale: Math.min(viewportScaleX, viewportScaleY)
     readonly property real boundedScale: Math.max(0.05, Math.min(32, layerScale))
-    readonly property real frameX: imageX + layerX * viewportScaleX
-    readonly property real frameY: imageY + layerY * viewportScaleY
-    readonly property real frameWidth: layerWidth * boundedScale * viewportScaleX
-    readonly property real frameHeight: layerHeight * boundedScale * viewportScaleY
+    readonly property real frameX: imageX + displayLayerX * viewportScaleX
+    readonly property real frameY: imageY + displayLayerY * viewportScaleY
+    readonly property real frameWidth: displayLayerWidth * boundedScale * viewportScaleX
+    readonly property real frameHeight: displayLayerHeight * boundedScale * viewportScaleY
     readonly property real centerX: frameX + frameWidth / 2
     readonly property real centerY: frameY + frameHeight / 2
     readonly property color guideColor: locked ? theme.textMuted : theme.primaryAccent
     property bool interactionActive: false
     property bool handleHovered: false
+    property bool textGesturePreviewActive: false
+    property bool textGestureAwaitingEcho: false
+    property real textGesturePreviewX: 0
+    property real textGesturePreviewY: 0
+    property real textGesturePreviewWidth: 0
+    property real textGesturePreviewHeight: 0
+    property real textGestureLastCommittedX: 0
+    property real textGestureLastCommittedY: 0
+    property real textGestureLastCommittedWidth: 0
+    property real textGestureLastCommittedHeight: 0
+    property string textGestureCommitMode: ""
+    property bool textGestureCommitPending: false
+    property real textGestureRequestedDeltaX: 0
+    property real textGestureRequestedDeltaY: 0
+    property real textGestureRequestedX: 0
+    property real textGestureRequestedY: 0
+    property real textGestureRequestedWidth: 0
+    property real textGestureRequestedHeight: 0
+    readonly property real displayLayerX: textGesturePreviewActive ? textGesturePreviewX : layerX
+    readonly property real displayLayerY: textGesturePreviewActive ? textGesturePreviewY : layerY
+    readonly property real displayLayerWidth: textGesturePreviewActive ? textGesturePreviewWidth : layerWidth
+    readonly property real displayLayerHeight: textGesturePreviewActive ? textGesturePreviewHeight : layerHeight
 
     function clamp(value, minimum, maximum) {
         return Math.max(minimum, Math.min(maximum, value))
@@ -87,6 +127,23 @@ Item {
     }
 
     function beginInteraction() {
+        textGestureCommitTimer.stop()
+        textGestureEchoTimer.stop()
+        textGesturePreviewActive = textBoxResize
+        textGestureAwaitingEcho = false
+        textGestureCommitMode = ""
+        textGestureCommitPending = false
+        gestureLayerId = layerId
+        if (textBoxResize) {
+            textGesturePreviewX = layerX
+            textGesturePreviewY = layerY
+            textGesturePreviewWidth = layerWidth
+            textGesturePreviewHeight = layerHeight
+            textGestureLastCommittedX = layerX
+            textGestureLastCommittedY = layerY
+            textGestureLastCommittedWidth = layerWidth
+            textGestureLastCommittedHeight = layerHeight
+        }
         interactionActive = true
         interactionStarted()
     }
@@ -94,11 +151,175 @@ Item {
     function endInteraction() {
         if (!interactionActive)
             return
+        if (textGesturePreviewActive) {
+            flushTextGestureCommit(true)
+            if (!textGestureAwaitingEcho && textGesturePreviewActive)
+                clearTextGesturePreview()
+        }
         interactionActive = false
         snapGuideX = Number.NaN
         snapGuideY = Number.NaN
         snapGuideLabel = ""
         interactionFinished()
+    }
+
+    function discardTextGestureAndEnd() {
+        textGestureCommitTimer.stop()
+        clearTextGesturePreview()
+        if (!interactionActive)
+            return
+        interactionActive = false
+        snapGuideX = Number.NaN
+        snapGuideY = Number.NaN
+        snapGuideLabel = ""
+        interactionFinished()
+    }
+
+    function clearTextGesturePreview() {
+        textGestureCommitTimer.stop()
+        textGestureEchoTimer.stop()
+        textGesturePreviewActive = false
+        textGestureAwaitingEcho = false
+        textGestureCommitMode = ""
+        textGestureCommitPending = false
+    }
+
+    function textGestureInputsMatchPreview() {
+        const positionMatches = Math.abs(layerX - textGesturePreviewX) <= 1.0 &&
+                                Math.abs(layerY - textGesturePreviewY) <= 1.0
+        if (!positionMatches)
+            return false
+        if (!textGestureAwaitingEcho || textGesturePreviewWidth <= 0 || textGesturePreviewHeight <= 0)
+            return true
+        return Math.abs(layerWidth - textGesturePreviewWidth) <= 1.0 &&
+               Math.abs(layerHeight - textGesturePreviewHeight) <= 1.0
+    }
+
+    function checkTextGestureEcho() {
+        if (textGesturePreviewActive && textGestureAwaitingEcho && textGestureInputsMatchPreview())
+            clearTextGesturePreview()
+    }
+
+    function scheduleTextGestureCommit(mode) {
+        if (!textGesturePreviewActive || !interactionActive)
+            return
+        textGestureCommitMode = mode
+        textGestureCommitPending = true
+        if (!textGestureCommitTimer.running)
+            textGestureCommitTimer.start()
+    }
+
+    function flushTextGestureCommit(finalCommit) {
+        textGestureCommitTimer.stop()
+        if (!finalCommit && (!enabled || locked || layerId !== gestureLayerId)) {
+            discardTextGestureAndEnd()
+            return
+        }
+        if (!textGesturePreviewActive || !textGestureCommitPending) {
+            if (finalCommit && textGesturePreviewActive && !textGestureAwaitingEcho)
+                clearTextGesturePreview()
+            return
+        }
+
+        const mode = textGestureCommitMode
+        textGestureCommitPending = false
+        if (mode === "move") {
+            const dx = Math.round(textGesturePreviewX - textGestureLastCommittedX)
+            const dy = Math.round(textGesturePreviewY - textGestureLastCommittedY)
+            if (dx === 0 && dy === 0) {
+                if (finalCommit) {
+                    textGestureAwaitingEcho = true
+                    textGestureEchoTimer.start()
+                    checkTextGestureEcho()
+                }
+                return
+            }
+            textGestureRequestedDeltaX = dx
+            textGestureRequestedDeltaY = dy
+            textGestureMoveEdited(dx, dy, finalCommit)
+        } else if (mode === "resize") {
+            textGestureRequestedX = Math.round(textGesturePreviewX)
+            textGestureRequestedY = Math.round(textGesturePreviewY)
+            textGestureRequestedWidth = Math.round(textGesturePreviewWidth)
+            textGestureRequestedHeight = Math.round(textGesturePreviewHeight)
+            const unchanged = textGestureRequestedX === Math.round(textGestureLastCommittedX) &&
+                textGestureRequestedY === Math.round(textGestureLastCommittedY) &&
+                textGestureRequestedWidth === Math.round(textGestureLastCommittedWidth) &&
+                textGestureRequestedHeight === Math.round(textGestureLastCommittedHeight)
+            if (unchanged) {
+                if (finalCommit) {
+                    textGestureAwaitingEcho = true
+                    textGestureEchoTimer.start()
+                    checkTextGestureEcho()
+                }
+                return
+            }
+            textGestureBoxEdited(textGestureRequestedX, textGestureRequestedY,
+                                 textGestureRequestedWidth, textGestureRequestedHeight, finalCommit)
+        }
+    }
+
+    function acknowledgeTextGestureCommit(accepted, finalCommit) {
+        if (!textGesturePreviewActive)
+            return
+        if (!accepted) {
+            if (finalCommit && textGestureCommitMode === "resize" &&
+                    textGestureRequestedX === Math.round(textGestureLastCommittedX) &&
+                    textGestureRequestedY === Math.round(textGestureLastCommittedY) &&
+                    textGestureRequestedWidth === Math.round(textGestureLastCommittedWidth) &&
+                    textGestureRequestedHeight === Math.round(textGestureLastCommittedHeight)) {
+                textGestureAwaitingEcho = true
+                textGestureEchoTimer.start()
+                checkTextGestureEcho()
+            } else if (finalCommit) {
+                clearTextGesturePreview()
+            }
+            return
+        }
+        if (textGestureCommitMode === "move") {
+            textGestureLastCommittedX += textGestureRequestedDeltaX
+            textGestureLastCommittedY += textGestureRequestedDeltaY
+        } else if (textGestureCommitMode === "resize") {
+            textGestureLastCommittedX = textGestureRequestedX
+            textGestureLastCommittedY = textGestureRequestedY
+            textGestureLastCommittedWidth = textGestureRequestedWidth
+            textGestureLastCommittedHeight = textGestureRequestedHeight
+        }
+        if (finalCommit) {
+            textGestureAwaitingEcho = true
+            textGestureEchoTimer.start()
+            checkTextGestureEcho()
+        }
+    }
+
+    Timer {
+        id: textGestureCommitTimer
+        interval: 16
+        repeat: false
+        onTriggered: {
+            if (!root.enabled || root.locked || root.layerId !== root.gestureLayerId)
+                root.discardTextGestureAndEnd()
+            else
+                root.flushTextGestureCommit(false)
+        }
+    }
+
+    Timer {
+        id: textGestureEchoTimer
+        interval: 1800
+        repeat: false
+        onTriggered: root.clearTextGesturePreview()
+    }
+
+    onLayerXChanged: checkTextGestureEcho()
+    onLayerYChanged: checkTextGestureEcho()
+    onLayerWidthChanged: checkTextGestureEcho()
+    onLayerHeightChanged: checkTextGestureEcho()
+    onLayerIdChanged: {
+        if (interactionActive && textGesturePreviewActive && gestureLayerId !== layerId)
+            endInteraction()
+        else if (textGesturePreviewActive && gestureLayerId !== layerId)
+            clearTextGesturePreview()
     }
 
     function nearestSnap(anchors, targets, viewportScale) {
@@ -114,6 +335,15 @@ Item {
             }
         }
         return best
+    }
+
+    function beginExternalMove(point) {
+        beginInteraction()
+        dragState.startX = point.x
+        dragState.startY = point.y
+        dragState.startLayerX = layerX
+        dragState.startLayerY = layerY
+        dragState.moved = true
     }
 
     function moveFromDrag(point, modifiers) {
@@ -244,10 +474,6 @@ Item {
 
         nextWidth = clamp(nextWidth, 16, 8192)
         nextHeight = clamp(nextHeight, 16, 8192)
-        if (Math.abs(nextWidth - dragState.startLayerWidth) < 0.01 &&
-                Math.abs(nextHeight - dragState.startLayerHeight) < 0.01)
-            return false
-
         const nextFrameWidth = nextWidth * dragState.startScale * viewportScaleX
         const nextFrameHeight = nextHeight * dragState.startScale * viewportScaleY
         let nextFrameX
@@ -263,9 +489,27 @@ Item {
             nextFrameY = dragState.anchorY - nextFrameHeight / 2 -
                 (sinRotation * oppositeX + cosRotation * oppositeY)
         }
-        textBoxEdited(Math.round(clamp((nextFrameX - imageX) / viewportScaleX, -1000000, 1000000)),
-                      Math.round(clamp((nextFrameY - imageY) / viewportScaleY, -1000000, 1000000)),
-                      Math.round(nextWidth), Math.round(nextHeight))
+        const nextX = Math.round(clamp((nextFrameX - imageX) / viewportScaleX, -1000000, 1000000))
+        const nextY = Math.round(clamp((nextFrameY - imageY) / viewportScaleY, -1000000, 1000000))
+        const roundedWidth = Math.round(nextWidth)
+        const roundedHeight = Math.round(nextHeight)
+        if (textGesturePreviewActive && interactionActive) {
+            if (nextX === Math.round(textGesturePreviewX) &&
+                    nextY === Math.round(textGesturePreviewY) &&
+                    roundedWidth === Math.round(textGesturePreviewWidth) &&
+                    roundedHeight === Math.round(textGesturePreviewHeight))
+                return false
+            textGesturePreviewX = nextX
+            textGesturePreviewY = nextY
+            textGesturePreviewWidth = roundedWidth
+            textGesturePreviewHeight = roundedHeight
+            scheduleTextGestureCommit("resize")
+        } else {
+            if (Math.abs(nextWidth - dragState.startLayerWidth) < 0.01 &&
+                    Math.abs(nextHeight - dragState.startLayerHeight) < 0.01)
+                return false
+            textBoxEdited(nextX, nextY, roundedWidth, roundedHeight)
+        }
         return true
     }
 
@@ -300,6 +544,12 @@ Item {
     }
 
     function emitPosition(x, y) {
+        if (textGesturePreviewActive && interactionActive) {
+            textGesturePreviewX = Math.round(clamp(x, -1000000, 1000000))
+            textGesturePreviewY = Math.round(clamp(y, -1000000, 1000000))
+            scheduleTextGestureCommit("move")
+            return
+        }
         if (moveSelection)
             positionEdited(Math.round(clamp(x, -1000000, 1000000)),
                            Math.round(clamp(y, -1000000, 1000000)))
@@ -419,9 +669,13 @@ Item {
             hoverEnabled: true
             cursorShape: Qt.SizeAllCursor
             onPressed: function(mouse) {
+                const point = root.pointerInRoot(mouse, frame)
+                if (typeof root.pickForMove === "function") {
+                    if (!root.pickForMove(point.x, point.y, mouse.modifiers)) { mouse.accepted = false; return }
+                } else root.layerPickRequested(point.x, point.y, mouse.modifiers)
+                if (root.locked) { mouse.accepted = false; return }
                 root.forceActiveFocus()
                 root.beginInteraction()
-                const point = root.pointerInRoot(mouse, frame)
                 dragState.startX = point.x
                 dragState.startY = point.y
                 dragState.moved = false
@@ -429,7 +683,7 @@ Item {
                 dragState.startLayerY = root.layerY
             }
             onPositionChanged: function(mouse) {
-                if (!pressed)
+                if (!pressed || !root.interactionActive)
                     return
                 const point = root.pointerInRoot(mouse, frame)
                 const deltaX = point.x - dragState.startX
@@ -442,13 +696,11 @@ Item {
                 root.moveFromDrag(point, mouse.modifiers)
             }
             onDoubleClicked: if (!dragState.moved) root.editRequested()
-            onClicked: function(mouse) {
-                if (dragState.moved)
-                    return
-                const point = root.pointerInRoot(mouse, frame)
-                root.layerPickRequested(point.x, point.y, mouse.modifiers)
+            onReleased: function(mouse) {
+                if (root.interactionActive)
+                    root.moveFromDrag(root.pointerInRoot(mouse, frame), mouse.modifiers)
+                root.endInteraction()
             }
-            onReleased: root.endInteraction()
             onCanceled: root.endInteraction()
         }
 
@@ -586,7 +838,7 @@ Item {
                         dragState.centerVectorY = dragState.cornerY - dragState.centerY
                     }
                     onPositionChanged: function(mouse) {
-                        if (!pressed)
+                        if (!pressed || !root.interactionActive)
                             return
                         const point = root.pointerInRoot(mouse, resizeArea)
                         if (root.textBoxResize) {
@@ -598,7 +850,21 @@ Item {
                             root.resizeFromDrag(point, Boolean(mouse.modifiers & Qt.AltModifier))
                         }
                     }
-                    onReleased: root.endInteraction()
+                    onReleased: function(mouse) {
+                        if (!root.interactionActive) {
+                            root.endInteraction()
+                            return
+                        }
+                        const point = root.pointerInRoot(mouse, resizeArea)
+                        if (root.textBoxResize) {
+                            root.resizeTextBoxFromDrag(point, handle.modelData,
+                                Boolean(mouse.modifiers & Qt.AltModifier),
+                                Boolean(mouse.modifiers & Qt.ShiftModifier))
+                        } else {
+                            root.resizeFromDrag(point, Boolean(mouse.modifiers & Qt.AltModifier))
+                        }
+                        root.endInteraction()
+                    }
                     onCanceled: root.endInteraction()
                 }
             }
@@ -621,12 +887,13 @@ Item {
                 objectName: "photoLayerTransformLabel"
                 anchors.centerIn: parent
                 text: root.textBoxResize
-                    ? "W " + Math.round(root.layerWidth) + "  H " + Math.round(root.layerHeight) + " px  " +
+                    ? "W " + Math.round(root.displayLayerWidth) + "  H " + Math.round(root.displayLayerHeight) + " px  " +
                       root.layerRotation.toFixed(1) + " deg"
                     : "X " + Math.round(root.layerX) + "  Y " + Math.round(root.layerY) +
                       "  " + root.layerScale.toFixed(2) + "x  " + root.layerRotation.toFixed(1) + " deg"
                 color: "#f4f7fa"
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 font.weight: Font.Medium
             }

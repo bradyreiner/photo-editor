@@ -5,6 +5,15 @@ import QtQuick.Controls.Basic
 ToolTip {
     id: root
 
+    // Tooltips are visual-only. Keep the popup out of pointer and keyboard
+    // routing so its fade-out cannot swallow the first click on a control below.
+    enabled: false
+    modal: false
+    focus: false
+    readonly property QtObject pointerPassthroughMask: QtObject {
+        function contains(point: point): bool { return false }
+    }
+
     property int maximumTextWidth: theme.scaled(300)
     property Item targetItem
     property bool followPointer: false
@@ -74,7 +83,8 @@ ToolTip {
             text: root.shortcutText
             width: root.preferredTextWidth
             color: theme.opticalLight
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: theme.typeMicro
             wrapMode: Text.Wrap
             renderType: Text.NativeRendering
@@ -82,6 +92,13 @@ ToolTip {
     }
 
     background: PopupSurface { shadowColor: "#40000000" }
+
+    Binding {
+        target: root.contentItem ? root.contentItem.parent : null
+        property: "containmentMask"
+        value: root.pointerPassthroughMask
+        when: root.contentItem !== null && root.contentItem.parent !== null
+    }
 
     Theme { id: theme }
 }

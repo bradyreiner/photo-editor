@@ -1,10 +1,13 @@
 #pragma once
 #include "edit_recipe_state.h"
+#include "photo_layer_effect_codec.h"
+#include "photo_editor/pipeline/layer_styles.h"
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QMimeData>
 #include <QSet>
 #include <QImage>
@@ -23,11 +26,86 @@ struct PhotoLayerClipboard {
   QSize canvas;
   QStringList selected_ids;
 };
+
+namespace detail {
+inline constexpr int maximum_direct_photo_layer_clipboard_json_depth = 128;
+
+inline bool photo_layer_clipboard_json_exceeds_direct_depth(
+    const QJsonValue& value,
+    int container_depth = 0) {
+  if (value.isObject()) {
+    if (container_depth >=
+        maximum_direct_photo_layer_clipboard_json_depth) {
+      return true;
+    }
+    const auto object = value.toObject();
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+      if (photo_layer_clipboard_json_exceeds_direct_depth(
+              it.value(), container_depth + 1)) {
+        return true;
+      }
+    }
+  } else if (value.isArray()) {
+    if (container_depth >=
+        maximum_direct_photo_layer_clipboard_json_depth) {
+      return true;
+    }
+    const auto array = value.toArray();
+    for (const auto& child : array) {
+      if (photo_layer_clipboard_json_exceeds_direct_depth(
+              child, container_depth + 1)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+// JSON UTF-8 strings and escaped object keys never use fewer bytes than
+// their UTF-16 code-unit count. Ignore punctuation and scalar values so this
+// stays a lower bound; accepted documents still use Qt's exact serializer.
+inline bool photo_layer_clipboard_json_text_exceeds_budget(
+    const QJsonValue& value, qsizetype& remaining) {
+  const auto consume = [&](qsizetype units) {
+    if (units > remaining) return true;
+    remaining -= units;
+    return false;
+  };
+  if (value.isString()) return consume(value.toString().size());
+  if (value.isObject()) {
+    const auto object = value.toObject();
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+      if (consume(it.key().size()) ||
+          photo_layer_clipboard_json_text_exceeds_budget(it.value(), remaining))
+        return true;
+    }
+  } else if (value.isArray()) {
+    const auto array = value.toArray();
+    for (const auto& child : array)
+      if (photo_layer_clipboard_json_text_exceeds_budget(child, remaining))
+        return true;
+  }
+  return false;
+}
+}  // namespace detail
+
 inline QByteArray encode_photo_layer_clipboard(const PhotoLayerClipboard& value) {
+  const auto recipe = build_edit_recipe_object(value.state);
+  if (recipe.contains(QStringLiteral("componentObjectTableError")) ||
+      recipe.contains(QStringLiteral("textDimensionError"))) return {};
+  auto embedded_recipe = recipe;
+  if (detail::photo_layer_clipboard_json_exceeds_direct_depth(
+          QJsonValue(recipe))) {
+    const auto recipe_json = QString::fromUtf8(
+        QJsonDocument(recipe).toJson(QJsonDocument::Compact));
+    embedded_recipe = QJsonDocument::fromJson(recipe_json.toUtf8()).object();
+  }
+  auto remaining = maximum_photo_layer_clipboard_bytes;
+  if (detail::photo_layer_clipboard_json_text_exceeds_budget(
+          QJsonValue(embedded_recipe), remaining)) return {};
   const QJsonObject object{{QStringLiteral("schema"), QStringLiteral("looksy-photo-layers-v1")},
       {QStringLiteral("width"), value.canvas.width()}, {QStringLiteral("height"), value.canvas.height()},
       {QStringLiteral("selectedIds"), QJsonArray::fromStringList(value.selected_ids)},
-      {QStringLiteral("recipe"), QJsonDocument::fromJson(serialize_edit_recipe_json(value.state).toUtf8()).object()}};
+      {QStringLiteral("recipe"), embedded_recipe}};
   const auto bytes = QJsonDocument(object).toJson(QJsonDocument::Compact);
   return bytes.size() <= maximum_photo_layer_clipboard_bytes ? bytes : QByteArray{};
 }
@@ -70,6 +148,34 @@ inline void collect_photo_clipboard_ids(const QVariant& value, QHash<QString, QS
     for (auto it = map.cbegin(); it != map.cend(); ++it) {
       if ((it.key() == QStringLiteral("id") || it.key() == QStringLiteral("maskSetId")) && !it->toString().isEmpty() &&
           !ids.contains(it->toString())) ids.insert(it->toString(), QUuid::createUuid().toString(QUuid::WithoutBraces));
+      if (it.key() == QStringLiteral("effectStack") &&
+          it.value().metaType().id() == QMetaType::QString) {
+        QString error;
+        const auto effects = decode_photo_layer_effects(map, &error);
+        if (effects) {
+          for (const auto& effect : *effects) {
+            const auto reference = QString::fromUtf8(
+                effect.mask_ref.data(),
+                static_cast<qsizetype>(effect.mask_ref.size()));
+            if (!reference.isEmpty() && !ids.contains(reference))
+              ids.insert(reference, QUuid::createUuid().toString(QUuid::WithoutBraces));
+          }
+        }
+      } else if (it.key() == QStringLiteral("layerStyleStack") &&
+                 it.value().metaType().id() == QMetaType::QString) {
+        std::string error;
+        const auto styles = photo_editor::pipeline::deserialize_layer_style_stack(
+            it.value().toString().toStdString(), &error);
+        if (styles) {
+          for (const auto& operation : styles->operations) {
+            const auto reference = QString::fromUtf8(
+                operation.mask_ref.data(),
+                static_cast<qsizetype>(operation.mask_ref.size()));
+            if (!reference.isEmpty() && !ids.contains(reference))
+              ids.insert(reference, QUuid::createUuid().toString(QUuid::WithoutBraces));
+          }
+        }
+      }
       collect_photo_clipboard_ids(it.value(), ids);
     }
   } else if (value.metaType().id() == QMetaType::QVariantList) {
@@ -77,6 +183,41 @@ inline void collect_photo_clipboard_ids(const QVariant& value, QHash<QString, QS
   }
 }
 inline QVariant remap_photo_clipboard_ids(const QVariant& value, const QHash<QString, QString>& ids, const QString& key = {}) {
+  if (key == QStringLiteral("effectStack") &&
+      value.metaType().id() == QMetaType::QString) {
+    QString error;
+    auto effects = decode_photo_layer_effects(
+        QVariantMap{{QStringLiteral("effectStack"), value}}, &error);
+    if (effects) {
+      for (auto& effect : *effects) {
+        const auto old = QString::fromUtf8(
+            effect.mask_ref.data(),
+            static_cast<qsizetype>(effect.mask_ref.size()));
+        if (!old.isEmpty() && ids.contains(old))
+          effect.mask_ref = ids.value(old).toStdString();
+      }
+      const auto encoded = encode_photo_layer_effects(*effects, &error);
+      if (encoded) return *encoded;
+    }
+  }
+  if (key == QStringLiteral("layerStyleStack") &&
+      value.metaType().id() == QMetaType::QString) {
+    std::string error;
+    auto styles = photo_editor::pipeline::deserialize_layer_style_stack(
+        value.toString().toStdString(), &error);
+    if (styles) {
+      for (auto& operation : styles->operations) {
+        const auto old = QString::fromUtf8(
+            operation.mask_ref.data(),
+            static_cast<qsizetype>(operation.mask_ref.size()));
+        if (!old.isEmpty() && ids.contains(old))
+          operation.mask_ref = ids.value(old).toStdString();
+      }
+      const auto encoded = photo_editor::pipeline::serialize_layer_style_stack(
+          *styles, &error);
+      if (encoded) return QString::fromStdString(*encoded);
+    }
+  }
   if (value.metaType().id() == QMetaType::QVariantMap) {
     auto map = value.toMap();
     for (auto it = map.begin(); it != map.end(); ++it) it.value() = remap_photo_clipboard_ids(it.value(), ids, it.key());

@@ -6,6 +6,8 @@ TextField {
 
     property color accent: theme.accentWarm400
     property string accessibleLabel: ""
+    property bool numericEntry: false
+    property bool inlineField: false
     readonly property string resolvedAccessibleName: {
         const explicitName = String(root.accessibleLabel || "").trim()
         if (explicitName.length > 0)
@@ -33,24 +35,24 @@ TextField {
     placeholderTextColor: theme.textFaint
     selectedTextColor: theme.ink950
     selectionColor: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.85)
-    font.family: theme.fontUi
+    font.family: root.numericEntry ? theme.fontNumeric : theme.fontUi
+    font.features: root.numericEntry ? theme.numericFontFeatures : ({})
     font.pixelSize: theme.typeControl
     font.weight: theme.weightControl
     leftPadding: theme.space8
     rightPadding: theme.space8
+    topPadding: theme.space4
+    bottomPadding: theme.space4
     activeFocusOnTab: true
     hoverEnabled: true
     Accessible.name: root.resolvedAccessibleName
     Accessible.description: root.placeholderText
     Accessible.role: Accessible.EditableText
 
-    background: Rectangle {
-        radius: theme.radiusControl
-        color: !root.enabled ? theme.alpha(theme.fieldFill, 0.45)
-               : root.hovered ? theme.fieldHoverFill : theme.fieldFill
-        border.width: root.activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
-        border.color: root.activeFocus ? theme.focusRing
-                      : root.hovered ? theme.alpha(theme.controlEdge, 0.82)
-                      : theme.alpha(theme.controlEdge, 0.52)
+    background: InputFieldSurface {
+        focused: root.activeFocus
+        hovered: root.hovered
+        interactiveEnabled: root.enabled
+        inlineField: root.inlineField
     }
 }

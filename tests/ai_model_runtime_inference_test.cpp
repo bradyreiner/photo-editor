@@ -212,11 +212,12 @@ int main(int argc, char** argv) {
       : 255;
   if (!smart_selection.success || !smart_selection_warm.success ||
       smart_selection.width != width || smart_selection.height != height ||
-      smart_selection.mask_data.size() != width * height || center_alpha < 128 ||
+      smart_selection.mask_data.size() != width * height || center_alpha < 250 ||
       smart_selection.refinement_logits_width != 256 ||
       smart_selection.refinement_logits_height != 256 ||
       smart_selection.refinement_logits.size() != 256 * 256 * static_cast<int>(sizeof(float)) ||
-      negative_alpha > 127 ||
+      smart_selection.refinement_logits_contract != QStringLiteral("sam2-square-1024:v2") ||
+      negative_alpha > 5 ||
       !photo_editor::desktop::smart_select_result_honors_prompts(smart_selection, smart_prompts)) {
     std::cerr << "success=" << smart_selection.success
               << " warmSuccess=" << smart_selection_warm.success

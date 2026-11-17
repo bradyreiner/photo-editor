@@ -15,6 +15,7 @@ struct ThumbnailPresentationFacts final {
   QString asset_id;
   QString file_path;
   QString state_signature;
+  QString content_output_policy_identity;
   int mask_revision = 0;
   int photo_layer_revision = -1;
   QVariantMap queue_fields;

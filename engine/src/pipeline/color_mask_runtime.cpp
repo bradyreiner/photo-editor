@@ -1,5 +1,6 @@
 #include "color_mask_runtime.h"
 #include "photo_editor/pipeline/local_mask_sampling.h"
+#include "photo_editor/pipeline/brush_edge_math.h"
 
 #include "color_blur_runtime.h"
 #include "color_adjustment_scheduler.h"
@@ -8,7 +9,9 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -171,9 +174,10 @@ void apply_mask_edge_cleanup(
     return 0.0;
   }
 
-  const auto radius_x = std::max(0.05, mask.radius_x);
-  const auto radius_y = std::max(0.05, mask.radius_y);
-  const auto feather = std::clamp(mask.feather, 0.05, 1.0);
+  const auto radius_x = mask.radius_x + clamp_signed_percent(mask.selection_expand) * 0.001;
+  const auto radius_y = mask.radius_y + clamp_signed_percent(mask.selection_expand) * 0.001;
+  if (radius_x <= 0 || radius_y <= 0) return 0.0;
+  const auto feather = std::clamp(mask.feather, 0.0, 1.0);
   const auto radians = mask.rotation * kMaskPi / 180.0;
   const auto cosine = std::cos(radians);
   const auto sine = std::sin(radians);
@@ -201,8 +205,9 @@ void apply_mask_edge_cleanup(
     return 0.0;
   }
 
-  const auto radius_x = std::max(0.01, mask.radius_x);
-  const auto radius_y = std::max(0.01, mask.radius_y);
+  const auto radius_x = mask.radius_x + clamp_signed_percent(mask.selection_expand) * 0.001;
+  const auto radius_y = mask.radius_y + clamp_signed_percent(mask.selection_expand) * 0.001;
+  if (radius_x <= 0 || radius_y <= 0) return 0.0;
   const auto feather = std::clamp(mask.feather, 0.0, 1.0);
   const auto radians = mask.rotation * kMaskPi / 180.0;
   const auto cosine = std::cos(radians);
@@ -326,13 +331,10 @@ void apply_mask_edge_cleanup(
   }
 
   const auto feather = std::clamp(mask.feather, 0.0, 0.25);
-  if (polygon_contains_point(normalized_x, normalized_y, mask)) {
-    return 1.0;
-  }
-  if (feather <= 1e-6) {
-    return 0.0;
-  }
-  return 1.0 - smoothstep(0.0, feather, min_distance);
+  const auto signed_distance = (polygon_contains_point(normalized_x, normalized_y, mask)
+      ? min_distance : -min_distance) + clamp_signed_percent(mask.selection_expand) * 0.001;
+  return feather <= 1e-6 ? (signed_distance >= 0.0 ? 1.0 : 0.0)
+                         : smoothstep(-feather, 0.0, signed_distance);
 }
 
 void hue_saturation_value_for_pixel(
@@ -413,11 +415,30 @@ void hue_saturation_value_for_pixel(
     std::swap(saturation_min, saturation_max);
   }
   const auto feather = std::clamp(mask.range_feather, 0.0, 0.5);
-  const auto hue_weight = circular_weight(hue, wrap_unit(mask.hue_center), std::max(0.02, mask.hue_range));
-  const auto sat_lower =
-      smoothstep(std::max(0.0, saturation_min - feather), saturation_min, saturation);
-  const auto sat_upper =
-      1.0 - smoothstep(saturation_max, std::min(1.0, saturation_max + feather), saturation);
+  auto hue_weight = circular_weight(hue, wrap_unit(mask.hue_center), std::max(0.02, mask.hue_range));
+  if (mask.color_range_sample_union && !mask.color_range_sample_hues.empty()) {
+    hue_weight = 0.0;
+    for (const auto sample_hue : mask.color_range_sample_hues) {
+      if (!std::isfinite(sample_hue)) {
+        continue;
+      }
+      hue_weight = std::max(
+          hue_weight,
+          circular_weight(hue, wrap_unit(sample_hue), std::max(0.02, mask.hue_range)));
+    }
+  }
+  const auto sat_lower = mask.color_range_sample_union && saturation_min <= 1.0e-9
+                             ? 1.0
+                             : smoothstep(
+                                   std::max(0.0, saturation_min - feather),
+                                   saturation_min,
+                                   saturation);
+  const auto sat_upper = mask.color_range_sample_union && saturation_max >= 1.0 - 1.0e-9
+                             ? 1.0
+                             : 1.0 - smoothstep(
+                                         saturation_max,
+                                         std::min(1.0, saturation_max + feather),
+                                         saturation);
   return clamp_unit(hue_weight * sat_lower * sat_upper);
 }
 
@@ -719,8 +740,12 @@ void hue_saturation_value_for_pixel(
   }
   const auto max_x = std::max(source_context.width - 1, 0);
   const auto max_y = std::max(source_context.height - 1, 0);
-  const auto fx = clamp_unit(normalized_x) * static_cast<double>(max_x);
-  const auto fy = clamp_unit(normalized_y) * static_cast<double>(max_y);
+  const auto fx = clamp_unit(source_context.coordinate_area_width>0.0
+      ? (normalized_x-source_context.coordinate_area_x)/source_context.coordinate_area_width : 0.5) *
+      static_cast<double>(max_x);
+  const auto fy = clamp_unit(source_context.coordinate_area_height>0.0
+      ? (normalized_y-source_context.coordinate_area_y)/source_context.coordinate_area_height : 0.5) *
+      static_cast<double>(max_y);
   return sample_bilinear(*source_context.pixels, source_context.width, source_context.height, fx, fy);
 }
 
@@ -1024,9 +1049,11 @@ void hue_saturation_value_for_pixel(
   }
 
   const auto source_step_x =
-      source_context->width > 1 ? 1.0 / static_cast<double>(source_context->width - 1) : 1.0;
+      source_context->width > 1 ? source_context->coordinate_area_width /
+          static_cast<double>(source_context->width - 1) : 1.0;
   const auto source_step_y =
-      source_context->height > 1 ? 1.0 / static_cast<double>(source_context->height - 1) : 1.0;
+      source_context->height > 1 ? source_context->coordinate_area_height /
+          static_cast<double>(source_context->height - 1) : 1.0;
   const auto matte_step_x =
       mask.segmentation_width > 1 ? 1.0 / static_cast<double>(mask.segmentation_width - 1) : source_step_x;
   const auto matte_step_y =
@@ -1108,45 +1135,67 @@ void hue_saturation_value_for_pixel(
   if (!mask.enabled) {
     return 0.0;
   }
-  const auto refined_weight = [&](double base_weight) {
-    auto spatial_expand_smooth_applied = false;
-    auto refined_base = apply_raster_selection_morphology(
+  const auto mask_x=mask.coordinate_area_x+normalized_x*mask.coordinate_area_width;
+  const auto mask_y=mask.coordinate_area_y+normalized_y*mask.coordinate_area_height;
+  auto mapped_source=source_context ? *source_context : EdgeAwareMatteContext{};
+  if (source_context) {
+    mapped_source.coordinate_area_x=mask.coordinate_area_x+
+        mapped_source.coordinate_area_x*mask.coordinate_area_width;
+    mapped_source.coordinate_area_y=mask.coordinate_area_y+
+        mapped_source.coordinate_area_y*mask.coordinate_area_height;
+    mapped_source.coordinate_area_width*=mask.coordinate_area_width;
+    mapped_source.coordinate_area_height*=mask.coordinate_area_height;
+  }
+  const auto* matte_source=source_context ? &mapped_source : nullptr;
+  const auto refined_weight = [&](double base_weight, bool geometry_refined = false) {
+    auto spatial_expand_smooth_applied = geometry_refined;
+    auto refined_base = geometry_refined ? base_weight : apply_raster_selection_morphology(
         base_weight,
-        normalized_x,
-        normalized_y,
+        mask_x,
+        mask_y,
         mask,
-        source_context,
+        matte_source,
         &spatial_expand_smooth_applied);
     return apply_range_refinement(
         apply_selection_refine(
-            apply_edge_aware_matte(refined_base, normalized_x, normalized_y, mask, source_context),
+            apply_edge_aware_matte(refined_base, mask_x, mask_y, mask, matte_source),
             mask,
             spatial_expand_smooth_applied),
-        normalized_x,
-        normalized_y,
+        mask_x,
+        mask_y,
         pixel,
         context,
         mask);
   };
 
+  const auto geometric_weight = [&](const auto& sample) {
+    const auto step = clamp_unit(mask.selection_smooth / 100.0) * 0.02;
+    if (step <= 1e-6) return refined_weight(sample(mask_x, mask_y), true);
+    auto sum = 0.0;
+    for (int y = -1; y <= 1; ++y)
+      for (int x = -1; x <= 1; ++x)
+        sum += sample(mask_x + x * step, mask_y + y * step);
+    return refined_weight(sum / 9.0, true);
+  };
+
   if (is_ai_segmentation_mask_kind(mask.kind)) {
-    return refined_weight(subject_mask_weight(normalized_x, normalized_y, mask));
+    return refined_weight(subject_mask_weight(mask_x, mask_y, mask));
   }
 
   if (mask.kind == "radial" || mask.kind == "ellipse") {
-    return refined_weight(radial_mask_weight(normalized_x, normalized_y, mask));
+    return geometric_weight([&](double x, double y) { return radial_mask_weight(x, y, mask); });
   }
 
   if (mask.kind == "rectangle") {
-    return refined_weight(rectangle_mask_weight(normalized_x, normalized_y, mask));
+    return geometric_weight([&](double x, double y) { return rectangle_mask_weight(x, y, mask); });
   }
 
   if (mask.kind == "brush") {
-    return refined_weight(brush_mask_weight(normalized_x, normalized_y, mask));
+    return refined_weight(brush_mask_weight(mask_x, mask_y, mask));
   }
 
   if (mask.kind == "polygon" || mask.kind == "lasso") {
-    return refined_weight(polygon_mask_weight(normalized_x, normalized_y, mask));
+    return geometric_weight([&](double x, double y) { return polygon_mask_weight(x, y, mask); });
   }
 
   if (mask.kind == "luminance") {
@@ -1158,10 +1207,10 @@ void hue_saturation_value_for_pixel(
   }
 
   if (mask.kind == "depth") {
-    return refined_weight(depth_range_mask_weight(normalized_x, normalized_y, pixel, context, mask));
+    return refined_weight(depth_range_mask_weight(mask_x, mask_y, pixel, context, mask));
   }
 
-  return refined_weight(linear_mask_weight(normalized_x, normalized_y, mask.position, mask.feather, mask.rotation));
+  return refined_weight(linear_mask_weight(mask_x, mask_y, mask.position, mask.feather, mask.rotation));
 }
 
 [[nodiscard]] double nested_local_mask_weight(
@@ -1170,7 +1219,7 @@ void hue_saturation_value_for_pixel(
     const ColorPixel& pixel,
     const PipelineColorContext& context,
     const LocalMask& mask,
-    const std::vector<LocalMask>& siblings,
+    std::span<const LocalMask> siblings,
     const EdgeAwareMatteContext* source_context) {
   auto weight = local_mask_weight(normalized_x, normalized_y, pixel, context, mask, source_context);
   if (mask.parent_id.empty() || weight <= 0.0) {
@@ -1548,7 +1597,7 @@ void accumulate_composite_weight(
   return false;
 }
 
-[[nodiscard]] bool has_local_mask_removal(const std::vector<LocalMask>& masks) {
+[[nodiscard]] bool has_local_mask_removal(std::span<const LocalMask> masks) {
   for (const auto& mask : masks) {
     if (!mask.enabled || mask.remove_strength <= 1e-6 ||
         !mask.inpaint_patch_pixels.empty()) {
@@ -1566,7 +1615,7 @@ void accumulate_composite_weight(
   return false;
 }
 
-[[nodiscard]] bool has_local_mask_heal(const std::vector<LocalMask>& masks) {
+[[nodiscard]] bool has_local_mask_heal(std::span<const LocalMask> masks) {
   for (const auto& mask : masks) {
     if (mask.enabled && mask.remove_strength > 1e-6 && mask.retouch_mode == "heal" &&
         mask.inpaint_patch_pixels.empty()) {
@@ -1576,7 +1625,7 @@ void accumulate_composite_weight(
   return false;
 }
 
-[[nodiscard]] bool has_local_mask_clone(const std::vector<LocalMask>& masks) {
+[[nodiscard]] bool has_local_mask_clone(std::span<const LocalMask> masks) {
   for (const auto& mask : masks) {
     if (!mask.enabled || mask.kind != "brush" || mask.operation != "add") {
       continue;
@@ -1590,7 +1639,7 @@ void accumulate_composite_weight(
   return false;
 }
 
-[[nodiscard]] bool has_local_mask_red_eye(const std::vector<LocalMask>& masks) {
+[[nodiscard]] bool has_local_mask_red_eye(std::span<const LocalMask> masks) {
   for (const auto& mask : masks) {
     if (mask.enabled && mask.remove_strength > 1e-6 && mask.retouch_mode == "red-eye") {
       return true;
@@ -1599,7 +1648,7 @@ void accumulate_composite_weight(
   return false;
 }
 
-[[nodiscard]] bool has_local_mask_skin_cleanup(const std::vector<LocalMask>& masks) {
+[[nodiscard]] bool has_local_mask_skin_cleanup(std::span<const LocalMask> masks) {
   for (const auto& mask : masks) {
     if (mask.enabled && mask.remove_strength > 1e-6 && mask.retouch_mode == "skin-cleanup") {
       return true;
@@ -1608,7 +1657,7 @@ void accumulate_composite_weight(
   return false;
 }
 
-[[nodiscard]] bool has_local_mask_frequency_smoothing(const std::vector<LocalMask>& masks) {
+[[nodiscard]] bool has_local_mask_frequency_smoothing(std::span<const LocalMask> masks) {
   for (const auto& mask : masks) {
     if (mask.enabled && mask.remove_strength > 1e-6 && mask.retouch_mode == "frequency-smoothing") {
       return true;
@@ -1622,7 +1671,7 @@ void accumulate_composite_weight(
     double normalized_y,
     const ColorPixel& pixel,
     const PipelineColorContext& context,
-    const std::vector<LocalMask>& masks,
+    std::span<const LocalMask> masks,
     std::string_view retouch_mode) {
   auto composite_weight = 0.0;
   auto initialized = false;
@@ -1667,7 +1716,7 @@ void accumulate_composite_weight(
     double normalized_y,
     const ColorPixel& pixel,
     const PipelineColorContext& context,
-    const std::vector<LocalMask>& masks) {
+    std::span<const LocalMask> masks) {
   auto composite_weight = 0.0;
   auto initialized = false;
   auto texture_sum = 0.0;
@@ -1719,6 +1768,38 @@ struct RemovalCandidate final {
   bool valid = false;
 };
 
+struct RemovalPatchNeighbor final {
+  int x_offset;
+  int y_offset;
+  double context_weight;
+};
+
+constexpr auto kRemovalPatchNeighbors = [] {
+  auto neighbors = std::array<RemovalPatchNeighbor, 24>{};
+  auto index = std::size_t{0};
+  for (int y_offset = -2; y_offset <= 2; ++y_offset) {
+    for (int x_offset = -2; x_offset <= 2; ++x_offset) {
+      if (x_offset == 0 && y_offset == 0) {
+        continue;
+      }
+      const auto distance_squared = x_offset * x_offset + y_offset * y_offset;
+      neighbors[index] = RemovalPatchNeighbor{
+          .x_offset = x_offset,
+          .y_offset = y_offset,
+          .context_weight =
+              1.0 / std::max(1.0, static_cast<double>(distance_squared)),
+      };
+      ++index;
+    }
+  }
+  return neighbors;
+}();
+
+struct RemovalRefinementCandidate final {
+  std::size_t pixel_index;
+  std::uint32_t valid_neighbor_mask;
+};
+
 [[nodiscard]] std::vector<double> grow_mask_weights(
     const std::vector<double>& mask,
     int width,
@@ -1729,26 +1810,63 @@ struct RemovalCandidate final {
     return mask;
   }
 
+  struct StencilRow final {
+    int y_offset;
+    int first_x_offset;
+    int last_x_offset;
+  };
+  constexpr auto kRadiusOneRows = std::array<StencilRow, 3>{
+      {{-1, 0, 0}, {0, -1, 1}, {1, 0, 0}}};
+  constexpr auto kRadiusTwoRows = std::array<StencilRow, 5>{
+      {{-2, 0, 0}, {-1, -1, 1}, {0, -2, 2}, {1, -1, 1}, {2, 0, 0}}};
+
   auto grown = mask;
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       auto maximum = clamp_unit(mask[static_cast<std::size_t>(y * width + x)]);
-      for (int offset_y = -radius; offset_y <= radius; ++offset_y) {
-        const auto sample_y = y + offset_y;
+      const auto include_row = [&](const StencilRow& row) {
+        const auto sample_y = y + row.y_offset;
         if (sample_y < 0 || sample_y >= height) {
-          continue;
+          return;
         }
-        for (int offset_x = -radius; offset_x <= radius; ++offset_x) {
+        for (auto offset_x = row.first_x_offset;
+             offset_x <= row.last_x_offset;
+             ++offset_x) {
           const auto sample_x = x + offset_x;
           if (sample_x < 0 || sample_x >= width) {
-            continue;
-          }
-          if (offset_x * offset_x + offset_y * offset_y > radius * radius) {
             continue;
           }
           maximum = std::max(
               maximum,
               clamp_unit(mask[static_cast<std::size_t>(sample_y * width + sample_x)]));
+        }
+      };
+      if (radius == 1) {
+        for (const auto& row : kRadiusOneRows) {
+          include_row(row);
+        }
+      } else if (radius == 2) {
+        for (const auto& row : kRadiusTwoRows) {
+          include_row(row);
+        }
+      } else {
+        for (int offset_y = -radius; offset_y <= radius; ++offset_y) {
+          const auto sample_y = y + offset_y;
+          if (sample_y < 0 || sample_y >= height) {
+            continue;
+          }
+          for (int offset_x = -radius; offset_x <= radius; ++offset_x) {
+            const auto sample_x = x + offset_x;
+            if (sample_x < 0 || sample_x >= width) {
+              continue;
+            }
+            if (offset_x * offset_x + offset_y * offset_y > radius * radius) {
+              continue;
+            }
+            maximum = std::max(
+                maximum,
+                clamp_unit(mask[static_cast<std::size_t>(sample_y * width + sample_x)]));
+          }
         }
       }
       grown[static_cast<std::size_t>(y * width + x)] = maximum;
@@ -1773,7 +1891,7 @@ struct RemovalCandidate final {
         std::lerp(static_cast<double>(source_low_channel), static_cast<double>(fill_low_channel), clamped_color);
     const auto detail =
         (static_cast<double>(fill_channel) - static_cast<double>(fill_low_channel)) * clamped_texture;
-    return static_cast<float>(std::clamp(low_frequency + detail, 0.0, 1.0));
+    return static_cast<float>(low_frequency + detail);
   };
   return ColorPixel{
       .red = channel(source_low.red, fill.red, fill_low.red),
@@ -1790,32 +1908,104 @@ struct RemovalCandidate final {
     int radius,
     CancellationToken cancellation = {}) {
   const auto pixel_count = pixels.size();
-  std::vector<float> red(pixel_count, 0.0F);
-  std::vector<float> green(pixel_count, 0.0F);
-  std::vector<float> blue(pixel_count, 0.0F);
-  for (std::size_t index = 0; index < pixel_count; ++index) {
-    if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
-      return {};
-    }
-    red[index] = pixels[index].red;
-    green[index] = pixels[index].green;
-    blue[index] = pixels[index].blue;
-  }
-  const auto blurred_red = box_blur(red, width, height, radius, cancellation);
-  const auto blurred_green = box_blur(green, width, height, radius, cancellation);
-  const auto blurred_blue = box_blur(blue, width, height, radius, cancellation);
-  if (cancellation.cancelled() || blurred_red.size() != pixel_count ||
-      blurred_green.size() != pixel_count || blurred_blue.size() != pixel_count) {
+  if (pixel_count == 0U || cancellation.cancelled()) {
     return {};
   }
-  std::vector<ColorPixel> low(pixel_count);
-  for (std::size_t index = 0; index < pixel_count; ++index) {
-    low[index] = ColorPixel{
-        .red = blurred_red[index],
-        .green = blurred_green[index],
-        .blue = blurred_blue[index],
-        .alpha = pixels[index].alpha,
-    };
+  if (radius <= 0 || width <= 0 || height <= 0) {
+    auto unchanged = std::vector<ColorPixel>(pixel_count);
+    for (std::size_t index = 0; index < pixel_count; ++index) {
+      if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return {};
+      }
+      unchanged[index] = pixels[index];
+    }
+    if (cancellation.cancelled()) {
+      return {};
+    }
+    return unchanged;
+  }
+
+  auto horizontal = std::vector<ColorPixel>(pixel_count);
+  auto low = std::vector<ColorPixel>(pixel_count);
+  const auto kernel_width = radius * 2 + 1;
+  run_color_adjustment_parallel_for(height, [&](int y) {
+    if (cancellation.cancelled()) {
+      return;
+    }
+    auto red_sum = 0.0;
+    auto green_sum = 0.0;
+    auto blue_sum = 0.0;
+    const auto row_offset = static_cast<std::size_t>(y) *
+                            static_cast<std::size_t>(width);
+    for (int sample = -radius; sample <= radius; ++sample) {
+      const auto clamped_x = std::clamp(sample, 0, width - 1);
+      const auto& pixel = pixels[row_offset + static_cast<std::size_t>(clamped_x)];
+      red_sum += pixel.red;
+      green_sum += pixel.green;
+      blue_sum += pixel.blue;
+    }
+    for (int x = 0; x < width; ++x) {
+      auto& output = horizontal[row_offset + static_cast<std::size_t>(x)];
+      output.red = static_cast<float>(red_sum / kernel_width);
+      output.green = static_cast<float>(green_sum / kernel_width);
+      output.blue = static_cast<float>(blue_sum / kernel_width);
+      const auto remove_x = std::clamp(x - radius, 0, width - 1);
+      const auto add_x = std::clamp(x + radius + 1, 0, width - 1);
+      const auto& remove_pixel =
+          pixels[row_offset + static_cast<std::size_t>(remove_x)];
+      const auto& add_pixel = pixels[row_offset + static_cast<std::size_t>(add_x)];
+      red_sum += add_pixel.red - remove_pixel.red;
+      green_sum += add_pixel.green - remove_pixel.green;
+      blue_sum += add_pixel.blue - remove_pixel.blue;
+    }
+  });
+  if (cancellation.cancelled()) {
+    return {};
+  }
+
+  run_color_adjustment_parallel_for(width, [&](int x) {
+    if (cancellation.cancelled()) {
+      return;
+    }
+    auto red_sum = 0.0;
+    auto green_sum = 0.0;
+    auto blue_sum = 0.0;
+    for (int sample = -radius; sample <= radius; ++sample) {
+      const auto clamped_y = std::clamp(sample, 0, height - 1);
+      const auto& pixel = horizontal[
+          static_cast<std::size_t>(clamped_y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x)];
+      red_sum += pixel.red;
+      green_sum += pixel.green;
+      blue_sum += pixel.blue;
+    }
+    for (int y = 0; y < height; ++y) {
+      const auto index = static_cast<std::size_t>(y) *
+                             static_cast<std::size_t>(width) +
+                         static_cast<std::size_t>(x);
+      low[index] = ColorPixel{
+          .red = static_cast<float>(red_sum / kernel_width),
+          .green = static_cast<float>(green_sum / kernel_width),
+          .blue = static_cast<float>(blue_sum / kernel_width),
+          .alpha = pixels[index].alpha,
+      };
+      const auto remove_y = std::clamp(y - radius, 0, height - 1);
+      const auto add_y = std::clamp(y + radius + 1, 0, height - 1);
+      const auto& remove_pixel =
+          horizontal[static_cast<std::size_t>(remove_y) *
+                         static_cast<std::size_t>(width) +
+                     static_cast<std::size_t>(x)];
+      const auto& add_pixel =
+          horizontal[static_cast<std::size_t>(add_y) *
+                         static_cast<std::size_t>(width) +
+                     static_cast<std::size_t>(x)];
+      red_sum += add_pixel.red - remove_pixel.red;
+      green_sum += add_pixel.green - remove_pixel.green;
+      blue_sum += add_pixel.blue - remove_pixel.blue;
+    }
+  });
+  if (cancellation.cancelled()) {
+    return {};
   }
   return low;
 }
@@ -1946,21 +2136,18 @@ struct RemovalCandidate final {
       const auto backward_weight = backward.confidence / static_cast<double>(std::max(1, backward.distance));
       const auto weight_sum = std::max(1e-6, forward_weight + backward_weight);
       candidate.pixel = ColorPixel{
-          .red = static_cast<float>(std::max(
-              0.0,
+          .red = static_cast<float>(
               (static_cast<double>(forward.pixel.red) * forward_weight +
                static_cast<double>(backward.pixel.red) * backward_weight) /
-                  weight_sum)),
-          .green = static_cast<float>(std::max(
-              0.0,
+              weight_sum),
+          .green = static_cast<float>(
               (static_cast<double>(forward.pixel.green) * forward_weight +
                static_cast<double>(backward.pixel.green) * backward_weight) /
-                  weight_sum)),
-          .blue = static_cast<float>(std::max(
-              0.0,
+              weight_sum),
+          .blue = static_cast<float>(
               (static_cast<double>(forward.pixel.blue) * forward_weight +
                static_cast<double>(backward.pixel.blue) * backward_weight) /
-                  weight_sum)),
+              weight_sum),
           .alpha = 1.0F,
       };
       const auto color_match =
@@ -2024,9 +2211,9 @@ struct RemovalCandidate final {
   }
   if (total_weight > 1e-6) {
     neighborhood_candidate.pixel = ColorPixel{
-        .red = static_cast<float>(std::max(0.0, weighted_red / total_weight)),
-        .green = static_cast<float>(std::max(0.0, weighted_green / total_weight)),
-        .blue = static_cast<float>(std::max(0.0, weighted_blue / total_weight)),
+        .red = static_cast<float>(weighted_red / total_weight),
+        .green = static_cast<float>(weighted_green / total_weight),
+        .blue = static_cast<float>(weighted_blue / total_weight),
         .alpha = pixels[static_cast<std::size_t>(y * width + x)].alpha,
     };
     neighborhood_candidate.confidence =
@@ -2194,9 +2381,9 @@ void apply_local_removal(
         }
 
         const auto candidate = ColorPixel{
-            .red = static_cast<float>(std::max(0.0, static_cast<double>(blurred_red[index]) / local_confidence)),
-            .green = static_cast<float>(std::max(0.0, static_cast<double>(blurred_green[index]) / local_confidence)),
-            .blue = static_cast<float>(std::max(0.0, static_cast<double>(blurred_blue[index]) / local_confidence)),
+            .red = static_cast<float>(static_cast<double>(blurred_red[index]) / local_confidence),
+            .green = static_cast<float>(static_cast<double>(blurred_green[index]) / local_confidence),
+            .blue = static_cast<float>(static_cast<double>(blurred_blue[index]) / local_confidence),
             .alpha = filled_pixels[index].alpha,
         };
         const auto blend =
@@ -2241,18 +2428,15 @@ void apply_local_removal(
         continue;
       }
       const auto detail_gain = detail_preservation * mask_weight * 0.30;
-      filled_pixels[index].red = static_cast<float>(std::max(
-          0.0,
+      filled_pixels[index].red = static_cast<float>(
           static_cast<double>(filled_pixels[index].red) +
-              static_cast<double>(filled_red[index] - blurred_red[index]) * detail_gain));
-      filled_pixels[index].green = static_cast<float>(std::max(
-          0.0,
+          static_cast<double>(filled_red[index] - blurred_red[index]) * detail_gain);
+      filled_pixels[index].green = static_cast<float>(
           static_cast<double>(filled_pixels[index].green) +
-              static_cast<double>(filled_green[index] - blurred_green[index]) * detail_gain));
-      filled_pixels[index].blue = static_cast<float>(std::max(
-          0.0,
+          static_cast<double>(filled_green[index] - blurred_green[index]) * detail_gain);
+      filled_pixels[index].blue = static_cast<float>(
           static_cast<double>(filled_pixels[index].blue) +
-              static_cast<double>(filled_blue[index] - blurred_blue[index]) * detail_gain));
+          static_cast<double>(filled_blue[index] - blurred_blue[index]) * detail_gain);
     }
   }
 
@@ -2306,7 +2490,58 @@ void apply_local_removal(
       if (!candidate_indices.empty()) {
         const auto candidate_stride =
             std::max(1, static_cast<int>(candidate_indices.size() / 4096));
-        const auto patch_radius = 2;
+        const auto stride_size = static_cast<std::size_t>(candidate_stride);
+        auto index_offsets = std::array<std::ptrdiff_t, kRemovalPatchNeighbors.size()>{};
+        for (std::size_t neighbor_index = 0;
+             neighbor_index < kRemovalPatchNeighbors.size();
+             ++neighbor_index) {
+          const auto& neighbor = kRemovalPatchNeighbors[neighbor_index];
+          index_offsets[neighbor_index] =
+              static_cast<std::ptrdiff_t>(neighbor.y_offset) *
+                  static_cast<std::ptrdiff_t>(width) +
+              static_cast<std::ptrdiff_t>(neighbor.x_offset);
+        }
+
+        auto sampled_candidates = std::vector<RemovalRefinementCandidate>{};
+        sampled_candidates.reserve(
+            (candidate_indices.size() + stride_size - 1U) / stride_size);
+        for (std::size_t candidate_offset = 0;
+             candidate_offset < candidate_indices.size();
+             candidate_offset += stride_size) {
+          if ((candidate_offset & 0x3FFU) == 0U && cancellation.cancelled()) {
+            return;
+          }
+          const auto candidate_index = candidate_indices[candidate_offset];
+          const auto candidate_x =
+              static_cast<int>(candidate_index % static_cast<std::size_t>(width));
+          const auto candidate_y =
+              static_cast<int>(candidate_index / static_cast<std::size_t>(width));
+          auto valid_neighbor_mask = std::uint32_t{0};
+          for (std::size_t neighbor_index = 0;
+               neighbor_index < kRemovalPatchNeighbors.size();
+               ++neighbor_index) {
+            const auto& neighbor = kRemovalPatchNeighbors[neighbor_index];
+            const auto sample_x = candidate_x + neighbor.x_offset;
+            const auto sample_y = candidate_y + neighbor.y_offset;
+            if (sample_x < 0 || sample_y < 0 || sample_x >= width ||
+                sample_y >= height) {
+              continue;
+            }
+            const auto sample_index = static_cast<std::size_t>(
+                static_cast<std::ptrdiff_t>(candidate_index) +
+                index_offsets[neighbor_index]);
+            if (clamp_unit(working_mask[sample_index]) > 1e-4) {
+              continue;
+            }
+            valid_neighbor_mask |=
+                std::uint32_t{1} << static_cast<unsigned int>(neighbor_index);
+          }
+          sampled_candidates.push_back(RemovalRefinementCandidate{
+              .pixel_index = candidate_index,
+              .valid_neighbor_mask = valid_neighbor_mask,
+          });
+        }
+
         auto refined_pixels = filled_pixels;
         for (int y = min_mask_y; y <= max_mask_y; ++y) {
           if (cancellation.cancelled()) {
@@ -2322,49 +2557,54 @@ void apply_local_removal(
             auto best_score = std::numeric_limits<double>::max();
             auto best_candidate = refined_pixels[index];
             auto found_candidate = false;
+            auto target_contexts = std::array<ColorPixel, kRemovalPatchNeighbors.size()>{};
+            auto target_valid_neighbor_mask = std::uint32_t{0};
+            for (std::size_t neighbor_index = 0;
+                 neighbor_index < kRemovalPatchNeighbors.size();
+                 ++neighbor_index) {
+              const auto& neighbor = kRemovalPatchNeighbors[neighbor_index];
+              const auto target_x = x + neighbor.x_offset;
+              const auto target_y = y + neighbor.y_offset;
+              if (target_x < 0 || target_y < 0 || target_x >= width ||
+                  target_y >= height) {
+                continue;
+              }
+              const auto target_index = static_cast<std::size_t>(
+                  static_cast<std::ptrdiff_t>(index) + index_offsets[neighbor_index]);
+              target_contexts[neighbor_index] =
+                  clamp_unit(working_mask[target_index]) <= 0.35
+                      ? (*pixels)[target_index]
+                      : filled_pixels[target_index];
+              target_valid_neighbor_mask |=
+                  std::uint32_t{1} << static_cast<unsigned int>(neighbor_index);
+            }
+
+            auto sampled_candidate_index = std::size_t{0};
             for (std::size_t candidate_offset = 0;
                  candidate_offset < candidate_indices.size();
-                 candidate_offset += static_cast<std::size_t>(candidate_stride)) {
+                 candidate_offset += stride_size) {
               if ((candidate_offset & 0x3FFU) == 0U && cancellation.cancelled()) {
                 return;
               }
-              const auto candidate_index = candidate_indices[candidate_offset];
-              const auto candidate_x = static_cast<int>(candidate_index % static_cast<std::size_t>(width));
-              const auto candidate_y = static_cast<int>(candidate_index / static_cast<std::size_t>(width));
+              const auto& candidate = sampled_candidates[sampled_candidate_index++];
 
               auto score = 0.0;
               auto support = 0.0;
-              for (int offset_y = -patch_radius; offset_y <= patch_radius; ++offset_y) {
-                for (int offset_x = -patch_radius; offset_x <= patch_radius; ++offset_x) {
-                  if (offset_x == 0 && offset_y == 0) {
-                    continue;
-                  }
-                  const auto target_x = x + offset_x;
-                  const auto target_y = y + offset_y;
-                  const auto sample_x = candidate_x + offset_x;
-                  const auto sample_y = candidate_y + offset_y;
-                  if (target_x < 0 || target_y < 0 || target_x >= width || target_y >= height ||
-                      sample_x < 0 || sample_y < 0 || sample_x >= width || sample_y >= height) {
-                    continue;
-                  }
-
-                  const auto target_index =
-                      static_cast<std::size_t>(target_y * width + target_x);
-                  const auto sample_index =
-                      static_cast<std::size_t>(sample_y * width + sample_x);
-                  if (clamp_unit(working_mask[sample_index]) > 1e-4) {
-                    continue;
-                  }
-
-                  const auto context_weight =
-                      1.0 / std::max(1.0, static_cast<double>(offset_x * offset_x + offset_y * offset_y));
-                  const auto target_context =
-                      clamp_unit(working_mask[target_index]) <= 0.35 ? (*pixels)[target_index]
-                                                                     : filled_pixels[target_index];
-                  score += removal_color_distance(target_context, filled_pixels[sample_index]) *
-                           context_weight;
-                  support += context_weight;
-                }
+              auto shared_neighbor_mask =
+                  target_valid_neighbor_mask & candidate.valid_neighbor_mask;
+              while (shared_neighbor_mask != 0U) {
+                const auto neighbor_index = static_cast<std::size_t>(
+                    std::countr_zero(shared_neighbor_mask));
+                shared_neighbor_mask &= shared_neighbor_mask - std::uint32_t{1};
+                const auto sample_index = static_cast<std::size_t>(
+                    static_cast<std::ptrdiff_t>(candidate.pixel_index) +
+                    index_offsets[neighbor_index]);
+                const auto& neighbor = kRemovalPatchNeighbors[neighbor_index];
+                score += removal_color_distance(
+                             target_contexts[neighbor_index],
+                             filled_pixels[sample_index]) *
+                         neighbor.context_weight;
+                support += neighbor.context_weight;
               }
 
               if (support <= 1e-6) {
@@ -2373,7 +2613,7 @@ void apply_local_removal(
               score /= support;
               if (score < best_score) {
                 best_score = score;
-                best_candidate = filled_pixels[candidate_index];
+                best_candidate = filled_pixels[candidate.pixel_index];
                 found_candidate = true;
               }
             }
@@ -2446,16 +2686,21 @@ void apply_local_clone(
     int width,
     int height,
     const PipelineColorContext& context,
-    const std::vector<LocalMask>& masks) {
+    std::span<const LocalMask> masks) {
   if (pixels == nullptr || width <= 0 || height <= 0) {
     return;
   }
 
   std::vector<LocalMask> strokes;
   std::vector<const LocalMask*> coverage_masks;
+  std::vector<bool> circular_tips;
+  std::vector<std::pair<double,double>> tip_scales;
   for (const auto& mask : masks) {
     if (!mask.enabled || mask.retouch_mode!="clone") continue;
-    if (mask.clone_strokes.empty()) { strokes.push_back(mask); coverage_masks.push_back(nullptr); continue; }
+    if (mask.clone_strokes.empty()) {
+      strokes.push_back(mask); coverage_masks.push_back(nullptr); circular_tips.push_back(false);
+      tip_scales.emplace_back(1.0,1.0); continue;
+    }
     auto base=mask;
     base.clone_strokes.clear(); base.brush_points.clear();
     base.segmentation_mask.clear(); base.segmentation_width=0; base.segmentation_height=0;
@@ -2464,7 +2709,10 @@ void apply_local_clone(
       part.clone_source_x=stroke.source_x; part.clone_source_y=stroke.source_y;
       part.clone_offset_x=stroke.offset_x; part.clone_offset_y=stroke.offset_y;
       part.clone_scale=stroke.scale; part.clone_rotation=stroke.rotation;
+      part.brush_hardness=stroke.hardness; part.feather=stroke.feather;
       strokes.push_back(std::move(part)); coverage_masks.push_back(&mask);
+      circular_tips.push_back(stroke.circular);
+      tip_scales.emplace_back(stroke.raster_width_scale,stroke.raster_height_scale);
     }
   }
   for (std::size_t stroke_index=0;stroke_index<strokes.size();++stroke_index) {
@@ -2487,13 +2735,23 @@ void apply_local_clone(
     const auto cosine = std::cos(radians);
     const auto sine = std::sin(radians);
     int left=width, top=height, right=0, bottom=0;
+    const auto width_extent=static_cast<double>(std::max(width-1,1));
+    const auto height_extent=static_cast<double>(std::max(height-1,1));
+    const auto circular=circular_tips[stroke_index];
+    const auto [width_scale,height_scale]=tip_scales[stroke_index];
+    const auto basis_width=width_extent*width_scale;
+    const auto basis_height=height_extent*height_scale;
     for (const auto& point : mask.brush_points) {
       if (point.erase) continue;
-      const double radius=std::max(0.01,point.size);
-      left=std::min(left,std::clamp(int(std::floor((point.x-radius)*(width-1))),0,width));
-      top=std::min(top,std::clamp(int(std::floor((point.y-radius)*(height-1))),0,height));
-      right=std::max(right,std::clamp(int(std::ceil((point.x+radius)*(width-1)))+1,0,width));
-      bottom=std::max(bottom,std::clamp(int(std::ceil((point.y+radius)*(height-1)))+1,0,height));
+      const auto size=std::max(0.01,point.size);
+      const auto radius_x=size*(circular ? std::min(basis_width,basis_height) : basis_width);
+      const auto radius_y=size*(circular ? std::min(basis_width,basis_height) : basis_height);
+      const auto center_x=point.x*width_extent;
+      const auto center_y=point.y*height_extent;
+      left=std::min(left,std::clamp(int(std::floor(center_x-radius_x)),0,width));
+      top=std::min(top,std::clamp(int(std::floor(center_y-radius_y)),0,height));
+      right=std::max(right,std::clamp(int(std::ceil(center_x+radius_x))+1,0,width));
+      bottom=std::max(bottom,std::clamp(int(std::ceil(center_y+radius_y))+1,0,height));
     }
     // Legacy refined mattes can extend beyond the original dabs.
     if (coverage_masks[stroke_index]==nullptr) {left=0;top=0;right=width;bottom=height;}
@@ -2509,11 +2767,20 @@ void apply_local_clone(
           // The final canonical matte supplies erasure, auto-mask and refinement.
           // Intersect it with this stroke's dab coverage to retain its own origin.
           for (const auto& point : mask.brush_points) {
-            const auto distance=std::hypot(normalized_x-point.x,normalized_y-point.y)/std::max(0.01,point.size);
+            const auto size=std::max(0.01,point.size);
+            const auto radius=size*std::min(basis_width,basis_height);
+            const auto dx=(normalized_x-point.x)*width_extent;
+            const auto dy=(normalized_y-point.y)*height_extent;
+            const auto feather=std::clamp(mask.feather,circular ? 0.0 : 0.05,1.0);
+            const auto inner=(1.0-feather)*(circular ? clamp_unit(mask.brush_hardness) : 1.0);
+            const auto tip=circular
+                ? circular_brush_coverage_pixels(std::hypot(dx,dy),radius,inner)
+                : 1.0-smoothstep(inner,1.0,std::hypot((normalized_x-point.x)/width_scale,
+                    (normalized_y-point.y)/height_scale)/size);
             const auto dab=clamp_unit(point.flow)*clamp_unit(point.opacity)*
-                (1-smoothstep(std::clamp(mask.brush_hardness,0.0,0.98),1.0,distance));
+                tip;
             if(point.erase) weight*=1-dab;
-            else weight=mask.brush_buildup?1-(1-weight)*(1-dab):std::max(weight,dab);
+            else weight=std::max(weight,dab);
           }
           weight=std::min(weight,local_mask_weight(normalized_x,normalized_y,source_pixels[index],context,*coverage));
         } else weight=local_mask_weight(normalized_x,normalized_y,source_pixels[index],context,mask);
@@ -2533,7 +2800,9 @@ void apply_local_clone(
             height,
             source_center_x + source_dx,
             source_center_y + source_dy);
-        const auto blend = clamp_unit(weight * clamp_unit(mask.brush_flow));
+        // Per-stroke alpha already includes its recorded flow and opacity.
+        const auto blend = coverage_masks[stroke_index] != nullptr
+            ? clamp_unit(weight) : clamp_unit(weight * clamp_unit(mask.brush_flow));
         (*pixels)[index].red = static_cast<float>(
             std::lerp(static_cast<double>((*pixels)[index].red), static_cast<double>(candidate.red), blend));
         (*pixels)[index].green = static_cast<float>(
@@ -2550,7 +2819,7 @@ void apply_local_red_eye(
     int width,
     int height,
     const PipelineColorContext& context,
-    const std::vector<LocalMask>& masks) {
+    std::span<const LocalMask> masks) {
   if (pixels == nullptr || width <= 0 || height <= 0) {
     return;
   }
@@ -2590,7 +2859,7 @@ void apply_local_skin_cleanup(
     int width,
     int height,
     const PipelineColorContext& context,
-    const std::vector<LocalMask>& masks) {
+    std::span<const LocalMask> masks) {
   if (pixels == nullptr || width <= 0 || height <= 0) {
     return;
   }
@@ -2647,7 +2916,7 @@ void apply_local_frequency_smoothing(
     int width,
     int height,
     const PipelineColorContext& context,
-    const std::vector<LocalMask>& masks) {
+    std::span<const LocalMask> masks) {
   if (pixels == nullptr || width <= 0 || height <= 0) {
     return;
   }
@@ -2735,7 +3004,7 @@ void apply_local_frequency_smoothing(
              static_cast<std::size_t>(mask.inpaint_patch_width * mask.inpaint_patch_height);
 }
 
-[[nodiscard]] bool has_local_inpaint_patch(const std::vector<LocalMask>& masks) {
+[[nodiscard]] bool has_local_inpaint_patch(std::span<const LocalMask> masks) {
   for (const auto& mask : masks) {
     if (inpaint_patch_available(mask)) {
       return true;
@@ -2750,18 +3019,12 @@ void apply_local_frequency_smoothing(
     double color_match) {
   const auto strength = clamp_unit(color_match);
   return ColorPixel{
-      .red = static_cast<float>(std::clamp(
-          static_cast<double>(patch_pixel.red) + static_cast<double>(color_delta.red) * strength,
-          0.0,
-          1.0)),
-      .green = static_cast<float>(std::clamp(
-          static_cast<double>(patch_pixel.green) + static_cast<double>(color_delta.green) * strength,
-          0.0,
-          1.0)),
-      .blue = static_cast<float>(std::clamp(
-          static_cast<double>(patch_pixel.blue) + static_cast<double>(color_delta.blue) * strength,
-          0.0,
-          1.0)),
+      .red = static_cast<float>(
+          static_cast<double>(patch_pixel.red) + static_cast<double>(color_delta.red) * strength),
+      .green = static_cast<float>(
+          static_cast<double>(patch_pixel.green) + static_cast<double>(color_delta.green) * strength),
+      .blue = static_cast<float>(
+          static_cast<double>(patch_pixel.blue) + static_cast<double>(color_delta.blue) * strength),
       .alpha = patch_pixel.alpha,
   };
 }
@@ -2773,6 +3036,10 @@ struct InpaintPatchPlacement final {
   int bottom = 0;
   int source_width = 0;
   int source_height = 0;
+  double source_x = 0.0;
+  double source_y = 0.0;
+  double source_span_width = 1.0;
+  double source_span_height = 1.0;
 };
 
 [[nodiscard]] InpaintPatchPlacement inpaint_patch_placement(
@@ -2780,25 +3047,32 @@ struct InpaintPatchPlacement final {
     int width,
     int height) {
   const auto source_width =
-      mask.segmentation_width > 0 ? mask.segmentation_width : width;
+      mask.inpaint_source_width>0 ? mask.inpaint_source_width :
+      (mask.segmentation_width > 0 ? mask.segmentation_width : width);
   const auto source_height =
-      mask.segmentation_height > 0 ? mask.segmentation_height : height;
-  const auto scaled_x = [&](int source_x) {
-    return static_cast<int>(std::floor(
-        static_cast<double>(source_x) * width /
-        static_cast<double>(std::max(1, source_width))));
+      mask.inpaint_source_height>0 ? mask.inpaint_source_height :
+      (mask.segmentation_height > 0 ? mask.segmentation_height : height);
+  const auto canonical_grid=[](double value) {
+    const auto integer=std::round(value);
+    return std::abs(value-integer)<=8.0*std::numeric_limits<double>::epsilon()*std::max(1.0,std::abs(value))
+        ? integer : value;
   };
-  const auto scaled_y = [&](int source_y) {
+  const auto source_x=canonical_grid(mask.inpaint_source_area_x*source_width);
+  const auto source_y=canonical_grid(mask.inpaint_source_area_y*source_height);
+  const auto source_span_width=canonical_grid(mask.inpaint_source_area_width*source_width);
+  const auto source_span_height=canonical_grid(mask.inpaint_source_area_height*source_height);
+  const auto scaled_x = [&](int patch_x) {
     return static_cast<int>(std::floor(
-        static_cast<double>(source_y) * height /
-        static_cast<double>(std::max(1, source_height))));
+        (static_cast<double>(patch_x)-source_x)*width/source_span_width));
+  };
+  const auto scaled_y = [&](int patch_y) {
+    return static_cast<int>(std::floor(
+        (static_cast<double>(patch_y)-source_y)*height/source_span_height));
   };
   const auto scaled_right = static_cast<int>(std::ceil(
-      static_cast<double>(mask.inpaint_patch_x + mask.inpaint_patch_width) *
-      width / static_cast<double>(std::max(1, source_width))));
+      (static_cast<double>(mask.inpaint_patch_x+mask.inpaint_patch_width)-source_x)*width/source_span_width));
   const auto scaled_bottom = static_cast<int>(std::ceil(
-      static_cast<double>(mask.inpaint_patch_y + mask.inpaint_patch_height) *
-      height / static_cast<double>(std::max(1, source_height))));
+      (static_cast<double>(mask.inpaint_patch_y+mask.inpaint_patch_height)-source_y)*height/source_span_height));
   return InpaintPatchPlacement{
       .left = std::clamp(scaled_x(mask.inpaint_patch_x), 0, width),
       .top = std::clamp(scaled_y(mask.inpaint_patch_y), 0, height),
@@ -2806,6 +3080,10 @@ struct InpaintPatchPlacement final {
       .bottom = std::clamp(scaled_bottom, 0, height),
       .source_width = source_width,
       .source_height = source_height,
+      .source_x = source_x,
+      .source_y = source_y,
+      .source_span_width = source_span_width,
+      .source_span_height = source_span_height,
   };
 }
 
@@ -2857,12 +3135,10 @@ struct InpaintPatchPlacement final {
     int width,
     int height) {
   const auto source_x =
-      (static_cast<double>(target_x) + 0.5) * placement.source_width /
-          static_cast<double>(std::max(1, width)) -
+      placement.source_x+(static_cast<double>(target_x)+0.5)*placement.source_span_width/std::max(1,width) -
       0.5;
   const auto source_y =
-      (static_cast<double>(target_y) + 0.5) * placement.source_height /
-          static_cast<double>(std::max(1, height)) -
+      placement.source_y+(static_cast<double>(target_y)+0.5)*placement.source_span_height/std::max(1,height) -
       0.5;
   return {
       source_x - static_cast<double>(mask.inpaint_patch_x),
@@ -2949,8 +3225,9 @@ struct InpaintPatchPlacement final {
   const int pw=right-left,ph=bottom-top;
   if(pw<=0 || ph<=0) return {};
   std::vector<double> alpha(static_cast<std::size_t>(pw)*static_cast<std::size_t>(ph),1.0);
-  const auto scale=std::min(double(width)/std::max(1,mask.segmentation_width>0?mask.segmentation_width:width),
-      double(height)/std::max(1,mask.segmentation_height>0?mask.segmentation_height:height));
+  const auto placement=inpaint_patch_placement(mask,width,height);
+  const auto scale=std::min(double(width)/placement.source_span_width,
+      double(height)/placement.source_span_height);
   const auto feather=std::clamp(mask.inpaint_seam_feather,0.0,24.0)*scale;
   if(feather<=1e-6) return alpha;
   const int radius=static_cast<int>(std::ceil(feather));
@@ -3020,7 +3297,7 @@ void apply_local_inpaint_patches(
     int width,
     int height,
     const PipelineColorContext& context,
-    const std::vector<LocalMask>& masks) {
+    std::span<const LocalMask> masks) {
   if (pixels == nullptr || width <= 0 || height <= 0) {
     return;
   }
@@ -3166,9 +3443,49 @@ std::vector<std::uint8_t> rasterize_local_mask_set_alpha_impl(
   const auto neutral_pixel = ColorPixel{0.5F, 0.5F, 0.5F, 1.0F};
 
   std::vector<std::uint8_t> alpha(pixel_count, 0);
+  auto first_x = 0;
+  auto last_x = safe_width - 1;
+  auto first_y = 0;
+  auto last_y = safe_height - 1;
+  // A single literal brush cannot create coverage beyond its raster support
+  // plus the bounded raw-matte neighborhoods. Keep the original pixel grid
+  // and weight function; skip only pixels whose exact result is zero.
+  if (mask_set.sources.size() == 1 && !mask_set.selection_invert &&
+      mask_set.selection_expand == 0.0 && mask_set.selection_smooth == 0.0 &&
+      mask_set.selection_fine_edge == 0.0 && mask_set.selection_edge_contrast == 0.0) {
+    const auto& mask = mask_set.sources.front();
+    if (mask.kind == "brush" && mask.enabled && !mask.invert && !mask.selection_invert &&
+        mask.parent_id.empty() && (mask.operation.empty() || mask.operation == "add") &&
+        (mask.blend_mode.empty() || mask.blend_mode == "normal") &&
+        mask.coordinate_area_x == 0.0 && mask.coordinate_area_y == 0.0 &&
+        mask.coordinate_area_width == 1.0 && mask.coordinate_area_height == 1.0 &&
+        mask.selection_fine_edge == 0.0 && mask.selection_decontaminate == 0.0 &&
+        mask.segmentation_width == safe_width && mask.segmentation_height == safe_height &&
+        mask.segmentation_mask.size() == pixel_count) {
+      first_x = safe_width; last_x = -1;
+      first_y = safe_height; last_y = -1;
+      for (int y = 0; y < safe_height; ++y) {
+        const auto row = static_cast<std::size_t>(y) * static_cast<std::size_t>(safe_width);
+        for (int x = 0; x < safe_width; ++x) {
+          if (mask.segmentation_mask[row + static_cast<std::size_t>(x)] == 0) continue;
+          first_x = std::min(first_x, x); last_x = std::max(last_x, x);
+          first_y = std::min(first_y, y); last_y = std::max(last_y, y);
+        }
+      }
+      if (last_x < first_x) return alpha;
+      // All morphology reads the original raster, with radius capped at 24.
+      // Two extra pixels cover bilinear support and floating-point phase.
+      constexpr int support = 26;
+      first_x = std::max(0, first_x - support);
+      last_x = std::min(safe_width - 1, last_x + support);
+      first_y = std::max(0, first_y - support);
+      last_y = std::min(safe_height - 1, last_y + support);
+    }
+  }
   run_color_adjustment_parallel_for(safe_height, [&](int y) {
+    if (y < first_y || y > last_y) return;
     const auto row_offset = static_cast<std::size_t>(y) * static_cast<std::size_t>(safe_width);
-    for (int x = 0; x < safe_width; ++x) {
+    for (int x = first_x; x <= last_x; ++x) {
       const auto index = row_offset + static_cast<std::size_t>(x);
       const auto& pixel = has_source_pixels ? source_pixels[index] : neutral_pixel;
       const auto normalized_x =

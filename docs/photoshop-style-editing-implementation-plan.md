@@ -1,5 +1,7 @@
 # Photoshop-style photo editing implementation plan
 
+2026-10-29 approved expansion: [Professional content tools roadmap](photoshop-professional-tools-roadmap.md) defines the new Photoshop foundations, cross-media extensions and completion criteria. Current program status lives in the [capability acceptance owner](capability-verification-plan.md#professional-content-tools-2026-10-29). Preserve the historical baseline below.
+
 Date: 2026-09-12. Status: proposed implementation plan; no product changes made by this audit.
 
 Implementation is now in progress; see the [implementation ledger](photoshop-style-editing-implementation-progress.md) for completed work, evidence and remaining gates. The original audit findings below describe the pre-implementation baseline.

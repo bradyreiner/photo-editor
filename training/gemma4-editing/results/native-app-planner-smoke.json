@@ -1,0 +1,79 @@
+{
+    "automaticCommitAllowed": false,
+    "cloudUsed": false,
+    "contract": "agent-live-local-runtime-smoke-v1",
+    "fixtureKind": "source-image-override",
+    "localOnly": true,
+    "modelFamily": "gemma4",
+    "modelId": "mlx-gemma4-26b-editing-pilot",
+    "ollamaModel": "looksy-gemma4-26b-editing",
+    "parameterSize": "26B-A4B",
+    "photographerApprovalRequired": true,
+    "planning": {
+        "decision": "recipe_patch",
+        "elapsedMs": 14058,
+        "fallbackUsed": false,
+        "generationSchemaByteCount": 1597,
+        "generationSchemaContract": "agent-operation-discriminated-generation-v2",
+        "globalChangePolicy": "allow",
+        "globalChangePolicyCorrection": {
+            "contract": "agent-explicit-scope-authority-v1",
+            "currentRequestAuthoritative": true,
+            "enforcedValue": "allow",
+            "modelValue": "preserve"
+        },
+        "imageIncluded": true,
+        "ok": true,
+        "ollamaServer": {
+            "evalCount": 311,
+            "evalDurationMs": 5738,
+            "loadDurationMs": 0,
+            "promptEvalCount": 3273,
+            "promptEvalDurationMs": 5488,
+            "totalDurationMs": 12207
+        },
+        "responseCharCount": 1142,
+        "summary": "Create a restrained cinematic evening look with gentle contrast and natural color while protecting highlights.",
+        "transport": {
+            "durationMs": 14055,
+            "endpoint": "http://127.0.0.1:11435",
+            "ok": true,
+            "path": "/api/chat",
+            "responseBytes": 1783,
+            "retryable": false,
+            "statusCode": 200,
+            "timeoutMs": -1
+        }
+    },
+    "probeAvailable": true,
+    "proofCritique": {
+        "elapsedMs": 4212,
+        "imageIncluded": true,
+        "needsUserReview": false,
+        "ok": true,
+        "ollamaServer": {
+            "available": true,
+            "evalCount": 72,
+            "evalDurationMs": 1246,
+            "loadDurationMs": 0,
+            "promptEvalCount": 1805,
+            "promptEvalDurationMs": 2946,
+            "totalDurationMs": 4205
+        },
+        "pass": true,
+        "summary": "The image meets the intended purpose of a restrained cinematic evening look. The color grading is natural with a gentle warmth, and the highlights remain well-preserved without clipping.",
+        "tasteConfidence": "high",
+        "transport": {
+            "durationMs": 4209,
+            "endpoint": "http://127.0.0.1:11435",
+            "ok": true,
+            "path": "/api/chat",
+            "responseBytes": 815,
+            "retryable": false,
+            "statusCode": 200,
+            "timeoutMs": -1
+        }
+    },
+    "quantizationLevel": "MLX-affine-4bit",
+    "sourceSha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56"
+}

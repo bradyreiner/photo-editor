@@ -164,7 +164,8 @@ ColumnLayout {
             text: "Board " + (content.boardIndex + 1) + " of " + content.carouselVariantComparisonDialog.boardCount + " · " +
                   (content.comparison.different ? "Documents differ" : "Documents match")
             color: content.theme.textMuted
-            font.family: content.theme.fontMono
+            font.family: content.theme.fontNumeric
+            font.features: content.theme.numericFontFeatures
             font.pixelSize: content.theme.typeCaption
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
         }

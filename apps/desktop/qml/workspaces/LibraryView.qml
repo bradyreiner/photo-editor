@@ -45,7 +45,8 @@ Rectangle {
             Layout.preferredWidth: 74
             text: detailRow.label
             color: rowTheme.textFaint
-            font.family: rowTheme.fontMono
+            font.family: rowTheme.fontNumeric
+            font.features: rowTheme.numericFontFeatures
             font.pixelSize: rowTheme.typeMicro
             font.letterSpacing: 0.4
             fontSizeMode: Text.HorizontalFit
@@ -81,6 +82,8 @@ Rectangle {
     property var carouselLibraryRecords: []
     property string pendingCarouselDocumentId: ""
     property bool pendingNewCarousel: false
+    property string pendingAssetActivationDestination: ""
+    property string pendingAssetActivationId: ""
     property string searchDraftText: catalogAssets.searchFilter
     property bool selectionModeActive: false
     property bool focusCheckEnabled: false
@@ -343,6 +346,41 @@ Rectangle {
         const fileName = fileNameForPath(filePath)
         const dotIndex = fileName.lastIndexOf(".")
         return dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
+    }
+
+    function isValidCaptureDate(value) {
+        const text = String(value || "").trim()
+        if (text.length === 0)
+            return true
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
+        if (!match)
+            return false
+        const year = Number(match[1])
+        const month = Number(match[2])
+        const day = Number(match[3])
+        if (year < 1 || month < 1 || month > 12 || day < 1)
+            return false
+        const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+        const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        return day <= daysInMonth[month - 1]
+    }
+
+    function captureDateRangeIssue(fromValue, toValue) {
+        const from = String(fromValue || "").trim()
+        const to = String(toValue || "").trim()
+        if (!isValidCaptureDate(from) || !isValidCaptureDate(to))
+            return "Enter real calendar dates in YYYY-MM-DD format."
+        if (from.length > 0 && to.length > 0 && from > to)
+            return "The start date must be on or before the end date."
+        return ""
+    }
+
+    function applyCaptureDateRange() {
+        if (captureDateRangeIssue(captureDateFromField.text, captureDateToField.text).length > 0)
+            return false
+        catalogAssets.captureDateFromFilter = captureDateFromField.text.trim()
+        catalogAssets.captureDateToFilter = captureDateToField.text.trim()
+        return true
     }
 
     function activeFilterSummary() {
@@ -734,6 +772,11 @@ Rectangle {
         if (catalogAssets.selectedAssetCount <= 0)
             return
 
+        if (!catalogAssets.selectedAssetsRecipesReady) {
+            catalogAssets.requestAssetRecipes(catalogAssets.selectedAssetIds)
+            return
+        }
+
         if (destinationFolder.length === 0)
             return
 
@@ -828,6 +871,9 @@ Rectangle {
         if (catalogAssets.selectedAssetCount <= 0)
             return
 
+        if (!catalogAssets.selectedAssetsRecipesReady)
+            catalogAssets.requestAssetRecipes(catalogAssets.selectedAssetIds)
+
         if (root.exportDestinationPath.length === 0)
             root.exportDestinationPath = exportJobs.defaultDestinationDirectory()
         exportDestinationField.text = root.exportDestinationPath
@@ -894,6 +940,12 @@ Rectangle {
     }
 
     function openSelectedAsset(destination) {
+        if (catalogAssets.selectedMediaType === "photo" && !catalogAssets.selectedRecipeReady) {
+            pendingAssetActivationDestination = destination
+            pendingAssetActivationId = catalogAssets.selectedAssetId
+            catalogAssets.requestAssetRecipes([pendingAssetActivationId])
+            return
+        }
         if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo" || !catalogAssets.selectedOnline)
             return root.assetActivated(destination)
 
@@ -1099,6 +1151,22 @@ Rectangle {
 
     Connections {
         target: catalogAssets
+
+        function onRecipeReadinessChanged() {
+            if (root.pendingAssetActivationDestination.length === 0)
+                return
+            if (catalogAssets.selectedAssetId !== root.pendingAssetActivationId) {
+                root.pendingAssetActivationDestination = ""
+                root.pendingAssetActivationId = ""
+                return
+            }
+            if (catalogAssets.selectedRecipeReady) {
+                const destination = root.pendingAssetActivationDestination
+                root.pendingAssetActivationDestination = ""
+                root.pendingAssetActivationId = ""
+                root.openSelectedAsset(destination)
+            }
+        }
 
         function onProjectNamesChanged() {
             root.syncProjectTarget();
@@ -1381,6 +1449,18 @@ Rectangle {
                 wrapMode: Text.WordWrap
             }
 
+            Label {
+                Layout.fillWidth: true
+                visible: !catalogAssets.selectedAssetsRecipesReady
+                text: catalogAssets.recipeLoadErrorCount > 0
+                      ? "A saved edit could not be loaded. Export is paused to protect the original recipe."
+                      : "Loading saved edits before export…"
+                color: catalogAssets.recipeLoadErrorCount > 0 ? theme.error : theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                wrapMode: Text.WordWrap
+            }
+
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: theme.space4
@@ -1388,7 +1468,8 @@ Rectangle {
                 Label {
                     text: "Format Preset"
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                 }
 
@@ -1407,7 +1488,8 @@ Rectangle {
                 Label {
                     text: "Destination"
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                 }
 
@@ -1455,7 +1537,7 @@ Rectangle {
                     text: "Start Export"
                     iconName: "export"
                     tone: "primary"
-                    enabled: root.exportDestinationPath.trim().length > 0
+                    enabled: root.exportDestinationPath.trim().length > 0 && catalogAssets.selectedAssetsRecipesReady
                     onClicked: {
                         root.queueSelectedExports(root.exportDestinationPath.trim(), exportDialogPresetCombo.currentText)
                         exportSelectionDialog.close()
@@ -1838,8 +1920,7 @@ Rectangle {
                                 font.family: theme.fontUi
                                 font.pixelSize: theme.typeCaption
                                 verticalAlignment: Text.AlignVCenter
-                                fontSizeMode: Text.HorizontalFit
-                                minimumPixelSize: theme.typeMicro
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
                             }
 
@@ -2064,7 +2145,7 @@ Rectangle {
                                         Layout.fillWidth: true
                                         placeholderText: "Search by filename, camera, lens, location"
                                         text: root.searchDraftText
-                                        background: Item {}
+                                        background: InputFieldSurface { inputControl: parent; inlineField: true }
                                         leftPadding: 0
                                         rightPadding: 0
                                         Accessible.name: "Library search"
@@ -2142,72 +2223,99 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        ColumnLayout {
                             objectName: "libraryCaptureFacetRow"
                             Layout.fillWidth: true
-                            spacing: theme.space6
+                            spacing: theme.space4
+
+                            GridLayout {
+                                id: libraryCaptureFiltersGrid
+                                Layout.fillWidth: true
+                                columns: width >= theme.scaled(900) ? 6 : 2
+                                columnSpacing: theme.space6
+                                rowSpacing: theme.space6
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: "Captured"
+                                    color: theme.textFaint
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    font.weight: Font.Medium
+                                }
+
+                                ToneComboBox {
+                                    objectName: "libraryCaptureYearFilter"
+                                    Layout.preferredWidth: 150
+                                    Layout.minimumWidth: 0
+                                    Layout.fillWidth: true
+                                    model: root.captureFilterLabels
+                                    currentIndex: root.indexForValue(root.captureFilterValues, catalogAssets.captureYearFilter)
+                                    Accessible.name: "Filter by capture year"
+                                    onActivated: catalogAssets.captureYearFilter = root.captureFilterValues[currentIndex]
+                                }
+
+                                ToneComboBox {
+                                    objectName: "libraryCameraFilter"
+                                    Layout.preferredWidth: 210
+                                    Layout.minimumWidth: 0
+                                    Layout.fillWidth: true
+                                    model: root.cameraFilterLabels
+                                    currentIndex: root.indexForValue(root.cameraFilterValues, catalogAssets.cameraFilter)
+                                    Accessible.name: "Filter by camera"
+                                    onActivated: catalogAssets.cameraFilter = root.cameraFilterValues[currentIndex]
+                                }
+
+                                ToneTextField {
+                                    id: captureDateFromField
+                                    objectName: "libraryCaptureDateFromField"
+                                    Layout.preferredWidth: 124
+                                    Layout.minimumWidth: 0
+                                    Layout.fillWidth: true
+                                    placeholderText: "From YYYY-MM-DD"
+                                    text: catalogAssets.captureDateFromFilter
+                                    Accessible.name: "Capture date from"
+                                    Accessible.description: root.captureDateRangeIssue(text, captureDateToField.text)
+                                    onAccepted: root.applyCaptureDateRange()
+                                }
+
+                                ToneTextField {
+                                    id: captureDateToField
+                                    objectName: "libraryCaptureDateToField"
+                                    Layout.preferredWidth: 124
+                                    Layout.minimumWidth: 0
+                                    Layout.fillWidth: true
+                                    placeholderText: "To YYYY-MM-DD"
+                                    text: catalogAssets.captureDateToFilter
+                                    Accessible.name: "Capture date to"
+                                    Accessible.description: root.captureDateRangeIssue(captureDateFromField.text, text)
+                                    onAccepted: root.applyCaptureDateRange()
+                                }
+
+                                ActionButton {
+                                    objectName: "libraryApplyCaptureDateRangeButton"
+                                    Layout.fillWidth: true
+                                    text: "Apply"
+                                    compact: true
+                                    enabled: root.captureDateRangeIssue(captureDateFromField.text, captureDateToField.text).length === 0
+                                    disabledReason: root.captureDateRangeIssue(captureDateFromField.text, captureDateToField.text)
+                                    onClicked: root.applyCaptureDateRange()
+                                }
+
+                            }
 
                             Label {
-                                text: "Captured"
-                                color: theme.textFaint
+                                objectName: "libraryCaptureDateValidationMessage"
+                                Layout.fillWidth: true
+                                visible: root.captureDateRangeIssue(captureDateFromField.text, captureDateToField.text).length > 0
+                                text: root.captureDateRangeIssue(captureDateFromField.text, captureDateToField.text)
+                                color: theme.warning
                                 font.family: theme.fontUi
-                                font.pixelSize: theme.typeMicro
-                                font.weight: Font.Medium
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                Accessible.role: Accessible.AlertMessage
                             }
-
-                            ToneComboBox {
-                                objectName: "libraryCaptureYearFilter"
-                                Layout.preferredWidth: 150
-                                model: root.captureFilterLabels
-                                currentIndex: root.indexForValue(root.captureFilterValues, catalogAssets.captureYearFilter)
-                                Accessible.name: "Filter by capture year"
-                                onActivated: catalogAssets.captureYearFilter = root.captureFilterValues[currentIndex]
-                            }
-
-                            ToneComboBox {
-                                objectName: "libraryCameraFilter"
-                                Layout.preferredWidth: 210
-                                model: root.cameraFilterLabels
-                                currentIndex: root.indexForValue(root.cameraFilterValues, catalogAssets.cameraFilter)
-                                Accessible.name: "Filter by camera"
-                                onActivated: catalogAssets.cameraFilter = root.cameraFilterValues[currentIndex]
-                            }
-
-                            ToneTextField {
-                                id: captureDateFromField
-                                objectName: "libraryCaptureDateFromField"
-                                Layout.preferredWidth: 124
-                                placeholderText: "From YYYY-MM-DD"
-                                text: catalogAssets.captureDateFromFilter
-                                Accessible.name: "Capture date from"
-                                onAccepted: catalogAssets.captureDateFromFilter = text.trim()
-                            }
-
-                            ToneTextField {
-                                id: captureDateToField
-                                objectName: "libraryCaptureDateToField"
-                                Layout.preferredWidth: 124
-                                placeholderText: "To YYYY-MM-DD"
-                                text: catalogAssets.captureDateToFilter
-                                Accessible.name: "Capture date to"
-                                onAccepted: catalogAssets.captureDateToFilter = text.trim()
-                            }
-
-                            ActionButton {
-                                objectName: "libraryApplyCaptureDateRangeButton"
-                                text: "Apply"
-                                compact: true
-                                enabled: (captureDateFromField.text.trim().length === 0 ||
-                                          /^\d{4}-\d{2}-\d{2}$/.test(captureDateFromField.text.trim())) &&
-                                         (captureDateToField.text.trim().length === 0 ||
-                                          /^\d{4}-\d{2}-\d{2}$/.test(captureDateToField.text.trim()))
-                                onClicked: {
-                                    catalogAssets.captureDateFromFilter = captureDateFromField.text.trim()
-                                    catalogAssets.captureDateToFilter = captureDateToField.text.trim()
-                                }
-                            }
-
-                            Item { Layout.fillWidth: true }
                         }
 
                         Label {
@@ -2261,8 +2369,7 @@ Rectangle {
                             color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: theme.typeBody
-                            fontSizeMode: Text.HorizontalFit
-                            minimumPixelSize: theme.typeMicro
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             elide: Text.ElideNone
                         }
 
@@ -2282,19 +2389,18 @@ Rectangle {
                         }
 
                         MenuButton {
+                            objectName: "librarySelectionActionsMenuButton"
                             text: "More"
-                            iconName: "menu"
+                            iconName: "more"
                             compact: true
-                            tooltipText: "Selection actions."
+                            primaryOpensMenu: true
+                            showMenuIndicator: false
+                            secondaryActionMenu: true
+                            menuTooltipText: "Selection actions"
+                            tooltipText: "Open actions for the current selection."
                             enabled: root.selectionModeActive || catalogAssets.selectedAssetCount > 0
                             menuItems: root.selectionActionMenuItems()
                             menuWidth: 190
-                            onClicked: {
-                                if (catalogAssets.selectedAssetCount > 0)
-                                    catalogAssets.clearSelection()
-                                else
-                                    root.setSelectionModeActive(false)
-                            }
                             onMenuItemTriggered: function(key) { root.handleSelectionActionMenu(key) }
                         }
                     }
@@ -2312,9 +2418,15 @@ Rectangle {
                         visible: (root.galleryCollection === "images" || root.galleryCollection === "timelines" || root.galleryCollection === "groupAssets") &&
                                  root.catalogViewMode === "grid" && !root.importBrowserOpen
                         clip: true
-                        property int columns: Math.max(2, Math.floor(width / 256))
+                        // Keep a lone image from becoming a thumbnail stranded in
+                        // a two-column contact sheet. Small collections get one
+                        // card per item; larger collections still use the width.
+                        property int columns: Math.max(1, Math.min(Math.max(1, root.catalogAssets.assetCount),
+                                                                  Math.floor(width / theme.scaled(256))))
                         property real tileSpacing: theme.space12
-                        property real tileWidth: Math.floor((width - ((columns - 1) * tileSpacing)) / columns)
+                        property real tileWidth: columns === 1 && root.catalogAssets.assetCount === 1
+                                                 ? Math.min(width, theme.scaled(560))
+                                                 : Math.max(1, Math.floor(width / columns) - tileSpacing)
                         property real tileHeight: Math.max(168, tileWidth * 0.72)
                         cellWidth: columns > 0 ? width / columns : width
                         cellHeight: tileHeight + tileSpacing
@@ -2363,7 +2475,7 @@ Rectangle {
                             required property string locationPath
                             required property string filePath
                             required property string thumbnailSource
-                            required property string adjustmentPatchJson
+                            required property bool recipeLoaded
                             required property int rating
                             required property bool picked
                             required property bool rejected
@@ -2377,19 +2489,19 @@ Rectangle {
                             required property bool online
                             readonly property bool selected: catalogAssets.assetSelected(assetId)
 
-                            width: galleryFlow.tileWidth
+                            width: galleryFlow.cellWidth
                             height: galleryFlow.tileHeight
                             activeFocusOnTab: true
 
-                            Keys.onReturnPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
-                            Keys.onEnterPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
-                            Keys.onSpacePressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType, Qt.ControlModifier)
+                            Keys.onReturnPressed: root.selectCatalogAsset(index)
+                            Keys.onEnterPressed: root.selectCatalogAsset(index)
+                            Keys.onSpacePressed: root.selectCatalogAsset(index, Qt.ControlModifier)
 
                             Rectangle {
                                 id: previewFrame
                                 anchors.top: parent.top
-                                anchors.left: parent.left
-                                anchors.right: parent.right
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: galleryFlow.tileWidth
                                 readonly property real cardAspectRatio: 0.72
                                 height: Math.max(168, width * cardAspectRatio)
                                 radius: theme.radius12
@@ -2436,16 +2548,39 @@ Rectangle {
                                     border.color: theme.alpha(theme.accentCool400, 0.36)
                                 }
 
-                                Image {
+                                ColorManagedImage {
                                     id: previewImage
                                     anchors.fill: parent
-                                    source: thumbnailSource
+                                    imageSource: thumbnailSource
                                     asynchronous: true
                                     cache: true
                                     fillMode: Image.PreserveAspectCrop
                                     sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
                                     sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
                                     opacity: online ? 1.0 : 0.42
+                                }
+
+                                Column {
+                                    anchors.centerIn: parent
+                                    spacing: theme.space6
+                                    visible: galleryTile.mediaType === "photo" && !galleryTile.recipeLoaded
+
+                                    OpticalActivityIndicator {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: 24
+                                        height: 24
+                                        active: galleryTile.recipeLoaded === false &&
+                                                catalogAssets.assetRecipeLoadError(galleryTile.assetId).length === 0
+                                    }
+
+                                    Label {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: catalogAssets.assetRecipeLoadError(galleryTile.assetId).length > 0
+                                              ? "Saved edit unavailable" : "Loading saved edit"
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeMicro
+                                    }
                                 }
 
                                 Rectangle {
@@ -2497,7 +2632,8 @@ Rectangle {
                                         anchors.centerIn: parent
                                         text: "Selected"
                                         color: theme.ink950
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeMicro
                                         font.weight: Font.DemiBold
                                     }
@@ -2533,7 +2669,8 @@ Rectangle {
                                         Label {
                                             text: mediaTypeBadge.mediaKind === "timeline" ? "Timeline" : "Video"
                                             color: theme.textStrong
-                                            font.family: theme.fontMono
+                                            font.family: theme.fontNumeric
+                                            font.features: theme.numericFontFeatures
                                             font.pixelSize: theme.typeMicro
                                         }
                                     }
@@ -2556,7 +2693,8 @@ Rectangle {
                                         anchors.centerIn: parent
                                         text: durationText
                                         color: theme.textStrong
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeMicro
                                     }
                                 }
@@ -2697,7 +2835,8 @@ Rectangle {
                                                         return isNaN(date.getTime()) ? "Import date unavailable" : date.toLocaleString()
                                                     }
                                                     color: theme.textFaint
-                                                    font.family: theme.fontMono
+                                                    font.family: theme.fontNumeric
+                                                    font.features: theme.numericFontFeatures
                                                     font.pixelSize: theme.typeMicro
                                                     maximumLineCount: 1
                                                     elide: Text.ElideRight
@@ -2706,6 +2845,8 @@ Rectangle {
                                         }
 
                                         Label {
+                                            id: importSourcePathLabel
+                                            objectName: "libraryImportSessionSourcePath"
                                             Layout.fillWidth: true
                                             text: String(modelData.sourcePath || "Source folder unavailable")
                                             color: theme.textMuted
@@ -2714,6 +2855,14 @@ Rectangle {
                                             wrapMode: Text.WrapAnywhere
                                             maximumLineCount: 2
                                             elide: Text.ElideRight
+                                            Accessible.name: "Import source folder"
+                                            Accessible.description: importSourcePathLabel.text
+                                            HoverHandler { id: importSourcePathHover }
+                                            AppToolTip {
+                                                targetItem: importSourcePathLabel
+                                                visible: importSourcePathHover.hovered
+                                                text: importSourcePathLabel.text
+                                            }
                                         }
 
                                         Label {
@@ -2930,7 +3079,8 @@ Rectangle {
                                                 Layout.fillWidth: true
                                                 text: "CAROUSEL"
                                                 color: theme.textMuted
-                                                font.family: theme.fontMono
+                                                font.family: theme.fontNumeric
+                                                font.features: theme.numericFontFeatures
                                                 font.pixelSize: theme.typeMicro
                                                 font.letterSpacing: 0.8
                                             }
@@ -3095,7 +3245,7 @@ Rectangle {
                                 boundsBehavior: Flickable.StopAtBounds
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                                delegate: Button {
+                                delegate: ActionButton {
                                     required property string modelData
                                     required property int index
                                     id: projectCollectionCard
@@ -3114,20 +3264,6 @@ Rectangle {
                                                              : " in the " + modelData + " group.")
                                     onClicked: root.openProjectCollection(modelData === "Unassigned" ? "unassigned" : modelData)
 
-                                    background: Rectangle {
-                                        radius: theme.radius12
-                                        color: projectCollectionCard.down
-                                               ? theme.alpha(theme.ink750, 0.96)
-                                               : projectCollectionCard.hovered
-                                                 ? theme.alpha(theme.ink800, 0.96)
-                                                 : theme.alpha(theme.ink900, 0.9)
-                                        border.width: projectCollectionCard.visualFocus ? theme.focusBorderWidth : theme.hairlineWidth
-                                        border.color: projectCollectionCard.visualFocus
-                                                      ? theme.focusRing
-                                                      : projectCollectionCard.hovered
-                                                        ? theme.alpha(theme.accentCool400, 0.5)
-                                                        : theme.alpha(theme.lineSoft, 0.42)
-                                    }
 
                                     contentItem: ColumnLayout {
                                         anchors.fill: parent
@@ -3359,7 +3495,8 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: root.importJobStatus()
                                 color: root.hasActiveImportJobs() ? theme.accentWarm300 : theme.textMuted
-                                font.family: theme.fontMono
+                                font.family: theme.fontNumeric
+                                font.features: theme.numericFontFeatures
                                 font.pixelSize: theme.typeMicro
                                 wrapMode: Text.Wrap
                             }
@@ -3461,7 +3598,7 @@ Rectangle {
                         border.color: theme.alpha(theme.lineSoft, 0.3)
                         clip: true
 
-                        Image {
+                        ColorManagedImage {
                             id: selectedInspectorPreview
                             readonly property real sourceAspectRatio: status === Image.Ready && implicitHeight > 0
                                                                       ? implicitWidth / implicitHeight
@@ -3469,7 +3606,7 @@ Rectangle {
                             anchors.fill: parent
                             anchors.margins: root.hasSelection && !catalogAssets.hasMultiSelection ? 0 : theme.space16
                             visible: root.hasSelection && !catalogAssets.hasMultiSelection
-                            source: catalogAssets.selectedThumbnailSource
+                            imageSource: catalogAssets.selectedThumbnailSource
                             asynchronous: true
                             cache: true
                             fillMode: Image.PreserveAspectFit
@@ -3633,7 +3770,8 @@ Rectangle {
                                     Layout.fillWidth: true
                                     text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : ""
                                     color: theme.textFaint
-                                    font.family: theme.fontMono
+                                    font.family: theme.fontNumeric
+                                    font.features: theme.numericFontFeatures
                                     font.pixelSize: theme.typeMicro
                                     maximumLineCount: 2
                                     elide: Text.ElideNone
@@ -3670,7 +3808,8 @@ Rectangle {
                                     Label {
                                         text: (catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount
                                         color: theme.textFaint
-                                        font.family: theme.fontMono
+                                        font.family: theme.fontNumeric
+                                        font.features: theme.numericFontFeatures
                                         font.pixelSize: theme.typeMicro
                                     }
                                 }

@@ -35,6 +35,7 @@
 
 #include "edit_recipe_state.h"
 #include "edit_adjustment_patch.h"
+#include "mask_workflow_ownership.h"
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
 #include "photo_editor/pipeline/color_pipeline.h"
@@ -239,8 +240,10 @@ QStringList final_inpaint_required_names_for_export(const EditRecipeState& state
   QStringList names;
   for (const auto& value : state.mask_stack) {
     const auto mask = value.toMap();
-    if (mask.value(QStringLiteral("inpaintFinalRequired"), false).toBool()) {
-      names.push_back(mask_display_name(mask));
+    if (retouch_patch_requires_final(mask)) {
+      const auto id = retouch_repair_id(mask);
+      names.push_back(id.isEmpty() ? mask_display_name(mask)
+          : QStringLiteral("%1 (%2)").arg(mask_display_name(mask), id));
     }
   }
   names.removeDuplicates();
@@ -789,6 +792,15 @@ bool ExportJobController::queuePlannedExportWithCropConstraint(
       job.recipe_json.isEmpty()) {
     return rejectSubmission(QStringLiteral("The export adjustment payload is invalid."));
   }
+  const auto decoded_for_quality = parse_adjustment_payload_or_legacy_recipe(job.recipe_json);
+  if (should_render_photo_job(job.media_type,
+          preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset) &&
+      decoded_for_quality.state.has_value()) {
+    const auto unfinished = final_inpaint_required_names_for_export(*decoded_for_quality.state);
+    if (!unfinished.isEmpty())
+      return rejectSubmission(QStringLiteral("Finish these repairs in Edit before exporting: %1. Select each repair and choose Finalize, then retry export.")
+          .arg(unfinished.join(QStringLiteral(", "))));
+  }
   job.metadata_json = export_crop_metadata(crop_preset, crop_x, crop_y, crop_width, crop_height);
   job.metadata_json.insert(QStringLiteral("assetId"), job.asset_id);
   job.metadata_json.insert(
@@ -1029,11 +1041,11 @@ QVariantMap build_export_source_report(
   }
   const auto final_inpaint_required =
       final_inpaint_required_names_for_export(recipe_state);
-  if (!final_inpaint_required.isEmpty()) {
+  if (render_photo && !final_inpaint_required.isEmpty()) {
     add_issue(
-        QStringLiteral("warning"),
+        QStringLiteral("error"),
         QStringLiteral("final-inpaint-required"),
-        QStringLiteral("%1 retouch patch%2 still need final-resolution inpaint before export: %3.")
+        QStringLiteral("%1 retouch patch%2 need final resolution: %3. In Edit, select each repair and choose Finalize, then retry export.")
             .arg(final_inpaint_required.size())
             .arg(final_inpaint_required.size() == 1 ? QString() : QStringLiteral("es"))
             .arg(final_inpaint_required.join(QStringLiteral(", "))));

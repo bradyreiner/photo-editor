@@ -40,7 +40,8 @@ ColumnLayout {
         text: (carouselRecoveryDialog.recovery.usingLastGood ? "Using last good snapshot  " : "Snapshot  ") +
               String(carouselRecoveryDialog.recovery.capturedAt || "time unavailable")
         color: carouselRecoveryDialog.recovery.usingLastGood ? theme.warning : theme.textFaint
-        font.family: theme.fontMono
+        font.family: theme.fontNumeric
+        font.features: theme.numericFontFeatures
         font.pixelSize: 10
         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
         elide: Text.ElideNone

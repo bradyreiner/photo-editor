@@ -1,0 +1,92 @@
+[
+  {
+    "name": "wedding-bride-01",
+    "photographer": "Alexander Mass",
+    "photo_id": 30138406,
+    "discovery_page": "https://www.pexels.com/photo/elegant-bridal-portrait-by-window-in-soft-light-30138406/",
+    "download": "https://images.pexels.com/photos/30138406/pexels-photo-30138406.jpeg?cs=srgb&dl=pexels-alexander-mass-748453803-30138406.jpg&fm=jpg",
+    "license": "https://www.pexels.com/license/",
+    "source_sha256": "664c9770e3b613b8e8d3dd894f8d3896f076de5a91eea76b1bedb050858bc552",
+    "source_dimensions": [
+      4160,
+      6240
+    ],
+    "preview_dimensions": [
+      1200,
+      1800
+    ],
+    "scope": "Licensed photographic JPEG for an authored product animation; not an original camera RAW, not a native Looksy export, not an endorsement."
+  },
+  {
+    "name": "wedding-bride-02",
+    "photographer": "Alexander Mass",
+    "photo_id": 30138407,
+    "discovery_page": "https://www.pexels.com/photo/elegant-bridal-portrait-by-window-in-soft-light-30138406/",
+    "download": "https://images.pexels.com/photos/30138407/pexels-photo-30138407.jpeg?cs=srgb&dl=pexels-alexander-mass-748453803-30138407.jpg&fm=jpg",
+    "license": "https://www.pexels.com/license/",
+    "source_sha256": "a51f02db62335fcc50432082adfffda8a3f3f2d92b1c672fc3b1ed04a26b14c5",
+    "source_dimensions": [
+      4160,
+      6240
+    ],
+    "preview_dimensions": [
+      1200,
+      1800
+    ],
+    "scope": "Licensed photographic JPEG for an authored product animation; not an original camera RAW, not a native Looksy export, not an endorsement."
+  },
+  {
+    "name": "wedding-bride-03",
+    "photographer": "Alexander Mass",
+    "photo_id": 31252207,
+    "discovery_page": "https://www.pexels.com/photo/elegant-bridal-portrait-by-window-in-soft-light-30138406/",
+    "download": "https://images.pexels.com/photos/31252207/pexels-photo-31252207.jpeg?cs=srgb&dl=pexels-alexander-mass-748453803-31252207.jpg&fm=jpg",
+    "license": "https://www.pexels.com/license/",
+    "source_sha256": "9b2cb3bb6d085810271cfbb3b72aa46601a66e6cef5aca21ad7fd57e0838c753",
+    "source_dimensions": [
+      4160,
+      6240
+    ],
+    "preview_dimensions": [
+      1200,
+      1800
+    ],
+    "scope": "Licensed photographic JPEG for an authored product animation; not an original camera RAW, not a native Looksy export, not an endorsement."
+  },
+  {
+    "name": "wedding-couple",
+    "photographer": "Trung Nguyen",
+    "photo_id": 9517379,
+    "discovery_page": "https://www.pexels.com/photo/bride-and-groom-standing-on-the-hill-back-to-back-9517379/",
+    "download": "https://images.pexels.com/photos/9517379/pexels-photo-9517379.jpeg?cs=srgb&dl=pexels-trungnguyenphotog-9517379.jpg&fm=jpg",
+    "license": "https://www.pexels.com/license/",
+    "source_sha256": "f00aa958c2296ec454bbd99816c596cef7a7651ebe1408f596ed973a798149ea",
+    "source_dimensions": [
+      5760,
+      3840
+    ],
+    "preview_dimensions": [
+      1800,
+      1200
+    ],
+    "scope": "Licensed photographic JPEG for an authored product animation; not an original camera RAW, not a native Looksy export, not an endorsement."
+  },
+  {
+    "name": "wedding-dawn",
+    "photographer": "Lina Ospina",
+    "photo_id": 20703918,
+    "discovery_page": "https://www.pexels.com/photo/bride-and-groom-in-mountains-at-dawn-20703918/",
+    "download": "https://images.pexels.com/photos/20703918/pexels-photo-20703918.jpeg?cs=srgb&dl=pexels-lina-ospina-1098622807-20703918.jpg&fm=jpg",
+    "license": "https://www.pexels.com/license/",
+    "source_sha256": "9220eb89d9b8413828c86e480769a6829fc88d3d25389375dfe7355f0083e419",
+    "source_dimensions": [
+      6240,
+      4160
+    ],
+    "preview_dimensions": [
+      1800,
+      1200
+    ],
+    "scope": "Licensed photographic JPEG for an authored product animation; not an original camera RAW, not a native Looksy export, not an endorsement."
+  }
+]

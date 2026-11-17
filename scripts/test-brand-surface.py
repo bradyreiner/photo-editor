@@ -42,6 +42,13 @@ class BrandSurfaceTests(unittest.TestCase):
         status, output = self.check("\n".join("  " + line for line in statements))
         self.assertEqual(status, 0, output)
 
+    def test_current_canvas_source_directory_readers_are_compatible(self):
+        source = (brand.ROOT / "apps/desktop/src/catalog_asset_model.cpp").read_text()
+        start = source.index("bool is_canvas_source_path(")
+        end = source.index("\nQString library_file_type(", start)
+        status, output = self.check(source[start:end])
+        self.assertEqual(status, 0, output)
+
     def test_displayed_engineering_name_is_rejected_in_same_file(self):
         status, output = self.check('setTitle(QStringLiteral("PhotoEditor"));')
         self.assertEqual(status, 1)

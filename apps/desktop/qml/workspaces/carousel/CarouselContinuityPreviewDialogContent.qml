@@ -39,7 +39,8 @@ ColumnLayout {
                       " and " + (Number(root.continuityPreview.rightBoardIndex || 1) + 1) +
                       " · actual export cut at " + Number(root.continuityPreview.actualCutX || 0) + " px"
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 elide: Text.ElideNone
@@ -97,7 +98,8 @@ ColumnLayout {
         Label {
             text: "Simulation only · never exported"
             color: theme.textFaint
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 9
         }
     }
@@ -202,7 +204,8 @@ ColumnLayout {
                   ? "Exact exported edges touching"
                   : root.continuityGutterPixels + " px simulated feed gutter between exact exported edges"
             color: theme.textFaint
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: 9
             elide: Text.ElideNone
         }

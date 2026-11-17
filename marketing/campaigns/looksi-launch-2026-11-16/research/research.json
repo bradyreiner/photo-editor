@@ -1,0 +1,234 @@
+{
+  "title": "Looksi launch reference research",
+  "retrieved_on": "2026-11-16",
+  "scope": "Five differentiated creative styles informed by actual maker posts, first-party release articles and a native LinkedIn launch caption.",
+  "methodology": [
+    "Only primary maker/company posts and official policy sources support observations.",
+    "Observed refers to retrieved text or visible media descriptions, not unplayed video content.",
+    "The creative adaptations and measurement hypotheses are recommendations, not results proven by these references.",
+    "No performance ranking or causal conversion claim is made. No follower, vote, sales or download counts are used to select winners.",
+    "Instagram direct post inspection was not established. Instagram formats below adapt the observed mechanics; no claim is made to have analyzed an accessible Instagram launch post."
+  ],
+  "styles": [
+    {
+      "id": "01",
+      "style": "Candid founder / build in public",
+      "audience": "Curious creators and independent builders",
+      "recommended_channels": [
+        "Reddit r/SideProject, subject to launch-day rule check",
+        "Founder Instagram Reel",
+        "Founder LinkedIn"
+      ],
+      "references": [
+        {
+          "title": "I Built a Photo Editor with Text Behind Images, Filters, and Custom Effects",
+          "publisher": "Original founder post on r/SideProject",
+          "date": "2025-07-04",
+          "url": "https://www.reddit.com/r/SideProject/comments/1lrmzzr/i_built_a_photo_editor_with_text_behind_images/",
+          "observed": "Personal editing frustration opens the post; a short feature list follows; the creator explains how a small idea grew and asks for feedback.",
+          "access": "Full post text inspected; embedded video did not load."
+        },
+        {
+          "title": "Building my dream video editor - AI Captions just landed",
+          "publisher": "Original founder post on r/SideProject",
+          "date": "2026-09-12",
+          "url": "https://www.reddit.com/r/SideProject/comments/1we6sw3/building_my_dream_video_editor_ai_captions_just/",
+          "observed": "Begins with the creator replacing tools they used, describes sharing with colleagues, then invites a trial. Comments include both interest and criticism of similarity to another app.",
+          "access": "Full post and visible comment text inspected; no video playback."
+        }
+      ],
+      "inference": "The founder can earn attention by naming a specific personal problem and showing a real work-in-progress. This is a creative hypothesis, not proof of conversion.",
+      "copy_mechanics": "I wanted [specific editing experience], so I built Looksi. Here is [one real task]. I am building toward a better option for professionals and hobbyists. What would you test first?",
+      "creative_execution": "Founder speaks plainly for the opening; cut to one genuine workflow recording; return to a concrete question. Carousel can pair a founder note with a real result and current product status.",
+      "avoid": "Invented founder timeline, customer counts, universal replacement claims, vague requests to support a launch.",
+      "measurement_hypothesis": "Quality of workflow feedback and qualified demo visits matter more than votes."
+    },
+    {
+      "id": "02",
+      "style": "Precise professional workflow",
+      "audience": "Working photographers, editors and hybrid creators",
+      "recommended_channels": [
+        "YouTube workflow demonstration",
+        "LinkedIn native video or carousel",
+        "Instagram screen-recording Reel"
+      ],
+      "references": [
+        {
+          "title": "New Version 25.01: Finally, Playlist Bins",
+          "publisher": "Shotcut / Meltytech",
+          "date": "2025-01-25",
+          "url": "https://www.shotcut.org/blog/new-release-250125/",
+          "observed": "A concrete workflow feature headlines the release. New controls use exact menu locations, while fixes and technical constraints are separately documented.",
+          "access": "Full release text inspected."
+        },
+        {
+          "title": "Process Zero: The Anti-Intelligent Camera",
+          "publisher": "Lux / Ben Sandofsky",
+          "date": "2024-08-14",
+          "url": "https://www.lux.camera/introducing-process-zero-for-iphone/",
+          "observed": "Introduces a specific imaging process, illustrates the visual choice, explains sensor-level behavior and names daylight and low-light tradeoffs.",
+          "access": "Full article text and embedded-media locations inspected; no direct playback."
+        }
+      ],
+      "inference": "A professional-oriented launch is stronger when a viewer can inspect a complete task and its limits instead of accepting a broad claim of superiority.",
+      "copy_mechanics": "Task \u2192 starting media \u2192 visible edit decisions \u2192 exported result \u2192 supported build and constraints. Use exact feature names only after capture verifies them.",
+      "creative_execution": "Show a single photo treatment or timeline task in a genuine recording. Keep the result visible beside the relevant controls. Supply project inputs and final export in a follow-up if permitted.",
+      "avoid": "Benchmark claims without measurements, client-delivery guarantees, claiming source code alone proves a complete workflow.",
+      "measurement_hypothesis": "Track demo completion, technical questions and testers who repeat the demonstrated task."
+    },
+    {
+      "id": "03",
+      "style": "Welcoming hobbyist tutorial",
+      "audience": "Weekend photographers and people learning photo/video editing",
+      "recommended_channels": [
+        "Instagram tutorial Reel",
+        "Instagram saveable carousel",
+        "YouTube beginner walkthrough"
+      ],
+      "references": [
+        {
+          "title": "Procreate Dreams arrives on the App Store",
+          "publisher": "Procreate",
+          "date": "2023-11-22 launch described",
+          "url": "https://procreate.com/insight/2023/procreate-dreams",
+          "observed": "The launch describes approachable animation and familiar gestures, gives practical examples such as loops and draw-overs, and directs users toward learning resources.",
+          "access": "Full article text inspected."
+        },
+        {
+          "title": "Learn Procreate Dreams with two months free access to Skillshare\u2019s growing library of classes for creatives",
+          "publisher": "Procreate",
+          "date": "2024",
+          "url": "https://procreate.com/insight/2024/skillshare",
+          "observed": "Launch-adjacent teaching content names instructors, specific achievable outputs and classes for differing experience levels. It includes social video examples.",
+          "access": "Full article text inspected; historical promotion is not a current offer recommendation."
+        }
+      ],
+      "inference": "An achievable first result can lower perceived complexity without talking down to beginners. Separate the short lesson from later advanced work.",
+      "copy_mechanics": "Here is one way to [small creative outcome]. Start here. Try this adjustment. Compare. Save the result. What would you make next?",
+      "creative_execution": "Show the finished result first, then three clearly labeled steps using actual Looksi controls. Use calm narration, readable captions and enough time to understand each action.",
+      "avoid": "Promising mastery in seconds, conflating a short cut with actual task time, assuming beginners want fewer creative choices.",
+      "measurement_hypothesis": "Track saves per reached account, meaningful how-to questions and completed first-task reports."
+    },
+    {
+      "id": "04",
+      "style": "Playful relatable editing pain / challenger",
+      "audience": "Creators who recognize everyday editing friction",
+      "recommended_channels": [
+        "Instagram short Reel",
+        "TikTok short original sketch",
+        "Threads image or short video"
+      ],
+      "references": [
+        {
+          "title": "New Version 25.07: Hot Hot Hot",
+          "publisher": "Shotcut / Meltytech",
+          "date": "2025-07-26",
+          "url": "https://www.shotcut.org/blog/new-release-250726/",
+          "observed": "Uses a running heat joke and a meme before explaining actual additions. The playful introduction leads into concrete instructions and constraints.",
+          "access": "Full release text inspected; reference meme is inspiration only and is not licensed for reuse."
+        },
+        {
+          "title": "Introducing the all-new Affinity: Professional design, now free for everyone",
+          "publisher": "Canva / Ash Hewson, Affinity CEO",
+          "date": "2025-10-29 indexed publication date",
+          "url": "https://www.canva.com/newsroom/news/all-new-affinity/",
+          "observed": "Frames launch around familiar frustrations with interrupted workflows and tool complexity, then connects that tension to a concrete product offer.",
+          "access": "Full release text inspected; its pricing, speed and licensing statements belong to Affinity."
+        }
+      ],
+      "inference": "A short original joke can make an editing pain recognizable; the product must then visibly resolve the exact small problem introduced.",
+      "copy_mechanics": "Recognizable editing situation \u2192 one escalating joke \u2192 Looksi reveal \u2192 one honest task \u2192 concise question.",
+      "creative_execution": "Original animated export-name pile or founder reaction sketch. Resolve the joke through a verified task recording. Use self-directed humor rather than mocking a competing company or beginners.",
+      "avoid": "Borrowing competitor pricing promises, unsupported faster/cheaper claims, implying a feature that is not demonstrated, reusing reference memes.",
+      "measurement_hypothesis": "Track shares per reach and profile-to-demo visits; comments that only respond to the joke do not establish product interest."
+    },
+    {
+      "id": "05",
+      "style": "Cinematic editorial manifesto",
+      "audience": "Taste-led photographers, filmmakers and design-conscious hobbyists",
+      "recommended_channels": [
+        "Instagram cinematic Reel",
+        "YouTube brand film",
+        "Website hero film or editorial image sequence"
+      ],
+      "references": [
+        {
+          "title": "Introducing Kino - Pro Video for iPhone",
+          "publisher": "Lux",
+          "date": "2024-05-29",
+          "url": "https://www.lux.camera/introducing-kino-pro-video-camera/",
+          "observed": "Leads with filmmaking ambition and explains how color changes the feeling of footage. The release embeds demos and a Sandwich launch film explicitly made with Kino.",
+          "access": "Full article text and film descriptions inspected; films were not played."
+        },
+        {
+          "title": "Procreate set to revolutionize animation with new app for iPad, Procreate Dreams",
+          "publisher": "Procreate",
+          "date": "2023-09-08 reveal described",
+          "url": "https://procreate.com/insight/2023/procreate-dreams-reveal",
+          "observed": "A founder reveal connects a broad storytelling ambition to specific tools, creator work and a deliberately expressive visual world.",
+          "access": "Full article text and image descriptions inspected."
+        }
+      ],
+      "supplemental_native_social_reference": {
+        "title": "Introducing Procreate Dreams",
+        "publisher": "Procreate on LinkedIn",
+        "url": "https://www.linkedin.com/posts/procreate-art_introducing-procreate-dreams-the-all-new-activity-7105938344571781122-VpqE",
+        "observed": "A very short native social caption identifies the new app, platform, release date and direct next step.",
+        "access": "Caption and visible comments inspected; no video playback."
+      },
+      "inference": "A restrained, expressive film can communicate taste, while a small amount of real interface footage connects that taste to the tool. The manifesto should describe intent rather than imply market leadership.",
+      "copy_mechanics": "A photographic observation \u2192 why the founder cares \u2192 Looksi as the tool being built \u2192 people the tool is for \u2192 invitation to see the work.",
+      "creative_execution": "Original photographs and motion footage, additive RGB light, deliberate typography and sparse narration. End with a real product moment and accurate current-status CTA.",
+      "avoid": "Implying illustrative artwork was edited in Looksi unless it was, unlicensed creator art, universal professional certification, treating polish as evidence of app reliability.",
+      "measurement_hypothesis": "Track attentive views and qualified profile visits; compare assisted demo starts separately from direct response."
+    }
+  ],
+  "platform_sources": [
+    {
+      "title": "Spam",
+      "publisher": "Reddit Help",
+      "url": "https://support.reddithelp.com/hc/en-us/articles/360043504051-Spam",
+      "observed": "Page updated October 30, 2026. Reddit disallows repeated or unsolicited mass engagement; relevance and community-specific expectations remain important.",
+      "decision": "One tailored founder post where the community permits it; no repeated cross-post blast, unsolicited DMs or coordinated engagement.",
+      "verification": "Full primary policy inspected."
+    },
+    {
+      "title": "r/SideProject community rules",
+      "publisher": "Reddit",
+      "url": "https://www.reddit.com/r/SideProject/about/rules/",
+      "observed": "Fetch redirected to the mod rules page and returned a rules heading without rule text.",
+      "decision": "Treat as a candidate community, not verified posting permission. Read the live sidebar, submission requirements and current rules in the posting account before launch.",
+      "verification": "Incomplete: public page shell only."
+    },
+    {
+      "title": "r/VideoEditing moderator removal",
+      "publisher": "VideoEditing-ModTeam on Reddit",
+      "url": "https://www.reddit.com/r/VideoEditing/comments/1tuy4lq/removed_by_moderator/",
+      "observed": "Visible ModTeam comments explicitly reject self-promotion and reference the same restriction in r/editors. The thread also lists a Tutorial Tuesday flair but does not establish software-launch permission.",
+      "decision": "Do not schedule a promotional Looksi launch there. A tutorial requires its own fresh rule review and any exception established by moderators.",
+      "verification": "Primary moderator comment inspected; not a complete launch-day rule audit."
+    },
+    {
+      "title": "r/photography community rules",
+      "publisher": "Reddit",
+      "url": "https://www.reddit.com/r/photography/about/rules/",
+      "observed": "Fetch returned a rules heading and table labels but no rule descriptions.",
+      "decision": "No promotional post scheduled; verify rules and correct thread before considering participation.",
+      "verification": "Incomplete: public page shell only."
+    },
+    {
+      "title": "Helping creators find new audiences (Portuguese official edition)",
+      "publisher": "Meta Newsroom",
+      "url": "https://about.fb.com/br/news/2024/04/ajudando-o-criador-de-conteudo-a-encontrar-novos-publicos/",
+      "observed": "Official April 30, 2024 announcement explains recommendation preference for original work and substitution of identical reposts. It discusses eligible content without visible watermarks.",
+      "decision": "Produce original Looksi assets and native exports. Treat this as a documented principle, not a current reach guarantee or complete 2026 ranking specification.",
+      "verification": "Full primary announcement inspected; newer direct Instagram policy endpoint returned HTTP 429."
+    }
+  ],
+  "limitations": [
+    "Historical launch pages may now include changed navigation or updated product offers. Do not transplant competitor pricing, features or dates into Looksi copy.",
+    "Blackmagic release pages returned navigation-only shells, so they were excluded from the final 10 core reference set.",
+    "Do not reuse the reference art, video, screenshots, memes, audio or quotes as Looksi campaign assets.",
+    "All launch-day community rules and destination links require rechecking when publishing is scheduled."
+  ]
+}

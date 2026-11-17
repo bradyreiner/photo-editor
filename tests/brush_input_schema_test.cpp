@@ -129,6 +129,16 @@ int main() {
       stroke.value(QStringLiteral("samples")).toList().size() != 1) {
     return fail("brush stroke serialization must preserve order, operation, settings, and samples");
   }
+  stroke_mask.insert(QStringLiteral("toolRole"), QStringLiteral("retouch"));
+  stroke_mask.insert(QStringLiteral("brushHardness"), 0.85);
+  stroke_mask.insert(QStringLiteral("feather"), 0.15);
+  const auto retouch_settings=brush_stroke_variant(stroke_mask,erase_samples,1)
+      .value(QStringLiteral("settings")).toMap();
+  if (retouch_settings.value(QStringLiteral("rasterVersion")).toInt()!=2 ||
+      !close(retouch_settings.value(QStringLiteral("hardness")).toDouble(),0.85) ||
+      !close(retouch_settings.value(QStringLiteral("feather")).toDouble(),0.15)) {
+    return fail("New retouch strokes must record the same circular tip and per-stroke softness as selection strokes");
+  }
 
   if (rounded_brush_decode_edge(1.0) != 64 ||
       rounded_brush_decode_edge(65.0) != 128 ||

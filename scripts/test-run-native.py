@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise launcher orchestration without touching the user's app or catalog."""
 
+import fcntl
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -21,12 +23,13 @@ class LauncherTest(unittest.TestCase):
         (self.root / "scripts").mkdir()
         source = Path(__file__).resolve().parent
         shutil.copy(source / "run-native.sh", self.root / "scripts/run-native.sh")
+        shutil.copy(source / "build-lock.sh", self.root / "scripts/build-lock.sh")
         shutil.copy(source.parent / "PhotoEditor.command", self.root / "PhotoEditor.command")
         self.bin = self.root / "test-bin"
         self.bin.mkdir()
         self.log = self.root / "calls.jsonl"
         self.stub = "#!" + sys.executable + "\n" + r'''
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 root = pathlib.Path(os.environ["TEST_REPO"])
 tool = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -36,6 +39,10 @@ with open(root / "calls.jsonl", "a") as f:
         "data": os.environ.get("PHOTO_EDITOR_APP_DATA_DIR", "")}) + "\n")
 if os.environ.get("TEST_FAIL") == tool:
     sys.exit(23)
+if os.environ.get("TEST_BLOCK") == tool:
+    (root / "build-blocked").touch()
+    while not (root / "release-build").exists():
+        time.sleep(0.02)
 if tool == "cmake":
     preset = args[args.index("--preset") + 1]
     build = root / "build" / preset.removeprefix("build-")
@@ -61,8 +68,9 @@ if tool == "pgrep":
         self.env = {**os.environ, "PATH": str(self.bin) + ":/usr/bin:/bin",
                     "TEST_REPO": str(self.root), "PHOTO_EDITOR_NATIVE_LOG_STYLE": "plain",
                     "PHOTO_EDITOR_APP_DATA_DIR": str(self.root / "runtime")}
+        (self.bin / "python3").symlink_to(sys.executable)
         for key in ("PHOTO_EDITOR_DATABASE_URL", "PHOTO_EDITOR_LOG_DIR", "PHOTO_EDITOR_BACKUP_DIR",
-                    "TEST_FAIL", "TEST_RUNNING", "TEST_STUCK", "BASH_ENV"):
+                    "TEST_FAIL", "TEST_RUNNING", "TEST_STUCK", "TEST_BLOCK", "BASH_ENV"):
             self.env.pop(key, None)
 
     def write_stub(self, path):
@@ -137,6 +145,100 @@ if tool == "pgrep":
         self.assertEqual(result.returncode, 23)
         self.assertEqual([c["tool"] for c in self.calls()], ["cargo", "cmake"])
         self.assertFalse((self.root / "runtime").exists())
+        self.env.pop("TEST_FAIL")
+        self.assertEqual(self.run_launcher("--build-only").returncode, 0)
+
+    def test_overlapping_build_rejected_before_cargo_and_debug_independent(self):
+        env = {**self.env, "TEST_BLOCK": "cargo"}
+        first = subprocess.Popen(
+            ["/bin/bash", str(self.root / "scripts/run-native.sh"), "--build-only"],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 10
+            while not (self.root / "build-blocked").exists():
+                self.assertIsNone(first.poll(), "first build exited before Cargo")
+                self.assertLess(time.monotonic(), deadline, "first build never reached Cargo")
+                time.sleep(0.02)
+            blocked = self.run_launcher("--build-only")
+            self.assertEqual(blocked.returncode, 1, blocked.stderr)
+            self.assertIn("A build is already running", blocked.stderr)
+            self.assertEqual([c["tool"] for c in self.calls()], ["cargo"])
+            debug = self.run_launcher("--debug", "--build-only")
+            self.assertEqual(debug.returncode, 0, debug.stderr)
+        finally:
+            (self.root / "release-build").touch()
+            stdout, stderr = first.communicate(timeout=10)
+        self.assertEqual(first.returncode, 0, stdout + stderr)
+        self.assertEqual(self.run_launcher("--build-only").returncode, 0)
+
+    def test_build_lock_released_before_app_launch(self):
+        env = {**self.env, "TEST_BLOCK": "Looksy"}
+        first = subprocess.Popen(
+            ["/bin/bash", str(self.root / "scripts/run-native.sh")],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 10
+            while not (self.root / "build-blocked").exists():
+                self.assertIsNone(first.poll(), "launcher exited before app launch")
+                self.assertLess(time.monotonic(), deadline, "launcher never reached app")
+                time.sleep(0.02)
+            result = self.run_launcher("--build-only")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        finally:
+            (self.root / "release-build").touch()
+            first.communicate(timeout=10)
+        self.assertEqual(first.returncode, 0)
+
+    def test_killed_launcher_keeps_lock_until_build_child_exits(self):
+        env = {**self.env, "TEST_BLOCK": "cargo"}
+        first = subprocess.Popen(
+            ["/bin/bash", str(self.root / "scripts/run-native.sh"), "--build-only"],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 10
+            while not (self.root / "build-blocked").exists():
+                self.assertIsNone(first.poll(), "first build exited before Cargo")
+                self.assertLess(time.monotonic(), deadline, "first build never reached Cargo")
+                time.sleep(0.02)
+            first.kill()
+            first.wait(timeout=5)
+            blocked = self.run_launcher("--build-only")
+            self.assertEqual(blocked.returncode, 1, blocked.stderr)
+            self.assertIn("A build is already running", blocked.stderr)
+        finally:
+            (self.root / "release-build").touch()
+            first.communicate(timeout=10)
+        self.assertEqual(self.run_launcher("--build-only").returncode, 0)
+
+    def test_packaging_scripts_share_launcher_lock(self):
+        source = Path(__file__).resolve().parent
+        for name in ("build-release.sh", "prepare-sales-candidate.sh"):
+            shutil.copy(source / name, self.root / "scripts" / name)
+        (self.root / "VERSION").write_text("0.1.0\n")
+        for tool in ("git", "cpack"):
+            self.write_stub(self.bin / tool)
+        # Exercise the macOS packaging entry points even on a non-macOS test host.
+        (self.bin / "uname").write_text(
+            '#!/bin/bash\nif [ "$1" = "-m" ]; then echo arm64; else echo Darwin; fi\n')
+        (self.bin / "uname").chmod(0o755)
+        env = {**self.env, "CMAKE_PREFIX_PATH": "/fixture/qt"}
+        build = self.root / "build/release-macos"
+        build.mkdir(parents=True)
+        with (build / ".looksy-build.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for name, args in (
+                ("build-release.sh", ["--allow-dirty", "--skip-tests"]),
+                ("prepare-sales-candidate.sh", [str(self.root / "candidate")]),
+            ):
+                with self.subTest(script=name):
+                    result = subprocess.run(
+                        ["/bin/bash", str(self.root / "scripts" / name), *args],
+                        env=env, text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("A build is already running", result.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.root / "candidate").exists())
+        self.assertEqual(self.run_launcher("--build-only").returncode, 0)
 
     def test_catalog_failure_prevents_restart(self):
         self.env["TEST_FAIL"] = "catalog_local_db"

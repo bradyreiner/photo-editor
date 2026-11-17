@@ -12,6 +12,7 @@ InspectorSection {
     Theme { id: groupTheme }
 
     Layout.fillWidth: true
+    panelSurface: true
     accent: workspace.mint
     showAccentMarker: false
     uppercaseTitle: false

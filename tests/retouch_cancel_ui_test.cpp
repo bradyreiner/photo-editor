@@ -29,16 +29,20 @@ import "../apps/desktop/qml/components"
 Item {
     id: root
     width: 780; height: 160
-    property alias editorPreview: controller
+    property alias editorPreviewController: controller
     property int exits: 0
     function completeRetouchTool() { exits++ }
     function activateEditTool(tool) { exits++ }
+    function componentRetouchDisabledReason(mode) { return "" }
     QtObject {
         id: controller
         objectName: "controller"
         property bool hasActiveMask: true
         property string activeMaskToolRole: "retouch"
         property bool activeMaskCommitted: true
+        property string activeMaskRetouchMode: "remove"
+        property bool aiInpaintAvailable: true
+        property bool activeInpaintFinalizationAvailable: false
         property bool inpaintProgressActive: true
         property int cancellations: 0
         property int applications: 0

@@ -21,14 +21,47 @@ pub(crate) fn main() -> std::process::ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = env::args().collect();
+    if arguments.get(1).map(String::as_str) == Some("--recipes") {
+        let asset_ids = arguments.iter().skip(2).cloned().collect::<Vec<_>>();
+        if asset_ids.is_empty() {
+            return Err("recipe snapshot requires at least one asset ID".into());
+        }
+        if asset_ids.len() > 8 {
+            return Err("recipe snapshot accepts at most 8 asset IDs per request".into());
+        }
+
+        let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
+        let stdout = io::stdout();
+        let mut output = BufWriter::with_capacity(64 * 1024, stdout.lock());
+        catalog
+            .write_asset_recipe_snapshots_json(&asset_ids, &mut output)
+            .await?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+        return Ok(());
+    }
+
     let limit = parse_limit(arguments.get(1).map(String::as_str));
+    let library_only = arguments.iter().any(|argument| argument == "--library");
 
     let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
 
     let stdout = io::stdout();
     let mut output = BufWriter::with_capacity(64 * 1024, stdout.lock());
-    output.write_all(b"{\"assets\":")?;
-    catalog.write_asset_snapshots_json(limit, &mut output).await?;
+    output.write_all(if library_only {
+        b"{\"recipes_loaded\":false,\"assets\":"
+    } else {
+        b"{\"recipes_loaded\":true,\"assets\":"
+    })?;
+    if library_only {
+        catalog
+            .write_asset_library_snapshots_json(limit, &mut output)
+            .await?;
+    } else {
+        catalog
+            .write_asset_snapshots_json(limit, &mut output)
+            .await?;
+    }
     output.write_all(b",\"drives\":")?;
     serde_json::to_writer(&mut output, &catalog.list_drives().await?)?;
     output.write_all(b",\"projects\":")?;

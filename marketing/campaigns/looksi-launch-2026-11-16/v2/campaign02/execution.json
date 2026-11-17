@@ -1,0 +1,48 @@
+{
+  "title": "NEPAL. In three forms.",
+  "role": "The professional casebook",
+  "duration_seconds": 42,
+  "fps": 30,
+  "dimensions": [
+    1080,
+    1920
+  ],
+  "sources": "../media/provenance.json",
+  "scene_plan": [
+    {
+      "start": 0,
+      "end": 4,
+      "title": "The project"
+    },
+    {
+      "start": 4,
+      "end": 11,
+      "title": "A photo treatment"
+    },
+    {
+      "start": 11,
+      "end": 18,
+      "title": "The native motion study"
+    },
+    {
+      "start": 18,
+      "end": 25,
+      "title": "Six boards, one story"
+    },
+    {
+      "start": 25,
+      "end": 33,
+      "title": "Let the files speak"
+    },
+    {
+      "start": 33,
+      "end": 42,
+      "title": "The builder\u2019s invitation"
+    }
+  ],
+  "audio": "Original sample-free sine/harmonic synthesis with authored scene accents; archived source audio muted.",
+  "source_scope": "Actual native photo/board/Timeline exports across sessions, not one fresh recorded end-to-end run.",
+  "public_caption": "NEPAL, in three forms: a photo treatment, a 12-second motion study, and a story in six boards. These are actual Looksy outputs made across sessions while building the tool. Photo and board exports: 16 November. Native Timeline review excerpt: 2 November. I\u2019m building LOOKSi for professional projects and the work you make for yourself. What would you want to inspect before trying a new editor?",
+  "alt_text": "NEPAL. In three forms. A photo. A motion study. A story in six boards.",
+  "remaining": "Creative review, media publication permissions and current placement check. Optional continuous current-build demo and founder narration are tracked separately."
+}

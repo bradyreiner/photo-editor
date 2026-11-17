@@ -1,0 +1,62 @@
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'marketing/native-recreation-v4/polish-pass-2026-10-30/native-audio-readouts-pass15-after/audio-readouts-pass15-after.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf62.3.100
+  Duration: 00:00:01.00, start: 0.000000, bitrate: 15740 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 15335 kb/s, 30 fps, 30 tbr, 240k tbn (default)
+    Metadata:
+      handler_name    : VideoHandler
+      vendor_id       : [0][0][0][0]
+      encoder         : Lavc62.11.100 libx264
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 376 kb/s (default)
+    Metadata:
+      handler_name    : SoundHandler
+      vendor_id       : [0][0][0][0]
+Stream mapping:
+  Stream #0:0 -> #0:0 (h264 (native) -> wrapped_avframe (native))
+  Stream #0:1 -> #0:1 (aac (native) -> pcm_s16le (native))
+Press [q] to stop, [?] for help
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.0999792  TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU  FTPK: -10.3 -11.5 dBFS  TPK: -10.3 -11.5 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.199979   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU  FTPK:  -3.2  -3.2 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.299979   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU  FTPK:  -9.0  -7.8 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.399979   TARGET:-23 LUFS    M: -16.6 S:-120.7     I: -16.6 LUFS       LRA:   0.0 LU  FTPK:  -9.5 -10.4 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.499979   TARGET:-23 LUFS    M: -16.5 S:-120.7     I: -16.6 LUFS       LRA:   0.0 LU  FTPK: -10.4 -10.2 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.599979   TARGET:-23 LUFS    M: -18.0 S:-120.7     I: -17.0 LUFS       LRA:   0.0 LU  FTPK: -10.3 -11.2 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.699979   TARGET:-23 LUFS    M: -18.1 S:-120.7     I: -17.3 LUFS       LRA:   0.0 LU  FTPK:  -8.6  -9.3 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.799979   TARGET:-23 LUFS    M: -17.8 S:-120.7     I: -17.4 LUFS       LRA:   0.0 LU  FTPK:  -9.6  -9.6 dBFS  TPK:  -3.2  -3.2 dBFS
+Output #0, null, to 'pipe:':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf62.3.100
+  Stream #0:0(und): Video: wrapped_avframe, yuv420p(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], q=2-31, 200 kb/s, 30 fps, 30 tbn (default)
+    Metadata:
+      encoder         : Lavc62.11.100 wrapped_avframe
+      handler_name    : VideoHandler
+      vendor_id       : [0][0][0][0]
+  Stream #0:1(und): Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+    Metadata:
+      encoder         : Lavc62.11.100 pcm_s16le
+      handler_name    : SoundHandler
+      vendor_id       : [0][0][0][0]
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.899979   TARGET:-23 LUFS    M: -17.8 S:-120.7     I: -17.4 LUFS       LRA:   0.0 LU  FTPK: -10.0  -9.3 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] t: 0.999979   TARGET:-23 LUFS    M: -18.0 S:-120.7     I: -17.5 LUFS       LRA:   0.0 LU  FTPK: -11.6 -10.5 dBFS  TPK:  -3.2  -3.2 dBFS
+[Parsed_ebur128_0 @ 0xa6ec5db00] Summary:
+
+  Integrated loudness:
+    I:         -17.5 LUFS
+    Threshold: -27.5 LUFS
+
+  Loudness range:
+    LRA:         0.0 LU
+    Threshold:   0.0 LUFS
+    LRA low:     0.0 LUFS
+    LRA high:    0.0 LUFS
+
+  True peak:
+    Peak:       -3.2 dBFS
+[out#0/null @ 0xa6ec5c300] video:12KiB audio:188KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=   30 fps=0.0 q=-0.0 Lsize=N/A time=00:00:01.00 bitrate=N/A speed=20.7x elapsed=0:00:00.04    

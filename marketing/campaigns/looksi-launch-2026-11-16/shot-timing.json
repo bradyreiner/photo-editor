@@ -1,0 +1,211 @@
+{
+  "fps": 24,
+  "seconds": 18,
+  "campaigns": [
+    {
+      "id": "01",
+      "name": "A note from the builder",
+      "shots": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "screen_text": [
+            "I built this."
+          ],
+          "production_label": "FOUNDER SHOT TO FILM"
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "screen_text": [
+            "For the way",
+            "I want to edit."
+          ],
+          "production_label": "FOUNDER / DEMO TO FILM"
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "screen_text": [
+            "Photo. Video.",
+            "Room for your ideas."
+          ],
+          "production_label": "PRODUCT RECORDING TO ADD"
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "screen_text": [
+            "I\u2019m building LOOKSi.",
+            "What would you change?"
+          ],
+          "production_label": "GRAPHIC END CARD"
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Show the work",
+      "shots": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "screen_text": [
+            "One source."
+          ],
+          "production_label": "DEMO RECORDING TO ADD"
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "screen_text": [
+            "A deliberate edit."
+          ],
+          "production_label": "DEMO RECORDING TO ADD"
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "screen_text": [
+            "Then the",
+            "exported result."
+          ],
+          "production_label": "EXPORT RECORDING TO ADD"
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "screen_text": [
+            "I\u2019m building LOOKSi.",
+            "Tell me your workflow."
+          ],
+          "production_label": "GRAPHIC END CARD"
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Start with your eye",
+      "shots": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "screen_text": [
+            "Like the photo.",
+            "Wonder about the edit?"
+          ],
+          "production_label": "GRAPHIC OPENING"
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "screen_text": [
+            "Start with",
+            "one choice."
+          ],
+          "production_label": "TUTORIAL CAPTURE TO ADD"
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "screen_text": [
+            "Then see",
+            "what changes."
+          ],
+          "production_label": "TUTORIAL CAPTURE TO ADD"
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "screen_text": [
+            "I\u2019m building LOOKSi.",
+            "Come learn with me."
+          ],
+          "production_label": "GRAPHIC END CARD"
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "name": "The final final club",
+      "shots": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "screen_text": [
+            "final_final."
+          ],
+          "production_label": "TYPE ANIMATION"
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "screen_text": [
+            "final_final_v7."
+          ],
+          "production_label": "TYPE ANIMATION"
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "screen_text": [
+            "I know the feeling.",
+            "So I\u2019m building."
+          ],
+          "production_label": "TYPE ANIMATION"
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "screen_text": [
+            "LOOKSi. Photo + video.",
+            "Tell me your file-name lore."
+          ],
+          "production_label": "GRAPHIC END CARD"
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "name": "A point of view",
+      "shots": [
+        {
+          "start": 0.0,
+          "end": 4.5,
+          "screen_text": [
+            "It starts",
+            "with how you see."
+          ],
+          "production_label": "OPTICAL ARTWORK"
+        },
+        {
+          "start": 4.5,
+          "end": 9.0,
+          "screen_text": [
+            "A frame.",
+            "A feeling."
+          ],
+          "production_label": "OPTICAL ARTWORK"
+        },
+        {
+          "start": 9.0,
+          "end": 13.5,
+          "screen_text": [
+            "Photo. Video.",
+            "Your point of view."
+          ],
+          "production_label": "TYPE / LIGHT"
+        },
+        {
+          "start": 13.5,
+          "end": 18.0,
+          "screen_text": [
+            "LOOKSi.",
+            "Follow the build."
+          ],
+          "production_label": "GRAPHIC END CARD"
+        }
+      ]
+    }
+  ]
+}

@@ -13,6 +13,10 @@ namespace photo_editor::desktop {
 struct BrushRasterGeometry final {
   bool circular = false;  // Legacy normalized-space tips remain unchanged.
   double hardness = 1.0;
+  // Portion of the recorded brush coordinate basis represented by this raster.
+  // An output crop must not resize the original tip or clamp off-crop centers.
+  QRectF coordinate_area{0.0, 0.0, 1.0, 1.0};
+  QSizeF basis_pixel_extent;
 };
 
 // In-place target for transient stroke buffers. Cancellation may leave partial writes;

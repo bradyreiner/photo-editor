@@ -30,12 +30,20 @@ jobs:
           fi
 
       - name: Validate release helper syntax
-        run: bash -n scripts/*.sh
+        run: |
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
 
       - name: Validate Looksy brand surface
         run: |
           python3 -B scripts/test-brand-surface.py
           python3 -B scripts/verify-brand-surface.py
+
+      - name: Enforce shared application style
+        run: |
+          python3 -B scripts/test-popup-style-audit.py
+          python3 -B scripts/audit-popup-system.py
 
       - name: Validate commercial release configuration
         run: |
@@ -82,6 +90,7 @@ jobs:
           python3 -B scripts/perf/test-preview-release-proof-report.py
           python3 -B scripts/perf/test-desktop-preview-proof-gate.py
           python3 -B scripts/perf/test-app-performance-suite.py
+          python3 -B scripts/perf/test-editor-regression-gate.py
           python3 -B scripts/perf/test-prune-performance-artifacts.py
           python3 -B scripts/test-code-duplication-report.py
           python3 -B scripts/test-qml-warning-budget.py
@@ -360,12 +369,30 @@ jobs:
           cmake --preset dev-windows-debug
           "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DPHOTO_EDITOR_REQUIRE_LIBRAW_CAMERA_LINEAR=ON
+          -DPHOTO_EDITOR_REQUIRE_OCIO_ACES2=ON
+          -DPHOTO_EDITOR_STRICT_OCIO_VERSION=ON
 
       - name: Build desktop targets
         run: cmake --build --preset build-dev-windows-debug --parallel
 
       - name: Run desktop test suite
         run: ctest --test-dir build/dev-windows-debug --output-on-failure --timeout 420 -LE monolithic -j 4
+
+      - name: Enforce editor regression inventory
+        shell: bash
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --build-dir build/dev-windows-debug
+          --tier portable --output "$RUNNER_TEMP/editor-regression-portable"
+      - name: Upload editor regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-regression-dev-windows-debug-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/editor-regression-portable
+            !${{ runner.temp }}/editor-regression-portable/**/runtime/**
+          if-no-files-found: error
 
   desktop-macos:
     runs-on: macos-14
@@ -376,7 +403,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install color reference backend
-        run: brew install little-cms2 openexr libheif libraw
+        run: brew install little-cms2 opencolorio openexr libheif libraw
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -389,7 +416,7 @@ jobs:
           cache: true
 
       - name: Configure desktop build
-        run: cmake --preset dev-macos-debug
+        run: cmake --preset dev-macos-debug -DPHOTO_EDITOR_REQUIRE_OCIO_ACES2=ON -DPHOTO_EDITOR_STRICT_OCIO_VERSION=ON
 
       - name: Build desktop targets
         run: cmake --build --preset build-dev-macos-debug --parallel
@@ -409,6 +436,23 @@ jobs:
         run: ctest --test-dir build/dev-macos-debug --output-on-failure --timeout 420 -LE monolithic -j 4
         env:
           PHOTO_EDITOR_VISUAL_PROOF_DIR: ${{ runner.temp }}/photo-editor-visual-proof
+
+      - name: Explore authoring sequences for this revision
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --build-dir build/dev-macos-debug --tier exploration
+          --output "${RUNNER_TEMP}/editor-authoring-exploration"
+
+      - name: Upload authoring exploration and failure traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-authoring-exploration-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/editor-authoring-exploration
+            !${{ runner.temp }}/editor-authoring-exploration/**/runtime/**
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Generate macOS color quality baseline
         run: |
@@ -547,7 +591,7 @@ jobs:
             --profile smoke \
             --output-root "${RUNNER_TEMP}/photo-editor-app-suite" \
             --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json" \
-            --desktop-app build/dev-macos-debug/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor \
+            --desktop-app build/dev-macos-debug/apps/desktop/Looksy.app/Contents/MacOS/Looksy \
             --preview-app build/dev-macos-debug/tests/preview_benchmark_driver \
             --thumbnail-app build/dev-macos-debug/tests/thumbnail_benchmark_driver \
             --timeout 120
@@ -576,6 +620,22 @@ jobs:
           path: ${{ runner.temp }}/photo-editor-visual-proof
           if-no-files-found: ignore
 
+      - name: Enforce editor regression inventory
+        shell: bash
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --build-dir build/dev-macos-debug
+          --tier portable --output "$RUNNER_TEMP/editor-regression-portable"
+      - name: Upload editor regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-regression-dev-macos-debug-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/editor-regression-portable
+            !${{ runner.temp }}/editor-regression-portable/**/runtime/**
+          if-no-files-found: error
+
   release-macos-build:
     runs-on: macos-14
     timeout-minutes: 35
@@ -595,7 +655,7 @@ jobs:
           cache: true
 
       - name: Install macOS native dependencies
-        run: brew install cmake ninja
+        run: brew install cmake ninja opencolorio openexr libheif libraw postgresql@16
 
       - name: Build Rust helper binaries
         run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release
@@ -610,3 +670,60 @@ jobs:
 
       - name: Build release targets
         run: cmake --build --preset build-release-macos --parallel
+
+      - name: Require desktop to PostgreSQL recipe compatibility
+        run: >-
+          python3 scripts/test-recipe-catalog-contract.py
+          --desktop-test build/release-macos/tests/edit_recipe_v13_persistence_test
+          --catalog-bin-dir rust/target/release
+          --postgres-bin "$(brew --prefix postgresql@16)/bin"
+          --require-postgres
+
+      - name: Enforce editor regression inventory
+        shell: bash
+        run: >-
+          python3 -B scripts/perf/editor-regression-gate.py
+          --build-dir build/release-macos
+          --tier portable --output "$RUNNER_TEMP/editor-regression-portable"
+      - name: Upload editor regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-regression-release-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/editor-regression-portable
+            !${{ runner.temp }}/editor-regression-portable/**/runtime/**
+          if-no-files-found: error
+
+  editor-regression:
+    name: Editor regression gate
+    if: always()
+    needs:
+      - repo-hygiene
+      - source-closure
+      - rust
+      - headless-linux
+      - headless-linux-asan-ubsan
+      - headless-linux-tsan
+      - headless-windows
+      - desktop-macos
+      - desktop-windows
+      - release-macos-build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every prerequisite to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          expected = {'repo-hygiene', 'source-closure', 'rust', 'headless-linux',
+                      'headless-linux-asan-ubsan', 'headless-linux-tsan', 'headless-windows',
+                      'desktop-macos', 'desktop-windows', 'release-macos-build'}
+          if set(results) != expected:
+              raise SystemExit('Editor regression prerequisite inventory changed')
+          failed = [name for name, result in results.items() if result['result'] != 'success']
+          if failed:
+              raise SystemExit('Editor regression prerequisites failed/skipped: ' + ', '.join(failed))
+          PY

@@ -1,0 +1,2603 @@
+{
+  "schema_version": 2,
+  "created_at_utc": "2026-11-16T22:18:29.887840+00:00",
+  "brand": {
+    "display": "LOOKSi",
+    "campaign_only": true,
+    "palette": {
+      "graphite": "#050505",
+      "paper": "#F3F3F3",
+      "red": "#FF3B30",
+      "green": "#30D158",
+      "blue": "#3282FF"
+    },
+    "name_note": "Current app may display Looksy. User-requested LOOKSi campaign spelling does not change product source/identity."
+  },
+  "scope": "Five fully rendered campaign routes with canonical covers, storyboard boards, hero films, hooks and actual carousel exports. Optional future captured variants are kept separate.",
+  "copy_usage": "Current primary captions and Reddit bodies describe delivered files. Future capture-led production variants are explicitly separate. Nothing has been published.",
+  "evidence_ledger": [
+    {
+      "id": "E01",
+      "path": "apps/desktop/qml/components/Theme.qml",
+      "lines": "33–38,85",
+      "finding": "Graphite/cool-white/additive-RGB identity; exact RGB colors.",
+      "evidence_class": "current source",
+      "sha256_at_audit": "a98e9bb0787769ec4ad1e59cab5505c3e65e3da765f2e8d65797c63f0b95688c"
+    },
+    {
+      "id": "E02",
+      "path": "apps/desktop/qml/workspaces/StudioWorkspace.qml",
+      "lines": "26591–26658",
+      "finding": "White Balance/Temperature and Light/Exposure/Contrast controls target active photo adjustment context.",
+      "evidence_class": "current source",
+      "sha256_at_audit": "06de002697bb26025bac2c231f717ef04fcc7ac0bcc1c54a5568a50677310e63"
+    },
+    {
+      "id": "E03",
+      "path": "apps/desktop/qml/workspaces/StudioWorkspace.qml",
+      "lines": "197–216,7406–7429",
+      "finding": "Undo/redo controller routes; original comparison and snapshot selection logic.",
+      "evidence_class": "current source",
+      "sha256_at_audit": "06de002697bb26025bac2c231f717ef04fcc7ac0bcc1c54a5568a50677310e63"
+    },
+    {
+      "id": "E04",
+      "path": "apps/desktop/src/carousel_document_controller.h",
+      "lines": "538–539,575,820–822",
+      "finding": "Editable text items; createBoardsFromEdit accepts file, adjustment patch and source context.",
+      "evidence_class": "current source",
+      "sha256_at_audit": "076d767a58737bac7af608be70c4780be331305f1ea1a2fc176097e5101a39b6"
+    },
+    {
+      "id": "E05",
+      "path": "apps/desktop/qml/workspaces/carousel/CarouselExportSheetContent.qml",
+      "lines": "155–228",
+      "finding": "Ordered board review and current/selected/all-board export scope surfaces.",
+      "evidence_class": "current source",
+      "sha256_at_audit": "7cde6ec2388f20b513d67cd9dcfed37c2f7c7f4f14ed7e2550c474537054306a"
+    },
+    {
+      "id": "E06",
+      "path": "apps/desktop/src/timeline_document_controller.h",
+      "lines": "1069–1070,1327–1328",
+      "finding": "Selected clip edge trim and selected clip split controller methods.",
+      "evidence_class": "current source",
+      "sha256_at_audit": "5239c3a5ddd99964c5378c2d3c568b253690beeb32a12a968bb65b8c0a094f8c"
+    },
+    {
+      "id": "E07",
+      "path": "apps/desktop/qml/components/TimelineColorConsole.qml",
+      "lines": "50–51,95–108",
+      "finding": "Shared photo-engine grade surface: exposure, contrast, temperature and other primaries.",
+      "evidence_class": "current source",
+      "sha256_at_audit": "ba17b674839b354eacbb4d3a51d0872105047d4f162d0207afbfca2f14cb9e89"
+    },
+    {
+      "id": "E08",
+      "path": "marketing/evidence/current-menu-boards-edit.md",
+      "lines": "5–11",
+      "finding": "Historical native manual authoring, save and export of three menu boards; output receipt.",
+      "evidence_class": "dated evidence receipt",
+      "sha256_at_audit": "16b8248e2fc7ae193cbf82452e0a2c3f842784948766b9969f688760d68ea81c"
+    },
+    {
+      "id": "E09",
+      "path": "marketing/evidence/current-magazine-edit.md",
+      "lines": "5–29",
+      "finding": "Historical native cover composition/export with external generated source; no relaunch/RAW/agent proof.",
+      "evidence_class": "dated evidence receipt",
+      "sha256_at_audit": "9e8697f0325856ba26eca1cd7872e3f4ea008d2f78490399dd55d635012216cb"
+    },
+    {
+      "id": "E10",
+      "path": "release/product.json",
+      "lines": "entire file",
+      "finding": "Apple silicon Mac target; blank checkout/prices, commercial terms approval false.",
+      "evidence_class": "current release configuration",
+      "sha256_at_audit": "adc5c576f59289154b688ffba57d1b15af8e19f20b0ff255a2666b729b98a975"
+    },
+    {
+      "id": "E11",
+      "path": "media/provenance.json",
+      "finding": "Fresh verified native photo exports, six native board exports and a hash-verified dated native Timeline review output, with recording dates and scope."
+    }
+  ],
+  "shared_product_shot_bank": [
+    {
+      "id": "P01",
+      "name": "Current product establishing view",
+      "workflow": "Open the actual current app with a real photo/project; capture the whole workspace, then a readable crop.",
+      "source_refs": [
+        "E02"
+      ],
+      "acceptance": "Date/build recorded; title, controls and image readable; no unsaved document discarded."
+    },
+    {
+      "id": "P02",
+      "name": "Owned original photograph",
+      "workflow": "Open one owned/cleared source photograph and retain original file/hash; record untouched view.",
+      "source_refs": [
+        "E02"
+      ],
+      "acceptance": "Origin and allowed use recorded; original is not called a Looksi result."
+    },
+    {
+      "id": "P03",
+      "name": "Actual photo adjustment",
+      "workflow": "White Balance > Temperature or Light > Exposure; pointer gesture to real result, uninterrupted.",
+      "ui_targets": [
+        "whiteBalanceInspectorGroup",
+        "temperatureSlider",
+        "lightInspectorGroup",
+        "exposureSlider"
+      ],
+      "source_refs": [
+        "E02"
+      ],
+      "acceptance": "Same source, fixed crop/zoom, actual control response; numeric value readable only if true."
+    },
+    {
+      "id": "P04",
+      "name": "Undo and original comparison",
+      "workflow": "Make one reversible adjustment, invoke actual Undo, inspect returned image; separately use original comparison.",
+      "source_refs": [
+        "E03"
+      ],
+      "acceptance": "Matching source/frame/zoom; resulting image truly changes; no animation substituting for behavior."
+    },
+    {
+      "id": "P05",
+      "name": "Timeline trim and cut playback",
+      "workflow": "Select real clip; drag one edge, then play across the resulting edit.",
+      "source_refs": [
+        "E06"
+      ],
+      "acceptance": "Source/sequence mapping retained; no fake moving playhead over static image."
+    },
+    {
+      "id": "P06",
+      "name": "Board headline authoring",
+      "workflow": "Open actual board from the project; edit one headline and show readable result.",
+      "source_refs": [
+        "E04"
+      ],
+      "acceptance": "Text is actually editable and committed; external graphic is not passed off as app-authored."
+    },
+    {
+      "id": "P07",
+      "name": "Same-project finish set",
+      "workflow": "Independent open of actual hero image, short video and ordered carousel files.",
+      "source_refs": [
+        "E05"
+      ],
+      "acceptance": "All files derive from the documented project; formats/dimensions/duration checked; no historical unrelated output substitution."
+    },
+    {
+      "id": "P08",
+      "name": "Actual project source bank",
+      "workflow": "One owned/cleared original still plus actual video clips or accurately identified motion derived from the still. Show source contact sheet and provenance.",
+      "source_refs": [],
+      "acceptance": "Use rights/authorship recorded. Derived or generated motion is not camera footage; do not call it a single shoot."
+    },
+    {
+      "id": "P09",
+      "name": "Photo export open",
+      "workflow": "Export through working actual route, open file independently.",
+      "source_refs": [
+        "E08",
+        "E09"
+      ],
+      "acceptance": "Historical receipts identify possibilities only; this new file exists and is visually reviewed."
+    },
+    {
+      "id": "P10",
+      "name": "Three-clip sequence",
+      "workflow": "Import owned clips; arrange short three-shot sequence; show real timeline and program.",
+      "source_refs": [
+        "E06",
+        "E07"
+      ],
+      "acceptance": "Timeline sequence plays actual selected clips, not test fixture pretending to be new work."
+    },
+    {
+      "id": "P11",
+      "name": "Three-board story",
+      "workflow": "An image-led opening, supporting detail and closing board; actual board count may exceed three. Editable text and inspectable ordering.",
+      "source_refs": [
+        "E04",
+        "E05"
+      ],
+      "acceptance": "Real document and authored layers retained; no automatic cross-workspace sync implied."
+    },
+    {
+      "id": "P12",
+      "name": "Board export order and open",
+      "workflow": "Export carousel > Boards to export > All boards or explicit selection; Review board order; export and independently open.",
+      "ui_targets": [
+        "carouselExportScope_all",
+        "carouselExportReviewBoardsButton",
+        "carouselExportOrderedBoardReview"
+      ],
+      "source_refs": [
+        "E05"
+      ],
+      "acceptance": "Actual ordered files exist and match visible document; UI object names are route clues, not proof."
+    },
+    {
+      "id": "P13",
+      "name": "Video export open/play",
+      "workflow": "Use current working Timeline export route, retain exact output, play independently.",
+      "source_refs": [
+        "E06"
+      ],
+      "acceptance": "Actual video opens, duration and intended cut/audio reviewed; do not infer from settings screenshot."
+    },
+    {
+      "id": "P14",
+      "name": "Lesson original/chosen pair",
+      "workflow": "Same source, same crop and display conditions; retain recipe/source/output.",
+      "source_refs": [
+        "E02",
+        "E03"
+      ],
+      "acceptance": "Real chosen edit and original, not generated pseudo-before/after."
+    },
+    {
+      "id": "P15",
+      "name": "Temperature gesture",
+      "workflow": "White Balance > Temperature; a restrained change judged on selected image.",
+      "ui_targets": [
+        "temperatureSlider"
+      ],
+      "source_refs": [
+        "E02"
+      ],
+      "acceptance": "Actual control and image response; no universal number prescribed."
+    },
+    {
+      "id": "P16",
+      "name": "Too far and pull back",
+      "workflow": "Push Temperature farther than chosen look, inspect, return to actual restrained treatment.",
+      "source_refs": [
+        "E02",
+        "E03"
+      ],
+      "acceptance": "Intermediate is real and returned treatment retained; script matches source."
+    },
+    {
+      "id": "P17",
+      "name": "Exposure gesture",
+      "workflow": "Light > Exposure; one small source-appropriate change.",
+      "ui_targets": [
+        "exposureSlider"
+      ],
+      "source_refs": [
+        "E02"
+      ],
+      "acceptance": "Actual gesture and response; do not claim preserved dynamic range or accuracy beyond visible evidence."
+    },
+    {
+      "id": "P18",
+      "name": "Deliberate crop",
+      "workflow": "Use actual crop route if current capture confirms it; show a specific edge decision and committed result.",
+      "source_refs": [],
+      "acceptance": "Route must be captured before inclusion; otherwise substitute verified color adjustment."
+    }
+  ],
+  "campaigns": [
+    {
+      "id": "01",
+      "slug": "i-wanted-to-make-this",
+      "title": "I wanted to make this.",
+      "voice": "Candid builder / direct / curious",
+      "funnel_role": "Introduction and qualified workflow discovery",
+      "audience": {
+        "primary": "Independent photo/video makers curious about the person behind a new editor.",
+        "secondary": "Hobbyists who want to follow a visible, approachable builder.",
+        "project_trigger": "They see a real tool from an individual maker and want to know what it is trying to improve.",
+        "job": "Decide whether Brady understands a creative workflow they recognize and whether the project deserves a closer look.",
+        "tension": "A broad feature list says little about the actual decisions the tool helps someone make.",
+        "objection": "Is this a real tool with a clear purpose, or only a polished launch concept?"
+      },
+      "proposition": "A builder introduces the tool through actual creative work.",
+      "consumer_claim": "A finished first-person letter pairs genuine photography, actual native outputs and dated native action footage.",
+      "reasons_to_believe": [
+        "Fresh native baseline/chosen photo exports, 16 Nov 2026.",
+        "Actual FIRST LIGHT board export, 16 Nov 2026.",
+        "Genuine archived tone-curve recording, 25 Oct 2026."
+      ],
+      "proof_refs": [
+        "E01",
+        "E11"
+      ],
+      "hero_image": {
+        "headline": "I wanted to make this.",
+        "support": "I’m Brady. I built LOOKSi.\nHere’s what I’m trying to make better.",
+        "cta": "What should I put it through?",
+        "direction": "See actual delivered cover and storyboard; no unfilmed founder or invented app view is represented.",
+        "alt_text": "A builder’s letter introduces LOOKSi with large original Nepal photographs, actual native exports, small RGB marks and editorial annotations; no founder portrait."
+      },
+      "carousel": [
+        {
+          "slide": 1,
+          "headline": "I wanted to make this.",
+          "body": "A photo + video editor I’m building for the way people make their work.",
+          "png": "carousel/01-slide.png"
+        },
+        {
+          "slide": 2,
+          "headline": "A frame I want to keep.",
+          "body": "Start with the work. Then decide what you want it to hold onto.",
+          "png": "carousel/02-slide.png"
+        },
+        {
+          "slide": 3,
+          "headline": "Make a choice. Look again.",
+          "body": "The small decisions are the work. Genuine native app recording,25Oct2026; historical interface.",
+          "png": "carousel/03-slide.png"
+        },
+        {
+          "slide": 4,
+          "headline": "Try a look. Keep what helps.",
+          "body": "The same photo, exported from the native app. A real choice you can inspect.16Nov2026.",
+          "png": "carousel/04-slide.png"
+        },
+        {
+          "slide": 5,
+          "headline": "Give it somewhere to go.",
+          "body": "FIRST LIGHT / from NEPAL · NEAR & FAR. Actual native board export,16Nov2026.",
+          "png": "carousel/05-slide.png"
+        },
+        {
+          "slide": 6,
+          "headline": "So I’m building LOOKSi.",
+          "body": "Photo + video. For professional work. For the work you make just because. What would you want to test?",
+          "png": "carousel/06-slide.png"
+        }
+      ],
+      "instagram": {
+        "caption": "I wanted to make this.\n\nI’m Brady. I built LOOKSi, a photo and video editor, and I want a better place to carry an idea through the work. A frame you want to keep. A look you want to shape. A story that needs somewhere to go.\n\nFor professional work, and for the work you make just because.\n\nWhat would you want to test? Tell me what you make and the step that gets in the way.\n\nThe film includes genuine native app archive footage from 25 Oct 2026 and native image/board exports from 16 Nov 2026.",
+        "preview_caption": "I wanted to make this.\n\nI’m Brady. I built LOOKSi, a photo and video editor, and I want a better place to carry an idea through the work. A frame you want to keep. A look you want to shape. A story that needs somewhere to go.\n\nFor professional work, and for the work you make just because.\n\nWhat would you want to test? Tell me what you make and the step that gets in the way.\n\nThe film includes genuine native app archive footage from 25 Oct 2026 and native image/board exports from 16 Nov 2026.",
+        "hashtags": [
+          "#PhotoEditing",
+          "#VideoEditing",
+          "#BuildInPublic"
+        ]
+      },
+      "reddit": {
+        "title": "I’m Brady. I built a photo/video editor, and I’d like to put it through a real project.",
+        "body": "I’m Brady. I built LOOKSi, a desktop photo and video editor, and I wanted to introduce it through the work I care about making.\n\nThe idea is simple to say and fairly involved to build: start with a frame, shape its look, carry it into a sequence or a layout, and finish something you actually want to show someone. I want the little decisions along that path to feel considered.\n\nThat includes changing your mind. The adjustment you undo can tell you something useful about the image. The cut you move back two frames can be the one that makes the sequence feel right. I want to show those moments instead of presenting every edit as a clean march toward a predetermined result.\n\nThe current build has photo adjustments and comparison, a Timeline, and editable text/image boards. The attached builder letter includes a genuine archived tone-curve recording from 25 October and actual photo/board exports from 16 November. The companion casebook and recipe breakdown identify the source and output of each example.\n\nI’m making this for people who need to deliver work and people who make it for themselves. A personal photo can matter a lot. A working photographer can be new to video. The project should determine how much explanation someone needs.\n\nSo I’d like to give the tool a specific brief from someone here. What do you make, and where does the edit get awkward? Maybe a set of event photos also needs a short clip. Maybe the picture has the right subject but the color never feels like the moment. Maybe the story needs a readable set of boards around it.\n\nWhat would you put it through first? Tell me the media you start with and what a good finish would look like. I’m the builder, and I’ll use the replies to choose a real next demonstration.",
+        "placement": "Builder/show-and-tell context with explicit self-promotion allowance; choose using current research.",
+        "attachment": "campaign01/videos/hero.mp4",
+        "link_policy": "Do not add a purchase/download CTA until an actual destination exists.",
+        "preview_body": "I’m Brady. I built LOOKSi, a desktop photo and video editor, and I wanted to introduce it through the work I care about making.\n\nThe idea is simple to say and fairly involved to build: start with a frame, shape its look, carry it into a sequence or a layout, and finish something you actually want to show someone. I want the little decisions along that path to feel considered.\n\nThat includes changing your mind. The adjustment you undo can tell you something useful about the image. The cut you move back two frames can be the one that makes the sequence feel right. I want to show those moments instead of presenting every edit as a clean march toward a predetermined result.\n\nThe current build has photo adjustments and comparison, a Timeline, and editable text/image boards. The attached builder letter includes a genuine archived tone-curve recording from 25 October and actual photo/board exports from 16 November. The companion casebook and recipe breakdown identify the source and output of each example.\n\nI’m making this for people who need to deliver work and people who make it for themselves. A personal photo can matter a lot. A working photographer can be new to video. The project should determine how much explanation someone needs.\n\nSo I’d like to give the tool a specific brief from someone here. What do you make, and where does the edit get awkward? Maybe a set of event photos also needs a short clip. Maybe the picture has the right subject but the color never feels like the moment. Maybe the story needs a readable set of boards around it.\n\nWhat would you put it through first? Tell me the media you start with and what a good finish would look like. I’m the builder, and I’ll use the replies to choose a real next demonstration.",
+        "main_body_publication_gate": "Approve actual delivered creative, source permissions and destination/community rules. No public availability or purchase claim."
+      },
+      "video": {
+        "duration": 32,
+        "format": "1080 × 1920 / 30 fps",
+        "scenes_file": "campaign01/tools/build.py",
+        "edit_note": "Finished text-led letter; genuine archived action footage dated 25 Oct and current still exports dated 16 Nov. Optional founder performance is separate."
+      },
+      "hook_options": [
+        {
+          "variant": "a",
+          "opening": "I wanted to make this.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "b",
+          "opening": "Bring a real project.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "c",
+          "opening": "What should this handle?",
+          "scope": "Rendered opening variant; body and duration held constant."
+        }
+      ],
+      "cta_options": [
+        "What would you want to test?"
+      ],
+      "founder_capture": {
+        "required_for_primary": false,
+        "optional_version": {
+          "required": true,
+          "minutes_estimate": 25,
+          "takes": [
+            "F01 complete opening plus three hooks",
+            "F02 complete closing plus two question variants",
+            "F03 quiet looking-at-screen reaction and room tone"
+          ]
+        },
+        "note": "Primary execution contains no founder likeness or synthetic voice. Optional self-shot version has a separate production plan."
+      },
+      "product_capture": {
+        "required_for_primary": false,
+        "current_evidence": "media/provenance.json",
+        "optional_upgrade": [
+          "P01 current overview",
+          "P02 source selection",
+          "P03 photo adjustment",
+          "P04 Undo/original comparison",
+          "P05 Timeline trim",
+          "P06 editable headline",
+          "P07 outputs"
+        ],
+        "note": "New continuous current-build capture is a separate optional production upgrade. Primary versions identify the actual media dates and scopes."
+      },
+      "measurement": {
+        "hypothesis": "A visible builder and one honest revision will earn specific workflow requests.",
+        "primary": "Qualified project-request comments per 1,000 reached accounts",
+        "secondary": [
+          "Relevant profile visits",
+          "Requests with source format and finish criteria"
+        ],
+        "test_variable": "Face-first versus product-first first three seconds"
+      },
+      "internal_proof_notes": [
+        "Finished text-led letter; genuine archived action footage dated 25 Oct and current still exports dated 16 Nov. Optional founder performance is separate.",
+        "Human creative/media/placement approvals remain pending. No public publication or release claim."
+      ],
+      "future_capture_variant": {
+        "title": "I wanted to make this.",
+        "video": {
+          "duration": 40,
+          "format": "Founder-led vertical short with real screen inserts",
+          "shots": [
+            {
+              "start": 0,
+              "end": 3,
+              "shot_type": "Founder medium close",
+              "on_screen": "I wanted to make this.",
+              "voiceover": "I wanted to make this.",
+              "action": "Brady looks at lens, then turns slightly toward the work.",
+              "required_capture": "F01 founder opening",
+              "preview_if_missing": "Title over a dated real desk/product still; label founder performance pending."
+            },
+            {
+              "start": 3,
+              "end": 7,
+              "shot_type": "Product establishing view",
+              "on_screen": "I’m Brady. This is LOOKSi.",
+              "voiceover": "I’m Brady. I built Looksi, a photo and video editor.",
+              "action": "Clean current app view; image dominates before punching in.",
+              "required_capture": "P01 current product overview",
+              "preview_if_missing": "Current or dated real UI still with date label; no simulated interaction."
+            },
+            {
+              "start": 7,
+              "end": 12,
+              "shot_type": "Photo and cursor detail",
+              "on_screen": "Start with a frame.",
+              "voiceover": "A frame you want to keep. A look you want to shape.",
+              "action": "Select actual photo, pause on untouched composition.",
+              "required_capture": "P02 owned source selection",
+              "preview_if_missing": "Owned source art with “source image” label."
+            },
+            {
+              "start": 12,
+              "end": 16,
+              "shot_type": "Adjustment close crop",
+              "on_screen": "Make a choice.",
+              "voiceover": "Then the small decisions.",
+              "action": "Move Temperature or Exposure once with result visible.",
+              "required_capture": "P03 actual photo adjustment",
+              "preview_if_missing": "UI still showing control; replace VO with “These are the decisions I’m building around.”"
+            },
+            {
+              "start": 16,
+              "end": 20,
+              "shot_type": "Same-source comparison",
+              "on_screen": "Change your mind.",
+              "voiceover": "Including the one you decide to undo.",
+              "action": "Undo the adjustment, inspect original, choose again.",
+              "required_capture": "P04 real undo/original compare",
+              "preview_if_missing": "Two dated actual source/result frames only if matched; otherwise use product detail, no before/after assertion."
+            },
+            {
+              "start": 20,
+              "end": 25,
+              "shot_type": "Timeline action",
+              "on_screen": "Build a sequence.",
+              "voiceover": "Sometimes that idea becomes a sequence.",
+              "action": "Trim an actual clip edge; hold program result.",
+              "required_capture": "P05 timeline trim",
+              "preview_if_missing": "Dated Timeline still labeled interface preview; no playhead movement implied."
+            },
+            {
+              "start": 25,
+              "end": 30,
+              "shot_type": "Board action",
+              "on_screen": "Give it context.",
+              "voiceover": "Sometimes it needs words and a place to live.",
+              "action": "Edit headline on a real board with source photo.",
+              "required_capture": "P06 board text action",
+              "preview_if_missing": "Real board still labeled with capture date."
+            },
+            {
+              "start": 30,
+              "end": 35,
+              "shot_type": "Work/result triptych",
+              "on_screen": "For work. For yourself.",
+              "voiceover": "I want this to work for a job, and for something you make just because you want to.",
+              "action": "Show actual finished files from same run, one at a time.",
+              "required_capture": "P07 opened outputs",
+              "preview_if_missing": "Show source and workspace crops, change VO to “That’s the work I’m trying to make better.”"
+            },
+            {
+              "start": 35,
+              "end": 40,
+              "shot_type": "Founder close and end hold",
+              "on_screen": "What should I put it through?",
+              "voiceover": "What should I put it through? Tell me what you make.",
+              "action": "Founder to lens; hold question at least two seconds.",
+              "required_capture": "F02 founder closing",
+              "preview_if_missing": "Clear typographic question over actual product detail."
+            }
+          ],
+          "audio": "Natural founder voice and quiet original pulse; leave breathing space around the question.",
+          "edit_note": "Product appears by second 4. Keep one honest revision in the cut. The founder is not replaced by synthetic likeness or voice."
+        },
+        "founder_capture": {
+          "required": true,
+          "minutes_estimate": 25,
+          "takes": [
+            "F01 complete opening plus three hooks",
+            "F02 complete closing plus two question variants",
+            "F03 quiet looking-at-screen reaction and room tone"
+          ]
+        },
+        "product_capture": [
+          "P01 current overview",
+          "P02 source selection",
+          "P03 photo adjustment",
+          "P04 Undo/original comparison",
+          "P05 Timeline trim",
+          "P06 editable headline",
+          "P07 outputs"
+        ],
+        "carousel": [
+          {
+            "number": 1,
+            "headline": "I wanted to make this.",
+            "body": "I’m Brady. I built LOOKSi, a photo and video editor.",
+            "visual_direction": "Founder or real desk, immediately paired with product.",
+            "alt_text": "Founder introduction and real editor view."
+          },
+          {
+            "number": 2,
+            "headline": "It starts with a frame.",
+            "body": "Something you saw. Something you want the work to hold onto.",
+            "visual_direction": "Owned source photo, full composition.",
+            "alt_text": "An original photograph before editing."
+          },
+          {
+            "number": 3,
+            "headline": "Then a decision.",
+            "body": "A little warmer. A quieter edge. More attention where you want it.",
+            "visual_direction": "Actual photo close-up and readable White Balance/Light control.",
+            "alt_text": "Real photo adjustment controls beside the image."
+          },
+          {
+            "number": 4,
+            "headline": "And sometimes, a different decision.",
+            "body": "Try it. Compare it. Change your mind.",
+            "visual_direction": "A genuine Undo/original comparison from same source.",
+            "alt_text": "Before and after from one documented edit."
+          },
+          {
+            "number": 5,
+            "headline": "The idea can grow.",
+            "body": "A photograph. A short cut. A board that gives it context.",
+            "visual_direction": "Three real workspaces, identified rather than crowded into tiny screens.",
+            "alt_text": "Photo, timeline and board views from LOOKSi."
+          },
+          {
+            "number": 6,
+            "headline": "What should I put it through?",
+            "body": "Tell me what you make and the step that gets in the way.",
+            "visual_direction": "Founder returns with large question.",
+            "alt_text": "Invitation to describe a real editing workflow."
+          }
+        ],
+        "hook_options": [
+          {
+            "text": "I wanted to make this.",
+            "execution": "Face first; then product by second 4."
+          },
+          {
+            "text": "I built an editor. Give me a real project.",
+            "execution": "Open on a completed real image, then cut to Brady with the brief request."
+          },
+          {
+            "text": "This is the part I keep coming back to.",
+            "execution": "A real undo/revision action, then founder context."
+          }
+        ],
+        "cta_options": [
+          "What should I put it through?",
+          "What do you make — and where does the edit get awkward?",
+          "Give me one project to demonstrate."
+        ],
+        "consumer_claim": "I built LOOKSi, a photo and video editor, and I want to make it a better place to carry an idea through the work.",
+        "reasons_to_believe": [
+          "Photo Light/White Balance controls and original comparison.",
+          "Visible Undo and a real change of mind.",
+          "Timeline and editable board work in the same application."
+        ],
+        "internal_proof_notes": [
+          "No invented origin story, customer number or build duration.",
+          "Main caption can accompany a true product/workflow introduction; preview_caption is for still-based concept films without the action captures.",
+          "Opening claim refers to the actual app; LOOKSi campaign spelling does not imply the app has been renamed.",
+          "Public first comments should answer a useful audience question. Internal claim qualifications belong in production notes unless needed to identify source art, dated capture or demonstration status."
+        ],
+        "note": "Optional capture-led production version; does not describe the delivered master."
+      },
+      "assets": {
+        "image": "campaign01/images/cover.png",
+        "editable_image": "campaign01/images/cover.svg",
+        "board": "campaign01/storyboard/board.png",
+        "editable_board": "campaign01/storyboard/board.svg",
+        "hero_video": "campaign01/videos/hero.mp4"
+      },
+      "preferred_execution": "finished builder letter with open text",
+      "rendered_carousel_files": [
+        "campaign01/carousel/01-slide.png",
+        "campaign01/carousel/02-slide.png",
+        "campaign01/carousel/03-slide.png",
+        "campaign01/carousel/04-slide.png",
+        "campaign01/carousel/05-slide.png",
+        "campaign01/carousel/06-slide.png"
+      ]
+    },
+    {
+      "id": "02",
+      "slug": "one-project-three-finished-pieces",
+      "title": "NEPAL. In three forms.",
+      "voice": "Studio precise / concrete / calmly confident",
+      "funnel_role": "Consideration and demonstrated project relevance",
+      "audience": {
+        "primary": "Independent hybrid photographer/editor making several outputs from one assignment.",
+        "secondary": "Still photographer adding a short video and social story to a project.",
+        "project_trigger": "A small shoot now needs a hero image, a short cut and a readable carousel.",
+        "job": "Finish three distinct pieces that feel like the same project, while inspecting each result.",
+        "tension": "Each deliverable requires its own decisions; generic all-in-one promises do not show the actual work.",
+        "objection": "Can the editor handle a complete modest project, not merely display three workspaces?"
+      },
+      "proposition": "Let professionals inspect actual files and their precise scope.",
+      "consumer_claim": "A Nepal casebook in three forms: a photo treatment, a 12-second motion-study review export and six boards, created across sessions.",
+      "reasons_to_believe": [
+        "Same-source native photo pair, 1800 x 1200, 16 Nov 2026.",
+        "Native Timeline review excerpt, 12 s/360 frames/1920 x 1080/30 fps, 2 Nov 2026; exact receipt hash verified.",
+        "Six native 1920 x 1536 PNG board exports, 16 Nov 2026."
+      ],
+      "proof_refs": [
+        "E01",
+        "E11"
+      ],
+      "hero_image": {
+        "headline": "NEPAL. In three forms.",
+        "support": "A photograph. A short cut. A story in boards.",
+        "cta": "Which part would you inspect first?",
+        "direction": "See actual delivered cover and storyboard; no unfilmed founder or invented app view is represented.",
+        "alt_text": "On graphite, NEPAL. In three forms. appears above a mountain photo treatment, a native motion-study thumbnail and a complete native FIRST LIGHT board. Small additive RGB marks identify LOOKSi."
+      },
+      "carousel": [
+        {
+          "slide": 1,
+          "eyebrow": "NEPAL.",
+          "headline": "In three forms.",
+          "body": "A photo treatment. A motion study. A story in six boards.",
+          "alt_text": "In three forms. A photo treatment. A motion study. A story in six boards.",
+          "png": "campaign02/carousels/slide-01.png"
+        },
+        {
+          "slide": 2,
+          "eyebrow": "01 / THE PHOTO",
+          "headline": "Small choices. A considered finish.",
+          "body": "Actual Looksy export: 5900 K, +12% contrast, +0.15 EV. A choice for this image.",
+          "alt_text": "Small choices. A considered finish. Actual Looksy export: 5900 K, +12% contrast, +0.15 EV. A choice for this image.",
+          "png": "campaign02/carousels/slide-02.png"
+        },
+        {
+          "slide": 3,
+          "eyebrow": "02 / THE MOTION",
+          "headline": "A native Timeline review export.",
+          "body": "12 seconds. 1920 × 1080. 30 fps. Export receipt verified; 2 Nov 2026.",
+          "alt_text": "A native Timeline review export. 12 seconds. 1920 × 1080. 30 fps. Export receipt verified; 2 Nov 2026.",
+          "png": "campaign02/carousels/slide-03.png"
+        },
+        {
+          "slide": 4,
+          "eyebrow": "03 / THE BOARDS",
+          "headline": "A story in six pieces.",
+          "body": "NEPAL / NEAR & FAR. Six native 1920 × 1536 PNG exports; 16 Nov 2026.",
+          "alt_text": "A story in six pieces. NEPAL / NEAR & FAR. Six native 1920 × 1536 PNG exports; 16 Nov 2026.",
+          "png": "campaign02/carousels/slide-04.png"
+        },
+        {
+          "slide": 5,
+          "eyebrow": "THE CASEBOOK",
+          "headline": "Related work, across sessions.",
+          "body": "Photo and boards exported 16 Nov. Motion review exported 2 Nov. The actual files accompany the review.",
+          "alt_text": "Related work, across sessions. Photo and boards exported 16 Nov. Motion review exported 2 Nov. The actual files accompany the review.",
+          "png": "campaign02/carousels/slide-05.png"
+        },
+        {
+          "slide": 6,
+          "eyebrow": "I’M BUILDING LOOKSi.",
+          "headline": "What would you inspect?",
+          "body": "Photo + video. For professional projects and the work you make for yourself.",
+          "alt_text": "What would you inspect? Photo + video. For professional projects and the work you make for yourself.",
+          "png": "campaign02/carousels/slide-06.png"
+        }
+      ],
+      "instagram": {
+        "caption": "NEPAL, in three forms: a photo treatment, a 12-second motion study, and a story in six boards. These are actual Looksy outputs made across sessions while building the tool. Photo and board exports: 16 November. Native Timeline review excerpt: 2 November. I’m building LOOKSi for professional projects and the work you make for yourself. What would you want to inspect before trying a new editor?",
+        "preview_caption": "NEPAL, in three forms: a photo treatment, a 12-second motion study, and a story in six boards. These are actual Looksy outputs made across sessions while building the tool. Photo and board exports: 16 November. Native Timeline review excerpt: 2 November. I’m building LOOKSi for professional projects and the work you make for yourself. What would you want to inspect before trying a new editor?",
+        "hashtags": [
+          "#PhotographyWorkflow",
+          "#VideoEditing",
+          "#CreativeProcess"
+        ]
+      },
+      "reddit": {
+        "title": "I’m building a photo/video editor. Here is a Nepal project in three forms.",
+        "body": "I’m the person building LOOKSi, a photo and video editor. I wanted to introduce it with actual files that someone can inspect: a photo treatment, a motion study, and a story in six boards.\n\nFor the photograph, I used a 1800 × 1200 camera JPEG preview from Nepal. In Looksy I chose a warmer direction at 5900 K, contrast at +12%, and a modest +0.15 EV lift. The baseline and chosen image were both exported through the same native PNG pipeline. The comparison shows those three choices together.\n\nThe motion piece is an actual 12-second native Timeline review export at 1920 × 1080 and 30 fps. The board set is NEPAL / NEAR & FAR: six native 1920 × 1536 image exports. They are related creative work made across sessions while building the tool: the motion excerpt was exported on 2 November, and the photo and board exports on 16 November. This is an output casebook rather than one uninterrupted editing session.\n\nI’m building for people who deliver work professionally and people who make it for themselves. For a professional discussion, I think the useful next step is scrutiny of a specific job: the source, the decisions, and the delivered file.\n\nWhat would you need to inspect before trying a new editor? Tell me the kind of work you do and one requirement you would want the next demonstration to cover.",
+        "placement": "Workflow discussion or permitted developer showcase; strongest only with actual source/output attachment.",
+        "attachment": "campaign02/videos/hero.mp4",
+        "link_policy": "Link only an available demo/output destination. No unverified checkout or release CTA.",
+        "preview_body": "I’m the person building LOOKSi, a photo and video editor. I wanted to introduce it with actual files that someone can inspect: a photo treatment, a motion study, and a story in six boards.\n\nFor the photograph, I used a 1800 × 1200 camera JPEG preview from Nepal. In Looksy I chose a warmer direction at 5900 K, contrast at +12%, and a modest +0.15 EV lift. The baseline and chosen image were both exported through the same native PNG pipeline. The comparison shows those three choices together.\n\nThe motion piece is an actual 12-second native Timeline review export at 1920 × 1080 and 30 fps. The board set is NEPAL / NEAR & FAR: six native 1920 × 1536 image exports. They are related creative work made across sessions while building the tool: the motion excerpt was exported on 2 November, and the photo and board exports on 16 November. This is an output casebook rather than one uninterrupted editing session.\n\nI’m building for people who deliver work professionally and people who make it for themselves. For a professional discussion, I think the useful next step is scrutiny of a specific job: the source, the decisions, and the delivered file.\n\nWhat would you need to inspect before trying a new editor? Tell me the kind of work you do and one requirement you would want the next demonstration to cover.",
+        "main_body_publication_gate": "Approve actual delivered creative, source permissions and destination/community rules. No public availability or purchase claim."
+      },
+      "video": {
+        "duration": 42,
+        "format": "1080 × 1920 / 30 fps",
+        "shots": [
+          {
+            "start": 0,
+            "end": 4,
+            "title": "The project"
+          },
+          {
+            "start": 4,
+            "end": 11,
+            "title": "A photo treatment"
+          },
+          {
+            "start": 11,
+            "end": 18,
+            "title": "The native motion study"
+          },
+          {
+            "start": 18,
+            "end": 25,
+            "title": "Six boards, one story"
+          },
+          {
+            "start": 25,
+            "end": 33,
+            "title": "Let the files speak"
+          },
+          {
+            "start": 33,
+            "end": 42,
+            "title": "The builder’s invitation"
+          }
+        ],
+        "edit_note": "Actual native photo/board/Timeline exports across sessions, not one fresh recorded end-to-end run."
+      },
+      "hook_options": [
+        {
+          "variant": "a",
+          "opening": "NEPAL. In three forms.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "b",
+          "opening": "The files. The finished work.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "c",
+          "opening": "One project. Several ways to tell it.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        }
+      ],
+      "cta_options": [
+        "What would you need to inspect before trying a new editor?"
+      ],
+      "founder_capture": {
+        "required_for_primary": false,
+        "optional_version": {
+          "required": false,
+          "minutes_estimate": 10,
+          "takes": [
+            "Optional clean 90-word voiceover after actual actions are known"
+          ]
+        },
+        "note": "Primary execution contains no founder likeness or synthetic voice. Optional self-shot version has a separate production plan."
+      },
+      "product_capture": {
+        "required_for_primary": false,
+        "current_evidence": "media/provenance.json",
+        "optional_upgrade": [
+          "P08 owned still/video source bank",
+          "P03 photo adjustment",
+          "P04 comparison",
+          "P09 opened photo export",
+          "P10 three-clip timeline",
+          "P05 trim/playback",
+          "P06 headline edit",
+          "P11 boards in order",
+          "P12 board export/open",
+          "P13 opened video export"
+        ],
+        "note": "New continuous current-build capture is a separate optional production upgrade. Primary versions identify the actual media dates and scopes."
+      },
+      "measurement": {
+        "hypothesis": "A complete modest assignment will generate more qualified consideration than a feature montage.",
+        "primary": "Qualified workflow/output-inspection questions per 1,000 reached accounts",
+        "secondary": [
+          "Long-demo requests",
+          "Output-inspection visits if a real destination exists"
+        ],
+        "test_variable": "Actual result-first versus three-deliverable brief-first opening"
+      },
+      "internal_proof_notes": [
+        "Actual native photo/board/Timeline exports across sessions, not one fresh recorded end-to-end run.",
+        "Human creative/media/placement approvals remain pending. No public publication or release claim."
+      ],
+      "slower_proof_edits": [
+        {
+          "id": "02-photo-proof",
+          "title": "One photograph, with time to inspect.",
+          "duration": 60,
+          "purpose": "Separate readable continuous proof of one actual photo decision and export.",
+          "shots": [
+            {
+              "start": 0,
+              "end": 7,
+              "action": "Show actual source file and untouched image, fixed crop.",
+              "on_screen": "The source.",
+              "voiceover": "Here is the source I’m working from.",
+              "capture": "Original file/hash and actual app view."
+            },
+            {
+              "start": 7,
+              "end": 15,
+              "action": "Hold image while naming one source-specific intention.",
+              "on_screen": "Choose the intention.",
+              "voiceover": "I want the light to feel warmer, without losing the quiet.",
+              "capture": "Intention must fit inspected source; replace warmth line if it does not."
+            },
+            {
+              "start": 15,
+              "end": 28,
+              "action": "One actual Temperature gesture, pause on image, pull back if needed.",
+              "on_screen": "One change. Time to look.",
+              "voiceover": "I’m watching the picture as I move Temperature. When the color starts taking over, I pull it back.",
+              "capture": "Continuous pointer/control/result, not sped up."
+            },
+            {
+              "start": 28,
+              "end": 40,
+              "action": "Make one source-appropriate Exposure adjustment and hold.",
+              "on_screen": "Let the light support it.",
+              "voiceover": "Then I look at the light. A small change may be enough.",
+              "capture": "Continuous Exposure action or a held image if no extra change is justified."
+            },
+            {
+              "start": 40,
+              "end": 49,
+              "action": "Actual original comparison, same crop and zoom; allow a clean pause.",
+              "on_screen": "Compare.",
+              "voiceover": "Here is where I started. Here is the choice I’m keeping.",
+              "capture": "Matched source and current recipe; each view long enough to inspect."
+            },
+            {
+              "start": 49,
+              "end": 60,
+              "action": "Export using actual working route; independently open the resulting file.",
+              "on_screen": "The actual file.",
+              "voiceover": "And this is the exported image, opened outside the editor.",
+              "capture": "Requires completed actual export; if export takes longer, extend film or label compression."
+            }
+          ],
+          "publication_gate": "Actual source, continuous actions and completed export captured; otherwise label a production script, not completed proof."
+        },
+        {
+          "id": "02-board-proof",
+          "title": "A board story, with time to read.",
+          "duration": 68,
+          "purpose": "Separate readable proof of actual text/layout work, ordered boards and output.",
+          "shots": [
+            {
+              "start": 0,
+              "end": 8,
+              "action": "Show actual document overview, identifying whether newly authored or existing.",
+              "on_screen": "A story in boards.",
+              "voiceover": "Here is the board document for the project.",
+              "capture": "Record current document identity; do not imply newly created if existing."
+            },
+            {
+              "start": 8,
+              "end": 17,
+              "action": "Choose one board and hold image/headline at readable scale.",
+              "on_screen": "Read the image. Read the words.",
+              "voiceover": "The first question is whether the image and the headline say the same thing.",
+              "capture": "Actual selection, readable source and type."
+            },
+            {
+              "start": 17,
+              "end": 30,
+              "action": "On a separate project copy, edit one real headline and commit.",
+              "on_screen": "Make the wording deliberate.",
+              "voiceover": "I want this line to give the image context, without explaining it away.",
+              "capture": "Duplicate/isolate before authoring; preserve the original active document and unsaved state."
+            },
+            {
+              "start": 30,
+              "end": 40,
+              "action": "Inspect actual board layout; adjust only if justified.",
+              "on_screen": "Leave the work room.",
+              "voiceover": "Then I look at the space around the type.",
+              "capture": "Actual layout gesture or clean visual inspection, not decorative simulated handles."
+            },
+            {
+              "start": 40,
+              "end": 50,
+              "action": "Move through actual boards in sequence; keep current actual count.",
+              "on_screen": "Read it in order.",
+              "voiceover": "The story needs to hold together as you move through it.",
+              "capture": "Real ordered document; exact current board count, not assumed three."
+            },
+            {
+              "start": 50,
+              "end": 59,
+              "action": "Open real export order/scope review and start export only on intended project copy.",
+              "on_screen": "Check the delivery.",
+              "voiceover": "I check the board order before exporting.",
+              "capture": "Actual review surface; no success implication before files exist."
+            },
+            {
+              "start": 59,
+              "end": 68,
+              "action": "Open exported board files independently in correct order.",
+              "on_screen": "The actual files.",
+              "voiceover": "These are the exported boards, in the order I intended.",
+              "capture": "Actual completed files; extend time if needed, never fake completion."
+            }
+          ],
+          "publication_gate": "Work on isolated copy, preserve active user state; actual authoring/order/export captured before main claims."
+        }
+      ],
+      "future_capture_variant": {
+        "title": "One project. Three finished pieces.",
+        "video": {
+          "duration": 45,
+          "format": "Result-first workflow demonstration",
+          "shots": [
+            {
+              "start": 0,
+              "end": 3,
+              "shot_type": "Result triptych",
+              "on_screen": "One project. Three finished pieces.",
+              "voiceover": "One project. Three things to finish.",
+              "action": "Three real outputs reveal one after another in a visual match.",
+              "required_capture": "P07 outputs from same project",
+              "preview_if_missing": "Use source contact sheet and change title to “One project. Three things to finish.”"
+            },
+            {
+              "start": 3,
+              "end": 7,
+              "shot_type": "Source contact sheet",
+              "on_screen": "One subject. Different jobs.",
+              "voiceover": "A photograph. A short cut. A story in boards.",
+              "action": "Identify the actual project photograph and motion sources. If motion is derived from a still, say so.",
+              "required_capture": "P08 source bank",
+              "preview_if_missing": "Actual owned source files or source art, accurately labeled."
+            },
+            {
+              "start": 7,
+              "end": 11,
+              "shot_type": "Photo control/action",
+              "on_screen": "01 / The photograph",
+              "voiceover": "First, the photograph. Shape the light and color.",
+              "action": "Move White Balance/Exposure once with source and result continuity.",
+              "required_capture": "P03 photo action",
+              "preview_if_missing": "Dated actual photo workspace still; label planned demonstration."
+            },
+            {
+              "start": 11,
+              "end": 15,
+              "shot_type": "Photo comparison",
+              "on_screen": "Compare before you keep it.",
+              "voiceover": "Then compare before you keep it.",
+              "action": "Show original and chosen treatment at identical crop.",
+              "required_capture": "P04 same-source comparison",
+              "preview_if_missing": "Only use a verified same-source pair; otherwise remain on actual current UI detail."
+            },
+            {
+              "start": 15,
+              "end": 18,
+              "shot_type": "Export open",
+              "on_screen": "Open the actual image.",
+              "voiceover": "",
+              "action": "Open actual photo export independently and hold.",
+              "required_capture": "P09 photo output open",
+              "preview_if_missing": "Omit export assertion; show planned deliverable card labeled capture pending."
+            },
+            {
+              "start": 18,
+              "end": 22,
+              "shot_type": "Timeline source-to-sequence",
+              "on_screen": "02 / The short cut",
+              "voiceover": "Next, choose the moments.",
+              "action": "Actual source media is visible in the real sequence; do not relabel derived motion as camera footage.",
+              "required_capture": "P10 three-clip timeline",
+              "preview_if_missing": "Dated real timeline still, not animated playback."
+            },
+            {
+              "start": 22,
+              "end": 26,
+              "shot_type": "Trim gesture",
+              "on_screen": "Let the ending land.",
+              "voiceover": "Take out what doesn’t earn its place. Let the ending land.",
+              "action": "Trim one edge then play across that edit.",
+              "required_capture": "P05 clip edge trim and playback",
+              "preview_if_missing": "Still crop of actual trim handle plus “action capture pending” label."
+            },
+            {
+              "start": 26,
+              "end": 30,
+              "shot_type": "Board assembly",
+              "on_screen": "03 / The story",
+              "voiceover": "Then give the project some context.",
+              "action": "Place actual photo on board or show actual source-linked board; edit headline.",
+              "required_capture": "P06 board text/photo",
+              "preview_if_missing": "Real authored board still labeled by capture date."
+            },
+            {
+              "start": 30,
+              "end": 34,
+              "shot_type": "Board sequence",
+              "on_screen": "A headline. A detail. An ending.",
+              "voiceover": "A headline. A detail. An ending.",
+              "action": "Pan between actual three editable boards in order.",
+              "required_capture": "P11 three-board document",
+              "preview_if_missing": "Storyboard three designed boards explicitly called campaign layout, not app output."
+            },
+            {
+              "start": 34,
+              "end": 38,
+              "shot_type": "Export review and file open",
+              "on_screen": "Read it in order.",
+              "voiceover": "Open the files. Read it in order.",
+              "action": "Actual board-order review, export, and independent file open.",
+              "required_capture": "P12 carousel export/open",
+              "preview_if_missing": "Show board export settings screenshot labeled interface preview; no success animation."
+            },
+            {
+              "start": 38,
+              "end": 42,
+              "shot_type": "Actual video playback and outputs",
+              "on_screen": "Three pieces. One point of view.",
+              "voiceover": "Three pieces, with one point of view.",
+              "action": "Play exported video then show image and carousel as same project.",
+              "required_capture": "P13 video output open/play",
+              "preview_if_missing": "Repeat actual source project without implying output playback."
+            },
+            {
+              "start": 42,
+              "end": 45,
+              "shot_type": "Question/end hold",
+              "on_screen": "What would your assignment need?",
+              "voiceover": "What would your assignment need?",
+              "action": "End on clear project question and LOOKSi signature.",
+              "required_capture": "G01 graphic end",
+              "preview_if_missing": "Same end card, no capture dependency."
+            }
+          ],
+          "audio": "Practical founder voiceover, audible real clicks/room sound, restrained original music.",
+          "edit_note": "A 45-second social edit is an introduction. Retain a longer uncut/source-to-result walkthrough. Do not claim time savings from the compressed cut."
+        },
+        "founder_capture": {
+          "required": false,
+          "minutes_estimate": 10,
+          "takes": [
+            "Optional clean 90-word voiceover after actual actions are known"
+          ]
+        },
+        "product_capture": [
+          "P08 owned still/video source bank",
+          "P03 photo adjustment",
+          "P04 comparison",
+          "P09 opened photo export",
+          "P10 three-clip timeline",
+          "P05 trim/playback",
+          "P06 headline edit",
+          "P11 boards in order",
+          "P12 board export/open",
+          "P13 opened video export"
+        ],
+        "carousel": [
+          {
+            "number": 1,
+            "headline": "One project. Three finished pieces.",
+            "body": "A photograph. A short cut. A story in boards.",
+            "visual_direction": "Three opened actual outputs or storyboard mockup clearly labeled pending.",
+            "alt_text": "The three deliverables from one small creative project."
+          },
+          {
+            "number": 2,
+            "headline": "One subject. Different jobs.",
+            "body": "The photo needs a look. The film needs a rhythm. The boards need a clear story.",
+            "visual_direction": "Actual source bank: photograph plus real video clips or accurately labeled derived motion sources.",
+            "alt_text": "Source material grouped by the job each output will do."
+          },
+          {
+            "number": 3,
+            "headline": "01 / Shape the photograph.",
+            "body": "Choose the light and color. Compare the edit before you keep it.",
+            "visual_direction": "Real White Balance/Light adjustment and matched comparison.",
+            "alt_text": "Source photograph and actual edited result."
+          },
+          {
+            "number": 4,
+            "headline": "02 / Find the cut.",
+            "body": "Choose three moments. Trim what doesn’t earn its place. Let the ending land.",
+            "visual_direction": "Actual three-shot timeline with one deliberate edge trim.",
+            "alt_text": "A short real sequence with a visible trim decision."
+          },
+          {
+            "number": 5,
+            "headline": "03 / Give it context.",
+            "body": "A headline, a detail, an ending. Build the boards around the work.",
+            "visual_direction": "Real three-board document, with headline editing visible.",
+            "alt_text": "Editable social boards from the same project."
+          },
+          {
+            "number": 6,
+            "headline": "Finish means opening the files.",
+            "body": "Inspect the image. Play the cut. Read the boards in order.",
+            "visual_direction": "Independent open of all exported files; real sizes only after checked.",
+            "alt_text": "Actual image, video and ordered board outputs."
+          },
+          {
+            "number": 7,
+            "headline": "What would your project need?",
+            "body": "Tell me the deliverables — and the part you would look at most closely.",
+            "visual_direction": "Large question plus narrow strips of three outputs.",
+            "alt_text": "Invitation to describe a professional project and inspection criteria."
+          }
+        ],
+        "hook_options": [
+          {
+            "text": "One project. Three finished pieces.",
+            "execution": "Actual opened output triptych, no product intro first."
+          },
+          {
+            "text": "The assignment grew. The idea should still hold together.",
+            "execution": "A simple three-deliverable brief, then the source contact sheet."
+          },
+          {
+            "text": "Here are the files. Here’s how I made them.",
+            "execution": "Actual output files, then rewind to source."
+          }
+        ],
+        "cta_options": [
+          "Which part would you inspect first?",
+          "What three outputs would your assignment need?",
+          "Give me a delivery brief to test."
+        ],
+        "consumer_claim": "Here is a small project in LOOKSi: a photo treatment, a short cut and a three-slide story.",
+        "reasons_to_believe": [
+          "Photo White Balance/Light controls.",
+          "Real Timeline clip trims/splits and color surface.",
+          "Editable board text and image content; ordered board export."
+        ],
+        "internal_proof_notes": [
+          "Title/main caption and finish shots require all three actual outputs from the same owned source project.",
+          "Current source supports proposed authoring routes; source presence does not prove fresh successful export.",
+          "Do not imply linked live updates across all formats, automatic one-click conversion, or complete delivery qualification.",
+          "If current capture is unavailable, use preview_caption and storyboard labels; never use historical unrelated outputs as this shoot’s results.",
+          "Campaign title is project rather than shoot: derived motion is allowed only with accurate source disclosure; no assertion of a literal single camera shoot.",
+          "Use exact actual board count in a published demonstration. Three-board script is a small proposed assignment, not a claim about an existing six-board Nepal document.",
+          "A current view of an existing saved document proves that document is open, not that it was newly authored during this marketing session.",
+          "Public first comments should answer a useful audience question. Internal claim qualifications belong in production notes unless needed to identify source art, dated capture or demonstration status.",
+          "Actual native photo/board/Timeline exports across sessions, not one fresh recorded end-to-end run."
+        ],
+        "note": "Optional capture-led production version; does not describe the delivered master."
+      },
+      "assets": {
+        "image": "campaign02/images/cover.png",
+        "editable_image": "campaign02/images/cover.svg",
+        "board": "campaign02/storyboard/board.png",
+        "editable_board": "campaign02/storyboard/board.svg",
+        "hero_video": "campaign02/videos/hero.mp4"
+      },
+      "preferred_execution": "The professional casebook",
+      "rendered_carousel_files": [
+        "campaign02/carousels/slide-01.png",
+        "campaign02/carousels/slide-02.png",
+        "campaign02/carousels/slide-03.png",
+        "campaign02/carousels/slide-04.png",
+        "campaign02/carousels/slide-05.png",
+        "campaign02/carousels/slide-06.png"
+      ]
+    },
+    {
+      "id": "03",
+      "slug": "make-this-photo-feel-like-the-moment",
+      "title": "Keep the gold. Keep the quiet blues.",
+      "voice": "Warm teacher / visual / specific",
+      "funnel_role": "Useful first experience and learning intent",
+      "audience": {
+        "primary": "Hobby photographer with a meaningful image that feels different from the scene they wanted to express.",
+        "secondary": "Working photographer who appreciates a clear, small teaching example.",
+        "project_trigger": "An evening/travel/everyday photo has the subject they like but a cooler or flatter feeling than intended.",
+        "job": "Make a considered light/color choice, understand it, compare it, and know when to stop.",
+        "tension": "The viewer can sense what feels wrong but has no reason to choose one control over another.",
+        "objection": "Will I just move sliders until everything looks over-edited?"
+      },
+      "proposition": "Help a learner name a photographic intention and inspect a combined treatment.",
+      "consumer_claim": "A specific Nepal JPEG treatment keeps the golden peaks and cool layers, using three modest choices shown through real native export endpoints.",
+      "reasons_to_believe": [
+        "Verified same-source native before/chosen PNGs with identical framing.",
+        "Committed native choices: Temperature 5900 K, Contrast +12%, Exposure+0.15 EV.",
+        "No isolated-control response or recorded Undo is claimed."
+      ],
+      "proof_refs": [
+        "E01",
+        "E11"
+      ],
+      "hero_image": {
+        "headline": "Keep the gold. Keep the quiet blues.",
+        "support": "One intention. A small change. A closer look.",
+        "cta": "Start with what you want to keep.",
+        "direction": "See actual delivered cover and storyboard; no unfilmed founder or invented app view is represented.",
+        "alt_text": "A warm summit above cool blue mountain layers sits in a paper print frame. The headline reads Keep the gold. Keep the quiet blues. A small line says A photo recipe to try."
+      },
+      "carousel": [
+        {
+          "slide": 1,
+          "eyebrow": "KEEP THE GOLD.",
+          "headline": "Keep the quiet blues.",
+          "body": "Three deliberate choices for this photograph.",
+          "alt_text": "Keep the quiet blues. Three deliberate choices for this photograph.",
+          "png": "campaign03/carousels/slide-01.png"
+        },
+        {
+          "slide": 2,
+          "eyebrow": "01 / LOOK FIRST",
+          "headline": "What is already working?",
+          "body": "Golden summit light. Cool layered shadows. Start by naming what you want to keep.",
+          "alt_text": "What is already working? Golden summit light. Cool layered shadows. Start by naming what you want to keep.",
+          "png": "campaign03/carousels/slide-02.png"
+        },
+        {
+          "slide": 3,
+          "eyebrow": "02 / THE DIRECTION",
+          "headline": "A little warmer.",
+          "body": "Temperature 5900 K was one choice for this JPEG. Start from your image, rather than copying a number.",
+          "alt_text": "A little warmer. Temperature 5900 K was one choice for this JPEG. Start from your image, rather than copying a number.",
+          "png": "campaign03/carousels/slide-03.png"
+        },
+        {
+          "slide": 4,
+          "eyebrow": "03 / THE SHAPE",
+          "headline": "A little separation.",
+          "body": "Contrast +12% and exposure +0.15 EV complete this treatment. Small moves, then look again.",
+          "alt_text": "A little separation. Contrast +12% and exposure +0.15 EV complete this treatment. Small moves, then look again.",
+          "png": "campaign03/carousels/slide-04.png"
+        },
+        {
+          "slide": 5,
+          "eyebrow": "04 / COMPARE",
+          "headline": "The same frame. A different feeling.",
+          "body": "The comparison shows the three adjustments together. Neither image has a simulated treatment.",
+          "alt_text": "The same frame. A different feeling. The comparison shows the three adjustments together. Neither image has a simulated treatment.",
+          "png": "campaign03/carousels/slide-05.png"
+        },
+        {
+          "slide": 6,
+          "eyebrow": "05 / KEEP THE FILE",
+          "headline": "Make something you want to revisit.",
+          "body": "Both images are real 1800 × 1200 native PNG exports. The original source remains untouched.",
+          "alt_text": "Make something you want to revisit. Both images are real 1800 × 1200 native PNG exports. The original source remains untouched.",
+          "png": "campaign03/carousels/slide-06.png"
+        },
+        {
+          "slide": 7,
+          "eyebrow": "I’M BUILDING LOOKSi.",
+          "headline": "What would you like to learn?",
+          "body": "Photo + video. For the work you make for yourself, and the work you make for others.",
+          "alt_text": "What would you like to learn? Photo + video. For the work you make for yourself, and the work you make for others.",
+          "png": "campaign03/carousels/slide-07.png"
+        }
+      ],
+      "instagram": {
+        "caption": "Keep the gold. Keep the quiet blues. For this Nepal photograph I chose 5900 K, contrast +12%, and exposure +0.15 EV. The comparison shows the combined treatment, using actual Looksy PNG exports from the same source. Your photograph may need different choices. I’m building LOOKSi for photo and video, and I’d like the learning to feel approachable. What would you like to learn to change in your own photos?",
+        "preview_caption": "Keep the gold. Keep the quiet blues. For this Nepal photograph I chose 5900 K, contrast +12%, and exposure +0.15 EV. The comparison shows the combined treatment, using actual Looksy PNG exports from the same source. Your photograph may need different choices. I’m building LOOKSi for photo and video, and I’d like the learning to feel approachable. What would you like to learn to change in your own photos?",
+        "hashtags": [
+          "#LearnPhotography",
+          "#PhotoEditing",
+          "#CreativeProcess"
+        ]
+      },
+      "reddit": {
+        "title": "A small photo-editing breakdown: keep the warm peaks and the quiet blue layers.",
+        "body": "I’m building LOOKSi, a photo and video editor, and wanted to share a small editing decision rather than a long feature list.\n\nThis Nepal photograph already had something I wanted to keep: warm light on the summit and cool, quiet layers below it. Before touching a control, I tried to name those two things. The aim was a slightly warmer, clearer reading of the same photograph.\n\nFor this particular JPEG, my combined treatment used White Balance → Temperature at 5900 K, Light → Contrast at +12%, and Exposure at +0.15 EV. Those numbers are choices for this image. A different source or a different intention may need something else.\n\nThe attached comparison uses actual PNG exports from the same native Looksy pipeline, with the same framing. It shows all three adjustments together; it is a recipe breakdown of the endpoint, rather than a recording of each individual control’s effect. The original source remains untouched.\n\nMy useful first step is to ask what the photograph already does well. Then make a modest choice, compare, and decide whether it helps. A personal photograph deserves that care just as much as a paid project.\n\nWhat is one thing you would like to learn to change in your own photos? Or, looking at this image, what would you want to keep the way it was? I’m the builder and would like the next lesson to start with a real question.",
+        "placement": "Learning/education context only where builder-linked tutorial content is permitted.",
+        "attachment": "campaign03/videos/hero.mp4",
+        "link_policy": "No access CTA needed; answer the teaching question within the post.",
+        "preview_body": "I’m building LOOKSi, a photo and video editor, and wanted to share a small editing decision rather than a long feature list.\n\nThis Nepal photograph already had something I wanted to keep: warm light on the summit and cool, quiet layers below it. Before touching a control, I tried to name those two things. The aim was a slightly warmer, clearer reading of the same photograph.\n\nFor this particular JPEG, my combined treatment used White Balance → Temperature at 5900 K, Light → Contrast at +12%, and Exposure at +0.15 EV. Those numbers are choices for this image. A different source or a different intention may need something else.\n\nThe attached comparison uses actual PNG exports from the same native Looksy pipeline, with the same framing. It shows all three adjustments together; it is a recipe breakdown of the endpoint, rather than a recording of each individual control’s effect. The original source remains untouched.\n\nMy useful first step is to ask what the photograph already does well. Then make a modest choice, compare, and decide whether it helps. A personal photograph deserves that care just as much as a paid project.\n\nWhat is one thing you would like to learn to change in your own photos? Or, looking at this image, what would you want to keep the way it was? I’m the builder and would like the next lesson to start with a real question.",
+        "main_body_publication_gate": "Approve actual delivered creative, source permissions and destination/community rules. No public availability or purchase claim."
+      },
+      "video": {
+        "duration": 33,
+        "format": "1080 × 1920 / 30 fps",
+        "shots": [
+          {
+            "start": 0,
+            "end": 4,
+            "title": "Show the chosen treatment"
+          },
+          {
+            "start": 4,
+            "end": 9,
+            "title": "Look before touching"
+          },
+          {
+            "start": 9,
+            "end": 17,
+            "title": "Three deliberate choices"
+          },
+          {
+            "start": 17,
+            "end": 24,
+            "title": "Compare the combined result"
+          },
+          {
+            "start": 24,
+            "end": 29,
+            "title": "Keep the file"
+          },
+          {
+            "start": 29,
+            "end": 33,
+            "title": "Invite the first question"
+          }
+        ],
+        "edit_note": "Actual same-source native photo exports; three combined adjustment choices; no single-control animation stands in for app response."
+      },
+      "hook_options": [
+        {
+          "variant": "a",
+          "opening": "Keep the gold. Keep the quiet blues.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "b",
+          "opening": "A little warmer. Still your photograph.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "c",
+          "opening": "One photo. Three deliberate choices.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        }
+      ],
+      "cta_options": [
+        "What would you like to learn to change in your own photos?"
+      ],
+      "founder_capture": {
+        "required_for_primary": false,
+        "optional_version": {
+          "required": false,
+          "minutes_estimate": 15,
+          "takes": [
+            "Optional 70-word calm voiceover after selecting actual source and visual intention"
+          ]
+        },
+        "note": "Primary execution contains no founder likeness or synthetic voice. Optional self-shot version has a separate production plan."
+      },
+      "product_capture": {
+        "required_for_primary": false,
+        "current_evidence": "media/provenance.json",
+        "optional_upgrade": [
+          "P14 same-source original/chosen",
+          "P15 Temperature",
+          "P16 overdo/pull back",
+          "P17 Exposure",
+          "P04 original comparison",
+          "P09 photo output open"
+        ],
+        "note": "New continuous current-build capture is a separate optional production upgrade. Primary versions identify the actual media dates and scopes."
+      },
+      "measurement": {
+        "hypothesis": "A visible intention and restrained real revision will create useful saves and specific learner questions.",
+        "primary": "Saves per 1,000 reached accounts",
+        "secondary": [
+          "Specific learner questions",
+          "Repeat requests for the next decision"
+        ],
+        "test_variable": "Intention-first versus verified before/after-first opening"
+      },
+      "internal_proof_notes": [
+        "Actual same-source native photo exports; three combined adjustment choices; no single-control animation stands in for app response.",
+        "Human creative/media/placement approvals remain pending. No public publication or release claim."
+      ],
+      "future_capture_variant": {
+        "title": "Make this photo feel like the moment.",
+        "video": {
+          "duration": 35,
+          "format": "Same-source micro lesson with actual motion and time to inspect",
+          "shots": [
+            {
+              "start": 0,
+              "end": 4,
+              "shot_type": "Held matched photo reveal",
+              "on_screen": "Make this photo feel like the moment.",
+              "voiceover": "The camera kept the scene. I want the edit to keep the feeling.",
+              "action": "Show actual original, then chosen treatment at identical framing.",
+              "required_capture": "P14 same-source lesson original/chosen",
+              "preview_if_missing": "Use original photo only; line becomes “What do you want this photo to hold onto?”"
+            },
+            {
+              "start": 4,
+              "end": 7,
+              "shot_type": "Original full frame",
+              "on_screen": "Warmer light. Keep the quiet.",
+              "voiceover": "For this one: warmer light, without losing the quiet.",
+              "action": "Return to original and let viewer see subject before controls.",
+              "required_capture": "P14 original source",
+              "preview_if_missing": "Owned original with intended treatment identified as lesson plan."
+            },
+            {
+              "start": 7,
+              "end": 11,
+              "shot_type": "Temperature control/action",
+              "on_screen": "A small Temperature change.",
+              "voiceover": "A small Temperature change. Watch the photo.",
+              "action": "Move actual control and hold resulting image.",
+              "required_capture": "P15 Temperature gesture",
+              "preview_if_missing": "Actual control still with “adjustment capture pending,” no fabricated transition."
+            },
+            {
+              "start": 11,
+              "end": 15,
+              "shot_type": "Overdo and pull back",
+              "on_screen": "Too far? Pull it back.",
+              "voiceover": "Too far? Pull it back. The color shouldn’t take over.",
+              "action": "Make real over-warm trial and pull back, keeping source fixed.",
+              "required_capture": "P16 actual intermediate/revision",
+              "preview_if_missing": "Storyboard original photo with text “trial / revision to record”; no generated fake before/after."
+            },
+            {
+              "start": 15,
+              "end": 19,
+              "shot_type": "Exposure gesture",
+              "on_screen": "Let the light support it.",
+              "voiceover": "Then a little light, if the photo needs it.",
+              "action": "Small actual exposure choice, judged on image, not target number.",
+              "required_capture": "P17 Exposure gesture",
+              "preview_if_missing": "Actual Light panel still, labeled planned action."
+            },
+            {
+              "start": 19,
+              "end": 23,
+              "shot_type": "Original comparison",
+              "on_screen": "Compare with where you started.",
+              "voiceover": "Compare with where you started.",
+              "action": "Use actual original comparison; fixed crop and zoom.",
+              "required_capture": "P04 original comparison",
+              "preview_if_missing": "Actual original image plus source label; omit comparison assertion."
+            },
+            {
+              "start": 23,
+              "end": 27,
+              "shot_type": "Chosen image clean hold",
+              "on_screen": "Keep what helps the picture.",
+              "voiceover": "Keep the change that helps the picture.",
+              "action": "Hold chosen edit without controls long enough to look.",
+              "required_capture": "P14 actual chosen result",
+              "preview_if_missing": "Owned original with intended goal text only."
+            },
+            {
+              "start": 27,
+              "end": 31,
+              "shot_type": "Exported image open",
+              "on_screen": "A small decision, carried through.",
+              "voiceover": "",
+              "action": "Open actual exported file and inspect at normal view.",
+              "required_capture": "P09 opened photo export",
+              "preview_if_missing": "Keep real product still; no export success graphic."
+            },
+            {
+              "start": 31,
+              "end": 35,
+              "shot_type": "Image plus invitation",
+              "on_screen": "What should I explain more slowly?",
+              "voiceover": "What would you like me to explain more slowly?",
+              "action": "Question over image with generous quiet space.",
+              "required_capture": "G02 lesson end",
+              "preview_if_missing": "Same question/end card."
+            }
+          ],
+          "audio": "Calm human teaching voice. Leave pauses after original comparison and chosen image.",
+          "edit_note": "If the source does not need warming, change the intention and corresponding script. Never force an example to fit the line."
+        },
+        "founder_capture": {
+          "required": false,
+          "minutes_estimate": 15,
+          "takes": [
+            "Optional 70-word calm voiceover after selecting actual source and visual intention"
+          ]
+        },
+        "product_capture": [
+          "P14 same-source original/chosen",
+          "P15 Temperature",
+          "P16 overdo/pull back",
+          "P17 Exposure",
+          "P04 original comparison",
+          "P09 photo output open"
+        ],
+        "carousel": [
+          {
+            "number": 1,
+            "headline": "Make this photo feel like the moment.",
+            "body": "Start with the feeling you want to keep.",
+            "visual_direction": "Real photo before/after from same source, identical framing.",
+            "alt_text": "Original and edited versions of the same photograph."
+          },
+          {
+            "number": 2,
+            "headline": "Before touching a slider, name one thing.",
+            "body": "“I want the light to feel warmer, without losing the quiet.”",
+            "visual_direction": "Original photo with one small unobtrusive attention marker.",
+            "alt_text": "Original photograph and the maker’s stated intention."
+          },
+          {
+            "number": 3,
+            "headline": "Warmth is a choice.",
+            "body": "Move Temperature a little. Watch the photo, not just the number.",
+            "visual_direction": "Actual Temperature control and image detail from continuous action.",
+            "alt_text": "A real Temperature adjustment beside the changing image."
+          },
+          {
+            "number": 4,
+            "headline": "Too much tells you something.",
+            "body": "If the color becomes the subject, pull it back.",
+            "visual_direction": "Actual over-warm intermediate and pulled-back version, same crop.",
+            "alt_text": "A strong trial adjustment and the more restrained choice."
+          },
+          {
+            "number": 5,
+            "headline": "Let the light support it.",
+            "body": "A small Exposure change can help. It doesn’t have to fix everything.",
+            "visual_direction": "Actual Exposure adjustment; do not prescribe fixed numeric setting.",
+            "alt_text": "A modest real exposure choice for the chosen image."
+          },
+          {
+            "number": 6,
+            "headline": "Compare with where you started.",
+            "body": "Keep the change that helps the photo say what you meant.",
+            "visual_direction": "Real original comparison and pause on chosen edit.",
+            "alt_text": "Matched original and chosen treatment, held for inspection."
+          },
+          {
+            "number": 7,
+            "headline": "What would you like explained next?",
+            "body": "I’m building LOOKSi for people making work — and learning how.",
+            "visual_direction": "Finished image and a clear learner question.",
+            "alt_text": "Invitation to ask about the next editing decision."
+          }
+        ],
+        "hook_options": [
+          {
+            "text": "The camera kept the scene. What about the feeling?",
+            "execution": "Hold original image; reveal actual subtle chosen treatment."
+          },
+          {
+            "text": "Before touching a slider, name one thing.",
+            "execution": "Maker writes an intention, then actual image/control."
+          },
+          {
+            "text": "This is where I went too far.",
+            "execution": "Actual over-warm intermediate first, then pull back and explain."
+          }
+        ],
+        "cta_options": [
+          "What should I explain more slowly?",
+          "What do you want your photo to hold onto?",
+          "Save this: intention, change, compare."
+        ],
+        "consumer_claim": "Here is one way to shape this photo: name the feeling, make a small change, compare and pull back if it goes too far.",
+        "reasons_to_believe": [
+          "Readable Temperature/Exposure controls.",
+          "Original comparison and actual Undo.",
+          "A held same-source before/after with explanation."
+        ],
+        "internal_proof_notes": [
+          "Teach the selected source, not a universal warmth/brightness correction.",
+          "Main caption and original/edited pair require actual captured edits from same source; use preview copy otherwise.",
+          "Do not say source art was generated by LOOKSi.",
+          "Consumer lesson can use a normal supported JPEG; RAW claims are unnecessary unless genuine RAW input/output proof is retained.",
+          "Public first comments should answer a useful audience question. Internal claim qualifications belong in production notes unless needed to identify source art, dated capture or demonstration status.",
+          "Actual same-source native photo exports; three combined adjustment choices; no single-control animation stands in for app response."
+        ],
+        "note": "Optional capture-led production version; does not describe the delivered master."
+      },
+      "assets": {
+        "image": "campaign03/images/cover.png",
+        "editable_image": "campaign03/images/cover.svg",
+        "board": "campaign03/storyboard/board.png",
+        "editable_board": "campaign03/storyboard/board.svg",
+        "hero_video": "campaign03/videos/hero.mp4"
+      },
+      "preferred_execution": "A welcoming recipe breakdown",
+      "rendered_carousel_files": [
+        "campaign03/carousels/slide-01.png",
+        "campaign03/carousels/slide-02.png",
+        "campaign03/carousels/slide-03.png",
+        "campaign03/carousels/slide-04.png",
+        "campaign03/carousels/slide-05.png",
+        "campaign03/carousels/slide-06.png",
+        "campaign03/carousels/slide-07.png"
+      ]
+    },
+    {
+      "id": "04",
+      "slug": "the-last-tweak-again",
+      "title": "The last tweak. Again.",
+      "voice": "Dry comedy / self-recognition / affectionate",
+      "funnel_role": "Attention and community recognition",
+      "audience": {
+        "primary": "Photo/video makers familiar with revisiting a nearly finished edit.",
+        "secondary": "Hobbyists learning that revision is normal, not a personal failing.",
+        "project_trigger": "An edit feels done until the maker notices one more possible adjustment.",
+        "job": "Recognize the creative habit, enjoy the joke, and name their own repeat adjustment.",
+        "tension": "Confidence lasts exactly as long as it takes to think of a warmer version.",
+        "objection": "Will this be a generic software joke or a disguised unsupported feature claim?"
+      },
+      "proposition": "Recognize a familiar creative habit and invite a relevant conversation.",
+      "consumer_claim": "An original poster becomes the character in a 24-second graphic film about the final adjustment.",
+      "reasons_to_believe": [
+        "Original campaign poster and seven evolving graphic scenes.",
+        "Original synthesized/mastered sound design and three completed hook variants.",
+        "Maker/category disclosure is visible; no app action or output is represented."
+      ],
+      "proof_refs": [
+        "E01",
+        "campaign04/source/provenance.json"
+      ],
+      "hero_image": {
+        "headline": "The last tweak. Again.",
+        "support": "I’m building LOOKSi. Photo + video. For people who care how it looks.",
+        "cta": "What’s your ‘last tweak’?",
+        "direction": "See actual delivered cover and storyboard; no unfilmed founder or invented app view is represented.",
+        "alt_text": "On black, large white type reads ‘The last tweak.’ A red correction adds ‘Again.’ An original cream poster with overlapping red, green and blue circular shapes sits inside crop marks. A cursor hovers beside it. The question below is ‘What’s your last tweak?’ The footer says the maker is building LOOKSi for photo and video."
+      },
+      "carousel": {
+        "campaign_id": "04",
+        "format": "Instagram portrait carousel",
+        "width": 1080,
+        "height": 1350,
+        "slide_count": 6,
+        "publication_status": "Review-ready artwork; not published",
+        "caption": "The last tweak. Again.\n\nA tiny nudge. Another crop. Six options that are definitely different.\n\nI’m building LOOKSi, a photo + video editor for professionals and hobbyists who care how it looks.\n\nWhat’s your “last tweak” — the thing you always go back for?",
+        "slides": [
+          {
+            "headline": "The last tweak. Again.",
+            "body": "One final tiny change. You know how this goes.",
+            "alt": "On graphite black, large white type reads The last tweak, with a red correction adding Again. A tilted cream poster with overlapping RGB circular geometry is the recurring graphic. The lower line reads You know how this goes. This is original campaign artwork, not product output.",
+            "number": 1,
+            "png": "slide-01.png",
+            "svg": "slide-01.svg",
+            "editable_text_svg": "slide-01-editable-text.svg",
+            "on_screen_text": [
+              "LOOKSi / PHOTO + VIDEO",
+              "01 / 06",
+              "A CREATOR’S RITUAL",
+              "The last",
+              "tweak.",
+              "Again.",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "04",
+              "ONE FINAL",
+              "TINY CHANGE.",
+              "You know how this goes."
+            ]
+          },
+          {
+            "headline": "A little right.",
+            "body": "…or left. Just checking. +12 px",
+            "alt": "The same original cream poster is shifted beside a vertical registration guide. Red and green arrows point in opposite directions. Large type reads A little right, then …or left. The bottom reads Just checking and +12 px. This is a graphic editing joke rather than an app interface.",
+            "number": 2,
+            "png": "slide-02.png",
+            "svg": "slide-02.svg",
+            "editable_text_svg": "slide-02-editable-text.svg",
+            "on_screen_text": [
+              "LOOKSi / PHOTO + VIDEO",
+              "02 / 06",
+              "A CREATOR’S RITUAL",
+              "A little",
+              "right.",
+              "…or left.",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "01",
+              "Just checking.",
+              "+12 px"
+            ]
+          },
+          {
+            "headline": "Maybe another crop.",
+            "body": "or… this?",
+            "alt": "An oversized crop of the recurring RGB poster fills a wide window, cutting through its typography and circular image. White crop marks and red alternate corners surround it. The words Maybe another crop are followed by or… this? The crop is an original campaign illustration.",
+            "number": 3,
+            "png": "slide-03.png",
+            "svg": "slide-03.svg",
+            "editable_text_svg": "slide-03-editable-text.svg",
+            "on_screen_text": [
+              "LOOKSi / PHOTO + VIDEO",
+              "03 / 06",
+              "A CREATOR’S RITUAL",
+              "Maybe another",
+              "crop.",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "03",
+              "or… this?"
+            ]
+          },
+          {
+            "headline": "A few options.",
+            "body": "Yes, they’re different.",
+            "alt": "Six subtly different versions of the original cream RGB poster are arranged in two rows of three, labeled Almost 01 through Almost 06. A loose red ellipse selects the fourth. The large heading reads A few options, followed by Yes, they’re different.",
+            "number": 4,
+            "png": "slide-04.png",
+            "svg": "slide-04.svg",
+            "editable_text_svg": "slide-04-editable-text.svg",
+            "on_screen_text": [
+              "LOOKSi / PHOTO + VIDEO",
+              "04 / 06",
+              "A CREATOR’S RITUAL",
+              "A few options.",
+              "Yes, they’re different.",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "01",
+              "ALMOST 01",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "02",
+              "ALMOST 02",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "03",
+              "ALMOST 03",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "04",
+              "ALMOST 04",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "05",
+              "ALMOST 05",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "06",
+              "ALMOST 06"
+            ]
+          },
+          {
+            "headline": "One more pixel.",
+            "body": "You get it.",
+            "alt": "The selected original RGB poster returns with crop marks and a cursor. A red leader points to an illustrative magnified grid with one red square and the label 1 px. Large red italic type reads One more pixel; a lower line says You get it. The grid is a joke prop and represents no product feature.",
+            "number": 5,
+            "png": "slide-05.png",
+            "svg": "slide-05.svg",
+            "editable_text_svg": "slide-05-editable-text.svg",
+            "on_screen_text": [
+              "LOOKSi / PHOTO + VIDEO",
+              "05 / 06",
+              "A CREATOR’S RITUAL",
+              "One more",
+              "pixel.",
+              "AFTERIMAGE",
+              "Almost",
+              "there.",
+              "04",
+              "1 px",
+              "You get it."
+            ]
+          },
+          {
+            "headline": "I’m building LOOKSi.",
+            "body": "Photo + video. For people who care how it looks. What’s your “last tweak”?",
+            "alt": "A clear typographic closing panel says I’m building LOOKSi, Photo + video, and For people who care how it looks. A red italic question asks What’s your last tweak? Three thin RGB circles sign the panel.",
+            "number": 6,
+            "png": "slide-06.png",
+            "svg": "slide-06.svg",
+            "editable_text_svg": "slide-06-editable-text.svg",
+            "on_screen_text": [
+              "LOOKSi / PHOTO + VIDEO",
+              "06 / 06",
+              "A CREATOR’S RITUAL",
+              "I’m building",
+              "LOOKSi.",
+              "Photo + video.",
+              "For people who care",
+              "how it looks.",
+              "What’s your",
+              "“last tweak”?"
+            ]
+          }
+        ],
+        "provenance": "Original procedural vector artwork matches campaign04’s recurring poster. No reference creative, stock art, app interface, app output, founder likeness or product-action claim. The editable-text SVGs embed the bundled OFL fonts; portable SVGs outline those fonts for exact rendering.",
+        "source_builder": "source/build_carousel.py",
+        "render_pipeline": "Native SVG geometry and live type → CoreText font outlines → Quick Look square wrapper at1350px → remove unused right gutter to1080×1350. PNG typography derives from the same outlined SVG master.",
+        "remaining": "Final creative/caption/placement review only; no founder filming or product capture required."
+      },
+      "instagram": {
+        "caption": "The last tweak. Again.\n\nA tiny nudge. Another crop. Six options that are definitely different.\n\nI’m building LOOKSi, a photo + video editor for professionals and hobbyists who care how it looks.\n\nWhat’s your ‘last tweak’ — the thing you always go back for?",
+        "preview_caption": "The last tweak. Again.\n\nA tiny nudge. Another crop. Six options that are definitely different.\n\nI’m building LOOKSi, a photo + video editor for professionals and hobbyists who care how it looks.\n\nWhat’s your ‘last tweak’ — the thing you always go back for?",
+        "hashtags": [
+          "#EditingLife",
+          "#PhotoEditing",
+          "#VideoEditing"
+        ]
+      },
+      "reddit": {
+        "title": "I’m building a photo + video editor and made a little film about the ‘last tweak’",
+        "body": "I’m the person building LOOKSi, a photo + video editor. This is an original graphic animation about a familiar creative ritual: one last adjustment that turns into another one.\n\nThe poster and sound design were created for this campaign. I want the product conversation to include people who edit for clients and people who edit for themselves.\n\nWhat do you always go back to adjust — the crop, the color, the timing, something else? A specific workflow example would be useful.",
+        "placement": "Creator-process conversation only where builder disclosure and relevant media are welcome; do not post humor into a technical help thread.",
+        "attachment": "campaign04/videos/hero.mp4",
+        "link_policy": "No hard sell or download CTA; the question is the purpose of the post.",
+        "preview_body": "I’m the person building LOOKSi, a photo + video editor. This is an original graphic animation about a familiar creative ritual: one last adjustment that turns into another one.\n\nThe poster and sound design were created for this campaign. I want the product conversation to include people who edit for clients and people who edit for themselves.\n\nWhat do you always go back to adjust — the crop, the color, the timing, something else? A specific workflow example would be useful.",
+        "main_body_publication_gate": "Approve actual delivered creative, source permissions and destination/community rules. No public availability or purchase claim."
+      },
+      "video": {
+        "duration": 24,
+        "format": "1080 × 1920 / 24 fps",
+        "shots": [
+          {
+            "start": 0,
+            "end": 3,
+            "scene": "The declaration",
+            "action": "Type rises. Red strike and Again appear. Cursor approaches."
+          },
+          {
+            "start": 3,
+            "end": 7,
+            "scene": "The negotiation",
+            "action": "Original artwork shifts left, right, then by one pixel. Registration line remains still."
+          },
+          {
+            "start": 7,
+            "end": 11,
+            "scene": "The crop",
+            "action": "Same artwork zooms and changes crop. A second thought appears as annotation."
+          },
+          {
+            "start": 11,
+            "end": 14,
+            "scene": "The alternatives",
+            "action": "Six original layout variants cascade in. A red circle selects number 04."
+          },
+          {
+            "start": 14,
+            "end": 16,
+            "scene": "The pause",
+            "action": "Selected artwork holds. Music thins. Maybe that’s it."
+          },
+          {
+            "start": 16,
+            "end": 18,
+            "scene": "The relapse",
+            "action": "One more pixel. Cursor click nudges the artwork literally one output pixel."
+          },
+          {
+            "start": 18,
+            "end": 24,
+            "scene": "The invitation",
+            "action": "Maker disclosure, photo + video, care-for-the-work message and question. All on screen by 20.5s."
+          }
+        ],
+        "edit_note": "Original poster and type animation; no app UI or product output claimed."
+      },
+      "hook_options": [
+        {
+          "variant": "a",
+          "opening": "The last tweak. Again.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "b",
+          "opening": "Just one more pixel. Again.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "c",
+          "opening": "You said it was done. Again.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        }
+      ],
+      "cta_options": [
+        "What’s your last tweak?"
+      ],
+      "founder_capture": {
+        "required_for_primary": false,
+        "optional_version": {
+          "required": true,
+          "minutes_estimate": 15,
+          "takes": [
+            "F04 satisfied",
+            "F05 doubtful",
+            "F06 flat too-warm reaction",
+            "F07 relief plus almost-return glance",
+            "One complete dry dialogue take"
+          ]
+        },
+        "note": "Primary execution contains no founder likeness or synthetic voice. Optional self-shot version has a separate production plan."
+      },
+      "product_capture": {
+        "required_for_primary": false,
+        "current_evidence": "media/provenance.json",
+        "optional_upgrade": [
+          "P14 actual chosen photo",
+          "P15 actual warming trial",
+          "P04 actual Undo/return"
+        ],
+        "note": "New continuous current-build capture is a separate optional production upgrade. Primary versions identify the actual media dates and scopes."
+      },
+      "measurement": {
+        "hypothesis": "A performed editing habit will drive recognition and relevant shares without a hard-sell pitch.",
+        "primary": "Shares per 1,000 reached accounts",
+        "secondary": [
+          "Specific adjustment-habit replies",
+          "Relevant profile visits"
+        ],
+        "test_variable": "Silent deadpan versus dry voiced opening"
+      },
+      "internal_proof_notes": [
+        "Original poster and type animation; no app UI or product output claimed.",
+        "Human creative/media/placement approvals remain pending. No public publication or release claim."
+      ],
+      "future_capture_variant": {
+        "title": "The last tweak. Again.",
+        "video": {
+          "duration": 26,
+          "format": "Dry founder micro-skit with one real product action",
+          "shots": [
+            {
+              "start": 0,
+              "end": 3,
+              "shot_type": "Founder satisfied close",
+              "on_screen": "Done.",
+              "voiceover": "Done.",
+              "action": "Brady leans back, small satisfied exhale.",
+              "required_capture": "F04 satisfied reaction",
+              "preview_if_missing": "Original storyboard illustration labeled performance pending; do not animate fake founder likeness."
+            },
+            {
+              "start": 3,
+              "end": 6,
+              "shot_type": "Clean actual photo",
+              "on_screen": "A perfectly reasonable ending.",
+              "voiceover": "",
+              "action": "Hold chosen actual image; room tone, no celebratory fake export.",
+              "required_capture": "P14 chosen image",
+              "preview_if_missing": "Owned source image with source label; no edit-result assertion."
+            },
+            {
+              "start": 6,
+              "end": 9,
+              "shot_type": "Founder doubtful glance",
+              "on_screen": "…what if it was warmer?",
+              "voiceover": "What if it was a little warmer?",
+              "action": "Eyes return to screen; tiny pause before moving.",
+              "required_capture": "F05 doubt reaction",
+              "preview_if_missing": "Typed second thought over real product still, labeled storyboard."
+            },
+            {
+              "start": 9,
+              "end": 13,
+              "shot_type": "Temperature gesture",
+              "on_screen": "Just checking.",
+              "voiceover": "",
+              "action": "Real same-source warmth gesture with visible response.",
+              "required_capture": "P15 Temperature",
+              "preview_if_missing": "Actual Temperature panel still; no fabricated response."
+            },
+            {
+              "start": 13,
+              "end": 16,
+              "shot_type": "Founder reaction",
+              "on_screen": "No. Too warm.",
+              "voiceover": "No. Too warm.",
+              "action": "Short flat reaction, no exaggerated mugging.",
+              "required_capture": "F06 too-warm reaction",
+              "preview_if_missing": "Typography with clear performance-pending label."
+            },
+            {
+              "start": 16,
+              "end": 20,
+              "shot_type": "Undo action and image return",
+              "on_screen": "Undo.",
+              "voiceover": "Undo.",
+              "action": "Actual Undo gesture and returned treatment, source fixed.",
+              "required_capture": "P04 actual Undo",
+              "preview_if_missing": "Product still of Undo control; avoid before/after transformation without proof."
+            },
+            {
+              "start": 20,
+              "end": 23,
+              "shot_type": "Founder relief",
+              "on_screen": "Done. With additional research.",
+              "voiceover": "Done. With additional research.",
+              "action": "Brady settles, almost ready to reconsider again.",
+              "required_capture": "F07 return/release",
+              "preview_if_missing": "Simple editorial copy over real product still."
+            },
+            {
+              "start": 23,
+              "end": 26,
+              "shot_type": "Question/end hold",
+              "on_screen": "What’s your last tweak?",
+              "voiceover": "What’s your last tweak?",
+              "action": "LOOKSi signature, question, optional tiny look back at screen.",
+              "required_capture": "G03 humor end",
+              "preview_if_missing": "Same end card."
+            }
+          ],
+          "audio": "Room tone, dry human delivery, actual mouse/key sounds. Music should not cue the joke before the second thought.",
+          "edit_note": "The pause is the joke. An additional graphic variation can exist, but a stack of title cards does not replace the acted scene."
+        },
+        "founder_capture": {
+          "required": true,
+          "minutes_estimate": 15,
+          "takes": [
+            "F04 satisfied",
+            "F05 doubtful",
+            "F06 flat too-warm reaction",
+            "F07 relief plus almost-return glance",
+            "One complete dry dialogue take"
+          ]
+        },
+        "product_capture": [
+          "P14 actual chosen photo",
+          "P15 actual warming trial",
+          "P04 actual Undo/return"
+        ],
+        "carousel": [
+          {
+            "number": 1,
+            "headline": "The last tweak. Again.",
+            "body": "A very short editing story.",
+            "visual_direction": "Founder pleased expression or actual image, calm composition.",
+            "alt_text": "Opening of a short joke about a final editing tweak."
+          },
+          {
+            "number": 2,
+            "headline": "Done.",
+            "body": "Looks good. Close the panel.",
+            "visual_direction": "Real chosen image, simple final-looking hold.",
+            "alt_text": "The maker considers the edit finished."
+          },
+          {
+            "number": 3,
+            "headline": "…what if it was warmer?",
+            "body": "Just checking.",
+            "visual_direction": "Same source and real Temperature panel.",
+            "alt_text": "The maker reconsiders the image warmth."
+          },
+          {
+            "number": 4,
+            "headline": "No. Too warm.",
+            "body": "A useful discovery, apparently.",
+            "visual_direction": "Actual too-warm intermediate with clear comic timing.",
+            "alt_text": "The stronger trial treatment is rejected."
+          },
+          {
+            "number": 5,
+            "headline": "Undo.",
+            "body": "Back where we were. With more certainty.",
+            "visual_direction": "Actual Undo action/returned image.",
+            "alt_text": "The maker returns to the earlier treatment."
+          },
+          {
+            "number": 6,
+            "headline": "What’s the adjustment that gets you?",
+            "body": "Warmth? Crop? Contrast? The cut point?",
+            "visual_direction": "Founder knowing look and large invitation.",
+            "alt_text": "Invitation to name a recurring editing adjustment."
+          }
+        ],
+        "hook_options": [
+          {
+            "text": "Done.",
+            "execution": "Deadpan satisfied founder, hold long enough to believe it."
+          },
+          {
+            "text": "This is absolutely the last tweak.",
+            "execution": "Straight-faced promise, then immediate doubtful glance."
+          },
+          {
+            "text": "I just need to move the cut two frames.",
+            "execution": "Video-edit variant with actual trim action; do not mix with warmth story."
+          }
+        ],
+        "cta_options": [
+          "What’s your last tweak?",
+          "Which adjustment gets you every time?",
+          "What tells you it’s actually done?"
+        ],
+        "consumer_claim": "I know the last-tweak loop. I’m building LOOKSi for people who care about the decisions.",
+        "reasons_to_believe": [
+          "A real Temperature control and same-source change.",
+          "A real Undo action rather than a fake file-history interface.",
+          "Founder performance makes the joke human."
+        ],
+        "internal_proof_notes": [
+          "Fictional performed dialogue is the founder’s skit, not customer testimony.",
+          "No version-management, recovery or measured productivity promise.",
+          "Founder filming is required for the preferred skit; a storyboard film must remain labeled a storyboard.",
+          "Temperature and Undo interactions must come from a real same-source capture.",
+          "Public first comments should answer a useful audience question. Internal claim qualifications belong in production notes unless needed to identify source art, dated capture or demonstration status."
+        ],
+        "note": "Optional capture-led production version; does not describe the delivered master."
+      },
+      "assets": {
+        "image": "campaign04/images/cover.png",
+        "editable_image": "campaign04/images/cover.svg",
+        "board": "campaign04/storyboard/board.png",
+        "editable_board": "campaign04/storyboard/board.svg",
+        "hero_video": "campaign04/videos/hero.mp4"
+      },
+      "preferred_execution": "Finished original graphic film",
+      "rendered_carousel_files": [
+        "campaign04/carousels/slide-01.png",
+        "campaign04/carousels/slide-02.png",
+        "campaign04/carousels/slide-03.png",
+        "campaign04/carousels/slide-04.png",
+        "campaign04/carousels/slide-05.png",
+        "campaign04/carousels/slide-06.png"
+      ]
+    },
+    {
+      "id": "05",
+      "slug": "make-room-for-your-eye",
+      "title": "Make room for your eye.",
+      "voice": "Editorial film / tactile / reflective",
+      "funnel_role": "Brand memory and identification",
+      "audience": {
+        "primary": "Design-conscious photographer/video maker who sees tools as part of a personal creative process.",
+        "secondary": "Professionals and hobbyists who want the same care applied to paid work and personal experiments.",
+        "project_trigger": "An observational image or film makes them pause and consider the maker behind it.",
+        "job": "Decide whether the project shares their taste, respects authorship, and is worth following.",
+        "tension": "Software launch films often show machinery and superlatives while the actual work disappears.",
+        "objection": "Is there a point of view behind this editor, or just an attractive logo?"
+      },
+      "proposition": "Express photographic taste and connect it to a real product moment.",
+      "consumer_claim": "Original photographs, actual board output and genuine dated tone-curve footage express the maker’s creative intent.",
+      "reasons_to_believe": [
+        "Nepal source photographs, rather than generic generated scenery.",
+        "Genuine native tone-curve recording dated 25 Oct 2026.",
+        "Actual native board exports dated 16 Nov 2026; original procedural light interlude."
+      ],
+      "proof_refs": [
+        "E01",
+        "E11"
+      ],
+      "hero_image": {
+        "headline": "Make room for your eye.",
+        "support": "A photograph. A cut.\nThe decisions that make it yours.",
+        "cta": "Follow the build.",
+        "direction": "See actual delivered cover and storyboard; no unfilmed founder or invented app view is represented.",
+        "alt_text": "Large orange flowers fill an editorial photograph between graphite title panels. Serif type reads Make room for your eye. LOOKSi and small additive RGB marks appear above; photo and video positioning appears below."
+      },
+      "carousel": [
+        {
+          "slide": 1,
+          "eyebrow": "MAKE ROOM",
+          "headline": "for your eye.",
+          "body": "A point of view starts with what you notice.",
+          "alt_text": "for your eye. A point of view starts with what you notice.",
+          "png": "campaign05/carousels/slide-01.png"
+        },
+        {
+          "slide": 2,
+          "eyebrow": "LIGHT.",
+          "headline": "Before it was a file.",
+          "body": "It was a moment you wanted to keep.",
+          "alt_text": "Before it was a file. It was a moment you wanted to keep.",
+          "png": "campaign05/carousels/slide-02.png"
+        },
+        {
+          "slide": 3,
+          "eyebrow": "COLOR.",
+          "headline": "The feeling stays with you.",
+          "body": "A photograph can hold more than a record.",
+          "alt_text": "The feeling stays with you. A photograph can hold more than a record.",
+          "png": "campaign05/carousels/slide-03.png"
+        },
+        {
+          "slide": 4,
+          "eyebrow": "THE DECISION.",
+          "headline": "Then you shape it.",
+          "body": "Looksy tone-curve recording, 25 Oct 2026. Real native controls; development footage.",
+          "alt_text": "Then you shape it. Looksy tone-curve recording, 25 Oct 2026. Real native controls; development footage.",
+          "png": "campaign05/carousels/slide-04.png"
+        },
+        {
+          "slide": 5,
+          "eyebrow": "THE WORK.",
+          "headline": "Give it somewhere to live.",
+          "body": "Actual native board export from NEPAL / NEAR & FAR, 16 Nov 2026.",
+          "alt_text": "Give it somewhere to live. Actual native board export from NEPAL / NEAR & FAR, 16 Nov 2026.",
+          "png": "campaign05/carousels/slide-05.png"
+        },
+        {
+          "slide": 6,
+          "eyebrow": "I’M BUILDING LOOKSi.",
+          "headline": "Photo+video. Your point of view.",
+          "body": "Make room for your eye. Follow the build.",
+          "alt_text": "Photo + video. Your point of view. Make room for your eye. Follow the build.",
+          "png": "campaign05/carousels/slide-06.png"
+        }
+      ],
+      "instagram": {
+        "caption": "It starts with something you notice: light, color, a moment you want to keep. I’m building LOOKSi, a photo and video editor, to make room for the way people see. The film brings together original Nepal photographs, actual board exports and a dated native tone-curve recording. The light interlude is original campaign artwork. Follow the build. Bring your eye.",
+        "preview_caption": "It starts with something you notice: light, color, a moment you want to keep. I’m building LOOKSi, a photo and video editor, to make room for the way people see. The film brings together original Nepal photographs, actual board exports and a dated native tone-curve recording. The light interlude is original campaign artwork. Follow the build. Bring your eye.",
+        "hashtags": [
+          "#VisualStorytelling",
+          "#Photography",
+          "#CreativeProcess"
+        ]
+      },
+      "reddit": {
+        "title": "I’m building a photo/video editor around the part of editing I care about: the way you see.",
+        "body": "I’m the person building LOOKSi, a photo and video editor. For this introduction I wanted to start with the thing that comes before a control or a feature: noticing something worth making a picture of.\n\nThe film moves through photographs from Nepal: early mountain light, warm flowers against a quiet background, and the work finding a place in a board. It also includes a genuine native tone-curve recording from 25 October and an actual board export from 16 November. The moving light at the end is original campaign artwork.\n\nI care about the decisions between a source and a result. How much warmth belongs in the frame? Where does the eye go? What should stay quiet? What needs a little more room? Those questions belong to professional work and to the photographs or films you make for yourself.\n\nThat is the direction I’m building toward with LOOKSi. The film expresses that point of view; the companion casebook and photo breakdown provide actual files and specific choices to inspect.\n\nWhat kind of work would you want to see this tool used for next? I’d like a project, a medium, or a creative decision that matters to you. I’m the builder, and I’ll use that to shape a useful demonstration.",
+        "placement": "Thoughtful maker/design process discussion where first-person product context is allowed; not a substitute for a technical demo in a support forum.",
+        "attachment": "campaign05/videos/hero.mp4",
+        "link_policy": "Follow/build context only; no invented signup destination.",
+        "preview_body": "I’m the person building LOOKSi, a photo and video editor. For this introduction I wanted to start with the thing that comes before a control or a feature: noticing something worth making a picture of.\n\nThe film moves through photographs from Nepal: early mountain light, warm flowers against a quiet background, and the work finding a place in a board. It also includes a genuine native tone-curve recording from 25 October and an actual board export from 16 November. The moving light at the end is original campaign artwork.\n\nI care about the decisions between a source and a result. How much warmth belongs in the frame? Where does the eye go? What should stay quiet? What needs a little more room? Those questions belong to professional work and to the photographs or films you make for yourself.\n\nThat is the direction I’m building toward with LOOKSi. The film expresses that point of view; the companion casebook and photo breakdown provide actual files and specific choices to inspect.\n\nWhat kind of work would you want to see this tool used for next? I’d like a project, a medium, or a creative decision that matters to you. I’m the builder, and I’ll use that to shape a useful demonstration.",
+        "main_body_publication_gate": "Approve actual delivered creative, source permissions and destination/community rules. No public availability or purchase claim."
+      },
+      "video": {
+        "duration": 36,
+        "format": "1080 × 1920 / 30 fps",
+        "shots": [
+          {
+            "start": 0,
+            "end": 4,
+            "title": "A way of seeing"
+          },
+          {
+            "start": 4,
+            "end": 9,
+            "title": "The light you noticed"
+          },
+          {
+            "start": 9,
+            "end": 15,
+            "title": "Color and feeling"
+          },
+          {
+            "start": 15,
+            "end": 21,
+            "title": "The product moment"
+          },
+          {
+            "start": 21,
+            "end": 28,
+            "title": "The work takes shape"
+          },
+          {
+            "start": 28,
+            "end": 36,
+            "title": "A personal signature"
+          }
+        ],
+        "edit_note": "Original source photography + genuine dated product recording and actual board export; procedural light is campaign art."
+      },
+      "hook_options": [
+        {
+          "variant": "a",
+          "opening": "Make room for your eye.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "b",
+          "opening": "You saw something.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        },
+        {
+          "variant": "c",
+          "opening": "The way you see it.",
+          "scope": "Rendered opening variant; body and duration held constant."
+        }
+      ],
+      "cta_options": [
+        "Follow the build. Bring your eye."
+      ],
+      "founder_capture": {
+        "required_for_primary": false,
+        "optional_version": {
+          "required": false,
+          "minutes_estimate": 15,
+          "takes": [
+            "Optional intimate full voiceover",
+            "Optional hands/desk observational detail; no face required"
+          ]
+        },
+        "note": "Primary execution contains no founder likeness or synthetic voice. Optional self-shot version has a separate production plan."
+      },
+      "product_capture": {
+        "required_for_primary": false,
+        "current_evidence": "media/provenance.json",
+        "optional_upgrade": [
+          "B01 observational owned footage",
+          "P02 source still",
+          "P03/P18 real color/crop",
+          "P14 chosen result",
+          "P05/P13 real cut",
+          "P06 board text",
+          "B02 owned project details",
+          "G04 optical art"
+        ],
+        "note": "New continuous current-build capture is a separate optional production upgrade. Primary versions identify the actual media dates and scopes."
+      },
+      "measurement": {
+        "hypothesis": "A coherent point of view with actual creative decisions will attract relevant follows and substantive project replies.",
+        "primary": "Relevant profile visits/follows per 1,000 reached accounts, where attribution exists",
+        "secondary": [
+          "Project-intent replies",
+          "Saves of the editorial carousel"
+        ],
+        "test_variable": "Observational footage versus original optical-light opening"
+      },
+      "internal_proof_notes": [
+        "Original source photography + genuine dated product recording and actual board export; procedural light is campaign art.",
+        "Human creative/media/placement approvals remain pending. No public publication or release claim."
+      ],
+      "future_capture_variant": {
+        "title": "Make room for your eye.",
+        "video": {
+          "duration": 36,
+          "format": "Editorial film with observational footage, real product details and optical transitions",
+          "shots": [
+            {
+              "start": 0,
+              "end": 4,
+              "shot_type": "Observational live detail",
+              "on_screen": "Before the edit, you noticed something.",
+              "voiceover": "Before the edit, you noticed something.",
+              "action": "Light crosses owned subject; hold a real detail rather than camera hardware.",
+              "required_capture": "B01 owned observational footage",
+              "preview_if_missing": "Original source artwork clearly identified, not purported product output."
+            },
+            {
+              "start": 4,
+              "end": 8,
+              "shot_type": "Chosen still frame",
+              "on_screen": "A frame worth keeping.",
+              "voiceover": "A frame worth keeping.",
+              "action": "Actual photo fills screen; gentle move only if treatment is campaign motion, not live app behavior.",
+              "required_capture": "P02 owned source still",
+              "preview_if_missing": "Owned/created source art label where necessary."
+            },
+            {
+              "start": 8,
+              "end": 12,
+              "shot_type": "Real crop/color action",
+              "on_screen": "Choose what matters.",
+              "voiceover": "Then you chose what mattered.",
+              "action": "Actual deliberate crop or restrained Temperature change.",
+              "required_capture": "P03 or P18 real crop/color action",
+              "preview_if_missing": "Actual interface still labeled preview; no synthetic slider response."
+            },
+            {
+              "start": 12,
+              "end": 16,
+              "shot_type": "Quiet clean image hold",
+              "on_screen": "Leave something quiet.",
+              "voiceover": "What to leave quiet.",
+              "action": "Hold actual chosen image; no fast effect montage.",
+              "required_capture": "P14 chosen result",
+              "preview_if_missing": "Use source image and change VO to “What you want to leave quiet.”"
+            },
+            {
+              "start": 16,
+              "end": 20,
+              "shot_type": "Actual sequence cut",
+              "on_screen": "A cut changes the rhythm.",
+              "voiceover": "A cut changed the rhythm.",
+              "action": "Play actual exported/captured sequence across one meaningful cut.",
+              "required_capture": "P05 or P13 actual cut playback",
+              "preview_if_missing": "Two source video moments labeled source montage; do not call it Looksi output."
+            },
+            {
+              "start": 20,
+              "end": 24,
+              "shot_type": "Board text/layout action",
+              "on_screen": "Give the work its shape.",
+              "voiceover": "An image. A line of type. Room to let them speak.",
+              "action": "Edit actual headline on real board; hold alignment/spacing.",
+              "required_capture": "P06 board action",
+              "preview_if_missing": "Actual dated board composition still; typography overlays are campaign design, not simulated UI."
+            },
+            {
+              "start": 24,
+              "end": 28,
+              "shot_type": "Work and personal detail",
+              "on_screen": "A deadline. An “I wonder.”",
+              "voiceover": "Some work has a deadline. Some starts with “I wonder.”",
+              "action": "Pair actual project output and observational source detail, authorship correct.",
+              "required_capture": "B02 owned project details",
+              "preview_if_missing": "Original campaign artwork, without implying a client assignment occurred."
+            },
+            {
+              "start": 28,
+              "end": 32,
+              "shot_type": "Founder hands or real desk",
+              "on_screen": "That’s why I’m building LOOKSi.",
+              "voiceover": "I want Looksi to give both the same care.",
+              "action": "Human hand returns to desk or real product overview; founder optional.",
+              "required_capture": "F08 optional hand/desk or P01",
+              "preview_if_missing": "Actual product still plus plain first-person line."
+            },
+            {
+              "start": 32,
+              "end": 36,
+              "shot_type": "Optical signature and end hold",
+              "on_screen": "Make room for your eye.\nFollow the build.",
+              "voiceover": "Make room for your eye.",
+              "action": "Original optical RGB overlaps into cool white, clean LOOKSi signature.",
+              "required_capture": "G04 original optical campaign art",
+              "preview_if_missing": "Same original optical end; identify as artwork in production ledger."
+            }
+          ],
+          "audio": "Intimate human voice, tactile room sounds, original slow tonal bed with a deliberate change at the cut.",
+          "edit_note": "The work and its decisions occupy the film. Optical art is a transition/signature, not the entire story. Avoid equipment fetish shots and unsupported superlatives."
+        },
+        "founder_capture": {
+          "required": false,
+          "minutes_estimate": 15,
+          "takes": [
+            "Optional intimate full voiceover",
+            "Optional hands/desk observational detail; no face required"
+          ]
+        },
+        "product_capture": [
+          "B01 observational owned footage",
+          "P02 source still",
+          "P03/P18 real color/crop",
+          "P14 chosen result",
+          "P05/P13 real cut",
+          "P06 board text",
+          "B02 owned project details",
+          "G04 optical art"
+        ],
+        "carousel": [
+          {
+            "number": 1,
+            "headline": "Make room for your eye.",
+            "body": "A photograph. A cut. The decisions that make it yours.",
+            "visual_direction": "Real work plus restrained optical transition.",
+            "alt_text": "A creative statement beside actual visual work."
+          },
+          {
+            "number": 2,
+            "headline": "Before the edit, you noticed something.",
+            "body": "The way the light fell. The frame worth keeping.",
+            "visual_direction": "Owned observational scene, not equipment beauty shot.",
+            "alt_text": "A small detail of light that motivates the photograph."
+          },
+          {
+            "number": 3,
+            "headline": "Then you chose what mattered.",
+            "body": "A little less at the edge. A little more quiet in the color.",
+            "visual_direction": "Actual chosen frame and edit detail; no universal correctness claim.",
+            "alt_text": "A maker’s framing and color decisions."
+          },
+          {
+            "number": 4,
+            "headline": "A cut changed the rhythm.",
+            "body": "One moment ended. Another began.",
+            "visual_direction": "Actual paired video frames around a real cut.",
+            "alt_text": "Two moments joined by a deliberate edit."
+          },
+          {
+            "number": 5,
+            "headline": "The work found its shape.",
+            "body": "An image. A line of type. Space to let them speak.",
+            "visual_direction": "Actual editable board headline and image composition.",
+            "alt_text": "A photograph and typography arranged on a real board."
+          },
+          {
+            "number": 6,
+            "headline": "Some work has a deadline.",
+            "body": "Some starts with “I wonder.” Both deserve your attention.",
+            "visual_direction": "Pair professional-feeling output and personal detail from same owned bank.",
+            "alt_text": "Paid and personal creative intentions receive equal care."
+          },
+          {
+            "number": 7,
+            "headline": "That’s why I’m building LOOKSi.",
+            "body": "Make room for your eye. Follow the build.",
+            "visual_direction": "Founder hand/desk detail or clean wordmark, optical signature.",
+            "alt_text": "LOOKSi signature and invitation to follow the builder."
+          }
+        ],
+        "hook_options": [
+          {
+            "text": "Before the edit, you noticed something.",
+            "execution": "Original observational detail, almost still, immediate tactile sound."
+          },
+          {
+            "text": "Make room for your eye.",
+            "execution": "A powerful owned frame, then actual decision detail."
+          },
+          {
+            "text": "Some work starts with “I wonder.”",
+            "execution": "Personal experiment before a professional-looking deliverable."
+          }
+        ],
+        "cta_options": [
+          "Follow the build.",
+          "What are you making room for?",
+          "What are you making next?"
+        ],
+        "consumer_claim": "I’m building LOOKSi to give the decisions behind a photograph, a cut and a layout room.",
+        "reasons_to_believe": [
+          "Actual photographic source and chosen framing.",
+          "Actual photo decision, Timeline cut and editable board detail.",
+          "Human founder voice and original additive-RGB optical art tie the scenes together."
+        ],
+        "internal_proof_notes": [
+          "Do not imply a real client commission solely because a piece looks professional.",
+          "Campaign optical art is not a Looksi edit/render result.",
+          "Actual cut/color/layout assertions require genuine captures; preview variants use intent language.",
+          "No claim that the software creates originality or uniquely owns the maker’s taste.",
+          "Public first comments should answer a useful audience question. Internal claim qualifications belong in production notes unless needed to identify source art, dated capture or demonstration status.",
+          "Original source photography + genuine dated product recording and actual board export; procedural light is campaign art."
+        ],
+        "note": "Optional capture-led production version; does not describe the delivered master."
+      },
+      "assets": {
+        "image": "campaign05/images/cover.png",
+        "editable_image": "campaign05/images/cover.svg",
+        "board": "campaign05/storyboard/board.png",
+        "editable_board": "campaign05/storyboard/board.svg",
+        "hero_video": "campaign05/videos/hero.mp4"
+      },
+      "preferred_execution": "The photographic manifesto",
+      "rendered_carousel_files": [
+        "campaign05/carousels/slide-01.png",
+        "campaign05/carousels/slide-02.png",
+        "campaign05/carousels/slide-03.png",
+        "campaign05/carousels/slide-04.png",
+        "campaign05/carousels/slide-05.png",
+        "campaign05/carousels/slide-06.png"
+      ]
+    }
+  ],
+  "publication_state": "No posting, messaging, outreach, spending or release configuration changes performed.",
+  "release_boundary": "Conversation/follow CTAs only. Current commercial terms unapproved and checkout/prices empty; Apple silicon Mac is target, no other platform/price/access promise."
+}

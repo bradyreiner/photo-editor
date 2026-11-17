@@ -4,6 +4,8 @@
 #include "photo_editor/pipeline/output_rendering.h"
 #include "photo_editor/pipeline/color_transform.h"
 #include "photo_editor/pipeline/photo_effect_types.h"
+#include "photo_editor/pipeline/layer_style_types.h"
+#include "photo_editor/pipeline/blend_if.h"
 
 #include <atomic>
 #include <array>
@@ -49,6 +51,12 @@ struct BrushPoint final {
 struct CloneStroke final {
   bool operator==(const CloneStroke&) const = default;
   std::vector<BrushPoint> points;
+  // Missing rasterVersion in persisted recipes means a normalized ellipse.
+  bool circular = false;
+  double hardness = 0.25;
+  double feather = 0.75;
+  double raster_width_scale = 1.0;
+  double raster_height_scale = 1.0;
   double source_x = 0.5;
   double source_y = 0.5;
   double offset_x = 0.0;
@@ -64,10 +72,17 @@ struct LocalMask final {
   std::string output_id;
   std::string name;
   std::string kind = "linear";
+  double coordinate_area_x = 0.0;
+  double coordinate_area_y = 0.0;
+  double coordinate_area_width = 1.0;
+  double coordinate_area_height = 1.0;
   std::string operation = "add";
   std::string blend_mode = "normal";
   std::string retouch_mode;
   int retouch_order = 0;
+  // Component retouch selections operate on the visible child composite after
+  // its photo layers are rendered. Regular photo retouch remains pre-layer.
+  bool component_post_composite_retouch = false;
   bool enabled = true;
   bool reusable_output = false;
   bool invert = false;
@@ -154,6 +169,10 @@ struct LocalMask final {
   double range_feather = 0.1;
   double hue_center = 0.08;
   double hue_range = 0.12;
+  // Explicit new Color Ranges use the editable scalar center until swatches
+  // are added, then evaluate their soft union. Legacy recipes leave this off.
+  bool color_range_sample_union = false;
+  std::vector<double> color_range_sample_hues;
   double saturation_min = 0.1;
   double saturation_max = 1.0;
   double depth_min = 0.2;
@@ -183,6 +202,14 @@ struct LocalMask final {
   double inpaint_blend_amount = 1.0;
   double inpaint_seam_feather = 4.0;
   double inpaint_color_match = 0.75;
+  // Baked patch coordinates belong to the original matte grid, independently
+  // of the alpha raster materialized for the current execution surface.
+  int inpaint_source_width = 0;
+  int inpaint_source_height = 0;
+  double inpaint_source_area_x = 0.0;
+  double inpaint_source_area_y = 0.0;
+  double inpaint_source_area_width = 1.0;
+  double inpaint_source_area_height = 1.0;
 };
 
 struct LocalMaskSet final {
@@ -282,12 +309,15 @@ constexpr std::array<const char*, kColorMixerChannelCount> kColorMixerChannelNam
 struct PhotoLayer final {
   // Resolve against the base at the layer stage, before any sibling content.
   bool copy_base_image = false;
+  // Copy the base after adjustment rows below this layer have developed it.
+  bool copy_base_image_through_adjustments = false;
   bool erase_base_image = false;
   std::string id;
   std::string parent_id;
   std::string name;
   std::string kind = "adjustment";
   std::string blend_mode = "normal";
+  LayerBlendIf blend_if;
   bool enabled = true;
   double opacity = 1.0;
   bool clipping_mask = false;
@@ -405,6 +435,10 @@ struct PhotoLayer final {
   bool mask_inverted = false;
   double mask_opacity = 1.0;
   double mask_density = 1.0;
+  // Retouch authored in a nested Smart Object is applied to this group's
+  // private child composite before the instance transform and group mask.
+  std::vector<LocalMask> component_retouch_masks;
+  bool component_retouch_final_quality = false;
   std::vector<ColorPixel> pixels;
   int pixel_width = 0;
   int pixel_height = 0;
@@ -429,11 +463,23 @@ struct PhotoLayer final {
   std::string effect_error;
   int effect_padding_x = 0;
   int effect_padding_y = 0;
+  LayerStyleStack style_stack;
+  std::string style_error;
+  // Maps layer-style geometry authored in document pixels to this raster.
+  double style_scale_x = 1.0;
+  double style_scale_y = 1.0;
+  // Shared global-light direction in clockwise image-space degrees; zero points right.
+  double style_global_light_angle = -45.0;
   std::string content_error;
 };
 
 inline bool photo_layer_has_active_effects(const PhotoLayer& layer) {
-  if (!layer.effect_error.empty()) return true;
+  if (!layer.effect_error.empty() || !layer.style_error.empty()) return true;
+  if (layer.style_stack.version != kLayerStyleStackVersion) return true;
+  for (const auto& style : layer.style_stack.operations) {
+    if (!std::isfinite(style.opacity) || style.opacity < 0.0 || style.opacity > 1.0) return true;
+    if (layer.style_stack.enabled && style.enabled && style.opacity > 0.0) return true;
+  }
   for (const auto& effect : layer.effects) {
     if (!effect.enabled || effect.amount == 0.0) continue;
     if (effect.type_id == "gaussian_blur" && effect.algorithm_version == 1 &&
@@ -476,6 +522,8 @@ struct InputTransformSettings final {
   double source_area_height = 1.0;
 };
 
+struct HighlightReconstructionReferenceGrid;
+
 struct HighlightReconstructionAnalysis final {
   bool active = false;
   std::string model = "disabled";
@@ -486,10 +534,26 @@ struct HighlightReconstructionAnalysis final {
   std::array<double, 3> chrominance_correction = {0.0, 0.0, 0.0};
   std::array<std::size_t, 3> correction_reference_samples = {0U, 0U, 0U};
   std::size_t reconstructed_channel_samples = 0U;
+  // Immutable bounded local evidence, shared by compiled per-pixel parameters.
+  // The global chrominance fields above are diagnostics, never recovery input.
+  std::shared_ptr<const HighlightReconstructionReferenceGrid> local_reference_grid;
 
   [[nodiscard]] bool has_clipping() const {
     return clipped_pixels > 0U;
   }
+};
+
+// Immutable full-source pixels at the layer-stage working color boundary.
+// A physical crop must not hide clone sources or the context used by healing.
+struct RetouchSourceContext final {
+  std::vector<ColorPixel> pixels;
+  std::vector<LocalMask> masks;
+  int width = 0;
+  int height = 0;
+  int crop_x = 0;
+  int crop_y = 0;
+  int crop_width = 0;
+  int crop_height = 0;
 };
 
 struct ColorAdjustmentState final {
@@ -613,6 +677,8 @@ struct ColorAdjustmentState final {
   double radial_mask_rotation = 0.0;
   std::vector<LocalMaskSet> local_mask_sets;
   std::vector<LocalMask> retouch_masks;
+  std::vector<LocalMask> post_composite_retouch_masks;
+  std::shared_ptr<const RetouchSourceContext> retouch_source_context;
   std::vector<LocalMask> local_masks;
   // Plain root text layers that the desktop compiler has proven safe to
   // composite in display-linear space after photographic output. The normal
@@ -1076,6 +1142,8 @@ struct ColorAdjustmentTelemetry final {
   std::int64_t gpu_blit_count = 0;
   std::int64_t gpu_cpu_to_gpu_bytes = 0;
   std::int64_t gpu_gpu_to_cpu_bytes = 0;
+  std::int64_t gpu_cpu_readback_buffer_pool_hit_count = 0;
+  std::int64_t gpu_cpu_readback_buffer_pool_miss_count = 0;
   std::int64_t gpu_spatial_texture_blur_dispatch_count = 0;
   std::int64_t gpu_spatial_clarity_blur_dispatch_count = 0;
   std::int64_t gpu_spatial_haze_blur_dispatch_count = 0;
@@ -1109,7 +1177,8 @@ struct ColorPrefixStageContext final {
     std::span<const ColorPixel> pixels,
     int width,
     int height,
-    const InputTransformSettings& settings);
+    const InputTransformSettings& settings,
+    double highlight_headroom = 1.0);
 [[nodiscard]] bool metal_color_backend_available();
 [[nodiscard]] std::string metal_color_backend_unavailable_reason();
 [[nodiscard]] bool metal_color_pipeline_compatible(const ColorAdjustmentState& state);

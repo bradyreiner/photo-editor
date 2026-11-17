@@ -488,6 +488,7 @@ QVariantMap read_capture_camera_metadata(const QString& path) {
         {"make", text(tiff[(__bridge NSString*)kCGImagePropertyTIFFMake])},
         {"model", text(tiff[(__bridge NSString*)kCGImagePropertyTIFFModel])},
         {"lens", text(exif[(__bridge NSString*)kCGImagePropertyExifLensModel])},
+        {"captureTime", text(exif[(__bridge NSString*)kCGImagePropertyExifDateTimeOriginal])},
         {"bodySerial", text(exif[(__bridge NSString*)kCGImagePropertyExifBodySerialNumber])},
         {"focalMm", number(exif[(__bridge NSString*)kCGImagePropertyExifFocalLength])},
         {"focal35Mm", number(exif[(__bridge NSString*)kCGImagePropertyExifFocalLenIn35mmFilm])}};

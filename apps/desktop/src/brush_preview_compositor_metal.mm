@@ -26,6 +26,7 @@ struct BrushUniforms {
   simd_float4 color;
   simd_uint2 texture_size;
   simd_uint2 origin;
+  unsigned int circular;
 };
 
 constexpr auto kBrushPreviewShaderSource = R"(
@@ -42,6 +43,7 @@ struct BrushUniforms {
   float4 color;
   uint2 texture_size;
   uint2 origin;
+  uint circular;
 };
 
 float smoothstep_safe(float edge0, float edge1, float x) {
@@ -73,10 +75,29 @@ kernel void composite_brush_dab(
   float denom_x = max(float(max(int(uniforms.texture_size.x) - 1, 1)), 1.0);
   float denom_y = max(float(max(int(uniforms.texture_size.y) - 1, 1)), 1.0);
   float2 pixel = float2(float(gid.x) / denom_x, float(gid.y) / denom_y);
-  float distance_norm = distance(pixel, uniforms.center) / max(uniforms.size, 0.01);
-  float inner_scale = clamp(uniforms.hardness, 0.0, 0.98);
-  float weight = uniforms.flow * (1.0 - smoothstep_safe(inner_scale, 1.0, distance_norm));
-  float src_alpha = clamp(weight * uniforms.opacity, 0.0, 1.0);
+  float2 center = clamp(uniforms.center, float2(0.0), float2(1.0));
+  float softness = clamp(uniforms.feather, uniforms.circular != 0 ? 0.0 : 0.05, 1.0);
+  float inner_scale = (1.0 - softness) *
+      (uniforms.circular != 0 ? clamp(uniforms.hardness, 0.0, 1.0) : 1.0);
+  float distance_norm = 0.0;
+  float tip_weight = 0.0;
+  if (uniforms.circular != 0) {
+    float2 delta_pixels = (pixel - center) * float2(denom_x, denom_y);
+    float radius_pixels = max(uniforms.size * min(denom_x, denom_y), 0.01);
+    float distance_pixels = length(delta_pixels);
+    distance_norm = distance_pixels / radius_pixels;
+    if ((1.0 - inner_scale) * radius_pixels < 1.0) {
+      tip_weight = 1.0 - smoothstep_safe(inner_scale * radius_pixels - 0.5,
+          radius_pixels + 0.5, distance_pixels);
+    } else {
+      tip_weight = 1.0 - smoothstep_safe(inner_scale, 1.0, distance_norm);
+    }
+  } else {
+    distance_norm = distance(pixel, center) / max(uniforms.size, 0.01);
+    tip_weight = 1.0 - smoothstep_safe(inner_scale, 1.0, distance_norm);
+  }
+  float weight = uniforms.flow * tip_weight;
+  float src_alpha = clamp(weight * uniforms.opacity * uniforms.color.a, 0.0, 1.0);
   if (src_alpha <= 1e-6) {
     return;
   }
@@ -88,8 +109,8 @@ kernel void composite_brush_dab(
     return;
   }
 
-  float3 out_rgb =
-      (uniforms.color.rgb * src_alpha + dst.rgb * dst.a * (1.0 - src_alpha)) / out_alpha;
+  float3 out_rgb = uniforms.color.rgb * src_alpha + dst.rgb * (1.0 - src_alpha);
+  out_rgb = min(out_rgb, float3(out_alpha));
   target.write(half4(half3(out_rgb), half(out_alpha)), gid);
 }
 )";
@@ -219,12 +240,13 @@ class MetalBrushPreviewCompositor final : public BrushPreviewCompositor {
 
     for (const auto& point : points) {
       const auto clamped_size = std::max(0.01, point.size);
-      const auto radius_x = std::max(
-          2,
-          static_cast<int>(std::ceil(clamped_size * static_cast<double>(std::max(image->width() - 1, 1)))));
-      const auto radius_y = std::max(
-          2,
-          static_cast<int>(std::ceil(clamped_size * static_cast<double>(std::max(image->height() - 1, 1)))));
+      const auto circular = style.circular;
+      const auto radius_pixels = clamped_size * static_cast<double>(std::max(
+          1, std::min(image->width() - 1, image->height() - 1)));
+      const auto radius_x = std::max(2, static_cast<int>(std::ceil(circular ? radius_pixels :
+          clamped_size * static_cast<double>(std::max(image->width() - 1, 1)))));
+      const auto radius_y = std::max(2, static_cast<int>(std::ceil(circular ? radius_pixels :
+          clamped_size * static_cast<double>(std::max(image->height() - 1, 1)))));
       const auto anchor_x = std::clamp(point.x, 0.0, 1.0) * static_cast<double>(std::max(image->width() - 1, 1));
       const auto anchor_y = std::clamp(point.y, 0.0, 1.0) * static_cast<double>(std::max(image->height() - 1, 1));
       const auto min_x = std::max(0, static_cast<int>(std::floor(anchor_x)) - radius_x);
@@ -246,25 +268,27 @@ class MetalBrushPreviewCompositor final : public BrushPreviewCompositor {
           std::min<NSUInteger>(max_threads, static_cast<NSUInteger>(dispatch_height));
 
       const auto uniforms = BrushUniforms{
-          .center = simd_make_float2(static_cast<float>(point.x), static_cast<float>(point.y)),
+          .center = simd_make_float2(static_cast<float>(std::clamp(point.x, 0.0, 1.0)),
+              static_cast<float>(std::clamp(point.y, 0.0, 1.0))),
           .size = static_cast<float>(clamped_size),
           .flow = static_cast<float>(
               std::clamp(point.flow, 0.0, 1.0) *
               std::clamp(point.opacity, 0.0, 1.0)),
-          .feather = static_cast<float>(std::clamp(style.feather, 0.05, 1.0)),
-          .hardness = static_cast<float>(std::clamp(style.hardness, 0.0, 0.98)),
+          .feather = static_cast<float>(std::clamp(style.feather, circular ? 0.0 : 0.05, 1.0)),
+          .hardness = static_cast<float>(std::clamp(style.hardness, 0.0, 1.0)),
           .opacity = static_cast<float>(std::clamp(style.opacity, 0.0, 1.0)),
           .color = simd_make_float4(
               static_cast<float>(style.color.redF()),
               static_cast<float>(style.color.greenF()),
               static_cast<float>(style.color.blueF()),
-              1.0f),
+              static_cast<float>(style.color.alphaF())),
           .texture_size = simd_make_uint2(
               static_cast<unsigned int>(image->width()),
               static_cast<unsigned int>(image->height())),
           .origin = simd_make_uint2(
               static_cast<unsigned int>(min_x),
               static_cast<unsigned int>(min_y)),
+          .circular = circular ? 1U : 0U,
       };
 
       [encoder setBytes:&uniforms length:sizeof(BrushUniforms) atIndex:0];

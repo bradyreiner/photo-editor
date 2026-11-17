@@ -1,0 +1,891 @@
+--- before/apps/desktop/qml/components/ActionButton.qml
++++ after/apps/desktop/qml/components/ActionButton.qml
+@@ -21,6 +21,7 @@
+     readonly property bool commandIconVisible: (!showText || text.length === 0 || showLeadingIcon) && (iconName.length > 0 || iconText.length > 0)
+     property bool allowLabelWrap: false
+     property bool embedded: false
++    property bool alignTextLeft: false
+     property int surfaceVerticalInset: 0
+     property bool square: !showText && (iconName.length > 0 || iconText.length > 0)
+     property string role: square ? "icon" : tone
+@@ -155,7 +156,9 @@
+     contentItem: Item {
+         RowLayout {
+             id: contentRow
+-            anchors.centerIn: parent
++            anchors.verticalCenter: parent.verticalCenter
++            anchors.horizontalCenter: root.alignTextLeft ? undefined : parent.horizontalCenter
++            anchors.left: root.alignTextLeft ? parent.left : undefined
+             width: Math.min(root.commandContentWidth, Math.max(0, parent.width))
+             height: implicitHeight
+             spacing: root.commandIconVisible && root.showText ? theme.gapDense : 0
+--- before/apps/desktop/qml/components/PhotoEffectStack.qml
++++ after/apps/desktop/qml/components/PhotoEffectStack.qml
+@@ -817,7 +817,8 @@
+                     ActionButton {
+                         objectName: "photoEffectExpand_" + String(entry.modelData.id)
+                         width: !root.timelineStyle && root.width < theme.scaled(360) ? cardContents.width
+-                            : Math.max(theme.scaled(110), cardContents.width - stateToggle.implicitWidth - theme.space4)
++                            : Math.max(theme.scaled(70), cardContents.width - stateToggle.implicitWidth
++                                       - (root.timelineStyle ? timelineEffectActions.implicitWidth : 0) - theme.space4 * 2)
+                         text: root.width < theme.scaled(130) ? entry.title.replace(/\s/, "\n") : entry.title
+                         iconName: root.width < theme.scaled(130) ? ""
+                             : entry.expanded ? "chevron-down" : "chevron-right"
+@@ -825,7 +826,9 @@
+                         allowLabelWrap: true
+                         checkable: true
+                         checked: entry.expanded
+-                        active: entry.expanded
++                        active: entry.expanded && !root.timelineStyle
++                        embedded: root.timelineStyle
++                        alignTextLeft: root.timelineStyle
+                         Accessible.name: qsTr("%1 settings").arg(entry.title)
+                         tooltipText: entry.expanded ? qsTr("Collapse effect controls") : qsTr("Edit effect settings")
+                         onClicked: root.expandedEffectId = entry.expanded ? "" : String(entry.modelData.id)
+@@ -843,6 +846,38 @@
+                         onToggled: function(enabled) {
+                             root.controller.setPhotoLayerEffectEnabled(root.layerIndex,
+                                 entry.modelData.id, enabled)
++                        }
++                    }
++                    MenuButton {
++                        id: timelineEffectActions
++                        objectName: "timelineEffectActions_" + String(entry.modelData.id)
++                        visible: root.timelineStyle
++                        text: qsTr("%1 actions").arg(entry.title)
++                        accessibleName: text
++                        iconName: "menu"
++                        showText: false
++                        compact: true
++                        primaryOpensMenu: true
++                        enabled: !root.locked
++                        menuItems: [
++                            {key: "reset", label: qsTr("Reset parameters"), icon: "reset"},
++                            {key: "earlier", label: qsTr("Move earlier"), icon: "move-up", enabled: entry.index > 0},
++                            {key: "later", label: qsTr("Move later"), icon: "move-down", enabled: entry.index + 1 < root.effects.length},
++                            {key: "duplicate", label: qsTr("Duplicate effect"), icon: "duplicate"},
++                            {key: "mask", label: qsTr("Mask from selection"), icon: "masks", enabled: root.controller.hasWorkingSelection === true},
++                            {key: "edit-mask", label: qsTr("Edit effect mask"), icon: "edit", enabled: String(entry.modelData.maskId || "").length > 0},
++                            {key: "clear-mask", label: qsTr("Remove effect mask"), icon: "masks", enabled: String(entry.modelData.maskId || "").length > 0},
++                            {key: "remove", label: qsTr("Remove effect"), icon: "delete", separatorBefore: true}
++                        ]
++                        onMenuItemTriggered: function(key) {
++                            if (key === "reset") root.controller.resetPhotoLayerEffect(root.layerIndex, entry.modelData.id)
++                            else if (key === "earlier" || key === "later") root.controller.movePhotoLayerEffect(
++                                root.layerIndex, entry.modelData.id, entry.index + (key === "earlier" ? -1 : 1))
++                            else if (key === "duplicate") root.controller.duplicatePhotoLayerEffect(root.layerIndex, entry.modelData.id)
++                            else if (key === "mask") root.controller.maskPhotoLayerEffectFromSelection(root.layerIndex, entry.modelData.id)
++                            else if (key === "edit-mask") root.editEffectMask(entry.modelData.id)
++                            else if (key === "clear-mask") root.controller.clearPhotoLayerEffectMask(root.layerIndex, entry.modelData.id)
++                            else if (key === "remove") root.controller.removePhotoLayerEffect(root.layerIndex, entry.modelData.id)
+                         }
+                     }
+                 }
+@@ -911,7 +946,7 @@
+                 }
+                 RowLayout {
+                     objectName: "photoEffectOrderRow_" + String(entry.modelData.id)
+-                    visible: root.effects.length > 1 && (!root.timelineStyle || entry.expanded)
++                    visible: !root.timelineStyle && root.effects.length > 1
+                     Layout.fillWidth: true
+                     spacing: theme.space4
+                     Label {
+@@ -955,7 +990,8 @@
+                     spacing: theme.space4
+                     InspectorSlider {
+                         objectName: "photoGaussianAmountField"
+-                        width: amountControls.width >= amountReset.implicitWidth + theme.scaled(200)
++                        width: root.timelineStyle ? amountControls.width
++                            : amountControls.width >= amountReset.implicitWidth + theme.scaled(200)
+                             ? amountControls.width - amountReset.implicitWidth - amountControls.spacing
+                             : amountControls.width
+                         label: qsTr("Amount (%)")
+@@ -980,6 +1016,7 @@
+                     }
+                     ActionButton {
+                         id: amountReset
++                        visible: !root.timelineStyle
+                         objectName: "photoGaussianAmountReset"
+                         text: qsTr("Reset")
+                         iconName: "reset"
+@@ -1108,7 +1145,7 @@
+                 }
+             }
+             ActionButton {
+-                visible: entry.expanded
++                visible: !root.timelineStyle && entry.expanded
+                 text: qsTr("Duplicate effect")
+                 iconName: "duplicate"
+                 showLeadingIcon: true
+@@ -1116,7 +1153,7 @@
+                 onClicked: root.controller.duplicatePhotoLayerEffect(root.layerIndex, entry.modelData.id)
+             }
+             ActionButton {
+-                visible: entry.expanded
++                visible: !root.timelineStyle && entry.expanded
+                 text: qsTr("Mask from selection")
+                 iconName: "masks"
+                 showLeadingIcon: true
+@@ -1125,7 +1162,7 @@
+                 onClicked: root.controller.maskPhotoLayerEffectFromSelection(root.layerIndex, entry.modelData.id)
+             }
+             ActionButton {
+-                visible: entry.expanded && String(entry.modelData.maskId || "").length > 0
++                visible: !root.timelineStyle && entry.expanded && String(entry.modelData.maskId || "").length > 0
+                 text: qsTr("Edit effect mask")
+                 objectName: "photoEffectEditMask_" + String(entry.modelData.id)
+                 iconName: "edit"
+@@ -1134,7 +1171,7 @@
+                 onClicked: root.editEffectMask(entry.modelData.id)
+             }
+             ActionButton {
+-                visible: entry.expanded && String(entry.modelData.maskId || "").length > 0
++                visible: !root.timelineStyle && entry.expanded && String(entry.modelData.maskId || "").length > 0
+                 text: qsTr("Remove effect mask")
+                 iconName: "delete"
+                 showLeadingIcon: true
+@@ -1143,7 +1180,7 @@
+                 onClicked: root.controller.clearPhotoLayerEffectMask(root.layerIndex, entry.modelData.id)
+             }
+             RowLayout {
+-                visible: entry.expanded
++                visible: !root.timelineStyle && entry.expanded
+                 Layout.fillWidth: true
+                 ActionButton {
+                     text: qsTr("Remove")
+--- before/apps/desktop/qml/components/TimelineSharedEffectControls.qml
++++ after/apps/desktop/qml/components/TimelineSharedEffectControls.qml
+@@ -60,6 +60,7 @@
+             required property string layerId
+             required property int layerIndex
+             required property var layerData
++            property int observedEffectCount: 0
+             Layout.fillWidth: true
+             Layout.preferredWidth: root.width
+             Layout.minimumWidth: 0
+@@ -88,9 +89,10 @@
+                 addButtonVisible: false
+                 onEffectMaskEditRequested: root.layerToolsRequested()
+                 onEffectsChanged: {
+-                    // A freshly added effect should expose its settings immediately.
+-                    Qt.callLater(function() {
+-                        if (effects.length > 0 && !expandedEffectId.length)
++                    const added = effects.length > effectLayer.observedEffectCount
++                    effectLayer.observedEffectCount = effects.length
++                    if (added) Qt.callLater(function() {
++                        if (effects.length > 0)
+                             expandedEffectId = String(effects[effects.length - 1].id)
+                     })
+                 }
+--- before/apps/desktop/qml/components/TimelineEffectsPanel.qml
++++ after/apps/desktop/qml/components/TimelineEffectsPanel.qml
+@@ -174,7 +174,7 @@
+     readonly property string timelineTitleMotionTruthSignature: "timeline-title-motion:v4|target:title-clips|presets:fade-pop-rise-slide-left-right|lifecycle:entrance-and-exit|animation:editable-clip-keyframes|text-position:anchor-and-transform-keyframes|clear:static-removes-motion-and-transform-keys|preview-export:shared-anchor-transform-path|state:undo-save-reopen"
+     readonly property string keyframeToolbarLayoutContract: "timeline-keyframe-toolbar:v1|hierarchy:heading-count-menu|controls:dedicated-row|responsive:no-overlap|accessibility:combined-count"
+     readonly property int inspectorRowSpacing: theme.densityCompact ? theme.space2 : theme.space4
+-    readonly property int inspectorLaneRowHeight: theme.scaled(34)
++    readonly property int inspectorLaneRowHeight: theme.scaled(32)
+     readonly property int inspectorLaneRulerHeight: theme.controlHeightDense
+ 
+     radius: 0
+@@ -2102,8 +2102,15 @@
+                                                : (index % 2 === 0
+                                                   ? theme.alpha(theme.glassLift, 0.07)
+                                                   : "transparent")
+-                                        border.width: selected ? 1 : 0
++                                        border.width: 0
+                                         border.color: theme.alpha(theme.selectionAccent, 0.4)
++
++                                        Rectangle {
++                                            width: theme.scaled(2)
++                                            height: parent.height
++                                            visible: inspectorControlRow.selected
++                                            color: theme.accentCool400
++                                        }
+ 
+                                         RowLayout {
+                                             anchors.fill: parent
+@@ -2113,7 +2120,7 @@
+ 
+                                             Label {
+                                                 id: inspectorControlName
+-                                                Layout.preferredWidth: theme.scaled(54)
++                                                Layout.preferredWidth: Math.max(theme.scaled(54), Math.min(theme.scaled(86), inspectorControlRow.width * 0.3))
+                                                 Layout.minimumWidth: theme.scaled(42)
+                                                 Layout.maximumWidth: theme.scaled(72)
+                                                 text: inspectorControlRow.parameter === "frameOffsetX" ? qsTr("Pos. X")
+@@ -2215,9 +2222,9 @@
+                                                 id: inspectorControlValueField
+                                                 property bool editingValue: false
+                                                 property string draftValueText: ""
+-                                                Layout.preferredWidth: theme.scaled(48)
++                                                Layout.preferredWidth: theme.scaled(58)
+                                                 Layout.minimumWidth: theme.scaled(44)
+-                                                Layout.maximumWidth: theme.scaled(48)
++                                                Layout.maximumWidth: theme.scaled(64)
+                                                 implicitHeight: theme.controlHeightDense
+                                                 accessibleLabel: inspectorControlRow.parameterLabel
+                                                 Accessible.description: qsTr(
+@@ -2748,92 +2755,61 @@
+                                         spacing: theme.gapDense
+                                         RowLayout {
+                                             Layout.fillWidth: true
+-                                            spacing: theme.gapDense
+-
++                                            spacing: theme.space4
+                                             Label {
+                                                 objectName: "timelineAppliedEffectsHeading"
+-                                                text: qsTr("APPLIED STACK")
++                                                text: qsTr("EFFECTS")
+                                                 color: theme.textMuted
+-                                                font.family: theme.fontNumeric
+-                                                font.features: theme.numericFontFeatures
+-                                                font.pixelSize: theme.typeLabel
++                                                font.family: theme.fontUi
++                                                font.pixelSize: theme.typeCaption
+                                                 font.weight: Font.DemiBold
+-                                                Layout.minimumWidth: implicitWidth
+-                                                Layout.preferredWidth: implicitWidth
+-                                                Accessible.name: text
+                                             }
+-
+                                             Label {
+                                                 text: String(root.currentEffectStack().length + root.sharedAppliedEffectCount)
+                                                 color: theme.textFaint
+                                                 font.family: theme.fontNumeric
+-                                                font.features: theme.numericFontFeatures
+                                                 font.pixelSize: theme.typeCaption
+                                                 Accessible.name: text + " effects in the stack"
+                                             }
+-
+                                             Item { Layout.fillWidth: true }
+-
+                                             ActionButton {
+                                                 objectName: "timelineQuickEffectPickerButton"
+-                                                text: qsTr("Add Effect")
+-                                                showText: true
++                                                text: qsTr("Add")
+                                                 iconName: "plus"
++                                                showLeadingIcon: true
+                                                 compact: true
+-                                                visible: root.effectLibraryItems.length > 0
+-                                                enabled: root.effectLibraryItems.length > 0
++                                                enabled: root.hasSelection && root.effectLibraryItems.length > 0
+                                                 Accessible.name: qsTr("Add effect")
+-                                                tooltipText: "Search and add an effect without leaving the applied stack."
++                                                tooltipText: qsTr("Browse effects for the selected clip.")
+                                                 onClicked: {
+-                                                if (root.surfaceMode === "controls") root.effectLibraryRequested()
+-                                                else quickEffectPicker.open()
++                                                    if (root.surfaceMode === "controls") root.effectLibraryRequested()
++                                                    else quickEffectPicker.open()
++                                                }
+                                             }
+-                                            }
+-                                        }
+-
+-                                        RowLayout {
+-                                            Layout.fillWidth: true
+-                                            spacing: theme.gapDense
+-
+-                                            Item { Layout.fillWidth: true }
+-
+-                                            ActionButton {
++                                            MenuButton {
+                                                 objectName: "timelineEffectStackPresetsButton"
+-                                                text: qsTr("Looks")
+-                                                iconName: "layers"
+-                                                showText: true
+-                                                compact: true
+-                                                enabled: root.isVideoClip
+-                                                disabledReason: "Effect stack looks apply to video clips."
+-                                                tooltipText: "Save, preview, version, or selectively apply an effect stack."
+-                                                onClicked: root.openEffectPresetManager()
+-                                            }
+-
+-                                            ConfirmActionButton {
+-                                                visible: root.currentEffectStack().length > 0
+-                                                iconName: "delete"
++                                                text: qsTr("Effect actions")
++                                                accessibleName: text
++                                                iconName: "menu"
+                                                 showText: false
+                                                 compact: true
+-                                                fillButtonWidth: false
+-                                                text: "Clear Stack"
+-                                                confirmText: "Clear all effects"
+-                                                helperText: "Press again to remove every effect from this clip"
+-                                                tooltipText: "Clear all effects from this clip."
+-                                                onConfirmed: if (root.documentController)
+-                                                                 root.documentController.clearSelectedClipEffects()
+-                                            }
+-
+-                                            ActionButton {
+-                                                visible: root.currentEffectStack().length > 0
+-                                                text: root.hasClip && clipState.effectsEnabled === false ? "Bypassed" : "Enabled"
+-                                                compact: true
+-                                                active: root.hasClip && clipState.effectsEnabled !== false
+-                                                tooltipText: root.hasClip && clipState.effectsEnabled === false
+-                                                             ? "Enable the complete effect stack."
+-                                                             : "Temporarily bypass the complete effect stack."
+-                                                onClicked: if (root.documentController)
+-                                                               root.documentController.setSelectedClipEffectsEnabled(
+-                                                                   root.hasClip && clipState.effectsEnabled === false)
++                                                primaryOpensMenu: true
++                                                menuItems: [
++                                                    {key: "looks", label: qsTr("Effect looks…"), icon: "layers",
++                                                     enabled: root.isVideoClip, disabledReason: qsTr("Select a video clip to use effect looks.")},
++                                                    {key: "bypass", label: root.clipState.effectsEnabled === false
++                                                        ? qsTr("Enable clip effects") : qsTr("Bypass clip effects"), icon: "effects",
++                                                     enabled: root.currentEffectStack().length > 0},
++                                                    {key: "clear", label: qsTr("Clear clip effect stack"), icon: "delete",
++                                                     enabled: root.currentEffectStack().length > 0,
++                                                     disabledReason: qsTr("Layer effects can be removed from their own action menus.")}
++                                                ]
++                                                onMenuItemTriggered: function(key) {
++                                                    if (key === "looks") root.openEffectPresetManager()
++                                                    else if (key === "bypass") root.documentController.setSelectedClipEffectsEnabled(
++                                                        root.clipState.effectsEnabled === false)
++                                                    else if (key === "clear") root.documentController.clearSelectedClipEffects()
++                                                }
+                                             }
+                                         }
+ 
+--- before/apps/desktop/qml/components/TimelineInspectorMiniLanes.qml
++++ after/apps/desktop/qml/components/TimelineInspectorMiniLanes.qml
+@@ -95,8 +95,7 @@
+         Rectangle {
+             anchors.fill: parent
+             color: root.theme.ink950
+-            border.width: 1
+-            border.color: root.theme.alpha(root.theme.lineSoft, 0.6)
++            border.width: 0
+         }
+ 
+         Repeater {
+@@ -113,7 +112,7 @@
+                     anchors.horizontalCenter: parent.horizontalCenter
+                     width: 1
+                     height: parent.height
+-                    color: root.theme.alpha(root.theme.lineSoft, 0.75)
++                    color: root.theme.alpha(root.theme.lineSoft, 0.28)
+                 }
+                 Label {
+                     anchors.top: parent.top
+@@ -190,7 +189,7 @@
+                                      : (lane.index % 2 === 0
+                                         ? root.theme.alpha(root.theme.glassLift, 0.07)
+                                         : "transparent")
+-                border.width: lane.selected ? 1 : 0
++                border.width: 0
+                 border.color: root.theme.alpha(root.theme.selectionAccent, 0.4)
+             }
+ 
+@@ -199,7 +198,7 @@
+                 width: Math.max(1, parent.width - root.theme.space12)
+                 height: 1
+                 anchors.verticalCenter: parent.verticalCenter
+-                color: root.theme.alpha(root.theme.lineStrong, 0.35)
++                color: root.theme.alpha(root.theme.lineStrong, 0.18)
+             }
+ 
+             Canvas {
+--- before/apps/desktop/qml/components/TimelineClipContent.qml
++++ after/apps/desktop/qml/components/TimelineClipContent.qml
+@@ -173,6 +173,8 @@
+                 return generator
+             return type === "motion-generator" ? "Motion graphic" : "Clip"
+         }
++        if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+){2,}$/.test(supplied))
++            return humanize(supplied)
+         return supplied.length > 0 ? supplied : "Clip"
+     }
+ 
+@@ -302,10 +304,40 @@
+     }
+ 
+     AppToolTip {
++        id: clipPreviewTip
+         targetItem: root
+         visible: root.compact && root.pointerInside
+         delay: 500
+         text: root.displayTitle + (root.completeDescription.length > 0 ? "\n" + root.completeDescription : "")
++        readonly property bool imagePreview: root.thumbnailSource.length > 0
++                && (root.mediaType === "photo" || root.mediaType === "video")
++        implicitWidth: imagePreview ? theme.scaled(272) : preferredTextWidth + leftPadding + rightPadding
++        implicitHeight: clipTipContents.implicitHeight + topPadding + bottomPadding
++        contentItem: Column {
++            id: clipTipContents
++            width: clipPreviewTip.availableWidth
++            spacing: theme.space6
++            Image {
++                objectName: "timelineClipHoverPreview"
++                visible: clipPreviewTip.imagePreview
++                width: parent.width
++                height: visible ? width * 0.5625 : 0
++                source: clipPreviewTip.visible && visible ? root.thumbnailSource : ""
++                sourceSize.width: 544
++                sourceSize.height: 306
++                fillMode: Image.PreserveAspectFit
++                asynchronous: true
++                cache: true
++            }
++            Text {
++                width: parent.width
++                text: clipPreviewTip.text
++                wrapMode: Text.Wrap
++                color: theme.textStrong
++                font.family: theme.fontUi
++                font.pixelSize: theme.typeCaption
++            }
++        }
+     }
+ 
+     ColumnLayout {
+@@ -327,7 +359,7 @@
+             Image {
+                 id: compactThumbnail
+                 objectName: "timelineCompactClipThumbnail"
+-                visible: root.height < theme.scaled(36) && root.contentWidth >= theme.scaled(160)
++                visible: root.height < theme.scaled(36) && root.contentWidth >= theme.scaled(132)
+                          && (root.mediaType === "photo" || root.mediaType === "video")
+                          && root.thumbnailSource.length > 0
+                 source: visible ? root.thumbnailSource : ""
+@@ -353,7 +385,8 @@
+ 
+             Label {
+                 objectName: "timelineClipMediaKindLabel"
+-                visible: root.contentWidth >= theme.scaled(140)
++                visible: root.contentWidth >= theme.scaled(240)
++                         || (!compactThumbnail.visible && root.contentWidth >= theme.scaled(140))
+                 text: root.displayMediaKind.toUpperCase()
+                 color: theme.textMuted
+                 font.family: theme.fontUi
+--- before/apps/desktop/qml/components/TimelineScaleStrip.qml
++++ after/apps/desktop/qml/components/TimelineScaleStrip.qml
+@@ -12,6 +12,7 @@
+     property string zoomLabel: "100%"
+     property int noteCount: 0
+     property bool embedded: false
++    property bool followPlayhead: true
+     property bool controlsReady: false
+     readonly property bool compact: embedded || width < theme.scaled(680)
+     signal horizontalScaleRequested(real zoom)
+@@ -19,9 +20,30 @@
+     signal fitRequested()
+     signal addNoteRequested()
+     signal notesRequested()
++    signal followPlayheadRequested(bool enabled)
+     Component.onCompleted: controlsReady = true
+ 
+     spacing: embedded ? theme.space4 : theme.space8
++    ToolButton {
++        id: followPlayheadButton
++        objectName: "timelineFollowPlayheadButton"
++        implicitWidth: root.theme.controlHeightDense
++        implicitHeight: root.theme.controlHeightDense
++        checkable: true
++        checked: root.followPlayhead
++        Accessible.name: checked ? "Follow playhead on" : "Follow playhead off"
++        Accessible.description: "Keep the playhead visible during playback. Shift+P reveals it immediately."
++        contentItem: AppIcon {
++            name: "focus-frame"
++            color: root.followPlayhead ? root.theme.accentCool400 : root.theme.textMuted
++        }
++        onClicked: root.followPlayheadRequested(!root.followPlayhead)
++        AppToolTip {
++            targetItem: followPlayheadButton
++            visible: followPlayheadButton.hovered
++            text: root.followPlayhead ? "Follow playhead · On" : "Follow playhead · Off"
++        }
++    }
+     MenuButton {
+         objectName: "timelineDirectAddNoteButton"
+         text: root.compact ? "Notes"
+@@ -29,7 +51,7 @@
+         iconName: "edit"
+         accent: "#47b5ff"
+         compact: true
+-        showText: true
++        showText: !root.embedded || root.width >= root.theme.scaled(390)
+         showMenuIndicator: !root.compact
+         primaryOpensMenu: true
+         accessibleName: "Timeline notes"
+--- before/apps/desktop/qml/components/TimelineMarkerPin.qml
++++ after/apps/desktop/qml/components/TimelineMarkerPin.qml
+@@ -17,6 +17,8 @@
+     property bool resolved: false
+     property bool draggable: !reviewNote
+     property real noteHeadSize: 22
++    property real rangeStartPixels: anchorPositionPixels
++    property real rangeEndPixels: anchorPositionPixels
+ 
+     signal jumpRequested(string markerId)
+     signal editRequested(string markerId)
+@@ -52,6 +54,18 @@
+         height: root.height
+         color: root.accent
+         opacity: markerMouse.containsMouse || root.activeFocus || root.dragging ? 0.72 : root.reviewNote ? 0.08 : 0.22
++    }
++
++    Rectangle {
++        id: noteRange
++        objectName: "timelineElectricNoteRange"
++        visible: root.reviewNote && root.rangeEndPixels > root.rangeStartPixels
++        x: root.rangeStartPixels - root.x
++        y: root.noteHeadSize / 2 - height / 2 + 1
++        width: Math.max(0, root.rangeEndPixels - root.rangeStartPixels)
++        height: 3
++        radius: 1.5
++        color: theme.alpha(root.accent, root.resolved ? 0.3 : 0.6)
+     }
+ 
+     Rectangle {
+--- before/apps/desktop/qml/components/TimelineNoteComposer.qml
++++ after/apps/desktop/qml/components/TimelineNoteComposer.qml
+@@ -13,6 +13,7 @@
+     property var clipIds: []
+     property string targetLabel: "Timeline"
+     property string errorText: ""
++    property string anchorError: ""
+     property alias noteText: body.text
+     signal noteCreated(string markerId)
+ 
+@@ -28,11 +29,56 @@
+         targetLabel = label || "Timeline"
+         body.text = ""
+         errorText = ""
++        anchorError = ""
+         open()
+     }
+ 
++    function changeAnchorKind(range) {
++        if (!range) {
++            endFrame = startFrame
++            anchorError = ""
++            return true
++        }
++        const fps = Math.max(1, frameRate)
++        const maximum = Math.round(Number(documentController.totalDurationSeconds || 0) * fps)
++        const last = maximum > 0 ? Math.min(maximum, startFrame + Math.round(fps)) : startFrame + Math.round(fps)
++        if (last <= startFrame) {
++            anchorError = "Choose a start time before the end of the timeline."
++            return false
++        }
++        endFrame = last
++        anchorError = ""
++        return true
++    }
++
++    function commitAnchorText(value, end) {
++        const text = String(value).trim()
++        const seconds = text.length > 0 ? Number(text) : NaN
++        const fps = Math.max(1, frameRate)
++        const next = Math.round(seconds * fps)
++        const maximum = Math.round(Number(documentController.totalDurationSeconds || 0) * fps)
++        if (!Number.isFinite(seconds) || seconds < 0 || (maximum > 0 && next > maximum)
++                || (end && next <= startFrame)) {
++            anchorError = end ? "End time must follow the start and stay inside the timeline."
++                              : "Enter a time inside the timeline."
++            return false
++        }
++        const range = endFrame > startFrame
++        if (end) endFrame = next
++        else {
++            if (range && maximum > 0 && next >= maximum) {
++                anchorError = "Choose a start time before the end of the timeline."
++                return false
++            }
++            startFrame = next
++            endFrame = range ? Math.max(endFrame, next + 1) : next
++        }
++        anchorError = ""
++        return true
++    }
++
+     function saveNote() {
+-        if (body.text.trim().length === 0)
++        if (body.text.trim().length === 0 || anchorError.length > 0)
+             return false
+         const id = String(documentController.addAnchoredReviewNote(
+             "", body.text.trim(), startFrame, endFrame, clipIds, "", "open") || "")
+@@ -74,6 +120,41 @@
+             font.pixelSize: root.theme.typeCaption
+             elide: Text.ElideRight
+         }
++        RowLayout {
++            Layout.fillWidth: true
++            spacing: root.theme.space4
++            ToneComboBox {
++                objectName: "timelineNoteAnchorKind"
++                Layout.preferredWidth: root.theme.scaled(100)
++                accessibleLabel: "Note anchor"
++                model: ["Frame", "Range"]
++                currentIndex: root.endFrame > root.startFrame ? 1 : 0
++                onActivated: function(index) { root.changeAnchorKind(index === 1) }
++            }
++            ToneTextField {
++                objectName: "timelineNoteStartTime"
++                Layout.fillWidth: true
++                Layout.minimumWidth: root.theme.scaled(66)
++                accessibleLabel: "Note start time in seconds"
++                numericEntry: true
++                text: (root.startFrame / Math.max(1, root.frameRate)).toFixed(3)
++                onEditingFinished: root.commitAnchorText(text, false)
++            }
++            Label {
++                text: root.endFrame > root.startFrame ? "–" : "s"
++                color: root.theme.textMuted
++            }
++            ToneTextField {
++                objectName: "timelineNoteEndTime"
++                visible: root.endFrame > root.startFrame
++                Layout.fillWidth: true
++                Layout.minimumWidth: root.theme.scaled(66)
++                accessibleLabel: "Note end time in seconds"
++                numericEntry: true
++                text: (root.endFrame / Math.max(1, root.frameRate)).toFixed(3)
++                onEditingFinished: root.commitAnchorText(text, true)
++            }
++        }
+         ToneTextArea {
+             id: body
+             objectName: "timelineQuickNoteText"
+@@ -92,8 +173,8 @@
+         }
+         Label {
+             Layout.fillWidth: true
+-            visible: root.errorText.length > 0
+-            text: root.errorText
++            visible: root.errorText.length > 0 || root.anchorError.length > 0
++            text: root.anchorError.length > 0 ? root.anchorError : root.errorText
+             color: root.theme.warning
+             wrapMode: Text.Wrap
+         }
+--- before/apps/desktop/qml/workspaces/TimelineView.qml
++++ after/apps/desktop/qml/workspaces/TimelineView.qml
+@@ -1463,7 +1463,10 @@
+         const right = left + timelineViewport.width / Math.max(1e-12, timelineZoom)
+         return (timelineDocument.reviewNotes || []).filter(function(note) {
+             const seconds = Number(note.seconds || 0)
+-            return seconds >= left && seconds <= right
++            const fps = Math.max(1, Number(timelineDocument.framesPerSecond || 30))
++            const end = String(note.anchorType || "frame") === "range"
++                    ? Math.max(seconds, Number(note.endFrame || 0) / fps) : seconds
++            return end >= left && seconds <= right
+         })
+     }
+     readonly property var timelineNotesByClipId: {
+@@ -1786,6 +1789,27 @@
+         quickNoteComposer.y = Math.max(12, Math.min(root.height - 320, local.y - 240))
+         quickNoteComposer.beginDraft(first, last, id.length > 0 ? [id] : [],
+             id.length > 0 ? String(clip.displayLabel || clip.timelineLabel || "Clip") : "Timeline · frame " + first)
++    }
++
++    function revealTimelineNote(note) {
++        if (!note || !timelineViewport) return
++        const fps = Math.max(1, Number(timelineDocument.framesPerSecond || 30))
++        const first = Math.max(0, Number(note.seconds || 0))
++        const last = String(note.anchorType || "frame") === "range"
++                ? Math.max(first, Number(note.endFrame || 0) / fps) : first
++        const ids = note.clipIds || []
++        if (ids.length > 0) {
++            timelineDocument.selectClipsByIds(ids)
++            root.ensureTimelineClipTrackVisible(timelineDocument.currentClip)
++        }
++        timelinePlayback.seekSequenceSeconds(first)
++        const contextDuration = Math.max(8, last - first + 4)
++        root.timelineZoom = timelineScaleGeometry.fitZoom(
++            Math.max(1, timelineViewport.width - 40), contextDuration,
++            root.timelineZoomMin, root.timelineZoomMax)
++        timelineViewport.contentX = Math.max(0, Math.min(
++            root.timelineContentWidth - timelineViewport.width,
++            root.timelineX(Math.max(0, first - 2))))
+     }
+ 
+     function clearTimelineTrackFocus() {
+@@ -25068,7 +25092,7 @@
+                         inPointSeconds: timelinePlayback.playbackRangeActive ? timelinePlayback.playbackRangeStart : -1
+                         outPointSeconds: timelinePlayback.playbackRangeActive ? timelinePlayback.playbackRangeEnd : -1
+                         onJumpRequested: function(seconds) {
+-                            timelinePlayback.seekSequenceSeconds(seconds)
++                            root.revealTimelineNote({seconds: seconds})
+                         }
+                     }
+                 }
+@@ -31427,6 +31451,11 @@
+                                         laneScale: root.timelineLaneScale
+                                         zoomLabel: root.timelineZoomLabel()
+                                         noteCount: timelineDocument.reviewNotes.length
++                                        followPlayhead: root.followTimelinePlayhead
++                                        onFollowPlayheadRequested: function(enabled) {
++                                            root.followTimelinePlayhead = enabled
++                                            if (enabled && root.sequencePlaying) root.followTimelinePlayheadIfNeeded()
++                                        }
+                                         onHorizontalScaleRequested: function(zoom) {
+                                             root.setTimelineZoom(zoom, timelineViewport.contentX + timelineViewport.width / 2)
+                                         }
+@@ -31462,7 +31491,7 @@
+                                                 model: root.timelineVisibleReviewNotes
+                                                 delegate: TimelineMarkerPin {
+                                                     required property var modelData
+-                                                    visible: parent !== null && anchorPositionPixels >= 0 && anchorPositionPixels <= parent.width
++                                                    visible: parent !== null && rangeEndPixels >= 0 && rangeStartPixels <= parent.width
+                                                     x: Math.max(0, Math.min((parent ? parent.width : 0) - width, anchorPositionPixels - width / 2))
+                                                     y: 0
+                                                     height: parent ? parent.height : 0
+@@ -31476,7 +31505,15 @@
+                                                     seconds: Number(modelData.seconds || 0)
+                                                     pixelsPerSecond: root.timelineZoom
+                                                     anchorPositionPixels: Number(modelData.seconds || 0) * root.timelineZoom - timelineViewport.contentX
+-                                                    onEditRequested: root.openMarkerEditor(modelData)
++                                                    rangeStartPixels: anchorPositionPixels
++                                                    rangeEndPixels: String(modelData.anchorType || "frame") === "range"
++                                                        ? Number(modelData.endFrame || 0) / Math.max(1, Number(timelineDocument.framesPerSecond || 30))
++                                                          * root.timelineZoom - timelineViewport.contentX
++                                                        : anchorPositionPixels
++                                                    onEditRequested: {
++                                                        root.revealTimelineNote(modelData)
++                                                        root.openMarkerEditor(modelData)
++                                                    }
+                                                 }
+                                             }
+                                         }
+--- before/tests/timeline_dense_surface_ui_test.cpp
++++ after/tests/timeline_dense_surface_ui_test.cpp
+@@ -473,11 +473,13 @@
+     property int horizontalChanges: 0
+     property int verticalChanges: 0
+     property int noteEdits: 0
++    property bool followEnabled: true
+     property real clock: 37.5
+     C.Theme { id: t }
+     QtObject {
+         id: controller
+         property bool reject: false
++        property real totalDurationSeconds: 10
+         property string status: "Save failed"
+         function addAnchoredReviewNote(label, note, start, end, ids, assignee, approval) {
+             if (reject) return ""
+@@ -492,6 +494,8 @@
+         width: parent.width
+         onHorizontalScaleRequested: fixture.horizontalChanges += 1
+         onVerticalScaleRequested: fixture.verticalChanges += 1
++        followPlayhead: fixture.followEnabled
++        onFollowPlayheadRequested: function(enabled) { fixture.followEnabled = enabled }
+     }
+     C.TimelineNoteComposer {
+         id: composer
+@@ -502,6 +506,8 @@
+         id: pin
+         x: 100; y: 60; height: 200
+         anchorPositionPixels: 122
++        rangeStartPixels: 122
++        rangeEndPixels: 244
+         reviewNote: true
+         compactPresentation: true
+         accent: "#47b5ff"
+@@ -525,6 +531,16 @@
+         controller.reject = false
+         if (!composer.saveNote() || saved.start !== 90 || saved.end !== 180 || saved.ids[0] !== "clip-b")
+             return "Whole-clip notes must retain their frame range"
++        composer.beginDraft(60, 60, ["clip-c"], "Range draft")
++        composer.noteText = "Check the transition"
++        if (!composer.changeAnchorKind(true) || !composer.commitAnchorText("2.25", false)
++                || !composer.commitAnchorText("4.5", true) || composer.startFrame !== 68 || composer.endFrame !== 135)
++            return "Note time editing must snap to exact native frame boundaries"
++        if (composer.commitAnchorText("1", true) || composer.saveNote() || !composer.visible)
++            return "An invalid range must preserve the draft and prevent saving"
++        if (!composer.commitAnchorText("4.5", true) || !composer.saveNote()
++                || saved.start !== 68 || saved.end !== 135 || saved.ids[0] !== "clip-c")
++            return "Range note editing must retain the frozen clip attachment"
+         return ""
+     }
+     function compactLayout() { width = 480 }
+@@ -547,6 +563,15 @@
+     return fail("Direct note creation must freeze anchors and retain failed drafts");
+   }
+   QTest::qWait(200);
++  auto* range_rail = notes_scale_fixture->findChild<QQuickItem*>(QStringLiteral("timelineElectricNoteRange"));
++  if (!range_rail || !range_rail->isVisible() || qAbs(range_rail->width() - 122) > 0.5)
++    return fail("A note range must draw its actual duration in the notes lane");
++  auto* follow_button = notes_scale_fixture->findChild<QQuickItem*>(QStringLiteral("timelineFollowPlayheadButton"));
++  if (!follow_button) return fail("Playback follow must be directly discoverable");
++  QTest::mouseClick(&scale_window, Qt::LeftButton, Qt::NoModifier,
++      follow_button->mapToScene(follow_button->boundingRect().center()).toPoint());
++  if (notes_scale_fixture->property("followEnabled").toBool())
++    return fail("The follow control must update the real view state");
+   QTest::mouseClick(&scale_window, Qt::LeftButton, Qt::NoModifier, QPoint(122, 70));
+   if (notes_scale_fixture->property("noteEdits").toInt() != 1 || notes_scale_fixture->property("clock").toDouble() != 48)
+     return fail("Blue note pins must open editing without seeking playback");
+--- before/tests/timeline_effect_discovery_ui_test.cpp
++++ after/tests/timeline_effect_discovery_ui_test.cpp
+@@ -178,10 +178,15 @@
+     property var photoLayers: [{id: "layer-a", name: "Clip effects", kind: "adjustment", revision: 0}]
+     property real amount: 0.75
+     property int ends: 0
++    property int resets: 0
++    property bool extraEffect: false
+     property bool hasWorkingSelection: false
+     function photoLayerEffects(index) {
+-        return [{id: "blur-a", type: "gaussian_blur", version: 1, sigma: 8, amount: amount,
+-                 enabled: true, maskId: "", edgeMode: 0}]
++        const effects = [{id: "blur-a", type: "gaussian_blur", version: 1, sigma: 8, amount: amount,
++                          enabled: true, maskId: "", edgeMode: 0}]
++        if (extraEffect) effects.push({id: "blur-b", type: "gaussian_blur", version: 1, sigma: 12,
++            amount: 1, enabled: true, maskId: "", edgeMode: 0})
++        return effects
+     }
+     function availablePhotoEffects() { return [{type: "gaussian_blur", name: "Gaussian blur", category: "Blur"}] }
+     function availablePhotoEffectLooks() { return [] }
+@@ -189,6 +194,11 @@
+     function finishPhotoLayerEffectPreview(apply) { return true }
+     function beginCoalescedEdit() {}
+     function endCoalescedEdit() { ends++ }
++    function resetPhotoLayerEffect(index, id) { if (index === 0 && id === "blur-a") resets++ }
++    function addAnotherEffect() {
++        extraEffect = true
++        photoLayers = [{id: "layer-a", name: "Clip effects", kind: "adjustment", revision: 2}]
++    }
+     function changeAmount() {
+         amount = 0.5
+         photoLayers = [{id: "layer-a", name: "Clip effects", kind: "adjustment", revision: 1}]
+@@ -234,5 +244,18 @@
+         amount->mapToScene(QPointF(amount->width(), 0)).x() > panel_width + 1)
+       return fail("Effect controls must remain readable and contained when the inspector is resized");
+   }
++  auto* actions = visual_item(stack, "timelineEffectActions_blur-a");
++  if (!actions || !actions->isVisible() || !QMetaObject::invokeMethod(actions, "menuItemTriggered",
++      Q_ARG(QString, QStringLiteral("reset"))) || controls->property("resets").toInt() != 1)
++    return fail("Compact effect actions must retain the real parameter reset action");
++  stack->setProperty("expandedEffectId", "");
++  QMetaObject::invokeMethod(controls.get(), "changeAmount");
++  QTest::qWait(60);
++  if (!stack->property("expandedEffectId").toString().isEmpty())
++    return fail("A deliberately collapsed effect must stay collapsed after a live value publication");
++  QMetaObject::invokeMethod(controls.get(), "addAnotherEffect");
++  QTest::qWait(60);
++  if (stack->property("expandedEffectId").toString() != "blur-b")
++    return fail("Adding an effect must open its own controls without selecting an older effect");
+   return 0;
+ }
+--- before/tests/timeline_ui_consistency_contract_test.cpp
++++ after/tests/timeline_ui_consistency_contract_test.cpp
+@@ -502,7 +502,7 @@
+         !contains(timeline_view, "targetScreen.availableGeometry") ||
+         !contains(timeline_view, "onXChanged: if (visible) timelineWorkspaceSettings.detachedSourceX = x") ||
+         !contains(timeline_view, "onWidthChanged: if (visible) timelineWorkspaceSettings.detachedInspectorWidth = width") ||
+-        !contains(effects_panel, "text: qsTr(\"APPLIED STACK\")") ||
++        !contains(effects_panel, "text: qsTr(\"EFFECTS\")") ||
+         !contains(effects_panel, "qsTr(\"EFFECT DISCOVERY\")") ||
+         !contains(effects_panel, "qsTr(\"EFFECT LIBRARY\")") ||
+         !contains(effects_panel, "objectName: \"timelineAppliedEffectsStack\"") ||
+@@ -1689,7 +1689,7 @@
+         !contains(effects_panel, "placeholderText: qsTr(\"Search %1 channels\")") ||
+         !contains(effects_panel, "objectName: \"timelineAnimateSelectionBar\"") ||
+         !contains(effects_panel, "animation:fixed-header-filter-and-footer-with-independent-channel-scroll") ||
+-        !contains(effects_panel, "text: qsTr(\"APPLIED STACK\")") ||
++        !contains(effects_panel, "text: qsTr(\"EFFECTS\")") ||
+         !contains(effects_panel, "timeline-keyframe-toolbar:v1|hierarchy:heading-count-menu|controls:dedicated-row|responsive:no-overlap|accessibility:combined-count") ||
+         !contains(effects_panel, "objectName: \"timelineKeyframeToolbarLabel\"") ||
+         !contains(effects_panel, "objectName: \"timelineKeyframeToolbarActions\"") ||

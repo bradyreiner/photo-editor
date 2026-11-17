@@ -59,7 +59,7 @@ Rectangle {
             visible: row.value.length > 0
             text: row.value
             color: row.active ? theme.textMain : theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontUi
             font.pixelSize: theme.typeCaption
         }
     }

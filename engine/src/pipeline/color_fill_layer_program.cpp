@@ -132,6 +132,7 @@ bool retained_simple_layers_supported(const ColorAdjustmentState& state) {
   auto pixel_count = std::size_t{0U};
   for (const auto& layer : state.photo_layers) {
     if (!layer.enabled || layer.opacity <= 1.0e-6) continue;
+    if (layer.blend_if.enabled) return false;
     // The retained flat program has no isolated group surface. Keep nested
     // stacks on the compositor until it can preserve group opacity and blend.
     if (layer.kind == "group" || !layer.parent_id.empty()) return false;

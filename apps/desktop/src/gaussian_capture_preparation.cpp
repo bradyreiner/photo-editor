@@ -4,6 +4,7 @@
 #include "capture_camera_metadata.h"
 #include "gaussian_camera_priors.h"
 #include "gaussian_timed_capture_manifest.h"
+#include "qimage_color_conversion.h"
 #include <QSaveFile>
 #include <QCryptographicHash>
 #include <QDir>
@@ -30,7 +31,8 @@ QVariantMap validate_prepared_gaussian_timed_capture(const QString& project,
   if (parse.error != QJsonParseError::NoError || !document.isObject() ||
       dataset.value("schema") != "framehouse-prepared-timed-capture-v1" ||
       dataset.value("state") != "prepared-not-trained" ||
-      dataset.value("colorContract") != "canonical-decode-and-render-to-srgb-v1")
+      (dataset.value("colorContract") != "canonical-decode-and-render-to-srgb-v1" &&
+       dataset.value("colorContract") != "capture-source-color-to-srgb-v2"))
     return reject("Unsupported prepared timed-capture format or color contract.");
   const auto observations = dataset.value("observations").toList();
   if (observations.size() < 4 || observations.size() > 20000) return reject("Invalid timed observation count.");
@@ -114,6 +116,7 @@ QVariantMap prepare_gaussian_capture(const QStringList& sources, const QString& 
     if (!input.open(QIODevice::ReadOnly)) return {{"ok", false}, {"error", "Cannot read an original capture."}};
     const QFileInfo before(source);
     auto optics = read_capture_camera_metadata(source);
+    const auto original_size = source_image_size(source);
     auto format = before.suffix().toLower();
     if (format == "jpg") format = "jpeg";
     // RAW and already processed images can have different distortion/crop
@@ -130,9 +133,16 @@ QVariantMap prepare_gaussian_capture(const QStringList& sources, const QString& 
     photo_editor::pipeline::DecodedImageMetadata metadata;
     if (!decode_source_image(source, &decoded, maximum_edge, state, &metadata, cancellation))
       return {{"ok", false}, {"error", QStringLiteral("Cannot decode capture: %1").arg(source)}};
-    const auto rendered = render_output_image_with_backend(decoded, state, QColorSpace(QColorSpace::SRgb),
+    // JPEG/PNG/TIFF inputs already contain a display rendering. Applying the
+    // editor's neutral RAW develop (ACES) a second time darkens the capture.
+    // Share the source-content thumbnail policy: ICC conversion for processed
+    // pixels, canonical neutral develop only for camera-linear RAW sources.
+    const bool raw_source = raw_image_supported(source);
+    const auto rendered = raw_source ? render_output_image_with_backend(decoded, state, QColorSpace(QColorSpace::SRgb),
         QImage::Format_RGB888, RenderBackendPreference::CpuOnly, &metadata, nullptr, {},
-        photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred, nullptr, cancellation);
+        photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred, nullptr, cancellation)
+        : convert_tagged_qimage_color_space(decoded,QColorSpace(QColorSpace::SRgb),QImage::Format_RGB888,
+            QImageColorConversionPurpose::OutputPublication);
     const auto relative = QStringLiteral("images/frame_%1.png").arg(index, 6, 10, QLatin1Char('0'));
     const auto target = QDir(project).filePath(relative);
     const QFileInfo after(source);
@@ -156,7 +166,10 @@ QVariantMap prepare_gaussian_capture(const QStringList& sources, const QString& 
     camera_groups[group_index] = group;
     frames.append(QVariantMap{{"sourcePath", source}, {"sourceSha256", QString::fromLatin1(hash.result().toHex())},
         {"sourceBytes", before.size()}, {"preparedPath", relative}, {"width", rendered.width()}, {"height", rendered.height()},
-        {"sourceRaw", raw_image_supported(source)}, {"colorSpace", "sRGB"}, {"optics", optics}, {"cameraPrior", prior}});
+        {"sourceWidth", original_size.width()}, {"sourceHeight", original_size.height()},
+        {"sourceRaw", raw_source}, {"colorSpace", "sRGB"},
+        {"colorInterpretation", raw_source ? "raw-neutral-develop-v1" : "display-referred-icc-to-srgb-v1"},
+        {"optics", optics}, {"cameraPrior", prior}});
   }
   for (qsizetype index = 0; index < camera_groups.size(); ++index) {
     auto group = camera_groups[index].toMap();
@@ -171,7 +184,7 @@ QVariantMap prepare_gaussian_capture(const QStringList& sources, const QString& 
   return {{"ok", true}, {"frames", frames}, {"frameCount", frames.size()},
       {"cameraGroups", camera_groups}, {"focalPriorFrames", prior_frames},
       {"estimatedIntrinsicsFrames", frames.size() - prior_frames},
-      {"colorContract", "canonical-decode-and-render-to-srgb-v1"}, {"originalsModified", false}};
+      {"colorContract", "capture-source-color-to-srgb-v2"}, {"originalsModified", false}};
 }
 
 QVariantMap prepare_gaussian_timed_capture(const QString& manifest, const QString& new_project,

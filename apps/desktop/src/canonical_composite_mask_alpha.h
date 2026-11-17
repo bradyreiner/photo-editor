@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <QImage>
+#include <QRectF>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -17,6 +18,14 @@ namespace photo_editor::desktop {
     const QVariantList& masks,
     double exposure_gain,
     const std::array<double, 3>& white_balance);
+
+[[nodiscard]] MaskAlphaEvaluationResult evaluate_canonical_composite_mask_alpha(
+    const QImage& source_image,
+    const QVariantList& masks,
+    double exposure_gain,
+    const std::array<double, 3>& white_balance,
+    const QRectF& source_area,
+    const QSizeF& original_basis_pixel_extent);
 
 [[nodiscard]] MaskAlphaEvaluationResult evaluate_canonical_composite_mask_alpha(
     const QString& cache_key,

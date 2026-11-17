@@ -58,4 +58,20 @@ inline GaussianFilmPublication publish_gaussian_film_files(const QString& movie,
     const QString& receipt, const QString& destination) {
   return publish_gaussian_media_files(movie, receipt, destination, QStringLiteral(".camera-path.json"));
 }
+// A sequence and its receipt are published together by one exclusive directory
+// rename. Staging must be beside the destination, on the same filesystem.
+inline GaussianFilmPublication publish_gaussian_frame_sequence(const QString& staged, const QString& destination) {
+  if (staged.contains(QChar::Null) || destination.contains(QChar::Null)) return {false,false,"Invalid sequence publication path."};
+#ifdef Q_OS_MACOS
+  const auto source = QFile::encodeName(staged), target = QFile::encodeName(destination);
+  struct stat info {};
+  if (::lstat(source.constData(),&info) != 0 || !S_ISDIR(info.st_mode))
+    return {false,false,"Sequence publication requires a complete staged directory."};
+  if (::renamex_np(source.constData(),target.constData(),RENAME_EXCL) == 0) return {true,false,{}};
+  return {false,false,"Cannot publish frame sequence without replacing an existing destination: " + QString::fromLocal8Bit(std::strerror(errno))};
+#else
+  Q_UNUSED(staged); Q_UNUSED(destination);
+  return {false,false,"Atomic Gaussian sequence publication requires macOS."};
+#endif
+}
 }  // namespace photo_editor::desktop

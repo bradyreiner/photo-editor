@@ -13,10 +13,24 @@ class WorkerQueueRegistry final {
   static QStringList registeredPoolIds();
   static bool isRegisteredPool(const QString& pool_id);
 
+  // Publishes the app's current foreground workspace. Transitions are
+  // latency-sensitive so deferrable background workflows yield while a route
+  // is changing, and inactive Timeline work stays queued while another
+  // workspace is active.
+  static void publishWorkspaceIntent(
+      const QString& surface,
+      bool workspace_visible,
+      bool playback_active,
+      bool interaction_active,
+      bool transitioning,
+      const QStringList& visible_item_ids = {},
+      const QString& focused_item_id = QString());
+
   // Publishes the currently visible editing surface and its latency-sensitive
   // intent. Background producers query the same policy before taking work so
   // playback and direct manipulation win without each queue inventing its own
-  // meaning of "high priority".
+  // meaning of "high priority". Kept as a compatibility entry point for
+  // callers that do not publish route-transition state.
   static void publishUserIntent(
       const QString& surface,
       bool workspace_visible,

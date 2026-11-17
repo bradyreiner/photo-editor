@@ -142,7 +142,12 @@ compile_base_color_adjustment_state(
                   normalized_input_color_profile_name(
                       state.input_color_profile)
                       .toStdString(),
-              .exposure = state.exposure,
+              // Both RAW decoder contracts defer EV. Actual RAW provenance,
+              // rather than camera-transform ownership, admits the extra EV;
+              // stale RAW controls on a raster image must remain inert.
+              .exposure = state.exposure +
+                  (metadata != nullptr && metadata->valid && metadata->is_raw
+                       ? state.raw_exposure : 0.0),
               .temperature = state.temperature,
               .tint = state.tint,
               .raw_input_transform_enabled = raw_input_transform_enabled,

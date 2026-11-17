@@ -64,6 +64,48 @@ const ASSET_SNAPSHOT_QUERY: &str = r#"
     ORDER BY a.created_at DESC, a.capture_year DESC, a.capture_month DESC, a.capture_day DESC, a.asset_id ASC
 "#;
 
+// Library rows stay small enough to render before edit recipes are needed.
+// Recipe data is fetched in bounded batches through ASSET_RECIPE_SNAPSHOT_QUERY.
+const ASSET_LIBRARY_SNAPSHOT_QUERY: &str = r#"
+    SELECT
+        a.asset_id,
+        a.capture_year,
+        a.capture_month,
+        a.capture_day,
+        a.capture_timestamp,
+        a.camera_make,
+        a.camera_model,
+        a.lens_model,
+        a.iso,
+        a.shutter_speed,
+        a.aperture,
+        a.import_mode,
+        d.drive_id,
+        a.root_path,
+        a.relative_path,
+        d.is_online,
+        TO_CHAR(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS imported_at
+    FROM assets a
+    INNER JOIN drives d ON d.drive_id = a.drive_id
+    ORDER BY a.created_at DESC, a.capture_year DESC, a.capture_month DESC, a.capture_day DESC, a.asset_id ASC
+"#;
+
+const ASSET_RECIPE_SNAPSHOT_QUERY: &str = r#"
+    SELECT
+        a.asset_id,
+        er.recipe_json,
+        canonical.recipe_payload AS canonical_recipe_payload,
+        canonical.cache_key AS canonical_cache_key,
+        canonical.provenance_payload::TEXT AS canonical_provenance_payload,
+        TO_CHAR(canonical.updated_at AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS canonical_updated_at
+    FROM assets a
+    LEFT JOIN edit_recipes er ON er.asset_id = a.asset_id
+    LEFT JOIN canonical_edit_recipes_v13 canonical ON canonical.asset_id = a.asset_id
+    WHERE a.asset_id = ANY($1)
+    ORDER BY a.asset_id ASC
+"#;
+
 const AGENT_ASSET_RECIPE_SNAPSHOT_QUERY: &str = r#"
     SELECT
         a.asset_id,
@@ -205,21 +247,172 @@ fn validate_canonical_edit_recipe_v13_input(
     let object = provenance.as_object().ok_or_else(|| {
         sqlx::Error::Protocol("canonical v13 provenance must be a JSON object".to_string())
     })?;
+    let valid_history = object
+        .get("history")
+        .and_then(Value::as_object)
+        .is_some_and(|history| {
+            history.len() == 2
+                && history
+                    .get("activeBranchId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|branch| !branch.trim().is_empty())
+                && history.get("snapshots").is_some_and(Value::is_array)
+        });
+    let valid_selection = object.get("selectionState").is_some_and(Value::is_object);
+    // Keep this envelope contract aligned with desktop provenance serialization
+    // and migration 0019. The cross-language PostgreSQL test consumes actual
+    // desktop payloads, including style, linked-light and dimensional-text capabilities.
     let valid_version = match object.get("schema").and_then(Value::as_str) {
         Some("photo-editor-edit-recipe-provenance:v1") => object.len() == 2,
-        Some("photo-editor-edit-recipe-provenance:v2") => {
-            object.len() == 3
-                && object
-                    .get("history")
-                    .and_then(Value::as_object)
-                    .is_some_and(|history| {
-                        history.len() == 2
-                            && history
-                                .get("activeBranchId")
-                                .and_then(Value::as_str)
-                                .is_some_and(|branch| !branch.trim().is_empty())
-                            && history.get("snapshots").is_some_and(Value::is_array)
-                    })
+        Some("photo-editor-edit-recipe-provenance:v2") => object.len() == 3 && valid_history,
+        Some("photo-editor-edit-recipe-provenance:v3") => {
+            object.len() == 4 && valid_history && valid_selection
+        }
+        Some("photo-editor-edit-recipe-provenance:v4") => {
+            object.len() == 5
+                && valid_history
+                && valid_selection
+                && object.get("requiredCapabilities")
+                    == Some(&serde_json::json!(["smart-object-documents-v1"]))
+        }
+        Some("photo-editor-edit-recipe-provenance:v5") => {
+            object.len() == 5
+                && valid_history
+                && valid_selection
+                && matches!(
+                    object.get("requiredCapabilities"),
+                    Some(capabilities)
+                        if capabilities == &serde_json::json!(["component-object-assets-v1"])
+                            || capabilities == &serde_json::json!([
+                                "component-object-assets-v1",
+                                "smart-object-documents-v1"
+                            ])
+                )
+        }
+        Some("photo-editor-edit-recipe-provenance:v6") => {
+            object.len() == 5
+                && valid_history
+                && valid_selection
+                && matches!(
+                    object.get("requiredCapabilities"),
+                    Some(capabilities)
+                        if capabilities == &serde_json::json!(["layer-styles-v1"])
+                            || capabilities == &serde_json::json!([
+                                "layer-styles-v1",
+                                "smart-object-documents-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "component-object-assets-v1",
+                                "layer-styles-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "component-object-assets-v1",
+                                "layer-styles-v1",
+                                "smart-object-documents-v1"
+                            ])
+                )
+        }
+        Some("photo-editor-edit-recipe-provenance:v7") => {
+            let valid_angle = object
+                .get("documentLayerStyleLightAngle")
+                .and_then(Value::as_f64)
+                .is_some_and(|angle| angle.is_finite() && (-3600.0..=3600.0).contains(&angle));
+            object.len() == 6
+                && valid_history
+                && valid_selection
+                && valid_angle
+                && matches!(
+                    object.get("requiredCapabilities"),
+                    Some(capabilities)
+                        if capabilities == &serde_json::json!(["document-layer-style-light-v1"])
+                            || capabilities == &serde_json::json!([
+                                "document-layer-style-light-v1",
+                                "smart-object-documents-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "layer-styles-v1",
+                                "document-layer-style-light-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "layer-styles-v1",
+                                "document-layer-style-light-v1",
+                                "smart-object-documents-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "component-object-assets-v1",
+                                "document-layer-style-light-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "component-object-assets-v1",
+                                "document-layer-style-light-v1",
+                                "smart-object-documents-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "component-object-assets-v1",
+                                "layer-styles-v1",
+                                "document-layer-style-light-v1"
+                            ])
+                            || capabilities == &serde_json::json!([
+                                "component-object-assets-v1",
+                                "layer-styles-v1",
+                                "document-layer-style-light-v1",
+                                "smart-object-documents-v1"
+                            ])
+                )
+        }
+        Some("photo-editor-edit-recipe-provenance:v8") => {
+            let capabilities = object
+                .get("requiredCapabilities")
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .map(Value::as_str)
+                        .collect::<Option<Vec<_>>>()
+                });
+            let valid_capabilities = capabilities.as_ref().is_some_and(|items| {
+                let allowed = [
+                    "component-object-assets-v1",
+                    "layer-styles-v1",
+                    "document-layer-style-light-v1",
+                    "text-dimension-v1",
+                    "smart-object-documents-v1",
+                ];
+                let mut unique = items.clone();
+                unique.sort_unstable();
+                unique.dedup();
+                let has = |capability: &str| items.contains(&capability);
+                let mut canonical = Vec::new();
+                for capability in [
+                    "component-object-assets-v1",
+                    "layer-styles-v1",
+                    "document-layer-style-light-v1",
+                    "text-dimension-v1",
+                    "smart-object-documents-v1",
+                ] {
+                    if has(capability) {
+                        canonical.push(capability);
+                    }
+                }
+                !items.is_empty()
+                    && has("text-dimension-v1")
+                    && items.len() == unique.len()
+                    && items.iter().all(|item| allowed.contains(item))
+                    && items.as_slice() == canonical.as_slice()
+            });
+            let has_document_light = capabilities.as_ref().is_some_and(|items| {
+                items.contains(&"document-layer-style-light-v1")
+            });
+            let valid_angle = object
+                .get("documentLayerStyleLightAngle")
+                .and_then(Value::as_f64)
+                .is_some_and(|angle| angle.is_finite() && (-3600.0..=3600.0).contains(&angle));
+            object.len() == if has_document_light { 6 } else { 5 }
+                && valid_history
+                && valid_selection
+                && valid_capabilities
+                && has_document_light == object.contains_key("documentLayerStyleLightAngle")
+                && (!has_document_light || valid_angle)
         }
         _ => false,
     };
@@ -229,7 +422,7 @@ fn validate_canonical_edit_recipe_v13_input(
             .is_some_and(Value::is_array)
     {
         return Err(sqlx::Error::Protocol(
-            "canonical v13 provenance does not match the v1 or v2 schema".to_string(),
+            "canonical v13 provenance does not match a supported v1-v8 schema".to_string(),
         ));
     }
     Ok(())
@@ -336,6 +529,27 @@ pub struct CatalogAssetSnapshot {
     pub edit_recipe: Option<Value>,
     pub canonical_edit_recipe_v13: Option<CanonicalEditRecipeV13>,
     pub imported_at: String,
+}
+
+/// Compact asset row used to populate the Library before edit recipes are
+/// requested. Its JSON shape matches `CatalogAssetSnapshot` minus both recipe
+/// fields, so consumers can keep the same asset projection without shipping
+/// recipe blobs during first paint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CatalogAssetLibrarySnapshot {
+    #[serde(flatten)]
+    pub asset: CatalogAssetRecord,
+    pub imported_at: String,
+}
+
+/// Exact stored recipe fields for one catalog asset. Empty recipe columns are
+/// represented explicitly as `None`; the caller can distinguish that valid
+/// default state from a recipe that has not been requested yet.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CatalogAssetRecipeSnapshot {
+    pub asset_id: String,
+    pub edit_recipe: Option<Value>,
+    pub canonical_edit_recipe_v13: Option<CanonicalEditRecipeV13>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -587,6 +801,14 @@ pub trait CatalogRepository {
         &self,
         limit: i64,
     ) -> Result<Vec<CatalogAssetSnapshot>, sqlx::Error>;
+    async fn list_asset_library_snapshots(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<CatalogAssetLibrarySnapshot>, sqlx::Error>;
+    async fn list_asset_recipe_snapshots(
+        &self,
+        asset_ids: &[String],
+    ) -> Result<Vec<CatalogAssetRecipeSnapshot>, sqlx::Error>;
     async fn upsert_edit_recipe(&self, asset_id: &str, recipe: &Value) -> Result<(), sqlx::Error>;
     async fn upsert_canonical_edit_recipe_v13(
         &self,
@@ -688,6 +910,12 @@ pub struct CatalogRuntime {
 }
 
 impl CatalogRuntime {
+    pub async fn list_carousel_document_summaries(
+        &self,
+    ) -> Result<Vec<PersistedCarouselDocument>, sqlx::Error> {
+        self.repository.list_carousel_document_summaries().await
+    }
+
     pub async fn open(paths: &AppRuntimePaths) -> Result<Self, sqlx::Error> {
         paths.ensure_directories().map_err(sqlx::Error::Io)?;
         let database_url = LocalCatalogDatabaseManager::from_env()
@@ -713,6 +941,28 @@ impl CatalogRuntime {
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.repository
             .write_asset_snapshots_json(limit, writer)
+            .await
+    }
+
+    /// Stream compact Library rows without touching either recipe table.
+    pub async fn write_asset_library_snapshots_json<W: std::io::Write>(
+        &self,
+        limit: i64,
+        writer: &mut W,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.repository
+            .write_asset_library_snapshots_json(limit, writer)
+            .await
+    }
+
+    /// Stream the stored recipe records for a bounded list of asset IDs.
+    pub async fn write_asset_recipe_snapshots_json<W: std::io::Write>(
+        &self,
+        asset_ids: &[String],
+        writer: &mut W,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.repository
+            .write_asset_recipe_snapshots_json(asset_ids, writer)
             .await
     }
 
@@ -1262,6 +1512,52 @@ impl CatalogService {
         rows.into_iter().map(map_asset_snapshot_row).collect()
     }
 
+    pub async fn list_asset_library_snapshots(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<CatalogAssetLibrarySnapshot>, sqlx::Error> {
+        let query_text = if limit > 0 {
+            format!("{ASSET_LIBRARY_SNAPSHOT_QUERY}\nLIMIT $1")
+        } else {
+            ASSET_LIBRARY_SNAPSHOT_QUERY.to_owned()
+        };
+        let rows = if limit > 0 {
+            sqlx::query(&query_text)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            sqlx::query(&query_text).fetch_all(&self.pool).await?
+        };
+
+        rows.into_iter()
+            .map(map_asset_library_snapshot_row)
+            .collect()
+    }
+
+    pub async fn list_asset_recipe_snapshots(
+        &self,
+        asset_ids: &[String],
+    ) -> Result<Vec<CatalogAssetRecipeSnapshot>, sqlx::Error> {
+        const MAX_RECIPE_SNAPSHOT_BATCH_SIZE: usize = 64;
+        if asset_ids.len() > MAX_RECIPE_SNAPSHOT_BATCH_SIZE {
+            return Err(sqlx::Error::Protocol(format!(
+                "recipe snapshot batch exceeds {MAX_RECIPE_SNAPSHOT_BATCH_SIZE} assets"
+            )));
+        }
+        if asset_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(ASSET_RECIPE_SNAPSHOT_QUERY)
+            .bind(asset_ids.to_vec())
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(map_asset_recipe_snapshot_row)
+            .collect()
+    }
+
     async fn write_asset_snapshots_json<W: std::io::Write>(
         &self,
         limit: i64,
@@ -1287,6 +1583,69 @@ impl CatalogService {
                 writer.write_all(b",")?;
             }
             serde_json::to_writer(&mut *writer, &asset)?;
+            first = false;
+        }
+        writer.write_all(b"]")?;
+        Ok(())
+    }
+
+    async fn write_asset_library_snapshots_json<W: std::io::Write>(
+        &self,
+        limit: i64,
+        writer: &mut W,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let query_text = if limit > 0 {
+            format!("{ASSET_LIBRARY_SNAPSHOT_QUERY}\nLIMIT $1")
+        } else {
+            ASSET_LIBRARY_SNAPSHOT_QUERY.to_owned()
+        };
+        let mut query = sqlx::query(&query_text);
+        if limit > 0 {
+            query = query.bind(limit);
+        }
+        let mut rows = query.fetch(&self.pool);
+        writer.write_all(b"[")?;
+        let mut first = true;
+        while let Some(row) = rows.try_next().await? {
+            let asset = map_asset_library_snapshot_row(row)?;
+            if !first {
+                writer.write_all(b",")?;
+            }
+            serde_json::to_writer(&mut *writer, &asset)?;
+            first = false;
+        }
+        writer.write_all(b"]")?;
+        Ok(())
+    }
+
+    async fn write_asset_recipe_snapshots_json<W: std::io::Write>(
+        &self,
+        asset_ids: &[String],
+        writer: &mut W,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        const MAX_RECIPE_SNAPSHOT_BATCH_SIZE: usize = 64;
+        if asset_ids.len() > MAX_RECIPE_SNAPSHOT_BATCH_SIZE {
+            return Err(format!(
+                "recipe snapshot batch exceeds {MAX_RECIPE_SNAPSHOT_BATCH_SIZE} assets"
+            )
+            .into());
+        }
+        writer.write_all(b"[")?;
+        if asset_ids.is_empty() {
+            writer.write_all(b"]")?;
+            return Ok(());
+        }
+
+        let mut rows = sqlx::query(ASSET_RECIPE_SNAPSHOT_QUERY)
+            .bind(asset_ids.to_vec())
+            .fetch(&self.pool);
+        let mut first = true;
+        while let Some(row) = rows.try_next().await? {
+            let recipe = map_asset_recipe_snapshot_row(row)?;
+            if !first {
+                writer.write_all(b",")?;
+            }
+            serde_json::to_writer(&mut *writer, &recipe)?;
             first = false;
         }
         writer.write_all(b"]")?;
@@ -2722,6 +3081,30 @@ impl CatalogService {
         rows.into_iter().map(map_carousel_document_row).collect()
     }
 
+    pub async fn list_carousel_document_summaries(
+        &self,
+    ) -> Result<Vec<PersistedCarouselDocument>, sqlx::Error> {
+        // Listing must never transfer embedded pixels, masks or edit history.
+        // Full content remains available through get_carousel_document.
+        let rows = sqlx::query(
+            r#"
+            SELECT document_id, name, document_format, slide_count,
+                jsonb_build_object(
+                    'projectName', document_json->>'projectName',
+                    'documentArchived', document_json->'documentArchived',
+                    'documentSavedAtUtc', document_json->>'documentSavedAtUtc'
+                ) AS document_json,
+                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM carousel_documents
+            ORDER BY updated_at DESC, document_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(map_carousel_document_row).collect()
+    }
+
     pub async fn get_carousel_document(
         &self,
         document_id: &str,
@@ -2824,6 +3207,20 @@ macro_rules! impl_catalog_repository {
                 limit: i64,
             ) -> Result<Vec<CatalogAssetSnapshot>, sqlx::Error> {
                 <$repository>::list_asset_snapshots(self, limit).await
+            }
+
+            async fn list_asset_library_snapshots(
+                &self,
+                limit: i64,
+            ) -> Result<Vec<CatalogAssetLibrarySnapshot>, sqlx::Error> {
+                <$repository>::list_asset_library_snapshots(self, limit).await
+            }
+
+            async fn list_asset_recipe_snapshots(
+                &self,
+                asset_ids: &[String],
+            ) -> Result<Vec<CatalogAssetRecipeSnapshot>, sqlx::Error> {
+                <$repository>::list_asset_recipe_snapshots(self, asset_ids).await
             }
 
             async fn upsert_edit_recipe(
@@ -3074,6 +3471,20 @@ impl CatalogRepository for CatalogRuntime {
         limit: i64,
     ) -> Result<Vec<CatalogAssetSnapshot>, sqlx::Error> {
         dispatch_catalog_runtime!(self, list_asset_snapshots, limit)
+    }
+
+    async fn list_asset_library_snapshots(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<CatalogAssetLibrarySnapshot>, sqlx::Error> {
+        dispatch_catalog_runtime!(self, list_asset_library_snapshots, limit)
+    }
+
+    async fn list_asset_recipe_snapshots(
+        &self,
+        asset_ids: &[String],
+    ) -> Result<Vec<CatalogAssetRecipeSnapshot>, sqlx::Error> {
+        dispatch_catalog_runtime!(self, list_asset_recipe_snapshots, asset_ids)
     }
 
     async fn upsert_edit_recipe(&self, asset_id: &str, recipe: &Value) -> Result<(), sqlx::Error> {
@@ -3701,6 +4112,35 @@ fn map_asset_snapshot_row(row: PgRow) -> Result<CatalogAssetSnapshot, sqlx::Erro
     })
 }
 
+fn map_asset_library_snapshot_row(row: PgRow) -> Result<CatalogAssetLibrarySnapshot, sqlx::Error> {
+    let imported_at: String = row.try_get("imported_at")?;
+    Ok(CatalogAssetLibrarySnapshot {
+        asset: map_asset_row(row)?,
+        imported_at,
+    })
+}
+
+fn map_asset_recipe_snapshot_row(row: PgRow) -> Result<CatalogAssetRecipeSnapshot, sqlx::Error> {
+    let asset_id: String = row.try_get("asset_id")?;
+    let edit_recipe: Option<Value> = row.try_get("recipe_json")?;
+    let canonical_recipe_payload: Option<String> = row.try_get("canonical_recipe_payload")?;
+    let canonical_edit_recipe_v13 = match canonical_recipe_payload {
+        Some(recipe_payload) => Some(CanonicalEditRecipeV13 {
+            asset_id: asset_id.clone(),
+            recipe_payload,
+            cache_key: row.try_get("canonical_cache_key")?,
+            provenance_payload: row.try_get("canonical_provenance_payload")?,
+            updated_at: row.try_get("canonical_updated_at")?,
+        }),
+        None => None,
+    };
+    Ok(CatalogAssetRecipeSnapshot {
+        asset_id,
+        edit_recipe,
+        canonical_edit_recipe_v13,
+    })
+}
+
 fn agent_state_error(message: &str) -> sqlx::Error {
     sqlx::Error::Protocol(message.to_string())
 }
@@ -3884,6 +4324,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compact_library_snapshot_omits_recipe_payloads() {
+        let snapshot = CatalogAssetLibrarySnapshot {
+            asset: CatalogAssetRecord {
+                asset_id: "photo-1".into(),
+                capture_year: 2024,
+                capture_month: 7,
+                capture_day: 8,
+                capture_timestamp: None,
+                camera_make: "Camera".into(),
+                camera_model: "Body".into(),
+                lens_model: "Lens".into(),
+                iso: Some(100),
+                shutter_speed: "1/125".into(),
+                aperture: Some(4.0),
+                import_mode: ImportMode::Managed,
+                location: AssetLocation {
+                    drive_id: "drive-1".into(),
+                    root_path: "/photos".into(),
+                    relative_path: "one.jpg".into(),
+                    online: true,
+                },
+            },
+            imported_at: "2026-10-26T12:00:00Z".into(),
+        };
+
+        let payload = serde_json::to_value(snapshot).expect("serialize compact Library row");
+        assert_eq!(payload["asset_id"], "photo-1");
+        assert_eq!(payload["imported_at"], "2026-10-26T12:00:00Z");
+        assert!(payload.get("edit_recipe").is_none());
+        assert!(payload.get("canonical_edit_recipe_v13").is_none());
+        assert!(ASSET_LIBRARY_SNAPSHOT_QUERY.contains("FROM assets a"));
+        assert!(!ASSET_LIBRARY_SNAPSHOT_QUERY.contains("edit_recipes"));
+        assert!(!ASSET_LIBRARY_SNAPSHOT_QUERY.contains("canonical_edit_recipes_v13"));
+    }
+
+    #[test]
+    fn asset_recipe_snapshot_keeps_legacy_and_canonical_values_exact() {
+        let snapshot = CatalogAssetRecipeSnapshot {
+            asset_id: "photo-1".into(),
+            edit_recipe: Some(serde_json::json!({"recipeVersion": 14, "exposure": 0.5})),
+            canonical_edit_recipe_v13: Some(CanonicalEditRecipeV13 {
+                asset_id: "photo-1".into(),
+                recipe_payload: "{\"schema\":\"photo-editor-edit-recipe:v13\"}".into(),
+                cache_key: "cache-1".into(),
+                provenance_payload: "{\"presetApplications\":[]}".into(),
+                updated_at: "2026-10-26T12:00:00.123456Z".into(),
+            }),
+        };
+
+        let payload = serde_json::to_value(snapshot).expect("serialize recipe snapshot");
+        assert_eq!(payload["edit_recipe"]["exposure"], 0.5);
+        assert_eq!(
+            payload["canonical_edit_recipe_v13"]["recipe_payload"],
+            "{\"schema\":\"photo-editor-edit-recipe:v13\"}"
+        );
+        assert_eq!(payload["canonical_edit_recipe_v13"]["cache_key"], "cache-1");
+    }
+
+    #[test]
     fn older_asset_payloads_default_capture_timestamp_to_none() {
         let legacy = serde_json::json!({
             "asset_id": "legacy-asset",
@@ -3984,6 +4483,170 @@ mod tests {
         let mut extra = valid.clone();
         extra["unknown"] = Value::Bool(true);
         assert!(check(&extra).is_err());
+    }
+
+    #[test]
+    fn canonical_provenance_preserves_selection_and_component_capabilities() {
+        let selection = serde_json::json!({
+            "schema": "photo-editor-edit-recipe-provenance:v3",
+            "presetApplications": [{"presetId": "portrait"}],
+            "history": {"activeBranchId": "review", "snapshots": [{"id": "before"}]},
+            "selectionState": {"initialized": true, "currentSetId": "", "previousSetId": ""}
+        });
+        let mut component = selection.clone();
+        component["schema"] = "photo-editor-edit-recipe-provenance:v4".into();
+        component["requiredCapabilities"] = serde_json::json!(["smart-object-documents-v1"]);
+        let check = |value: &Value| {
+            validate_canonical_edit_recipe_v13_input("asset", "recipe", "cache", &value.to_string())
+        };
+        for valid in [&selection, &component] {
+            assert!(check(valid).is_ok());
+            for field in ["schema", "presetApplications", "history", "selectionState"] {
+                let mut missing = valid.clone();
+                missing.as_object_mut().unwrap().remove(field);
+                assert!(check(&missing).is_err(), "accepted missing {field}");
+            }
+            for value in [
+                Value::Null,
+                serde_json::json!([]),
+                serde_json::json!("invalid"),
+            ] {
+                let mut invalid = valid.clone();
+                invalid["selectionState"] = value;
+                assert!(check(&invalid).is_err());
+            }
+            let mut extra = valid.clone();
+            extra["unknown"] = Value::Bool(true);
+            assert!(check(&extra).is_err());
+        }
+        for capabilities in [
+            Value::Null,
+            serde_json::json!([]),
+            serde_json::json!(["unknown"]),
+            serde_json::json!(["smart-object-documents-v1", "unknown"]),
+            serde_json::json!("smart-object-documents-v1"),
+        ] {
+            let mut invalid = component.clone();
+            invalid["requiredCapabilities"] = capabilities;
+            assert!(check(&invalid).is_err());
+        }
+        component
+            .as_object_mut()
+            .unwrap()
+            .remove("requiredCapabilities");
+        assert!(check(&component).is_err());
+        let mut unknown_version = selection;
+        unknown_version["schema"] = "photo-editor-edit-recipe-provenance:v999".into();
+        assert!(check(&unknown_version).is_err());
+    }
+
+    #[test]
+    fn canonical_provenance_negotiates_layer_style_lighting() {
+        let base = serde_json::json!({
+            "presetApplications": [],
+            "history": {"activeBranchId": "main", "snapshots": []},
+            "selectionState": {}
+        });
+        let mut v5 = base.clone();
+        v5["schema"] = "photo-editor-edit-recipe-provenance:v5".into();
+        v5["requiredCapabilities"] = serde_json::json!([
+            "component-object-assets-v1",
+            "smart-object-documents-v1"
+        ]);
+        let mut v6 = base.clone();
+        v6["schema"] = "photo-editor-edit-recipe-provenance:v6".into();
+        v6["requiredCapabilities"] = serde_json::json!([
+            "component-object-assets-v1",
+            "layer-styles-v1",
+            "smart-object-documents-v1"
+        ]);
+        let mut v7 = base;
+        v7["schema"] = "photo-editor-edit-recipe-provenance:v7".into();
+        v7["documentLayerStyleLightAngle"] = serde_json::json!(-123.5);
+        v7["requiredCapabilities"] = serde_json::json!([
+            "component-object-assets-v1",
+            "layer-styles-v1",
+            "document-layer-style-light-v1",
+            "smart-object-documents-v1"
+        ]);
+        let check = |value: &Value| {
+            validate_canonical_edit_recipe_v13_input("asset", "recipe", "cache", &value.to_string())
+        };
+        assert!(check(&v5).is_ok());
+        assert!(check(&v6).is_ok());
+        assert!(check(&v7).is_ok());
+
+        for bad_angle in [Value::Null, serde_json::json!(3600.1), serde_json::json!(-3600.1)] {
+            let mut invalid = v7.clone();
+            invalid["documentLayerStyleLightAngle"] = bad_angle;
+            assert!(check(&invalid).is_err());
+        }
+        let mut missing_angle = v7.clone();
+        missing_angle.as_object_mut().unwrap().remove("documentLayerStyleLightAngle");
+        assert!(check(&missing_angle).is_err());
+        let mut missing_capability = v7.clone();
+        missing_capability["requiredCapabilities"] = serde_json::json!([
+            "component-object-assets-v1",
+            "layer-styles-v1",
+            "smart-object-documents-v1"
+        ]);
+        assert!(check(&missing_capability).is_err());
+        let mut unknown_capability = v7;
+        unknown_capability["requiredCapabilities"] = serde_json::json!([
+            "document-layer-style-light-v1",
+            "future-light-capability"
+        ]);
+        assert!(check(&unknown_capability).is_err());
+    }
+
+    #[test]
+    fn canonical_provenance_negotiates_dimensional_text_compositions() {
+        let base = serde_json::json!({
+            "presetApplications": [],
+            "history": {"activeBranchId": "main", "snapshots": []},
+            "selectionState": {}
+        });
+        let mut dimension_only = base.clone();
+        dimension_only["schema"] = "photo-editor-edit-recipe-provenance:v8".into();
+        dimension_only["requiredCapabilities"] =
+            serde_json::json!(["text-dimension-v1"]);
+
+        let mut dimension_with_light = base;
+        dimension_with_light["schema"] = "photo-editor-edit-recipe-provenance:v8".into();
+        dimension_with_light["documentLayerStyleLightAngle"] = serde_json::json!(120.0);
+        dimension_with_light["requiredCapabilities"] = serde_json::json!([
+            "layer-styles-v1",
+            "document-layer-style-light-v1",
+            "text-dimension-v1",
+            "smart-object-documents-v1"
+        ]);
+        let check = |value: &Value| {
+            validate_canonical_edit_recipe_v13_input("asset", "recipe", "cache", &value.to_string())
+        };
+        assert!(check(&dimension_only).is_ok());
+        assert!(check(&dimension_with_light).is_ok());
+
+        for capabilities in [
+            serde_json::json!([]),
+            serde_json::json!(["unknown", "text-dimension-v1"]),
+            serde_json::json!(["text-dimension-v1", "layer-styles-v1"]),
+            serde_json::json!(["text-dimension-v1", "text-dimension-v1"]),
+        ] {
+            let mut invalid = dimension_only.clone();
+            invalid["requiredCapabilities"] = capabilities;
+            assert!(check(&invalid).is_err());
+        }
+        for invalid_angle in [Value::Null, serde_json::json!(3600.1), serde_json::json!(-3600.1)] {
+            let mut invalid = dimension_with_light.clone();
+            invalid["documentLayerStyleLightAngle"] = invalid_angle;
+            assert!(check(&invalid).is_err());
+        }
+        let mut missing_angle = dimension_with_light.clone();
+        missing_angle
+            .as_object_mut()
+            .unwrap()
+            .remove("documentLayerStyleLightAngle");
+        assert!(check(&missing_angle).is_err());
     }
 
     #[test]
@@ -4633,6 +5296,55 @@ mod tests {
     #[tokio::test]
     async fn postgres_feature_probe_is_available() {
         assert!(postgres_feature_enabled());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PHOTO_EDITOR_CAROUSEL_TEST_DATABASE_URL; uses a connection-local temporary table"]
+    async fn carousel_summaries_keep_project_without_transferring_document_content() {
+        let url = std::env::var("PHOTO_EDITOR_CAROUSEL_TEST_DATABASE_URL")
+            .expect("isolated test connection");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .expect("test connection");
+        sqlx::query("CREATE TEMPORARY TABLE carousel_documents (document_id TEXT PRIMARY KEY, name TEXT NOT NULL, document_format TEXT NOT NULL, slide_count INTEGER NOT NULL, document_json JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+            .execute(&pool).await.expect("connection-local table");
+        let service = CatalogService { pool };
+        let document = PersistedCarouselDocument {
+            document_id: "nepal-board-fixture".into(),
+            name: "Nepal 2026".into(),
+            document_format: "4x5".into(),
+            slide_count: 4,
+            document_json: serde_json::json!({"projectName":"Nepal 2026", "documentArchived":false,
+                "documentSavedAtUtc":"2026-11-04T05:02:07.416Z", "embeddedPixels":"x".repeat(4 * 1024 * 1024), "slides":[{"editable":true}]}),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        service
+            .upsert_carousel_document(&document)
+            .await
+            .expect("fixture saved");
+        let summaries = service
+            .list_carousel_document_summaries()
+            .await
+            .expect("compact listing");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].document_json["projectName"], "Nepal 2026");
+        assert_eq!(summaries[0].slide_count, 4);
+        assert_eq!(summaries[0].document_json["documentArchived"], false);
+        assert!(serde_json::to_vec(&summaries).unwrap().len() < 1024);
+        assert!(!summaries[0]
+            .document_json
+            .as_object()
+            .unwrap()
+            .contains_key("embeddedPixels"));
+        let full = service
+            .get_carousel_document(&document.document_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(full.document_json, document.document_json);
     }
 
     #[test]

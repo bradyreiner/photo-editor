@@ -1,5 +1,7 @@
 #pragma once
 #include "photo_paint_surface.h"
+#include "photo_editor/pipeline/brush_edge_math.h"
+#include "photo_editor/pipeline/cpu_work_scheduler.h"
 #include <QColor>
 #include <QtGui/qrgbafloat.h>
 #include <QTransform>
@@ -32,6 +34,7 @@ class PhotoPixelStroke final {
   double tip_rotation_variation = 0, tip_scale_variation = 0;
   double light_falloff = 0.55, light_exposure = 2.0, light_taper = 0.0;
   bool light_accumulation = true;
+  bool alpha_locked = false;
   bool erase = false, pressure_size = true, pressure_flow = false, changed = false;
   QString error;
   std::shared_ptr<std::atomic_bool> cancelled = std::make_shared<std::atomic_bool>(false);
@@ -89,11 +92,19 @@ class PhotoPixelStroke final {
       ink_ = QRgbaFloat32{ink_.red() * radiance, ink_.green() * radiance,
           ink_.blue() * radiance, ink_.alpha()};
     }
+    capture_saturated_coverage_style();
     return true;
   }
   void point(QPointF document_point, double pressure) {
+    while (!point_chunk(document_point, pressure, 256)) {}
+  }
+  // Resume the same input sample until consumed. Keep its original segment
+  // and interpolation parameters so yielding never changes the painted pixels.
+  bool point_chunk(QPointF document_point, double pressure, int dab_budget = 1) {
+    refresh_saturated_coverage_style();
     if (surface.size.isEmpty() || cancelled->load() || !error.isEmpty() ||
-        !std::isfinite(document_point.x()) || !std::isfinite(document_point.y()) || !std::isfinite(pressure)) return;
+        !std::isfinite(document_point.x()) || !std::isfinite(document_point.y()) || !std::isfinite(pressure)) return true;
+    if (segment_pending_) return apply_segment(dab_budget);
     pressure = std::clamp(pressure,0.0,1.0);
     auto point = layer_to_document.inverted().map(document_point);
     // Limit work for pointer excursions outside the viewport, retaining a full
@@ -103,13 +114,14 @@ class PhotoPixelStroke final {
     if (texture_material == QStringLiteral("light_paint") && light_taper > 0 && !replaying_light_path_) {
       if (light_path_.size() >= kMaxLightPathPoints) {
         error = QStringLiteral("Light-paint stroke exceeded the supported path sample limit.");
-        return;
+        return true;
       }
       light_path_.push_back({point, pressure});
     }
-    apply_point(point, pressure);
+    return apply_point(point, pressure, dab_budget);
   }
   void finish() {
+    refresh_saturated_coverage_style();
     if (!has_point_) return;
     if (texture_material == QStringLiteral("light_paint") && light_taper > 0 && !light_path_.empty()) {
       // The live draft uses a leading taper. Once the pointer is released, replay
@@ -131,7 +143,7 @@ class PhotoPixelStroke final {
       replaying_light_path_ = true;
       for (const auto& sample : light_path_) {
         if (cancelled->load() || !error.isEmpty()) break;
-        apply_point(sample.position, sample.pressure);
+        (void)apply_point(sample.position, sample.pressure, std::numeric_limits<int>::max());
       }
       if (!cancelled->load() && error.isEmpty() && has_point_ &&
           std::hypot(last_.x() - last_dab_.x(), last_.y() - last_dab_.y()) > 1e-6) {
@@ -148,25 +160,45 @@ class PhotoPixelStroke final {
     }
   }
  private:
-  void apply_point(QPointF point, double pressure) {
+  double dab_step(double pressure, double scale) const {
+    return std::max(0.25, diameter * spacing * (pressure_size ? pressure : 1.0) / scale);
+  }
+  bool apply_point(QPointF point, double pressure, int dab_budget) {
     const auto scale = std::max(0.05,std::hypot(layer_to_document.m11(),layer_to_document.m12()));
-    const auto step = [&](double p) { return std::max(0.25,diameter*spacing*(pressure_size?p:1.0)/scale); };
     if (!has_point_) {
       dab(point,pressure,scale,taper_coverage(path_distance_, taper_path_length_));
-      has_point_=true; distance_to_next_=step(pressure);
+      has_point_=true; distance_to_next_=dab_step(pressure, scale);
+      last_=point; last_pressure_=pressure;
+      return true;
     } else {
-      const auto delta=point-last_; const auto distance=std::hypot(delta.x(),delta.y());
-      if (distance > 1e-9) direction_ = std::atan2(delta.y(), delta.x());
-      auto travelled=distance_to_next_;
-      while(travelled<=distance && distance>0 && !cancelled->load() && error.isEmpty()) {
-        const auto t=travelled/distance, p=last_pressure_+(pressure-last_pressure_)*t;
-        dab(last_+delta*t,p,scale,taper_coverage(path_distance_ + travelled, taper_path_length_));
-        travelled+=step(p);
-      }
-      distance_to_next_=travelled-distance;
-      path_distance_ += distance;
+      segment_end_ = point;
+      segment_pressure_ = pressure;
+      segment_delta_ = point - last_;
+      segment_distance_ = std::hypot(segment_delta_.x(), segment_delta_.y());
+      segment_travelled_ = distance_to_next_;
+      segment_pending_ = true;
+      if (segment_distance_ > 1e-9) direction_ = std::atan2(segment_delta_.y(), segment_delta_.x());
+      return apply_segment(dab_budget);
     }
-    last_=point; last_pressure_=pressure;
+  }
+  bool apply_segment(int dab_budget) {
+    const auto scale = std::max(0.05,std::hypot(layer_to_document.m11(),layer_to_document.m12()));
+    int dabs = 0;
+    while (segment_travelled_ <= segment_distance_ && segment_distance_ > 0 &&
+           !cancelled->load() && error.isEmpty()) {
+      if (dabs++ >= std::max(1, dab_budget)) return false;
+      const auto t = segment_travelled_ / segment_distance_;
+      const auto pressure = last_pressure_ + (segment_pressure_ - last_pressure_) * t;
+      dab(last_ + segment_delta_ * t, pressure, scale,
+          taper_coverage(path_distance_ + segment_travelled_, taper_path_length_));
+      segment_travelled_ += dab_step(pressure, scale);
+    }
+    distance_to_next_ = segment_travelled_ - segment_distance_;
+    path_distance_ += segment_distance_;
+    last_ = segment_end_;
+    last_pressure_ = segment_pressure_;
+    segment_pending_ = false;
+    return true;
   }
  public:
   void erase_selection(bool accumulate_erased_coverage = false) {
@@ -205,6 +237,34 @@ class PhotoPixelStroke final {
     return result;
   }
   QVariantMap commit() {
+    qsizetype touched_bytes = 0;
+    if (touched_.size() >= 32 && !cancelled->load()) {
+      for (auto it = touched_.cbegin(); it != touched_.cend() && !cancelled->load(); ++it)
+        touched_bytes += it->image.sizeInBytes();
+    }
+    // Compress immutable tiles independently, then publish in the original
+    // key order on this worker. Small strokes retain the allocation-free path.
+    if (touched_.size() >= 32 && touched_bytes >= 16 * 1024 * 1024 && !cancelled->load()) {
+      struct Entry { QString key; const QImage* image; };
+      std::vector<Entry> entries;
+      entries.reserve(static_cast<std::size_t>(touched_.size()));
+      for (auto it = touched_.cbegin(); it != touched_.cend(); ++it)
+        entries.push_back({it.key(), &it->image});
+      std::vector<QString> encoded(entries.size());
+      std::vector<unsigned char> ready(entries.size(), 0);
+      photo_editor::pipeline::run_cpu_parallel_for(
+          static_cast<int>(entries.size()), [&](int index) {
+            if (cancelled->load()) return;
+            const auto item = static_cast<std::size_t>(index);
+            encoded[item] = PhotoPaintSurface::encode_tile(*entries[item].image);
+            ready[item] = 1;
+          }, 4);
+      for (std::size_t index = 0; index < entries.size() && !cancelled->load(); ++index) {
+        if (!ready[index]) break;
+        surface.tiles.insert(entries[index].key, encoded[index]);
+      }
+      return surface.snapshot();
+    }
     for(auto it=touched_.cbegin();it!=touched_.cend() && !cancelled->load();++it) {
       const auto parts=it.key().split(','); surface.store(parts[0].toInt(),parts[1].toInt(),it->image);
     }
@@ -233,10 +293,43 @@ class PhotoPixelStroke final {
   std::vector<QImage> tip_mips_;
   QRgbaFloat32 ink_{};
   QPointF last_,last_dab_;
+  QPointF segment_end_, segment_delta_;
+  double segment_pressure_ = 1, segment_distance_ = 0, segment_travelled_ = 0;
+  bool segment_pending_ = false;
   double last_pressure_=1, distance_to_next_=0, path_distance_=0, taper_path_length_=-1;
   double direction_=0;
   double texture_cos_=1, texture_sin_=0;
   bool has_point_=false, replaying_light_path_=false;
+  bool saturated_coverage_skip_eligible_ = false;
+  QColor saturated_coverage_color_;
+  double saturated_coverage_opacity_ = 1.0;
+  bool saturated_coverage_erase_ = false;
+  QString saturated_coverage_material_;
+  QTransform saturated_coverage_transform_;
+  qint64 saturated_coverage_selection_key_ = 0;
+  void capture_saturated_coverage_style() {
+    // Public style fields remain editable during a stroke. Only admit a flat
+    // style with no active selection, then latch the shortcut off on changes.
+    saturated_coverage_skip_eligible_ =
+        texture_material != QStringLiteral("light_paint") &&
+        texture_material != QStringLiteral("photo_fragment") &&
+        selection.isNull() && (erase || texture_material == QStringLiteral("solid"));
+    saturated_coverage_color_ = color;
+    saturated_coverage_opacity_ = opacity;
+    saturated_coverage_erase_ = erase;
+    saturated_coverage_material_ = texture_material;
+    saturated_coverage_transform_ = layer_to_document;
+    saturated_coverage_selection_key_ = selection.cacheKey();
+  }
+  void refresh_saturated_coverage_style() {
+    if (!saturated_coverage_skip_eligible_) return;
+    if (color != saturated_coverage_color_ || opacity != saturated_coverage_opacity_ ||
+        erase != saturated_coverage_erase_ || texture_material != saturated_coverage_material_ ||
+        layer_to_document != saturated_coverage_transform_ ||
+        selection.cacheKey() != saturated_coverage_selection_key_) {
+      saturated_coverage_skip_eligible_ = false;
+    }
+  }
   static double smoothstep(double lower, double upper, double value) {
     const auto t=std::clamp((value-lower)/std::max(1e-9,upper-lower),0.0,1.0);
     return t*t*(3-2*t);
@@ -350,6 +443,7 @@ class PhotoPixelStroke final {
   void dab(QPointF point,double pressure,double scale,double stroke_taper = 1.0) {
     last_dab_=point;
     if(pressure<=0 || cancelled->load()) return;
+    const bool skip_saturated_coverage = saturated_coverage_skip_eligible_;
     const auto texture_direction=direction_+texture_angle*0.017453292519943295;
     texture_cos_=std::cos(texture_direction);
     texture_sin_=std::sin(texture_direction);
@@ -397,6 +491,16 @@ class PhotoPixelStroke final {
     const auto extent_y = photo_fragment
         ? 0.5 * (std::abs(fragment_sin) * fragment_width + std::abs(fragment_cos) * fragment_height)
         : outer_radius;
+    const auto inner_radius = std::clamp(hardness, 0.0, 1.0) * radius;
+    const bool antialias_edge = radius - inner_radius < 1.0;
+    const auto solid_radius = inner_radius - (antialias_edge ? 0.5 : 0.0);
+    const auto support_radius = light_paint ? outer_radius : radius + (antialias_edge ? 0.5 : 0.0);
+    const auto support_squared = support_radius * support_radius;
+    const auto solid_squared = solid_radius * solid_radius;
+    const bool textured = !erase && texture_strength > 0 &&
+        (texture_material == QStringLiteral("dry_ink") || texture_material == QStringLiteral("graphite"));
+    const auto color_alpha = color.alphaF();
+    const bool selected = !selection.isNull();
     const QRect bounds(QPoint(std::max(0,static_cast<int>(std::floor(point.x()-extent_x))),
                              std::max(0,static_cast<int>(std::floor(point.y()-extent_y)))),
                        QPoint(std::min(surface.size.width()-1,static_cast<int>(std::ceil(point.x()+extent_x))),
@@ -416,11 +520,21 @@ class PhotoPixelStroke final {
         auto* pixels=reinterpret_cast<QRgbaFloat32*>(tile.image.bits());
         const auto* baseline=reinterpret_cast<const QRgbaFloat32*>(tile.baseline.constBits());
         for(int y=region.top();y<=region.bottom();++y) for(int x=region.left();x<=region.right();++x) {
+          const auto index=static_cast<std::size_t>((y-tile_rect.y())*tile.image.width()+x-tile_rect.x());
+          auto& weight=tile.coverage[index];
+          // Coverage is absorbing at one. Under the stable flat-style guard,
+          // later dabs cannot change this pixel's coverage or material output.
+          if (skip_saturated_coverage && weight == 1.0F) continue;
           const auto delta_x = x + 0.5 - point.x();
           const auto delta_y = y + 0.5 - point.y();
-          const auto distance = photo_fragment ? 0.0 : std::hypot(delta_x, delta_y);
-          auto edge=photo_fragment ? 1.0 :
-              std::clamp((radius-distance)/std::max(1.0,radius*(1-hardness)),0.0,1.0);
+          const auto distance_squared = delta_x * delta_x + delta_y * delta_y;
+          if (!photo_fragment && distance_squared >= support_squared) continue;
+          const bool solid_core = !photo_fragment && solid_radius >= 0 && distance_squared <= solid_squared;
+          // Most large round dabs are either outside support or fully inside
+          // the core. Only the feather/halo needs an actual radial distance.
+          const auto distance = photo_fragment || solid_core ? 0.0 : std::hypot(delta_x, delta_y);
+          auto edge = photo_fragment || solid_core ? 1.0 :
+              photo_editor::pipeline::circular_brush_coverage_pixels(distance, radius, hardness);
           QRgbaFloat32 fragment_pixel{};
           if (photo_fragment) {
             const auto source_x = (fragment_cos * delta_x + fragment_sin * delta_y) /
@@ -438,27 +552,30 @@ class PhotoPixelStroke final {
           }
           if (light_paint) edge *= std::clamp(stroke_taper, 0.0, 1.0);
           if(edge<=0) continue;
-          const auto index=static_cast<std::size_t>((y-tile_rect.y())*tile.image.width()+x-tile_rect.x());
-          auto& weight=tile.coverage[index];
           const auto dab_flow = std::clamp(flow * (pressure_flow ? pressure : 1.0) * edge, 0.0, 1.0);
           weight = static_cast<float>(light_paint && !light_accumulation
               ? std::max(static_cast<double>(weight), dab_flow)
               : 1.0 - (1.0 - weight) * (1.0 - dab_flow));
           double clip=1;
-          if(!selection.isNull()) {
+          if(selected) {
             const auto doc=layer_to_document.map(QPointF(x+0.5,y+0.5));
             const int sx=static_cast<int>(std::floor(doc.x())),sy=static_cast<int>(std::floor(doc.y()));
             clip=sx>=0&&sy>=0&&sx<selection.width()&&sy<selection.height()?selection.constScanLine(sy)[sx]/255.0:0;
           }
-          const auto texture=erase?1.0:material_coverage(x+0.5,y+0.5);
+          const auto texture=textured?material_coverage(x+0.5,y+0.5):1.0;
           const auto fragment_opacity = photo_fragment ? static_cast<double>(fragment_pixel.alpha()) : 1.0;
-          const auto alpha=static_cast<float>(weight*opacity*color.alphaF()*clip*texture*fragment_opacity), keep=1-alpha;
+          const auto alpha=static_cast<float>(weight*opacity*color_alpha*clip*texture*fragment_opacity), keep=1-alpha;
           const auto& b=baseline[index];
-          const auto fragment_gain = static_cast<float>(weight*opacity*color.alphaF()*clip*texture);
-          const QRgbaFloat32 out{b.red()*keep+(erase?0:(photo_fragment ? fragment_pixel.red()*fragment_gain : ink_.red()*alpha)),
+          const auto fragment_gain = static_cast<float>(weight*opacity*color_alpha*clip*texture);
+          QRgbaFloat32 out{b.red()*keep+(erase?0:(photo_fragment ? fragment_pixel.red()*fragment_gain : ink_.red()*alpha)),
               b.green()*keep+(erase?0:(photo_fragment ? fragment_pixel.green()*fragment_gain : ink_.green()*alpha)),
               b.blue()*keep+(erase?0:(photo_fragment ? fragment_pixel.blue()*fragment_gain : ink_.blue()*alpha)),
               b.alpha()*keep+(erase?0:alpha)};
+          if (alpha_locked && !erase) {
+            out = QRgbaFloat32{b.red()*keep + ink_.red()*alpha*b.alpha(),
+                b.green()*keep + ink_.green()*alpha*b.alpha(),
+                b.blue()*keep + ink_.blue()*alpha*b.alpha(), b.alpha()};
+          }
           changed=changed || out!=pixels[index]; pixels[index]=out;
         }
       }

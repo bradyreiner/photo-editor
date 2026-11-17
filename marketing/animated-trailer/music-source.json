@@ -1,0 +1,41 @@
+{
+  "track": "A Game",
+  "artist": "Michael Ramir C",
+  "catalog": "Mixkit",
+  "catalog_page": "https://mixkit.co/free-stock-music/edm/",
+  "asset_url": "https://assets.mixkit.co/music/777/777.mp3",
+  "license_reference": "https://mixkit.co/license/modal/musicFree/",
+  "catalog_tags": [
+    "Electro House",
+    "Propulsive",
+    "Driving",
+    "Bass",
+    "Drums"
+  ],
+  "use": "Soundtrack in the 120-second complete review cut",
+  "status": "Produced stock track for review; user has not approved final music selection",
+  "checked_on": "2026-10-23",
+  "arrangement": [
+    {
+      "film_seconds": [
+        0,
+        72
+      ],
+      "source_seconds": [
+        8,
+        80
+      ]
+    },
+    {
+      "film_seconds": [
+        71,
+        120
+      ],
+      "source_seconds": [
+        32,
+        81
+      ]
+    }
+  ],
+  "mix": "One-second crossfade at 71-72s, opening fade, 1.7-second closing fade; produced stock review selection"
+}

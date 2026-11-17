@@ -100,7 +100,8 @@ Item {
                                             - implicitHeight / 2)) : 0
                     text: String(modelData)
                     color: theme.textFaint
-                    font.family: theme.fontMono
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
                     font.pixelSize: theme.typeMicro
                 }
             }
@@ -128,7 +129,8 @@ Item {
                 text: "P " + root.db(Math.max(Number(root.meter.left || 0),
                                                Number(root.meter.right || 0))).toFixed(1)
                 color: theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
             }
 
@@ -136,7 +138,8 @@ Item {
                 text: "TP " + root.db(Math.max(Number(root.meter.truePeakLeft || 0),
                                                 Number(root.meter.truePeakRight || 0))).toFixed(1)
                 color: theme.textMain
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
             }
 
@@ -144,7 +147,8 @@ Item {
                 text: "R " + root.db(Math.max(Number(root.meter.rmsLeft || 0),
                                                Number(root.meter.rmsRight || 0))).toFixed(1)
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
             }
 
@@ -152,7 +156,8 @@ Item {
                 visible: root.loudnessText.length > 0
                 text: root.loudnessText
                 color: theme.textStrong
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: theme.typeMicro
                 wrapMode: Text.Wrap
             }

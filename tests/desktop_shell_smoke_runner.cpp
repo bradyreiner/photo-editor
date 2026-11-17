@@ -1,6 +1,14 @@
 #include "canonical_composite_mask_alpha.h"
 #include "desktop_shell_smoke_runner.h"
+#include "scene_library_controller.h"
+#include "timeline_voiceover_recorder.h"
 #include "native_window_test_input.h"
+#include "photo_text_rasterizer.h"
+#include "creative_example_thumbnail_image_provider.h"
+#include <QtTest/qtestmouse.h>
+#include <QtTest/qtestkeyboard.h>
+#include <QtTest/QSignalSpy>
+#include "qml_style_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,6 +19,7 @@
 #include <QApplication>
 #include <QAccessible>
 #include <QColor>
+#include <QColorSpace>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDate>
@@ -32,6 +41,7 @@
 #include <QLineF>
 #include <QMouseEvent>
 #include <QDragEnterEvent>
+#include <QClipboard>
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -39,7 +49,9 @@
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQmlContext>
+#include <QQmlError>
 #include <QQmlIncubator>
+#include <QQmlIncubationController>
 #include <QQmlProperty>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -53,12 +65,14 @@
 #include <QScopeGuard>
 #include <QStyleHints>
 #include <QSettings>
+#include <QSaveFile>
 #include <QSet>
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
 #include <QTime>
 #include <QUrl>
+#include <QUuid>
 #include <QVariant>
 #include <qqml.h>
 #include <QQuickStyle>
@@ -78,10 +92,14 @@
 #include "library_workflow_controller.h"
 #include "library_original_image_provider.h"
 #include "editor_preview_controller.h"
+#include "photo_component_workspace_controller.h"
+#include <QScopeGuard>
+#include "flattened_output_renderer.h"
 #include "editor_preview_image_provider.h"
 #include "observability.h"
 #include "editor_preview_texture.h"
 #include "editor_preview_texture_item.h"
+#include "scope_plot_item.h"
 #include "edit_adjustment_patch.h"
 #include "export_job_controller.h"
 #include "job_queue_model.h"
@@ -105,6 +123,22 @@ void initialize_desktop_shell_test_visual_resources() {
 
 namespace photo_editor::desktop {
 
+// Layout proofs seed history through the normal asynchronous publication path.
+// They do not qualify catalog persistence; the real-shoot proof runs real jobs.
+struct JobQueueModelTestAccess {
+  static void setHistoryFixture(JobQueueModel& model, const QVector<PersistentJobRecord>& records) {
+    model.history_reader_ = [records](bool) {
+      return JobHistoryReadResult{records, {}};
+    };
+  }
+};
+
+struct CarouselHistoryTestAccess {
+  static bool loadDocumentObject(CarouselDocumentController& controller, QJsonObject object) {
+    return controller.loadDocumentObject(object);
+  }
+};
+
 #if defined(PHOTO_EDITOR_TEST_NATIVE_PREVIEW_TEXTURE)
 std::unique_ptr<EditorPreviewTexture> create_metal_editor_preview_texture();
 #endif
@@ -114,6 +148,9 @@ struct TimelinePlaybackFrameTestAccess {
   static QVariantMap readiness(const TimelinePlaybackController& controller) {
     return {
         {QStringLiteral("nativeEnabled"), controller.native_media_enabled_},
+        {QStringLiteral("scenePreview"), controller.scene_preview_cache_active_},
+        {QStringLiteral("prerollStatus"), controller.native_paused_preroll_status_},
+        {QStringLiteral("playPending"), controller.native_paused_preroll_play_pending_},
         {QStringLiteral("waitingForMedia"), controller.awaiting_media_source_},
         {QStringLiteral("waitingForPosition"), controller.awaiting_position_sync_},
         {QStringLiteral("awaitedPositionMs"), controller.awaited_position_ms_},
@@ -132,6 +169,34 @@ struct TimelinePlaybackFrameTestAccess {
 };
 
 struct EditorPreviewControllerTestAccess {
+  static QVariantMap inspection_state(const EditorPreviewController& controller) {
+    return {{QStringLiteral("processing"), controller.processing_},
+            {QStringLiteral("requested"), controller.diagnostic_overlays_requested_},
+            {QStringLiteral("active"), controller.diagnostic_overlay_active_},
+            {QStringLiteral("pending"), controller.diagnostic_overlay_pending_},
+            {QStringLiteral("timer"), controller.diagnostic_overlay_timer_.isActive()},
+            {QStringLiteral("cpu_image"), !controller.pixel_inspector_preview_image_.isNull()},
+            {QStringLiteral("native_surface"), controller.pixel_inspector_native_surface_ != nullptr},
+            {QStringLiteral("readback_fallback"), controller.diagnostic_native_readback_failed_}};
+  }
+  static QVariantMap pending_work(const EditorPreviewController& c) {
+    return {{"interactiveTimer", c.render_scheduler_.interactiveActive()},
+        {"fullTimer", c.render_scheduler_.fullActive()},
+        {"transactionTimer", c.edit_transaction_interactive_preview_timer_.isActive()},
+        {"interactiveWatcher", c.interactive_render_watcher_.isRunning()},
+        {"interactiveResult", c.interactive_render_result_pending_},
+        {"fullWatcher", c.full_render_watcher_.isRunning()},
+        {"overlayWatcher", c.overlay_render_watcher_.isRunning()},
+        {"interactivePending", c.interactive_request_pending_},
+        {"fullPending", c.full_request_pending_},
+        {"overlayPending", c.overlay_request_pending_}};
+  }
+  static bool preview_idle(const EditorPreviewController& controller) {
+    return !controller.processing() && !controller.interactive_render_watcher_.isRunning() &&
+        !controller.full_render_watcher_.isRunning() && !controller.interactive_request_pending_ &&
+        !controller.full_request_pending_ && !controller.render_scheduler_.interactiveActive() &&
+        !controller.render_scheduler_.fullActive();
+  }
   static bool set_active_mask_definition(EditorPreviewController& controller, const QVariantMap& mask) {
     return controller.updateActiveMaskDefinition(mask);
   }
@@ -146,6 +211,13 @@ struct EditorPreviewControllerTestAccess {
   }
   static QString recipe_json(const EditorPreviewController& controller) {
     return serialize_edit_recipe_json(controller.currentState());
+  }
+  static QVariantMap render_configuration(const EditorPreviewController& controller) {
+    const auto state = controller.currentState();
+    return {{QStringLiteral("actual_photographic_rendering_model"), state.photographic_rendering_model},
+        {QStringLiteral("renderer_transition_look"), state.renderer_transition_look},
+        {QStringLiteral("exposure"), state.exposure},
+        {QStringLiteral("working_color_profile"), state.working_color_profile}};
   }
   static bool brush_commit_running(const EditorPreviewController& controller) {
     return controller.mask_worker_coordinator_.brushRasterCommitWatcher().isRunning();
@@ -164,6 +236,9 @@ struct EditorPreviewControllerTestAccess {
   }
   static int render_generation(const EditorPreviewController& controller) {
     return controller.preview_session_.generation();
+  }
+  static QVariantMap photo_layer_stack_performance(const EditorPreviewController& controller) {
+    return controller.last_photo_layer_stack_performance_;
   }
   static std::optional<RenderResult> ready_interactive_render_result(
       const EditorPreviewController& controller) {
@@ -600,6 +675,47 @@ bool capture_visual_proof(
     std::cerr << "Visual proof state " << state.toStdString()
               << " missing/hidden: " << missing_or_hidden.join(QStringLiteral(", ")).toStdString()
               << '\n';
+    for (const auto& name : missing_or_hidden) {
+      for (auto* item : find_named_items(root, name)) {
+        std::cerr << "  candidate " << name.toStdString() << " visible=" << item->isVisible()
+                  << " size=" << item->width() << "x" << item->height()
+                  << " window=" << (item->window() != nullptr) << '\n';
+      }
+    }
+    window->grabWindow().save(QDir(output_dir).filePath(state + QStringLiteral("-failed.png")));
+    return false;
+  }
+  // Retained hidden panels can still be incubating after the visible controls
+  // are ready. Audit fully constructed objects, including their Theme bindings,
+  // rather than partially initialized popup instances. Keep the existing layout
+  // convergence budget and fail readiness instead of bypassing the style audit.
+  const auto* proof_engine = qmlEngine(root);
+  auto* proof_incubation = proof_engine ? proof_engine->incubationController() : nullptr;
+  if (proof_incubation && proof_incubation->incubatingObjectCount() > 0 &&
+      !wait_for_condition([&] {
+        window->requestUpdate();
+        return proof_incubation->incubatingObjectCount() == 0;
+      }, 2000)) {
+    std::cerr << "Visual proof state " << state.toStdString()
+              << " still has " << proof_incubation->incubatingObjectCount()
+              << " QML objects under construction\n";
+    return false;
+  }
+  // Popup.opened becomes true after its enter transition. Visibility alone
+  // can capture a half-transparent menu and obscure the final visual hierarchy.
+  const auto popups_presented = [&] {
+    const auto objects = root->findChildren<QObject*>();
+    return std::all_of(objects.cbegin(), objects.cend(), [](QObject* object) {
+      if (!object->property("appPopupContract").isValid() &&
+          !object->property("appMenuContract").isValid() &&
+          !object->property("appDialogContract").isValid()) return true;
+      return !object->property("visible").toBool() ||
+             !object->property("opened").isValid() || object->property("opened").toBool();
+    });
+  };
+  if (!wait_for_condition(popups_presented, 750)) {
+    std::cerr << "Visual proof state " << state.toStdString()
+              << " popup transition did not settle\n";
     return false;
   }
   QImage image;
@@ -616,6 +732,16 @@ bool capture_visual_proof(
               << " window=" << window->width() << 'x' << window->height()
               << " pixels=" << image.width() << 'x' << image.height()
               << " ratio=" << window->devicePixelRatio() << '\n';
+    return false;
+  }
+  // grabWindow() forces the current scene graph frame through polish and
+  // rendering before the audit reads style-bound QML properties.
+  process_layout_events(2);
+  const auto style_errors = qml_popup_style_violations(root);
+  if (!style_errors.isEmpty()) {
+    std::cerr << "Visual proof state " << state.toStdString() << " violates application style:\n"
+              << style_errors.join('\n').toStdString() << '\n';
+    image.save(QDir(output_dir).filePath(state + QStringLiteral("-style-failure.png")));
     return false;
   }
   const auto file_name = visual_proof_file_stem(state, width, height) + QStringLiteral(".png");

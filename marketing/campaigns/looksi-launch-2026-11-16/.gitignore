@@ -1,0 +1,17 @@
+# Rebuildable campaign exports, review captures and native snapshots.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.mp4
+*.mov
+*.wav
+*.pdf
+*.xlsx
+*.ndjson
+*.zip
+**/frames/
+**/native-rebuild/evidence/
+**/native-rebuild/projects/
+# Retain authored source artwork used by the generators.
+!artwork/*.png

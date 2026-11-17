@@ -1,3 +1,4 @@
+#include "search_model_paths.h"
 #include <QApplication>
 #include <QColorSpace>
 #include <QCryptographicHash>
@@ -8,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
@@ -15,6 +17,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QImageReader>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
@@ -22,6 +25,7 @@
 #include <QQuickStyle>
 #include <QSize>
 #include <QSettings>
+#include <QSet>
 #include <QString>
 #include <QTextStream>
 #include <QTemporaryDir>
@@ -51,16 +55,20 @@
 #include "catalog_asset_model.h"
 #include "library_workflow_controller.h"
 #include "library_original_image_provider.h"
+#include "import_preview_image_provider.h"
 #include "visual_search_controller.h"
 #include "catalog_similarity_search.h"
 #include "search_runtime_bundle.h"
+#include "search_model_setup_controller.h"
 #include "gaussian_spacetime_artifact.h"
 #include "search_edit_workflow.h"
 #include "editor_preview_controller.h"
+#include "photo_component_workspace_controller.h"
 #include "edit_adjustment_patch.h"
 #include "editor_close_coordinator.h"
 #include <QSaveFile>
 #include "editor_preview_image_provider.h"
+#include "creative_example_thumbnail_image_provider.h"
 #include "export_job_controller.h"
 #include "job_queue_model.h"
 #include "job_runner.h"
@@ -74,13 +82,18 @@
 #include "agent_task_permissions.h"
 #include "agent_prepared_canvas_task.h"
 #include "agent_timeline_commands.h"
+#include "agent_timeline_compound_commands.h"
 #include "ai_model_runtime.h"
 #include "photo_automation_bridge.h"
 #include "preview_backend_controller.h"
 #include "qml_performance_monitor.h"
 #include "rendering_migration_batch_command.h"
 #include "timeline_document_controller.h"
+#include "timeline_color_edit_controller.h"
+#include "timeline_draft_lifecycle.h"
 #include "timeline_playback_controller.h"
+#include "timeline_fractal_noise_source.h"
+#include "timeline_route_performance_lifecycle_probe.h"
 #include "recent_user_input_filter.h"
 #include "creative_fonts.h"
 #include "../../../tests/agent_full_workflow_runtime_proof.h"
@@ -102,6 +115,24 @@ constexpr auto kRenderingMigrationPlanOnlyArgument =
 constexpr auto kRenderingMigrationChunkAuthorizationArgument =
     "--rendering-migration-chunk-authorization";
 constexpr auto kEnableAutomationArgument = "--enable-automation";
+
+[[nodiscard]] QString canonicalOutputFilePath(const QString& path) {
+  const QFileInfo input(path);
+  if (path.trimmed().isEmpty() || !input.isAbsolute() || input.fileName().isEmpty()) return {};
+  const auto parent = input.dir().canonicalPath();
+  if (parent.isEmpty()) return {};
+  return QDir(parent).filePath(input.fileName());
+}
+
+[[nodiscard]] bool pathIsWithinDirectory(const QString& directory, const QString& path) {
+  const auto root = QDir::cleanPath(directory);
+  const auto candidate = QDir::cleanPath(path);
+  if (root.isEmpty() || candidate.isEmpty() || candidate == root) return false;
+  const auto relative = QDir(root).relativeFilePath(candidate);
+  return !relative.isEmpty() && relative != QStringLiteral(".") &&
+      relative != QStringLiteral("..") && !relative.startsWith(QStringLiteral("../")) &&
+      !QFileInfo(relative).isAbsolute();
+}
 
 [[nodiscard]] bool automationRequested(const QStringList& arguments) {
   if (arguments.contains(QString::fromLatin1(kEnableAutomationArgument))) {
@@ -652,6 +683,155 @@ int main(int argc, char* argv[]) {
   QApplication::setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
   QApplication::setApplicationName(photo_editor::desktop::AppBootstrap::application_name);
   QApplication::setOrganizationName(photo_editor::desktop::AppBootstrap::organization_name);
+  // Isolated desktop workers must not overwrite the regular app's workspace
+  // layout and preferences while reviewing the same native editor surface.
+  const auto preferences_directory =
+      qEnvironmentVariable("PHOTO_EDITOR_PREFERENCES_DIR").trimmed();
+  if (!preferences_directory.isEmpty()) {
+    const QFileInfo preferences_info(preferences_directory);
+    if (!preferences_info.isAbsolute() || preferences_info.isSymLink() ||
+        !QDir().mkpath(preferences_directory) ||
+        !QFileInfo(preferences_directory).isDir() ||
+        !QFileInfo(preferences_directory).isWritable()) {
+      qCritical() << "PHOTO_EDITOR_PREFERENCES_DIR must be an absolute writable directory.";
+      return EXIT_FAILURE;
+    }
+    const auto private_preferences = QDir(preferences_directory).canonicalPath();
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, private_preferences);
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, private_preferences);
+  }
+  const auto lifecycle_flag =
+      QStringLiteral("--timeline-route-performance-lifecycle");
+  const auto source_flag = QStringLiteral("--timeline-route-performance-source");
+  const auto image_flag = QStringLiteral("--timeline-route-performance-image");
+  const bool timeline_route_performance_lifecycle =
+      app.arguments().contains(lifecycle_flag);
+  const bool legacy_timeline_route_performance =
+      app.arguments().contains(QStringLiteral("--timeline-route-performance"));
+  QString lifecycle_output_directory;
+  QString lifecycle_source_video;
+  QString lifecycle_source_image;
+  if (timeline_route_performance_lifecycle) {
+    QStringList validation_errors;
+    const auto argument_value = [&app, &validation_errors](const QString& name,
+                                                           bool required) {
+      const auto index = app.arguments().indexOf(name);
+      if (index < 0) {
+        if (required) {
+          validation_errors.push_back(QStringLiteral("Missing %1 argument.").arg(name));
+        }
+        return QString{};
+      }
+      if (app.arguments().count(name) != 1 || index + 1 >= app.arguments().size() ||
+          app.arguments().at(index + 1).startsWith(QStringLiteral("--"))) {
+        validation_errors.push_back(QStringLiteral("Invalid value for %1.").arg(name));
+        return QString{};
+      }
+      return app.arguments().at(index + 1);
+    };
+    lifecycle_output_directory = argument_value(lifecycle_flag, true);
+    lifecycle_source_video = argument_value(source_flag, true);
+    lifecycle_source_image = argument_value(image_flag, false);
+    if (legacy_timeline_route_performance) {
+      validation_errors.push_back(QStringLiteral(
+          "The legacy one-shot route probe cannot run together with lifecycle mode."));
+    }
+    if (app.arguments().contains(QStringLiteral("--managed-runtime-proof-dir")) ||
+        app.arguments().contains(QStringLiteral("--agent-full-workflow-proof-dir")) ||
+        app.arguments().contains(QStringLiteral("--timeline-route-performance-empty")) ||
+        app.arguments().contains(QStringLiteral("--timeline-route-performance-creator-setup"))) {
+      validation_errors.push_back(QStringLiteral(
+          "Lifecycle mode cannot be combined with another runtime proof or an empty Timeline fixture."));
+    }
+
+    const QFileInfo output_info(lifecycle_output_directory);
+    if (lifecycle_output_directory.isEmpty() || !output_info.isAbsolute() ||
+        output_info.isSymLink()) {
+      validation_errors.push_back(QStringLiteral(
+          "The lifecycle output directory must be an absolute, non-symlink path."));
+    } else if (QFileInfo::exists(QDir(lifecycle_output_directory).filePath(
+                   QStringLiteral("lifecycle-receipt.json")))) {
+      validation_errors.push_back(QStringLiteral(
+          "The lifecycle output directory already contains a receipt."));
+    }
+
+    const QFileInfo video_info(lifecycle_source_video);
+    if (lifecycle_source_video.isEmpty() || !video_info.isFile() ||
+        video_info.size() <= 0 ||
+        !video_info.isReadable() || video_info.canonicalFilePath().isEmpty()) {
+      validation_errors.push_back(QStringLiteral(
+          "The lifecycle video source must be a readable local file."));
+    } else {
+      lifecycle_source_video = video_info.canonicalFilePath();
+    }
+    if (!lifecycle_source_image.isEmpty()) {
+      const QFileInfo image_info(lifecycle_source_image);
+      if (!image_info.isFile() || image_info.size() <= 0 || !image_info.isReadable() ||
+          image_info.canonicalFilePath().isEmpty()) {
+        validation_errors.push_back(QStringLiteral(
+            "The optional lifecycle image source must be a readable local file."));
+      } else {
+        lifecycle_source_image = image_info.canonicalFilePath();
+        QImageReader image_reader(lifecycle_source_image);
+        if (!image_reader.canRead()) {
+          validation_errors.push_back(QStringLiteral(
+              "The optional lifecycle image source is not a decodable image."));
+        }
+      }
+    }
+
+    const auto app_data_root = qEnvironmentVariable("PHOTO_EDITOR_APP_DATA_DIR").trimmed();
+    const auto cache_root = qEnvironmentVariable("PHOTO_EDITOR_CACHE_DIR").trimmed();
+    const auto validate_runtime_root = [&validation_errors](
+                                          const QString& name,
+                                          const QString& path) {
+      const QFileInfo root_info(path);
+      if (path.isEmpty() || !root_info.isAbsolute() || root_info.isSymLink()) {
+        validation_errors.push_back(QStringLiteral(
+            "%1 must name a caller-supplied absolute, non-symlink directory.").arg(name));
+      }
+    };
+    validate_runtime_root(QStringLiteral("PHOTO_EDITOR_APP_DATA_DIR"), app_data_root);
+    validate_runtime_root(QStringLiteral("PHOTO_EDITOR_CACHE_DIR"), cache_root);
+    const auto database_url = qEnvironmentVariable("PHOTO_EDITOR_DATABASE_URL").trimmed();
+    const QUrl database(database_url);
+    const auto database_name = database.path().section(QLatin1Char('/'), -1);
+    const auto local_database =
+        database.isValid() &&
+        QStringList{QStringLiteral("postgres"), QStringLiteral("postgresql")}
+            .contains(database.scheme(), Qt::CaseInsensitive) &&
+        database.host() == QStringLiteral("127.0.0.1") && database.port() > 0 &&
+        database_name.contains(QStringLiteral("test"), Qt::CaseInsensitive);
+    if (!local_database) {
+      validation_errors.push_back(QStringLiteral(
+          "PHOTO_EDITOR_DATABASE_URL must point to a local PostgreSQL test database."));
+    }
+
+    if (!validation_errors.isEmpty()) {
+      QVariantMap inputs{
+          {QStringLiteral("outputDirectory"), lifecycle_output_directory},
+          {QStringLiteral("sourceVideoPath"), lifecycle_source_video},
+          {QStringLiteral("sourceImagePath"), lifecycle_source_image},
+          {QStringLiteral("appDataRoot"), app_data_root},
+          {QStringLiteral("cacheRoot"), cache_root},
+          {QStringLiteral("databaseHost"), database.host()},
+          {QStringLiteral("databaseName"), database_name},
+          {QStringLiteral("databasePort"), database.port()},
+      };
+      photo_editor::desktop::TimelineRoutePerformanceLifecycleProbe::
+          writeCommandFailureReceipt(
+              lifecycle_output_directory, validation_errors, inputs);
+      qWarning() << "Timeline route lifecycle probe preflight failed:" << validation_errors;
+      return EXIT_FAILURE;
+    }
+  } else if (app.arguments().contains(source_flag) ||
+             app.arguments().contains(image_flag)) {
+    qWarning() << source_flag << "and" << image_flag
+               << "require" << lifecycle_flag;
+    return EXIT_FAILURE;
+  }
+
   QString agent_workflow_proof_dir;
   const auto agent_workflow_argument =
       app.arguments().indexOf(QStringLiteral("--agent-full-workflow-proof-dir"));
@@ -661,7 +841,8 @@ int main(int argc, char* argv[]) {
     // Set settings and runtime paths before constructing any app controller.
     if (agent_workflow_argument + 1 >= app.arguments().size() ||
         app.arguments().contains(QStringLiteral("--managed-runtime-proof-dir")) ||
-        app.arguments().contains(QStringLiteral("--timeline-route-performance")))
+        app.arguments().contains(QStringLiteral("--timeline-route-performance")) ||
+        timeline_route_performance_lifecycle)
       return EXIT_FAILURE;
     const QFileInfo supplied_root(app.arguments().at(agent_workflow_argument + 1));
     if (!supplied_root.isAbsolute() || !supplied_root.isDir() || supplied_root.isSymLink())
@@ -702,10 +883,18 @@ int main(int argc, char* argv[]) {
     QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, private_preferences);
   }
   const bool timeline_route_performance =
-      app.arguments().contains(QStringLiteral("--timeline-route-performance"));
+      legacy_timeline_route_performance || timeline_route_performance_lifecycle;
   QTemporaryDir timeline_route_settings;
   if (timeline_route_performance) {
-    if (!timeline_route_settings.isValid()) return EXIT_FAILURE;
+    if (!timeline_route_settings.isValid()) {
+      if (timeline_route_performance_lifecycle) {
+        photo_editor::desktop::TimelineRoutePerformanceLifecycleProbe::
+            writeCommandFailureReceipt(
+                lifecycle_output_directory,
+                {QStringLiteral("Private route probe preferences could not be created.")});
+      }
+      return EXIT_FAILURE;
+    }
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
         timeline_route_settings.path());
@@ -713,7 +902,18 @@ int main(int argc, char* argv[]) {
         timeline_route_settings.path());
   }
   QString managed_runtime_proof_dir;
-  const auto proof_argument = app.arguments().indexOf(QStringLiteral("--managed-runtime-proof-dir"));
+  const auto scene_render_proof_argument = app.arguments().indexOf(QStringLiteral("--gaussian-scene-render-proof-dir"));
+  const bool scene_render_only_proof = scene_render_proof_argument >= 0;
+  const bool scene_render_offline_proof = app.arguments().contains(QStringLiteral("--gaussian-scene-offline-proof"));
+  const bool scene_lighting_progressive_proof = app.arguments().contains(QStringLiteral("--gaussian-lighting-progressive-proof"));
+  if (scene_lighting_progressive_proof && (!scene_render_only_proof || !app.arguments().contains(QStringLiteral("--gaussian-environment-proof")))) return EXIT_FAILURE;
+  if (scene_render_offline_proof && !scene_render_only_proof) return EXIT_FAILURE;
+  const int scene_render_wait_ms = scene_render_offline_proof ? 120000 : 30000;
+  const auto managed_proof_argument = app.arguments().indexOf(QStringLiteral("--managed-runtime-proof-dir"));
+  if (scene_render_only_proof && (managed_proof_argument >= 0 ||
+      !app.arguments().contains(QStringLiteral("--gaussian-workspace-proof")) ||
+      !app.arguments().contains(QStringLiteral("--gaussian-project-proof")))) return EXIT_FAILURE;
+  const auto proof_argument = scene_render_only_proof ? scene_render_proof_argument : managed_proof_argument;
   if (proof_argument >= 0) {
     if (proof_argument + 1 >= app.arguments().size()) return EXIT_FAILURE;
     managed_runtime_proof_dir = app.arguments()[proof_argument + 1];
@@ -742,7 +942,15 @@ int main(int argc, char* argv[]) {
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
         QDir(managed_runtime_proof_dir).filePath(QStringLiteral("preferences")));
   }
-  photo_editor::desktop::AppBootstrap::ensureRuntimeDirectories();
+  const auto runtime_directories_ready =
+      photo_editor::desktop::AppBootstrap::ensureRuntimeDirectories();
+  if (timeline_route_performance_lifecycle && !runtime_directories_ready) {
+    photo_editor::desktop::TimelineRoutePerformanceLifecycleProbe::
+        writeCommandFailureReceipt(
+            lifecycle_output_directory,
+            {QStringLiteral("Caller-supplied runtime and cache directories are unavailable.")});
+    return EXIT_FAILURE;
+  }
   photo_editor::desktop::observability::initialize();
   photo_editor::desktop::observability::logInfo(
       photoEditorAppLog(),
@@ -786,13 +994,17 @@ int main(int argc, char* argv[]) {
       qEnvironmentVariable("PHOTO_EDITOR_DATABASE_URL",
           photo_editor::desktop::AppBootstrap::appDataLocation() + "/managed-catalog"));
   const auto similarity_index = QDir(photo_editor::desktop::AppBootstrap::appDataLocation()).filePath("visual-search/embeddings.sqlite3");
-  const auto similarity_model = qEnvironmentVariable("PHOTO_EDITOR_SEARCH_MODEL_ROOT",
-      QDir(photo_editor::desktop::AppBootstrap::appDataLocation()).filePath("search-models/siglip2-base-patch16-224"));
+  const auto similarity_model = photo_editor::desktop::search_model_location(
+      photo_editor::desktop::AppBootstrap::appDataLocation(),
+      QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation),
+      qEnvironmentVariable("PHOTO_EDITOR_SEARCH_MODEL_ROOT"),
+      !qEnvironmentVariable("PHOTO_EDITOR_APP_DATA_DIR").trimmed().isEmpty());
   const auto similarity_device = qEnvironmentVariable("PHOTO_EDITOR_SEARCH_DEVICE", "cpu");
+  photo_editor::desktop::SearchModelSetupController search_model_setup(
+      similarity_search.controller(), similarity_model, similarity_device, similarity_index);
   QFutureWatcher<photo_editor::desktop::SearchRuntimeVerification> similarity_runtime_verification;
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SEARCH_EXECUTABLE")) {
-    similarity_search.controller()->configureExecutable(qEnvironmentVariable("PHOTO_EDITOR_SEARCH_EXECUTABLE"),
-        similarity_model, similarity_device, similarity_index);
+    search_model_setup.setRuntime(qEnvironmentVariable("PHOTO_EDITOR_SEARCH_EXECUTABLE"));
   } else if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SEARCH_PYTHON") || qEnvironmentVariableIsSet("PHOTO_EDITOR_SEARCH_WORKER")) {
     similarity_search.controller()->configure(qEnvironmentVariable("PHOTO_EDITOR_SEARCH_PYTHON"),
         qEnvironmentVariable("PHOTO_EDITOR_SEARCH_WORKER"), similarity_model, similarity_device, similarity_index);
@@ -800,15 +1012,21 @@ int main(int argc, char* argv[]) {
 #ifdef PHOTO_EDITOR_SEARCH_RUNTIME_RECEIPT_SHA256
     const auto runtime_root = QDir(QCoreApplication::applicationDirPath()).filePath("../Resources/search-runtime");
     similarity_search.controller()->setSetupStatus("Checking the bundled local search runtime…");
+    search_model_setup.setRuntimeStatus("Checking the bundled local search runtime…");
     QObject::connect(&similarity_runtime_verification, &QFutureWatcher<photo_editor::desktop::SearchRuntimeVerification>::finished,
         &similarity_search, [&] {
       const auto checked = similarity_runtime_verification.result();
-      if (checked.ok) similarity_search.controller()->configureExecutable(checked.executable, similarity_model, similarity_device, similarity_index);
-      else similarity_search.controller()->setSetupStatus(checked.error);
+      if (checked.ok) search_model_setup.setRuntime(checked.executable);
+      else {
+        similarity_search.controller()->setSetupStatus(checked.error);
+        search_model_setup.setRuntimeStatus(checked.error);
+      }
     });
     similarity_runtime_verification.setFuture(QtConcurrent::run([runtime_root] {
       return photo_editor::desktop::verify_search_runtime_bundle(runtime_root, QStringLiteral(PHOTO_EDITOR_SEARCH_RUNTIME_RECEIPT_SHA256));
     }));
+#else
+    search_model_setup.setRuntimeStatus("This build does not include the local search runtime.");
 #endif
   }
   photo_editor::desktop::CrashReportingController crash_reporting;
@@ -835,17 +1053,18 @@ int main(int argc, char* argv[]) {
     if (value.toMap().value(QStringLiteral("runtime")).toString() == QStringLiteral("managed"))
       managed_runtime_requested = true;
   }
-  if (managed_runtime_requested) {
+  if (managed_runtime_requested && !scene_render_only_proof) {
     QTimer::singleShot(0, &managed_agent_runtime, [&managed_agent_runtime] {
       managed_agent_runtime.start(photo_editor::desktop::agent_runtime_binary(),
           QDir(photo_editor::desktop::AppBootstrap::appDataLocation()).filePath(QStringLiteral("agent-runtime/models")));
     });
   }
   photo_editor::desktop::AppShellController app_shell;
-  if (!managed_runtime_proof_dir.isEmpty() && (app.arguments().contains(QStringLiteral("--managed-runtime-setup-proof")) ||
+  if (timeline_route_performance_lifecycle ||
+      (!managed_runtime_proof_dir.isEmpty() && (app.arguments().contains(QStringLiteral("--managed-runtime-setup-proof")) ||
       app.arguments().contains(QStringLiteral("--recipe-save-error-proof")) ||
       app.arguments().contains(QStringLiteral("--recipe-close-proof")) ||
-      app.arguments().contains(QStringLiteral("--gaussian-workspace-proof")))) {
+      app.arguments().contains(QStringLiteral("--gaussian-workspace-proof"))))) {
     // This QA profile has isolated preferences. Exercise setup after onboarding,
     // as a user would, without a delayed welcome popup covering its controls.
     app_shell.completeFirstRunExperience();
@@ -876,6 +1095,8 @@ int main(int argc, char* argv[]) {
   photo_editor::desktop::ExportJobController export_jobs;
   photo_editor::desktop::AgentTaskCoordinator agent_tasks;
   QStringList agent_task_target_ids;
+  QString mcp_timeline_task_id;
+  QStringList mcp_timeline_target_ids;
   agent_session.setContextSnapshotHandler([&catalog_assets, &editor_preview, &agent_edit](const QVariantMap& supplied) {
     auto context = supplied;
     context.remove(QStringLiteral("contextError"));
@@ -897,6 +1118,13 @@ int main(int argc, char* argv[]) {
       const auto asset = catalog_assets.assetById(id);
       if (asset.isEmpty()) {
         context.insert(QStringLiteral("contextError"), QStringLiteral("A selected asset is no longer available. Update the selection."));
+        continue;
+      }
+      if (editor_preview.assetId() != id &&
+          asset.value(QStringLiteral("mediaType")).toString() == QStringLiteral("photo") &&
+          !catalog_assets.assetRecipeReady(id)) {
+        catalog_assets.requestAssetRecipes({id});
+        context.insert(QStringLiteral("contextError"), QStringLiteral("The selected photo's saved edit is still loading. Retry after it finishes."));
         continue;
       }
       const auto recipe = editor_preview.assetId() == id
@@ -965,6 +1193,14 @@ int main(int argc, char* argv[]) {
       return {{"pending", true}, {"activity", "Waiting for the current brush operation to finish."}};
     const auto ids = approved.value(QStringLiteral("targetIds")).toStringList();
     for (const auto& id : ids) {
+      const auto target = catalog_assets.assetById(id);
+      if (target.isEmpty())
+        return {{"error", "The approved photo is unavailable. Update the request before starting."}};
+      if (target.value(QStringLiteral("mediaType")).toString() == QStringLiteral("photo") &&
+          !catalog_assets.assetRecipeReady(id)) {
+        catalog_assets.requestAssetRecipes({id});
+        return {{"pending", true}, {"activity", "Loading the approved photo's saved edit."}};
+      }
       if (!catalog_assets.agentTaskRecipePersistenceSettled(id))
         return {{"pending", true}, {"activity", "Waiting for the selected photos' saves to finish."}};
     }
@@ -1204,6 +1440,7 @@ int main(int argc, char* argv[]) {
   photo_editor::desktop::PhotoAutomationBridge photo_automation(&agent_edit, &catalog_assets);
   photo_automation.setAppCommandRegistry(&app_commands);
   photo_automation.setEditAccessPolicy(edit_access);
+  photo_automation.setTimelineJobQueueModel(&job_queue);
   agent_edit.setTaskTransactionHandler([&editor_preview, &catalog_assets, &agent_tasks, &agent_task_target_ids,
       &agent_recipe_saves, &pending_task_settlement, &task_saves_pending](const QString& action, const QString& task_id,
       const QStringList& asset_ids, const QVariantMap& context) -> QVariantMap {
@@ -1312,6 +1549,10 @@ int main(int argc, char* argv[]) {
     return agent_tasks.finish(action);
   });
   photo_automation.setCompositionHandler([&editor_preview, &agent_edit](const QVariantMap& request) -> QVariantMap {
+    if (request.value("operation") != QStringLiteral("inspect") && editor_preview.photoAuthoringDraftActive())
+      return {{"ok", false}, {"error", QStringLiteral("Finish or cancel the current authoring draft before automation edits this document.")},
+          {"errorCode", QStringLiteral("authoring_session_active")}, {"recoverable", true},
+          {"blockedByResourceOwnership", true}, {"mutationNotApplied", true}};
     const auto task_id = agent_edit.activeTaskId();
     if (!task_id.isEmpty() && request.value("operation") != QStringLiteral("inspect"))
       return editor_preview.runAgentTaskComposition(task_id, request);
@@ -1327,6 +1568,14 @@ int main(int argc, char* argv[]) {
           {"taskStateHash", agent_tasks.journal()->checkpointHash(asset_id)}};
     }
     const auto asset = catalog_assets.assetById(asset_id);
+    if (asset.isEmpty())
+      return {{"ok", false}, {"error", "The selected photo is no longer available."}};
+    if (asset.value(QStringLiteral("mediaType")).toString() == QStringLiteral("photo") &&
+        !catalog_assets.assetRecipeReady(asset_id)) {
+      catalog_assets.requestAssetRecipes({asset_id});
+      return {{"ok", false}, {"pending", true},
+          {"error", "The saved edit recipe is still loading. Retry after it finishes."}};
+    }
     return {{"ok", !asset.isEmpty()}, {"assetId", asset_id},
         {"recipeJson", asset.value("adjustmentPatchJson")}, {"source", "catalog-photo"}};
   });
@@ -1358,6 +1607,7 @@ int main(int argc, char* argv[]) {
   photo_editor::desktop::QmlPerformanceMonitor qml_performance;
   photo_editor::desktop::TimelineDocumentController timeline_document;
   timeline_document.setEditAccessPolicy(edit_access);
+  photo_editor::desktop::TimelineColorEditController timeline_color_editor(&timeline_document, &editor_preview);
   if (timeline_route_performance &&
       !app.arguments().contains(QStringLiteral("--timeline-route-performance-empty")) &&
       !app.arguments().contains(QStringLiteral("--timeline-route-performance-creator-setup"))) {
@@ -1375,6 +1625,421 @@ int main(int argc, char* argv[]) {
               : QStringLiteral("standard")}});
   }
   photo_automation.setTimelineDocumentController(&timeline_document);
+  photo_editor::desktop::AgentTimelineCompoundCommands timeline_compound_commands(
+      &timeline_document, &agent_tasks,
+      [&mcp_timeline_task_id]() { return mcp_timeline_task_id; },
+      [&agent_edit, &agent_tasks](const QString&) {
+        return agent_edit.authorizeNativeEditingCommandForTask(
+            QStringLiteral("Timeline"), false,
+            agent_tasks.state().value(QStringLiteral("approvedSnapshot")).toMap());
+      });
+  agent_tasks.setBeforeRevertHandler([&timeline_compound_commands](const bool check_only) {
+    return check_only ? timeline_compound_commands.checkBeforeRevert()
+                      : timeline_compound_commands.reconcileBeforeRevert();
+  });
+  photo_automation.setTimelineTaskLifecycleHandler(
+      [&timeline_document, &agent_tasks, &agent_edit, &edit_access, &mcp_timeline_task_id,
+       &mcp_timeline_target_ids, &timeline_compound_commands](const QString& action, const QVariantMap& args) -> QVariantMap {
+    const auto failure = [](const QString& message) {
+      return QVariantMap{{QStringLiteral("ok"), false}, {QStringLiteral("error"), message}};
+    };
+    const auto timeline_adapter = [&timeline_document](const QString& resource_id) {
+      return photo_editor::desktop::AgentTaskJournal::ResourceAdapter{
+          [&timeline_document, resource_id]() {
+            return timeline_document.agentTaskDocumentId() == resource_id
+                ? timeline_document.agentTaskDocumentState() : QByteArray{};
+          },
+          [&timeline_document, resource_id](const QByteArray& bytes) {
+            return timeline_document.agentTaskDocumentId() == resource_id &&
+                timeline_document.restoreAgentTaskDocument(bytes);
+          }, {}};
+    };
+    if (action == QStringLiteral("cancel_preparation")) {
+      if (!mcp_timeline_task_id.isEmpty() || agent_tasks.journal()->active() ||
+          !agent_edit.activeTaskId().isEmpty() || agent_edit.draftActive() ||
+          agent_edit.running()) {
+        return failure(QStringLiteral(
+            "Timeline preparation can only be canceled before a task is admitted."));
+      }
+      return timeline_document.cancelAgentTaskDocumentPreparationForAutomation();
+    }
+    if (action == QStringLiteral("admit")) {
+      if (!args.value(QStringLiteral("confirmed")).toBool())
+        return failure(QStringLiteral("Timeline task admission requires confirmed:true."));
+      if (!edit_access()) return failure(QStringLiteral("Editing requires an active trial or purchase."));
+      if (!mcp_timeline_task_id.isEmpty() || agent_tasks.journal()->active() ||
+          !agent_edit.activeTaskId().isEmpty() || agent_edit.draftActive() || agent_edit.running())
+        return failure(QStringLiteral("Finish or revert the existing agent task before admitting a Timeline task."));
+      const auto target_id = args.value(QStringLiteral("targetResourceId")).toString().trimmed();
+      if (target_id.isEmpty() || target_id != timeline_document.agentTaskDocumentId())
+        return failure(QStringLiteral("The requested stable Timeline target is not the open document."));
+      const auto objective = args.value(QStringLiteral("objective")).toString().trimmed();
+      if (objective.isEmpty() || objective.size() > 5000)
+        return failure(QStringLiteral("Timeline task objective must contain 1 to 5000 characters."));
+      const auto actions = args.value(QStringLiteral("actions")).toList();
+      const auto capabilities = photo_editor::desktop::agent_timeline_task_capabilities_for_plan({
+          {QStringLiteral("actions"), actions}});
+      if (actions.isEmpty() || actions.size() > 9 || capabilities.isEmpty())
+        return failure(QStringLiteral("Timeline task actions must be a nonempty supported plan of up to nine approved actions."));
+      const auto asset_paths = args.value(QStringLiteral("assetPaths")).toStringList();
+      if (asset_paths.size() > 256)
+        return failure(QStringLiteral("A Timeline task may admit at most 256 source files."));
+      QSet<QString> seen_paths;
+      for (const auto& path : asset_paths) {
+        const QFileInfo info(path);
+        if (path.trimmed().isEmpty() || seen_paths.contains(path) || !info.isFile() ||
+            !info.isReadable() || info.canonicalFilePath() != path)
+          return failure(QStringLiteral("Every source must be a unique canonical existing readable regular file."));
+        seen_paths.insert(path);
+      }
+      const auto output_directory = args.value(QStringLiteral("outputDirectory")).toString().trimmed();
+      const QFileInfo output_info(output_directory);
+      if (output_directory.isEmpty() || output_info.canonicalFilePath() != output_directory ||
+          !output_info.isDir() || !output_info.isWritable())
+        return failure(QStringLiteral("The project output directory must be an existing canonical writable directory."));
+
+      const auto preparation = timeline_document.prepareAgentTaskDocumentForAutomation();
+      if (!preparation.value(QStringLiteral("ok")).toBool()) {
+        return failure(preparation.value(QStringLiteral("error")).toString());
+      }
+      if (!preparation.value(QStringLiteral("ready")).toBool()) {
+        auto pending = failure(preparation.value(QStringLiteral("message")).toString());
+        pending.insert(QStringLiteral("preparationPhase"),
+                       preparation.value(QStringLiteral("phase")));
+        return pending;
+      }
+
+      const auto task_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+      const auto begun = agent_tasks.begin(
+          photo_editor::desktop::AppBootstrap::appDataLocation(), task_id);
+      if (!begun.value(QStringLiteral("ok")).toBool()) {
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+        return begun;
+      }
+      const QVariantMap approved_snapshot{
+          {QStringLiteral("contract"), QStringLiteral("agent-approved-session-v1")},
+          {QStringLiteral("prompt"), objective},
+          {QStringLiteral("targetIds"), QStringList{target_id}},
+          {QStringLiteral("actions"), actions},
+          {QStringLiteral("taskScopedCapabilities"), capabilities}};
+      const auto approved = agent_tasks.journal()->recordApprovedSnapshot(approved_snapshot);
+      if (!approved.value(QStringLiteral("ok")).toBool()) {
+        static_cast<void>(agent_tasks.abandonAdmission());
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+        return approved;
+      }
+      const auto scope = agent_tasks.journal()->recordNativeTimelineScope(
+          {target_id}, asset_paths, output_directory);
+      if (!scope.value(QStringLiteral("ok")).toBool()) {
+        static_cast<void>(agent_tasks.abandonAdmission());
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+        return scope;
+      }
+      const auto enrolled = agent_tasks.enroll(target_id, timeline_adapter(target_id));
+      if (!enrolled.value(QStringLiteral("ok")).toBool()) {
+        static_cast<void>(agent_tasks.abandonAdmission());
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+        return enrolled;
+      }
+      mcp_timeline_task_id = task_id;
+      mcp_timeline_target_ids = {target_id};
+      const auto accepted_preparation =
+          timeline_document.acceptAgentTaskDocumentPreparationForAutomation();
+      if (!accepted_preparation.value(QStringLiteral("ok")).toBool()) {
+        mcp_timeline_task_id.clear();
+        mcp_timeline_target_ids.clear();
+        static_cast<void>(agent_tasks.abandonAdmission());
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+        return accepted_preparation;
+      }
+      auto receipt = agent_tasks.state();
+      receipt.insert(QStringLiteral("active"), true);
+      receipt.insert(QStringLiteral("targetResourceId"), target_id);
+      return receipt;
+    }
+    if (action == QStringLiteral("status")) {
+      if (mcp_timeline_task_id.isEmpty() || agent_tasks.journal()->taskId() != mcp_timeline_task_id)
+        return {{QStringLiteral("ok"), true}, {QStringLiteral("active"), false}};
+      auto receipt = agent_tasks.state();
+      receipt.insert(QStringLiteral("active"), true);
+      receipt.insert(QStringLiteral("targetResourceIds"), mcp_timeline_target_ids);
+      return receipt;
+    }
+    if (action == QStringLiteral("recover")) {
+      const auto task_id = args.value(QStringLiteral("taskId")).toString().trimmed();
+      const auto target_id = args.value(QStringLiteral("targetResourceId")).toString().trimmed();
+      if (task_id.isEmpty() || target_id.isEmpty()) return failure(QStringLiteral("Task and stable Timeline target IDs are required."));
+      auto source_integrity_reconciled = false;
+      auto compound_projection_reconciled = false;
+      auto prepared_batch_recovered_unchanged = false;
+      QVariant recovered_prepared_step_id;
+      if (mcp_timeline_task_id.isEmpty()) {
+        if (agent_tasks.journal()->active() || !agent_edit.activeTaskId().isEmpty() ||
+            agent_edit.draftActive() || agent_edit.running())
+          return failure(QStringLiteral("Another agent task is active and must be resolved first."));
+        if (target_id != timeline_document.agentTaskDocumentId())
+          return failure(QStringLiteral("Recovery requires the exact open Timeline resource stored in the journal."));
+        photo_editor::desktop::AgentTaskJournal probe;
+        const auto preview = probe.recover(
+            photo_editor::desktop::AppBootstrap::appDataLocation(), task_id);
+        if (!preview.value(QStringLiteral("ok")).toBool()) return preview;
+        const auto scope = probe.nativeTimelineScope();
+        const auto target_ids = scope.value(QStringLiteral("targetIds")).toStringList();
+        const auto output_directory = scope.value(QStringLiteral("outputDirectory")).toString();
+        const QFileInfo output_info(output_directory);
+        if (target_ids != QStringList{target_id} || output_info.canonicalFilePath() != output_directory ||
+            !output_info.isDir())
+          return failure(QStringLiteral("Recovered task scope does not match the requested Timeline and output directory."));
+        const auto preview_status = preview.value(QStringLiteral("status")).toString();
+        const auto preview_steps = preview.value(QStringLiteral("steps")).toList();
+        if (preview_status == QStringLiteral("running") && preview_steps.isEmpty()) {
+          const auto preview_resources = preview.value(QStringLiteral("resources")).toList();
+          if (preview.value(QStringLiteral("uncertainOperation")).toBool() ||
+              preview_resources.size() != 1 ||
+              preview_resources.front().toMap().value(QStringLiteral("id")).toString() != target_id ||
+              preview_resources.front().toMap().value(QStringLiteral("pending")).toBool() ||
+              preview_resources.front().toMap().value(QStringLiteral("beforeHash")).toString() !=
+                  preview_resources.front().toMap().value(QStringLiteral("currentHash")).toString()) {
+            return failure(QStringLiteral("A running Timeline task with no completed steps must have one exact unchanged baseline before source recovery."));
+          }
+          if (!timeline_document.agentTaskDocumentReady()) {
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("retryable"), true},
+                {QStringLiteral("status"), QStringLiteral("source_integrity_pending")},
+                {QStringLiteral("taskOwnershipAttached"), false},
+                {QStringLiteral("preparationStarted"), false},
+                {QStringLiteral("error"), QStringLiteral("Let the open Timeline finish its current derived checks before recovering this untouched task. No preparation or task ownership was started.")}};
+          }
+          const auto current_state = timeline_document.agentTaskDocumentState();
+          if (current_state.isEmpty())
+            return failure(QStringLiteral("The recovered Timeline has no stable state for source identity verification."));
+          const auto reconciled = probe.reconcileUnmutatedTimelineSourceIntegrity(target_id, current_state);
+          if (!reconciled.value(QStringLiteral("ok")).toBool()) return reconciled;
+          source_integrity_reconciled = reconciled.value(QStringLiteral("changed")).toBool();
+        }
+        if (preview.value(QStringLiteral("status")).toString() == QStringLiteral("released") &&
+            !timeline_document.agentTaskDocumentReady()) {
+          return {{QStringLiteral("ok"), false}, {QStringLiteral("retryable"), true},
+              {QStringLiteral("status"), QStringLiteral("released_timeline_derived_work_pending")},
+              {QStringLiteral("error"), QStringLiteral("Let the released Timeline finish its admitted source and metadata checks, then retry recovery. No task ownership was attached.")}};
+        }
+        for (const auto& value : preview.value(QStringLiteral("resources")).toList()) {
+          const auto id = value.toMap().value(QStringLiteral("id")).toString();
+          if (id == target_id) continue;
+          bool output_resource_found = false;
+          for (const auto& path : probe.nativeTimelineOutputPaths()) {
+            const auto canonical_path = canonicalOutputFilePath(path);
+            const auto file_resource = photo_editor::desktop::AgentTaskCoordinator::taskOwnedTimelineOutputFileResource(canonical_path);
+            if (path == canonical_path && pathIsWithinDirectory(output_directory, canonical_path) &&
+                file_resource.resource_id == id) {
+              output_resource_found = true;
+              break;
+            }
+          }
+          if (!output_resource_found)
+            return failure(QStringLiteral("The recovered task contains a resource outside its declared Timeline scope."));
+        }
+        const auto preparation = timeline_document.prepareAgentTaskDocumentForAutomation();
+        if (!preparation.value(QStringLiteral("ok")).toBool()) {
+          return failure(preparation.value(QStringLiteral("error")).toString());
+        }
+        if (!preparation.value(QStringLiteral("ready")).toBool()) {
+          auto pending = failure(preparation.value(QStringLiteral("message")).toString());
+          pending.insert(QStringLiteral("preparationPhase"),
+                         preparation.value(QStringLiteral("phase")));
+          pending.insert(QStringLiteral("retryable"), true);
+          pending.insert(QStringLiteral("preparationRetained"), true);
+          pending.insert(QStringLiteral("taskOwnershipAttached"), false);
+          return pending;
+        }
+        if (preview_status == QStringLiteral("running")) {
+          const auto current_state = timeline_document.agentTaskDocumentState();
+          if (current_state.isEmpty()) {
+            timeline_document.releaseAgentTaskDocumentForAutomation();
+            return failure(QStringLiteral(
+                "The opened Timeline does not match the recovered task's exact current checkpoint. Recovery was not attached; preserve both states."));
+          }
+          if (!probe.matchesCheckpoint(target_id, current_state)) {
+            const auto compound_proof =
+                photo_editor::desktop::AgentTimelineCompoundCommands::verifyPendingCompoundRecovery(
+                    preview, target_id, current_state);
+            if (!compound_proof.value(QStringLiteral("ok")).toBool()) {
+              timeline_document.releaseAgentTaskDocumentForAutomation();
+              return {{QStringLiteral("ok"), false},
+                      {QStringLiteral("error"), QStringLiteral(
+                          "The opened Timeline differs from its task checkpoint and does not satisfy the narrow pending-compound recovery proof.")},
+                      {QStringLiteral("compoundRecoveryProofError"),
+                       compound_proof.value(QStringLiteral("error"))}};
+            }
+            compound_projection_reconciled = true;
+          }
+        }
+        const auto recovered = agent_tasks.recover(
+            photo_editor::desktop::AppBootstrap::appDataLocation(), task_id);
+        if (!recovered.value(QStringLiteral("ok")).toBool()) {
+          timeline_document.releaseAgentTaskDocumentForAutomation();
+          return recovered;
+        }
+        mcp_timeline_task_id = task_id;
+        mcp_timeline_target_ids = target_ids;
+      } else if (mcp_timeline_task_id != task_id || agent_tasks.journal()->taskId() != task_id) {
+        return failure(QStringLiteral("A different native Timeline task is already active."));
+      } else {
+        if (!timeline_document.agentTaskDocumentReady()) {
+          return {{QStringLiteral("ok"), false},
+              {QStringLiteral("retryable"), true},
+              {QStringLiteral("status"), QStringLiteral("timeline_derived_work_pending")},
+              {QStringLiteral("taskOwnershipAttached"), true},
+              {QStringLiteral("preparationRetained"), true},
+              {QStringLiteral("error"), QStringLiteral("The recovered task remains attached while native Timeline work settles; retry recovery after it finishes.")}};
+        }
+      }
+      const auto scope = agent_tasks.journal()->nativeTimelineScope();
+      if (scope.value(QStringLiteral("targetIds")).toStringList() != QStringList{target_id} ||
+          timeline_document.agentTaskDocumentId() != target_id || !timeline_document.agentTaskDocumentReady())
+        return failure(QStringLiteral("The active Timeline does not match the recovered task target."));
+      const auto enrolled = agent_tasks.enroll(target_id, timeline_adapter(target_id));
+      if (!enrolled.value(QStringLiteral("ok")).toBool()) return enrolled;
+      const auto output_directory = scope.value(QStringLiteral("outputDirectory")).toString();
+      for (const auto& path : agent_tasks.journal()->nativeTimelineOutputPaths()) {
+        const auto canonical_path = canonicalOutputFilePath(path);
+        if (path != canonical_path || !pathIsWithinDirectory(output_directory, canonical_path))
+          return failure(QStringLiteral("A recovered task output path escaped its admitted directory."));
+        const auto file_resource = photo_editor::desktop::AgentTaskCoordinator::taskOwnedTimelineOutputFileResource(canonical_path);
+        if (file_resource.resource_id.isEmpty()) return failure(QStringLiteral("A recovered task output path is no longer available."));
+        const auto file_enrolled = agent_tasks.enroll(file_resource.resource_id, file_resource.adapter);
+        if (!file_enrolled.value(QStringLiteral("ok")).toBool()) return file_enrolled;
+      }
+      const auto prepared_batch_reconciliation =
+          agent_tasks.reconcilePreparedUnchangedTimelineDraftBatch(target_id);
+      if (!prepared_batch_reconciliation.value(QStringLiteral("ok")).toBool()) {
+        auto blocked = prepared_batch_reconciliation;
+        blocked.insert(QStringLiteral("taskOwnershipAttached"), true);
+        blocked.insert(QStringLiteral("active"), true);
+        blocked.insert(QStringLiteral("targetResourceIds"), mcp_timeline_target_ids);
+        return blocked;
+      }
+      prepared_batch_recovered_unchanged =
+          prepared_batch_reconciliation.value(QStringLiteral("recoveredUnchanged")).toBool();
+      recovered_prepared_step_id =
+          prepared_batch_reconciliation.value(QStringLiteral("reconciledStepId"));
+      auto accepted_preparation =
+          timeline_document.acceptAgentTaskDocumentPreparationForAutomation();
+      if (!accepted_preparation.value(QStringLiteral("ok")).toBool()) {
+        const auto preparation = timeline_document.prepareAgentTaskDocumentForAutomation();
+        if (!preparation.value(QStringLiteral("ok")).toBool()) {
+          auto pending = preparation;
+          pending.insert(QStringLiteral("retryable"), true);
+          pending.insert(QStringLiteral("taskOwnershipAttached"), true);
+          return pending;
+        }
+        if (!preparation.value(QStringLiteral("ready")).toBool()) {
+          auto pending = failure(preparation.value(QStringLiteral("message")).toString());
+          pending.insert(QStringLiteral("preparationPhase"), preparation.value(QStringLiteral("phase")));
+          pending.insert(QStringLiteral("retryable"), true);
+          pending.insert(QStringLiteral("taskOwnershipAttached"), true);
+          pending.insert(QStringLiteral("preparationRetained"), true);
+          return pending;
+        }
+        accepted_preparation = timeline_document.acceptAgentTaskDocumentPreparationForAutomation();
+        if (!accepted_preparation.value(QStringLiteral("ok")).toBool()) {
+          auto pending = accepted_preparation;
+          pending.insert(QStringLiteral("retryable"), true);
+          pending.insert(QStringLiteral("taskOwnershipAttached"), true);
+          pending.insert(QStringLiteral("preparationRetained"), true);
+          return pending;
+        }
+      }
+      auto receipt = agent_tasks.state();
+      receipt.insert(QStringLiteral("active"), true);
+      receipt.insert(QStringLiteral("targetResourceIds"), mcp_timeline_target_ids);
+      if (source_integrity_reconciled)
+        receipt.insert(QStringLiteral("sourceIntegrityCheckpointReconciled"), true);
+      if (compound_projection_reconciled)
+        receipt.insert(QStringLiteral("compoundRecoveryProjectionVerified"), true);
+      receipt.insert(QStringLiteral("recoverUnchanged"), prepared_batch_recovered_unchanged);
+      if (prepared_batch_recovered_unchanged)
+        receipt.insert(QStringLiteral("recoveredPreparedStepId"), recovered_prepared_step_id);
+      return receipt;
+    }
+    if (mcp_timeline_task_id.isEmpty() || agent_tasks.journal()->taskId() != mcp_timeline_task_id ||
+        args.value(QStringLiteral("taskId")).toString() != mcp_timeline_task_id)
+      return failure(QStringLiteral("The requested native Timeline task is not active."));
+    const auto scope = agent_tasks.journal()->nativeTimelineScope();
+    const auto targets = scope.value(QStringLiteral("targetIds")).toStringList();
+    const auto compound_reconciliation_allowed =
+        action == QStringLiteral("revert") && timeline_compound_commands.hasUnsettledCompounds();
+    if (targets.size() != 1 || targets.front() != timeline_document.agentTaskDocumentId() ||
+        (!timeline_document.agentTaskDocumentReady() && !compound_reconciliation_allowed))
+      return failure(QStringLiteral("The Timeline changed or is busy; the task remains available for recovery."));
+    if (action == QStringLiteral("finish")) {
+      const auto requested_action = args.value(QStringLiteral("action")).toString();
+      if (requested_action == QStringLiteral("continue") && !edit_access())
+        return failure(QStringLiteral("Continue requires an active trial or purchase."));
+      if (requested_action == QStringLiteral("review"))
+        return agent_tasks.finish(QStringLiteral("review"));
+      const auto continued = agent_tasks.continueTask();
+      if (!continued.value(QStringLiteral("ok")).toBool() &&
+          continued.value(QStringLiteral("status")).toString() == QStringLiteral("source_integrity_pending") &&
+          agent_tasks.state().value(QStringLiteral("status")).toString() == QStringLiteral("released")) {
+        mcp_timeline_task_id.clear();
+        mcp_timeline_target_ids.clear();
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+        auto retry = continued;
+        retry.insert(QStringLiteral("ownershipReleased"), true);
+        retry.insert(QStringLiteral("retryAction"), QStringLiteral("timeline.recover_task"));
+        return retry;
+      }
+      return continued;
+    }
+    if (action == QStringLiteral("release_reviewed")) {
+      if (!args.value(QStringLiteral("confirmed")).toBool())
+        return failure(QStringLiteral("Releasing Timeline ownership requires confirmed:true."));
+      if (agent_tasks.state().value(QStringLiteral("status")).toString() != QStringLiteral("review"))
+        return failure(QStringLiteral("Review and settle the Timeline task before releasing ownership."));
+      const auto released = agent_tasks.releaseReviewedDraft();
+      if (released.value(QStringLiteral("ok")).toBool() &&
+          released.value(QStringLiteral("status")).toString() == QStringLiteral("released")) {
+        mcp_timeline_task_id.clear();
+        mcp_timeline_target_ids.clear();
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+      }
+      return released;
+    }
+    if (action == QStringLiteral("revert")) {
+      if (!args.value(QStringLiteral("confirmed")).toBool())
+        return failure(QStringLiteral("Task revert requires confirmed:true."));
+      const auto compounds = timeline_compound_commands.reconcileBeforeRevert();
+      if (!compounds.value(QStringLiteral("ok")).toBool()) return compounds;
+      if (!timeline_document.agentTaskDocumentReady())
+        return {{QStringLiteral("ok"), false},
+                {QStringLiteral("retryable"), true},
+                {QStringLiteral("reconciledCompounds"), true},
+                {QStringLiteral("error"), QStringLiteral("Compound producers are stopped; wait for native Timeline updates to settle, then retry the confirmed revert.")}};
+      const auto reverted = agent_tasks.revert();
+      if (reverted.value(QStringLiteral("ok")).toBool() &&
+          reverted.value(QStringLiteral("status")).toString() == QStringLiteral("reverted")) {
+        mcp_timeline_task_id.clear();
+        mcp_timeline_target_ids.clear();
+        timeline_document.releaseAgentTaskDocumentForAutomation();
+      }
+      return reverted;
+    }
+    return failure(QStringLiteral("Unknown native Timeline task lifecycle action."));
+  });
+  photo_editor::desktop::TimelineDraftLifecycle timeline_draft_lifecycle(
+      &timeline_document,
+      [&agent_tasks, &agent_edit, &mcp_timeline_task_id]() {
+        return !mcp_timeline_task_id.isEmpty() || agent_tasks.journal()->active() ||
+            !agent_edit.activeTaskId().isEmpty() || agent_edit.draftActive() || agent_edit.running();
+      },
+      [&edit_access]() { return edit_access(); },
+      [&photo_automation]() { return photo_automation.activateTimelineWorkspaceFromAutomation(); },
+      qgetenv("PHOTO_EDITOR_AUTOMATION_PROJECT_INPUTS"));
+  photo_automation.setTimelineDraftLifecycleHandler(
+      [&timeline_draft_lifecycle](const QString& action, const QVariantMap& args) {
+        return timeline_draft_lifecycle.invoke(action, args);
+      });
   photo_editor::desktop::TimelinePlaybackController timeline_playback(&timeline_document);
   photo_automation.setTimelinePlaybackController(&timeline_playback);
   const auto unregistered_owner = [](const QString&, bool, bool) {
@@ -1384,25 +2049,104 @@ int main(int argc, char* argv[]) {
   // complete resource adapter. Reflection alone never authorizes a mutation.
   app_commands.registerObject("library", &catalog_assets, unregistered_owner);
   app_commands.registerObject("carousel", &carousel_document, unregistered_owner);
+  const auto authorize_timeline_path = [&timeline_document, &agent_tasks, &agent_edit, &edit_access,
+      &mcp_timeline_task_id, &mcp_timeline_target_ids](const QString& operation, const QString& path) -> QVariantMap {
+    const auto fail_path = [](const QString& error) {
+      return QVariantMap{{QStringLiteral("ok"), false}, {QStringLiteral("error"), error},
+          {QStringLiteral("blockedByScope"), true}};
+    };
+    const auto resource_id = timeline_document.agentTaskDocumentId();
+    if (!edit_access()) return fail_path(QStringLiteral("Editing requires an active trial or purchase."));
+    if (mcp_timeline_task_id.isEmpty() || agent_tasks.journal()->taskId() != mcp_timeline_task_id ||
+        agent_tasks.state().value(QStringLiteral("status")).toString() != QStringLiteral("running") ||
+        !mcp_timeline_target_ids.contains(resource_id))
+      return fail_path(QStringLiteral("The path operation requires the running task's exact Timeline target."));
+    const auto scope = agent_tasks.journal()->nativeTimelineScope();
+    if (scope.value(QStringLiteral("targetIds")).toStringList() != QStringList{resource_id} ||
+        !timeline_document.agentTaskDocumentReady())
+      return fail_path(QStringLiteral("The Timeline is busy or outside the admitted task scope."));
+    const auto style_permission = agent_edit.authorizeNativeEditingCommandForTask(
+        QStringLiteral("Timeline"), false,
+        agent_tasks.state().value(QStringLiteral("approvedSnapshot")).toMap());
+    if (!style_permission.value(QStringLiteral("ok")).toBool()) return style_permission;
+    if (operation == QStringLiteral("import_media")) {
+      const QFileInfo source(path);
+      const auto canonical_source = source.canonicalFilePath();
+      const auto allowed_paths = scope.value(QStringLiteral("assetPaths")).toStringList();
+      if (!source.isFile() || !source.isReadable() || canonical_source.isEmpty() || path != canonical_source ||
+          !allowed_paths.contains(canonical_source))
+        return fail_path(QStringLiteral("Media import is limited to canonical source files admitted for this task."));
+      return {{QStringLiteral("ok"), true}, {QStringLiteral("canonicalPath"), canonical_source}};
+    }
+    if (operation == QStringLiteral("save_project")) {
+      const auto output_directory = scope.value(QStringLiteral("outputDirectory")).toString();
+      const auto canonical_output = canonicalOutputFilePath(path);
+      const QFileInfo output_file(canonical_output);
+      if (canonical_output.isEmpty() || canonical_output != path ||
+          !pathIsWithinDirectory(output_directory, canonical_output) || output_file.exists() ||
+          !output_file.dir().exists() || !QFileInfo(output_file.dir().absolutePath()).isWritable())
+        return fail_path(QStringLiteral("Project save may create only a new canonical task file inside the admitted output directory."));
+      const auto file_resource = photo_editor::desktop::AgentTaskCoordinator::taskOwnedFileResource(canonical_output);
+      if (file_resource.resource_id.isEmpty() || file_resource.canonical_path != canonical_output)
+        return fail_path(QStringLiteral("The requested project path cannot be safely owned by this task."));
+      return {{QStringLiteral("ok"), true}, {QStringLiteral("canonicalPath"), canonical_output},
+          {QStringLiteral("resourceId"), file_resource.resource_id}};
+    }
+    return fail_path(QStringLiteral("This task does not authorize the requested path operation."));
+  };
   photo_editor::desktop::register_agent_timeline_commands(app_commands, &timeline_document, agent_tasks,
-      [&agent_edit]() { return agent_edit.activeTaskId(); }, [&agent_edit, &timeline_document, &agent_task_target_ids](const QString& name) -> QVariantMap {
-        if (!agent_task_target_ids.contains(timeline_document.agentTaskDocumentId()))
-          return {{"ok", false}, {"error", "Include this Timeline in the task targets before editing it."}, {"blockedByScope", true}};
+      [&agent_edit, &mcp_timeline_task_id]() {
+        const auto native_task_id = agent_edit.activeTaskId();
+        return native_task_id.isEmpty() ? mcp_timeline_task_id : native_task_id;
+      }, [&agent_edit, &timeline_document, &agent_task_target_ids, &agent_tasks,
+          &mcp_timeline_task_id, &mcp_timeline_target_ids, &edit_access](const QString& name) -> QVariantMap {
+        if (!edit_access())
+          return {{"ok", false}, {"error", "Editing requires an active trial or purchase."}};
+        const auto resource_id = timeline_document.agentTaskDocumentId();
         const auto graphics = name.contains(QStringLiteral("Title")) || name.contains(QStringLiteral("Graphic")) ||
             name.contains(QStringLiteral("Caption"));
-        return agent_edit.authorizeNativeEditingCommand(graphics ? QStringLiteral("TextTimeline") : QStringLiteral("Timeline"), false);
-      });
+        const auto permission_name = graphics ? QStringLiteral("TextTimeline") : QStringLiteral("Timeline");
+        const auto native_task_id = agent_edit.activeTaskId();
+        if (!native_task_id.isEmpty()) {
+          if (!agent_task_target_ids.contains(resource_id))
+            return {{"ok", false}, {"error", "Include this Timeline in the task targets before editing it."}, {"blockedByScope", true}};
+          return agent_edit.authorizeNativeEditingCommand(permission_name, false);
+        }
+        if (mcp_timeline_task_id.isEmpty() || agent_tasks.journal()->taskId() != mcp_timeline_task_id ||
+            !mcp_timeline_target_ids.contains(resource_id) ||
+            agent_tasks.journal()->nativeTimelineScope().value(QStringLiteral("targetIds")).toStringList() != QStringList{resource_id})
+          return {{"ok", false}, {"error", "Include this Timeline in the task targets before editing it."}, {"blockedByScope", true}};
+        const auto approved_snapshot = agent_tasks.state().value(QStringLiteral("approvedSnapshot")).toMap();
+        return agent_edit.authorizeNativeEditingCommandForTask(permission_name, false, approved_snapshot);
+      }, authorize_timeline_path, true);
+  if (!timeline_compound_commands.registerCommands(app_commands))
+    qWarning() << "Task-owned Timeline compound MCP commands could not be registered.";
   app_commands.registerObject("scene", &gaussian_scene, unregistered_owner);
   app_commands.registerObject("export", &export_jobs, unregistered_owner);
   app_commands.registerObject("preferences", &app_shell, unregistered_owner);
   app_commands.registerObject("jobs", &job_queue, unregistered_owner);
   QQmlApplicationEngine engine;
+  engine.rootContext()->setContextProperty(
+      "automationRequiresExplicitSessionRecovery",
+      qEnvironmentVariable("PHOTO_EDITOR_ENABLE_AUTOMATION") == QStringLiteral("1"));
   auto* editor_preview_image_provider = new photo_editor::desktop::EditorPreviewImageProvider;
   editor_preview.setImageProvider(editor_preview_image_provider);
   engine.addImageProvider(QStringLiteral("editor-preview"), editor_preview_image_provider);
+  const auto preview_provider_lifetime = qScopeGuard([&editor_preview] {
+    editor_preview.setImageProvider(nullptr);
+  });
+  photo_editor::desktop::PhotoComponentWorkspaceController component_workspace(&editor_preview);
+  engine.rootContext()->setContextProperty("componentWorkspace", &component_workspace);
+  photo_editor::desktop::register_creative_example_thumbnail_provider(&engine);
   engine.addImageProvider(QStringLiteral("library-original"), new photo_editor::desktop::LibraryOriginalImageProvider);
+  engine.addImageProvider(QStringLiteral("import-preview"), new photo_editor::desktop::ImportPreviewImageProvider);
   engine.addImageProvider(
       QStringLiteral("timeline-playback"), timeline_playback.createImageProvider());
+  engine.addImageProvider(
+      QStringLiteral("timeline-fractal-noise"),
+      new photo_editor::desktop::timeline_motion::FractalNoiseImageProvider(
+          QDir(photo_editor::desktop::AppBootstrap::cacheLocation())
+              .filePath(QStringLiteral("timeline-fractal-noise"))));
   engine.rootContext()->setContextProperty(
       "timelineInspectorDeferredLoadingEnabled",
       !app.arguments().contains(QStringLiteral("--timeline-route-performance-eager-inspector")));
@@ -1426,6 +2170,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty("libraryWorkflow", &library_workflow);
   engine.rootContext()->setContextProperty("visualSearch", &visual_search);
   engine.rootContext()->setContextProperty("similaritySearch", &similarity_search);
+  engine.rootContext()->setContextProperty("searchModelSetup", &search_model_setup);
   engine.rootContext()->setContextProperty("searchEdit", &search_edit);
   engine.rootContext()->setContextProperty("carouselDocument", &carousel_document);
   engine.rootContext()->setContextProperty("editorPreview", &editor_preview);
@@ -1435,6 +2180,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty("previewBackend", &preview_backend);
   engine.rootContext()->setContextProperty("qmlPerformance", &qml_performance);
   engine.rootContext()->setContextProperty("timelineDocument", &timeline_document);
+  engine.rootContext()->setContextProperty("timelineColorEditor", &timeline_color_editor);
   engine.rootContext()->setContextProperty("timelinePlayback", &timeline_playback);
 
   QObject::connect(
@@ -1444,6 +2190,11 @@ int main(int argc, char* argv[]) {
       []() { QCoreApplication::exit(EXIT_FAILURE); },
       Qt::QueuedConnection);
   engine.loadFromModule(QStringLiteral("PhotoEditor"), QStringLiteral("Main"));
+  if (engine.rootObjects().isEmpty()) {
+    photo_editor::desktop::observability::logWarning(
+        photoEditorAppLog(), QStringLiteral("desktop.startup.qml_failed"));
+    return EXIT_FAILURE;
+  }
   QObject::connect(
       &app,
       &QGuiApplication::screenRemoved,
@@ -1454,6 +2205,7 @@ int main(int argc, char* argv[]) {
             QStringLiteral("A display disconnected; detached Timeline windows were returned to the active display."));
       });
   if (!engine.rootObjects().isEmpty()) {
+    photo_automation.setQmlRootObject(engine.rootObjects().first());
     engine.rootObjects().first()->setProperty("closeCoordinator", QVariant::fromValue(&close_coordinator));
     if (auto* root_window = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
       new photo_editor::desktop::RecentUserInputFilter(root_window);
@@ -1500,7 +2252,7 @@ int main(int argc, char* argv[]) {
     agent_workflow_proof = new photo_editor::desktop::AgentFullWorkflowRuntimeProof(window,
         &agent_session, &agent_edit, &editor_preview, &catalog_assets, std::move(options), &app);
   }
-  if (timeline_route_performance) {
+  if (timeline_route_performance && !timeline_route_performance_lifecycle) {
     if (engine.rootObjects().isEmpty()) {
       return EXIT_FAILURE;
     }
@@ -1703,6 +2455,40 @@ int main(int argc, char* argv[]) {
     });
   }
   bool catalog_bootstrap_finished = false;
+  if (timeline_route_performance_lifecycle) {
+    if (engine.rootObjects().isEmpty()) {
+      photo_editor::desktop::TimelineRoutePerformanceLifecycleProbe::
+          writeCommandFailureReceipt(
+              lifecycle_output_directory,
+              {QStringLiteral("The packaged QML application failed to create its Main window.")});
+      return EXIT_FAILURE;
+    }
+    auto* lifecycle_root = engine.rootObjects().first();
+    auto* lifecycle_window = qobject_cast<QQuickWindow*>(lifecycle_root);
+    if (lifecycle_window == nullptr) {
+      photo_editor::desktop::TimelineRoutePerformanceLifecycleProbe::
+          writeCommandFailureReceipt(
+              lifecycle_output_directory,
+              {QStringLiteral("The packaged Main root was not a native Quick window.")});
+      return EXIT_FAILURE;
+    }
+    auto* lifecycle_probe =
+        new photo_editor::desktop::TimelineRoutePerformanceLifecycleProbe(
+            &app,
+            lifecycle_root,
+            lifecycle_window,
+            &catalog_assets,
+            &timeline_document,
+            &timeline_playback,
+            &catalog_bootstrap_finished,
+            lifecycle_output_directory,
+            lifecycle_source_video,
+            lifecycle_source_image,
+            &app);
+    QTimer::singleShot(0, lifecycle_probe, [lifecycle_probe]() {
+      lifecycle_probe->start();
+    });
+  }
   const auto placed_layer_argument = app.arguments().indexOf(QStringLiteral("--placed-layer-proof"));
   const bool placed_layer_requested = !managed_runtime_proof_dir.isEmpty() && placed_layer_argument >= 0;
   const bool export_handoff_requested = placed_layer_requested &&
@@ -1911,6 +2697,7 @@ int main(int argc, char* argv[]) {
   session_timer.start();
 
   QObject::connect(&app, &QCoreApplication::aboutToQuit, [&]() {
+    search_model_setup.shutdown();
     session_timer.stop();
     managed_agent_runtime.stop();
     gaussian_scene.cancel();
@@ -1935,6 +2722,8 @@ int main(int argc, char* argv[]) {
   QVariantMap runtime_ready_install_plan;
   bool runtime_proof_captured = false;
   bool runtime_proof_setup_opened = false;
+  bool scene_render_panel_opened = false;
+  qint64 scene_render_panel_opened_at = 0;
   QPointer<QObject> runtime_proof_setup_dialog;
   qint64 runtime_proof_previous_tick = 0;
   qint64 runtime_proof_max_tick_gap = 0;
@@ -1984,6 +2773,8 @@ int main(int argc, char* argv[]) {
   qint64 placed_layer_export_max_tick_gap = 0;
   int placed_layer_export_tick_count = 0;
   QVariantMap scene_film_proof_result;
+  QVariantMap scene_lighting_prefix_result;
+  qint64 scene_lighting_render_observed_at = -1;
   const int runtime_proof_timeout = scene_photo_edit_requested ? 120000 :
       placed_layer_requested || export_admission_requested || app.arguments().contains(QStringLiteral("--gaussian-film-proof")) ? 45000 : 20000;
   QTimer scene_motion_timer;
@@ -1997,6 +2788,172 @@ int main(int argc, char* argv[]) {
     QObject::connect(&runtime_proof_timer, &QTimer::timeout, &app, [&] {
       auto* window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow*>(engine.rootObjects().first());
       const auto now = runtime_proof_elapsed.elapsed();
+      // A separate, explicitly scoped packaged Scene proof. The existing
+      // managed-runtime proof below retains its agent-readiness requirements.
+      if (scene_render_only_proof) {
+        const bool alpha_proof = app.arguments().contains(QStringLiteral("--gaussian-alpha-model-proof"));
+        const bool emitter_proof = app.arguments().contains(QStringLiteral("--gaussian-visible-emitter-proof"));
+        const bool haze_proof = app.arguments().contains(QStringLiteral("--gaussian-haze-proof"));
+        const bool studio_proof = app.arguments().contains(QStringLiteral("--gaussian-camera-studio-proof"));
+        const bool film_controls_proof = studio_proof && app.arguments().contains(QStringLiteral("--gaussian-film-controls-proof"));
+        const bool sequence_proof = app.arguments().contains(QStringLiteral("--gaussian-frame-sequence-proof"));
+        const bool environment_proof = app.arguments().contains(QStringLiteral("--gaussian-environment-proof"));
+        const bool tone_proof = app.arguments().contains(QStringLiteral("--gaussian-camera-tone-proof"));
+        const bool autofocus_proof = app.arguments().contains(QStringLiteral("--gaussian-autofocus-proof"));
+        const bool aberration_proof = app.arguments().contains(QStringLiteral("--gaussian-lens-aberration-proof"));
+        const bool pupil_proof = tone_proof || autofocus_proof || aberration_proof || app.arguments().contains(QStringLiteral("--gaussian-camera-pupil-proof"));
+        const bool camera_post_proof = pupil_proof || app.arguments().contains(QStringLiteral("--gaussian-camera-post-proof"));
+        if (window && (window->width() != 1600 || window->height() != 900)) window->resize(1600,900);
+        auto* viewport = window ? window->findChild<QObject*>(QStringLiteral("gaussianSceneViewport")) : nullptr;
+        const auto state = viewport ? viewport->property("status").toMap() : QVariantMap{};
+        if (scene_lighting_progressive_proof && window && window->isExposed() &&
+            window->property("currentWorkspace").toInt() == window->property("sceneWorkspaceIndex").toInt()) {
+          if (scene_lighting_render_observed_at < 0 && state.value("pointCount").toULongLong() > 0 && state.value("previewPhase") == "refining")
+            scene_lighting_render_observed_at = now;
+          const auto metrics = state.value("metrics").toMap();
+          if (scene_lighting_prefix_result.isEmpty() && state.value("frameAvailable").toBool() && state.value("publishedPhase") == "refining" &&
+              metrics.value("progressiveLighting").toBool() && metrics.value("softLightSamples").toInt() > 0 &&
+              metrics.value("softLightSamples").toInt() < metrics.value("targetLightingSamples").toInt()) {
+            const auto image = window->grabWindow();
+            const bool captured = !image.isNull() && image.save(QDir(managed_runtime_proof_dir).filePath("lighting-first-prefix.png"));
+            const auto since_render = scene_lighting_render_observed_at >= 0 ? now-scene_lighting_render_observed_at : -1;
+            scene_lighting_prefix_result = {{"captured",captured},{"qualified",captured && since_render >= 0 && since_render <= 5000 && !metrics.value("previewReadback").toBool()},
+                {"elapsedMs",now},{"sinceRenderObservedMs",since_render},{"windowExposed",window->isExposed()},{"windowActive",window->isActive()},
+                {"metrics",metrics},{"scope","packaged Main visible lighting prefix after observed Scene rendering; not input-to-photon latency"}};
+          }
+        }
+        if (now <= scene_render_wait_ms && window && state.value("frameAvailable").toBool() && state.value("previewPhase") == "photo" &&
+            window->property("currentWorkspace").toInt() == window->property("sceneWorkspaceIndex").toInt()) {
+          if (environment_proof && !state.value("metrics").toMap().contains("environmentLightingModel")) return;
+          if (haze_proof && state.value("metrics").toMap().value("hazeModel") != "shadowed-homogeneous-single-scattering-v1") return;
+          if (alpha_proof && state.value("metrics").toMap().value("alphaModel") != "inria-alpha-099-v1") return;
+          if (emitter_proof && state.value("metrics").toMap().value("cameraVisibleEmitterCount").toInt() < 1) return;
+          if ((camera_post_proof || emitter_proof || studio_proof) && !viewport->property("cameraPostProofRestored").toBool()) {
+            const auto views = state.value("savedViews").toList();
+            QVariantMap restored;
+            if (!views.isEmpty() && QMetaObject::invokeMethod(viewport,"restoreView",Q_RETURN_ARG(QVariantMap,restored),
+                Q_ARG(QString,views.front().toMap().value("id").toString())) && restored.value("ok").toBool()) {
+              bool configured = true;
+              if (pupil_proof) {
+                auto photo = restored.value("camera").toMap().value("photo").toMap();
+                auto lens = photo.value("lens").toMap(); lens.insert("samples",256); photo.insert("lens",lens);
+                QVariantMap changed;
+                configured = QMetaObject::invokeMethod(viewport,"setPhotoSettings",Q_RETURN_ARG(QVariantMap,changed),Q_ARG(QVariantMap,photo)) && changed.value("ok").toBool();
+              }
+              if (configured) viewport->setProperty("cameraPostProofRestored",true);
+            }
+            return;
+          }
+          if (camera_post_proof && (pupil_proof ? (state.value("lensSettings").toMap().value("schema") != "framehouse-thin-lens-v3" && state.value("lensSettings").toMap().value("schema") != "framehouse-thin-lens-v4" && state.value("lensSettings").toMap().value("schema") != "framehouse-thin-lens-v5" && state.value("lensSettings").toMap().value("schema") != "framehouse-thin-lens-v6") ||
+              state.value("metrics").toMap().value("apertureSamples").toInt() != 256 : !state.value("metrics").toMap().value("cameraPostApplied").toBool())) return;
+          if (aberration_proof && !state.value("lensSettings").toMap().contains("sphericalDistortion")) return;
+          if (autofocus_proof && (state.value("lensSettings").toMap().value("focusMode") != "auto-centre" || state.value("autofocus").toMap().isEmpty())) return;
+          if (tone_proof && !state.value("metrics").toMap().value("cameraToneApplied").toBool()) return;
+          if (emitter_proof && (!state.value("metrics").toMap().value("cameraPostApplied").toBool() || state.value("autofocus").toMap().isEmpty())) return;
+          auto* panel = window->findChild<QObject*>(sequence_proof ? QStringLiteral("sceneFilmExportOptions") : (camera_post_proof || studio_proof) ? QStringLiteral("scenePhotoControlsPopup") : QStringLiteral("sceneCompositionPopup"));
+
+          if (!scene_render_panel_opened && panel) {
+            const auto objects = state.value("sceneComposition").toMap().value("objects").toList();
+            if (!sequence_proof && !camera_post_proof && !studio_proof && !objects.isEmpty()) panel->setProperty("selectedId",objects.front().toMap().value("id"));
+            if (!sequence_proof && (environment_proof || alpha_proof || emitter_proof || haze_proof)) {
+              auto* section = window->findChild<QObject*>(QStringLiteral("sceneCompositionSection"));
+              const int index = haze_proof ? 3 : alpha_proof ? 2 : 1;
+              if (section) { section->setProperty("currentIndex",index); QMetaObject::invokeMethod(section,"activated",Q_ARG(int,index)); }
+              if (emitter_proof) {
+                const auto lights = state.value("sceneComposition").toMap().value("lights").toList();
+                for (const auto& value : lights) if (value.toMap().value("cameraVisible").toBool()) { panel->setProperty("selectedId",value.toMap().value("id")); break; }
+              }
+            }
+            if (sequence_proof) {
+              auto* format = window->findChild<QObject*>(QStringLiteral("sceneFilmFormatCombo"));
+              auto* workspace = window->findChild<QObject*>(QStringLiteral("sceneWorkspace"));
+              auto* name = window->findChild<QObject*>(QStringLiteral("sceneSequenceFolderName"));
+              if (!format || !workspace || !name) return;
+              format->setProperty("currentIndex",1);
+              workspace->setProperty("sequenceParentFolder",QUrl::fromLocalFile(managed_runtime_proof_dir));
+              name->setProperty("text",QStringLiteral("Bonsai master frames"));
+            }
+            if (camera_post_proof || studio_proof) {
+              auto* section = window->findChild<QObject*>(QStringLiteral("scenePhotoSettingsSectionCombo"));
+              auto* post_section = window->findChild<QObject*>(QStringLiteral("scenePostSectionCombo"));
+              if (section) { const int index = film_controls_proof ? 3 : studio_proof ? 4 : tone_proof ? 0 : autofocus_proof ? 1 : pupil_proof ? 2 : 5; section->setProperty("currentIndex",index); QMetaObject::invokeMethod(section,"activated",Q_ARG(int,index)); }
+              if (film_controls_proof) {
+                auto* film_section=window->findChild<QObject*>(QStringLiteral("sceneFilmSectionCombo"));
+                if (film_section) { film_section->setProperty("currentIndex",1); QMetaObject::invokeMethod(film_section,"activated",Q_ARG(int,1)); }
+              }
+              if (aberration_proof) {
+                auto* character = window->findChild<QObject*>(QStringLiteral("sceneLensCharacterCombo"));
+                if (character) { character->setProperty("currentIndex",1); QMetaObject::invokeMethod(character,"activated",Q_ARG(int,1)); }
+              }
+              if (post_section && !pupil_proof && !studio_proof) { post_section->setProperty("currentIndex",1); QMetaObject::invokeMethod(post_section,"activated",Q_ARG(int,1)); }
+            }
+            scene_render_panel_opened = QMetaObject::invokeMethod(panel,"open");
+            scene_render_panel_opened_at = now;
+          }
+          if (scene_render_panel_opened && panel && panel->property("opened").toBool() && now-scene_render_panel_opened_at >= 400) {
+            runtime_proof_timer.stop();
+            const auto image = window->grabWindow();
+            const bool image_ok = !image.isNull() && image.save(QDir(managed_runtime_proof_dir).filePath(film_controls_proof ? "film-studio.png" : studio_proof ? "camera-studio.png" : sequence_proof ? "frame-sequence.png" : emitter_proof ? "visible-emitters.png" : alpha_proof ? "alpha-model.png" : environment_proof ? "environment-lighting.png" : tone_proof ? "camera-tone.png" : autofocus_proof ? "camera-autofocus.png" : aberration_proof ? "camera-aberration.png" : pupil_proof ? "camera-pupil.png" : camera_post_proof ? "camera-post.png" : "scene-objects.png"));
+            auto* haze_control = haze_proof ? window->findChild<QObject*>(QStringLiteral("sceneHazeShadows")) : nullptr;
+            const bool haze_controls_visible = haze_control && haze_control->property("visible").toBool() && haze_control->property("checked").toBool();
+            QVariantMap studio_geometry;
+            bool studio_ok=true;
+            if (studio_proof) {
+              auto* stage=window->findChild<QQuickItem*>(QStringLiteral("sceneStudioStage"));
+              const auto stage_rect=stage ? stage->mapRectToScene(stage->boundingRect()) : QRectF{};
+              studio_ok=stage && stage_rect.width()>200 && stage_rect.height()>150;
+              for (const auto& name:{"sceneStudioOutliner","sceneStudioInspector","sceneStudioShots"}) {
+                auto* item=window->findChild<QQuickItem*>(QString::fromLatin1(name));
+                const auto rect=item ? item->mapRectToScene(item->boundingRect()) : QRectF{};
+                studio_ok=studio_ok && item && item->isVisible() && !stage_rect.intersects(rect);
+                studio_geometry.insert(QString::fromLatin1(name),QVariantMap{{"visible",item && item->isVisible()},
+                    {"x",rect.x()},{"y",rect.y()},{"width",rect.width()},{"height",rect.height()}});
+              }
+              QVariantMap optics;
+              studio_ok=studio_ok && QMetaObject::invokeMethod(viewport,"describeCameraOptics",Q_RETURN_ARG(QVariantMap,optics),
+                  Q_ARG(double,30.0)) && optics.value("ok").toBool();
+              studio_geometry.insert("optics",optics);
+            }
+            const auto film_recipe=state.value("photoSettings").toMap().value("film").toMap();
+            auto* film_slider=window->findChild<QQuickItem*>(QStringLiteral("sceneFilmHalationSlider"));
+            const bool film_ok=!film_controls_proof || ((film_recipe.value("schema")=="framehouse-film-plane-v2" || film_recipe.value("schema")=="framehouse-film-plane-v3") &&
+                film_recipe.value("grainAmount").toDouble()>0 && film_recipe.value("halationAmount").toDouble()>0 &&
+                panel->property("page").toInt()==3 && film_slider && film_slider->isVisible());
+            const bool proof_ok = image_ok && studio_ok && film_ok && (!haze_proof || haze_controls_visible) && (!scene_lighting_progressive_proof || scene_lighting_prefix_result.value("qualified").toBool());
+            const QVariantMap receipt{{"ok",proof_ok}, {"scope",studio_proof ? "packaged-Main-Scene-studio-camera-and-docked-layout-only" : scene_render_offline_proof ? "packaged-Main-Scene-offline-render-and-controls-only" : sequence_proof ? "packaged-Main-Scene-PNG-sequence-render-and-format-controls-only" : emitter_proof ? "packaged-Main-Scene-visible-emitters-render-and-controls-only" : alpha_proof ? "packaged-Main-Scene-opacity-convention-render-and-controls-only" : environment_proof ? "packaged-Main-Scene-environment-render-and-controls-only" : tone_proof ? "packaged-Main-Scene-256-sample-tone-render-and-controls-only" : autofocus_proof ? "packaged-Main-Scene-256-sample-autofocus-render-and-controls-only" : aberration_proof ? "packaged-Main-Scene-256-sample-aberration-render-and-controls-only" : pupil_proof ? "packaged-Main-Scene-256-sample-pupil-render-and-controls-only" : camera_post_proof ? "packaged-Main-Scene-camera-post-render-and-controls-only" : "packaged-Main-Scene-render-and-object-controls-only"},
+                {"waitLimitMs",scene_render_wait_ms}, {"timingGateQualified",!scene_render_offline_proof},
+                {"lightingPrefixRequested",scene_lighting_progressive_proof},{"lightingPrefixProof",scene_lighting_prefix_result},
+                {"agentRuntimeQualified",false}, {"catalogQualified",false}, {"sceneViewport",state},
+                {"studioRequested",studio_proof},{"studioGeometry",studio_geometry},{"studioQualified",studio_proof && studio_ok},
+                {"filmControlsRequested",film_controls_proof},{"filmControlsQualified",film_controls_proof && film_ok},
+                {"environmentControlsVisible",environment_proof && panel->property("opened").toBool()},
+                {"hazeControlsVisible",haze_controls_visible},
+                {"alphaControlsVisible",alpha_proof && panel->property("opened").toBool()},
+                {"emitterControlsVisible",emitter_proof && !sequence_proof && panel->property("opened").toBool()},
+                {"sequenceControlsVisible",sequence_proof && panel->property("opened").toBool()},
+                {"objectControlsVisible",!studio_proof && !camera_post_proof && !sequence_proof && panel->property("opened").toBool()}, {"cameraControlsVisible",studio_proof && panel->property("opened").toBool()}, {"cameraPostControlsVisible",camera_post_proof && !pupil_proof && panel->property("opened").toBool()}, {"pupilControlsVisible",pupil_proof && !autofocus_proof && !tone_proof && panel->property("opened").toBool()}, {"autofocusControlsVisible",autofocus_proof && panel->property("opened").toBool()}, {"toneControlsVisible",tone_proof && panel->property("opened").toBool()}, {"windowActive",window->isActive()},
+                {"windowExposed",window->isExposed()}, {"width",window->width()}, {"height",window->height()},
+                {"elapsedMs",now}, {"pixelWidth",image.width()}, {"pixelHeight",image.height()}};
+            QFile file(QDir(managed_runtime_proof_dir).filePath("receipt.json"));
+            const auto bytes = QJsonDocument::fromVariant(receipt).toJson();
+            const bool saved = file.open(QIODevice::WriteOnly|QIODevice::NewOnly) && file.write(bytes) == bytes.size();
+            app.exit(proof_ok && saved ? EXIT_SUCCESS : EXIT_FAILURE); return;
+          }
+        }
+        if (now > scene_render_wait_ms) {
+          runtime_proof_timer.stop();
+          const QVariantMap receipt{{"ok",false}, {"scope","packaged-Main-Scene-render-and-object-controls-only"},
+              {"waitLimitMs",scene_render_wait_ms}, {"timingGateQualified",false}, {"elapsedMs",now},
+              {"lightingPrefixRequested",scene_lighting_progressive_proof},{"lightingPrefixProof",scene_lighting_prefix_result},
+              {"windowActive",window && window->isActive()}, {"windowExposed",window && window->isExposed()},
+              {"error","Scene render/control proof timed out."}, {"sceneViewport",state}, {"scene",gaussian_scene.snapshot()}};
+          QFile file(QDir(managed_runtime_proof_dir).filePath("receipt.json"));
+          if (file.open(QIODevice::WriteOnly|QIODevice::NewOnly)) file.write(QJsonDocument::fromVariant(receipt).toJson());
+          if (window) window->grabWindow().save(QDir(managed_runtime_proof_dir).filePath("failure.png"));
+          app.exit(EXIT_FAILURE);
+        }
+        return;
+      }
       if (placed_layer_export_started && placed_layer_proof_stage == 1) {
         placed_layer_export_max_tick_gap = qMax(placed_layer_export_max_tick_gap,
             now - placed_layer_export_last_tick);
@@ -2964,6 +3921,12 @@ int main(int argc, char* argv[]) {
     });
     runtime_proof_timer.start();
   }
+  const auto qml_root_lifetime = qScopeGuard([&engine] {
+    // Views release their controller references before component sessions and
+    // their image sinks are destroyed during application shutdown.
+    const auto roots = engine.rootObjects();
+    for (auto* root : roots) delete root;
+  });
   const auto exit_code = app.exec();
   // A forced proof/programmatic exit can bypass the window close guard. Finish
   // accepted catalog writes while Qt paths, logging and application state live.

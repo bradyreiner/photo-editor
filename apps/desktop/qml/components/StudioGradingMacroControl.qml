@@ -138,7 +138,8 @@ Rectangle {
             horizontalAlignment: Text.AlignRight
             text: control.valueText
             color: control.modified ? control.accent : "#C8D2DC"
-            font.family: theme.fontMono
+            font.family: theme.fontNumeric
+            font.features: theme.numericFontFeatures
             font.pixelSize: theme.typeCaption
             font.weight: theme.weightSection
             font.letterSpacing: 0

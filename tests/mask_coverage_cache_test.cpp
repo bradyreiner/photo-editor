@@ -1,4 +1,5 @@
 #include "color_mask_coverage_cache.h"
+#include "color_mask_runtime.h"
 #include <atomic>
 #include <cstring>
 #include <functional>
@@ -31,8 +32,44 @@ std::vector<ColorPixel> render(std::vector<ColorPixel> pixels, const ColorAdjust
   if (!apply_local_adjustments_to_look_pixels(&pixels, width, height, state, mapping)) return {};
   return pixels;
 }
+bool sparse_alpha_matches_full_grid() {
+  constexpr int w = 129, h = 97;
+  LocalMaskSet set;
+  LocalMask mask;
+  mask.kind = "brush"; mask.operation = "add";
+  mask.segmentation_width = w; mask.segmentation_height = h;
+  mask.segmentation_mask.resize(w * h);
+  mask.selection_despeckle = 3; mask.selection_fill_holes = 2; mask.selection_remove_islands = 2;
+  set.sources = {mask};
+  for (int scenario = 0; scenario < 10; ++scenario) {
+    auto current = set;
+    auto& source = current.sources.front();
+    const auto x = scenario == 1 ? 0 : 62;
+    const auto y = scenario == 1 ? h - 1 : 44;
+    if (scenario != 2) source.segmentation_mask[static_cast<std::size_t>(y * w + x)] = 218;
+    if (scenario == 3) { source.selection_grow = 100; source.selection_feather = 100; }
+    if (scenario == 4) { source.selection_blur = 100; source.selection_smooth = 100; }
+    if (scenario == 5) { source.selection_shrink = 100; source.selection_harden = 100; }
+    if (scenario == 6) { source.opacity = .63; source.density = .42; current.opacity = .71; }
+    if (scenario == 7) source.selection_invert = true;
+    if (scenario == 8) current.selection_invert = true;
+    if (scenario == 9) { source.coordinate_area_x = .2; source.coordinate_area_width = .5; }
+    auto full = current;
+    LocalMask disabled; disabled.enabled = false;
+    full.sources.push_back(disabled);  // Forces the general full-grid evaluator.
+    const auto actual = rasterize_local_mask_set_alpha(current, w, h, {});
+    const auto reference = rasterize_local_mask_set_alpha(full, w, h, {});
+    if (actual != reference) {
+      std::cerr << "Sparse brush alpha differs from full native grid, scenario=" << scenario << '\n';
+      return false;
+    }
+  }
+  std::cout << "Sparse brush alpha: ten exact full-grid comparisons pass\n";
+  return true;
+}
 }
 int main() {
+  if (!sparse_alpha_matches_full_grid()) return 1;
   std::vector<ColorPixel> source;
   for (int i = 0; i < width * height; ++i)
     source.push_back({float(i % 23) / 19.0F, float(i % 17) / 13.0F, float(i % 31) / 27.0F, float(i % 5) / 4.0F});

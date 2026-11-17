@@ -1,4 +1,6 @@
 #pragma once
+#include <atomic>
+#include <memory>
 
 #include "edit_recipe_state.h"
 #include "photo_editor/pipeline/color_adjustments.h"
@@ -12,7 +14,14 @@ namespace photo_editor::desktop {
 struct RenderBackendTelemetry;
 
 [[nodiscard]] QImage render_editable_base_pixels(
-    const QString& source_path, EditRecipeState state, QString* error = nullptr);
+    const QString& source_path,
+    EditRecipeState state,
+    QString* error = nullptr,
+    bool include_photo_adjustment_layers = false);
+
+[[nodiscard]] QImage render_base_selection_cutout(const QString& source_path, const EditRecipeState& state,
+    const QVariantList& masks, QString* error = nullptr,
+    const std::shared_ptr<std::atomic_bool>& cancelled = {}, QSize output_size = {});
 
 [[nodiscard]] QImage render_photo_layer_snapshot(
     const QImage& source_image,

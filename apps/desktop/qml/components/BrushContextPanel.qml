@@ -65,13 +65,14 @@ Rectangle {
             Label {
                 objectName: "brushContextLayerStackLabel"
                 Layout.fillWidth: true
-                text: root.layerStackLabel
+                text: qsTr("Target")
+                Accessible.description: root.layerStackLabel
                 color: theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 9
-                font.weight: Font.DemiBold
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 7
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
+                font.weight: theme.weightControl
+                fontSizeMode: Text.FixedSize
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 elide: Text.ElideNone
             }
 
@@ -88,20 +89,22 @@ Rectangle {
         Rectangle {
             objectName: "brushContextLayerCard"
             Layout.fillWidth: true
-            Layout.preferredHeight: 38
+            Layout.preferredHeight: brushContextLayerCardContent.implicitHeight + theme.space12
+            Layout.minimumHeight: theme.scaled(38)
             radius: 3
             color: theme.alpha(theme.surfaceTop, 0.88)
             border.width: theme.chromeBorderWidth
             border.color: theme.alpha(theme.glassEdge, 0.42)
 
             RowLayout {
+                id: brushContextLayerCardContent
                 anchors.fill: parent
-                anchors.margins: 6
-                spacing: 7
+                anchors.margins: theme.space6
+                spacing: theme.space6
 
                 Rectangle {
-                    Layout.preferredWidth: 28
-                    Layout.preferredHeight: 28
+                    Layout.preferredWidth: theme.scaled(28)
+                    Layout.preferredHeight: theme.scaled(28)
                     radius: 3
                     color: theme.alpha(theme.accentCool400, 0.12)
                     border.width: 1
@@ -109,8 +112,8 @@ Rectangle {
 
                     Components.AppIcon {
                         anchors.centerIn: parent
-                        width: 13
-                        height: 13
+                        width: theme.scaled(13)
+                        height: theme.scaled(13)
                         name: root.layerIconName
                         color: theme.textMain
                     }
@@ -126,7 +129,7 @@ Rectangle {
                         text: root.layerName
                         color: theme.textMain
                         font.family: theme.fontUi
-                        font.pixelSize: 11
+                        font.pixelSize: theme.typeLabel
                         font.weight: Font.DemiBold
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         maximumLineCount: 2
@@ -138,10 +141,10 @@ Rectangle {
                         Layout.fillWidth: true
                         text: root.layerStateText
                         color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
-                        fontSizeMode: Text.HorizontalFit
-                        minimumPixelSize: 6
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
+                        fontSizeMode: Text.FixedSize
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         elide: Text.ElideNone
                     }
                 }
@@ -151,16 +154,18 @@ Rectangle {
         Rectangle {
             objectName: "brushContextMaskCard"
             Layout.fillWidth: true
-            Layout.preferredHeight: 42
+            Layout.preferredHeight: brushContextMaskCardContent.implicitHeight + theme.space12
+            Layout.minimumHeight: theme.scaled(42)
             radius: 3
             color: theme.alpha(root.accent, 0.075)
             border.width: theme.chromeBorderWidth
             border.color: theme.alpha(root.accent, 0.44)
 
             ColumnLayout {
+                id: brushContextMaskCardContent
                 anchors.fill: parent
-                anchors.margins: 7
-                spacing: 2
+                anchors.margins: theme.space6
+                spacing: theme.space2
 
                 Label {
                     objectName: "brushContextMaskNameLabel"
@@ -168,7 +173,7 @@ Rectangle {
                     text: root.maskName
                     color: root.accent
                     font.family: theme.fontUi
-                    font.pixelSize: 12
+                    font.pixelSize: theme.typeLabel
                     font.weight: Font.DemiBold
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
@@ -180,10 +185,10 @@ Rectangle {
                     Layout.fillWidth: true
                     text: root.maskStateText
                     color: theme.textMain
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 7
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
+                    fontSizeMode: Text.FixedSize
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone
                 }
             }
@@ -199,10 +204,10 @@ Rectangle {
                 objectName: "brushContextMaskCountLabel"
                 text: root.maskSetCount + " selection sets"
                 color: theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 9
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 7
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
+                fontSizeMode: Text.FixedSize
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 elide: Text.ElideNone
             }
 
@@ -221,11 +226,11 @@ Rectangle {
                     text: root.maskChipText
                     color: theme.textStrong
                     font.family: theme.fontUi
-                    font.pixelSize: 9
+                    font.pixelSize: theme.typeMicro
                     font.weight: Font.DemiBold
                     verticalAlignment: Text.AlignVCenter
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 7
+                    fontSizeMode: Text.FixedSize
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone
                 }
             }
@@ -292,11 +297,11 @@ Rectangle {
                     Layout.fillWidth: true
                     text: root.brushSizeText
                     color: theme.textMain
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
                     font.weight: Font.DemiBold
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 7
+                    fontSizeMode: Text.FixedSize
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone
                 }
 
@@ -305,11 +310,11 @@ Rectangle {
                     Layout.fillWidth: true
                     text: root.brushFlowText
                     color: theme.textMain
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
                     font.weight: Font.DemiBold
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 7
+                    fontSizeMode: Text.FixedSize
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone
                 }
 
@@ -318,11 +323,11 @@ Rectangle {
                     Layout.fillWidth: true
                     text: root.brushHardnessText
                     color: theme.textMain
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
                     font.weight: Font.DemiBold
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 7
+                    fontSizeMode: Text.FixedSize
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone
                 }
 
@@ -336,11 +341,11 @@ Rectangle {
                         Layout.fillWidth: true
                         text: root.brushDensityText
                         color: theme.textMain
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
-                        fontSizeMode: Text.HorizontalFit
-                        minimumPixelSize: 7
+                        fontSizeMode: Text.FixedSize
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         elide: Text.ElideNone
                     }
 
@@ -373,11 +378,11 @@ Rectangle {
                         Layout.fillWidth: true
                         text: root.brushOpacityText
                         color: theme.textMain
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeMicro
                         font.weight: Font.DemiBold
-                        fontSizeMode: Text.HorizontalFit
-                        minimumPixelSize: 7
+                        fontSizeMode: Text.FixedSize
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         elide: Text.ElideNone
                     }
 

@@ -1,0 +1,2177 @@
+{
+  "sourceClipId": "f4a4d7db-d3d8-4315-8b28-8f2fabf35020",
+  "opacity": 0,
+  "sourceWidth": -1,
+  "sourceHeight": -1,
+  "frameCornerRadius": 0.016455696202531647,
+  "frameWidth": 0.7020833333333333,
+  "frameHeight": 0.7296296296296296,
+  "frameScale": 0.92,
+  "frameOffsetX": 0,
+  "frameOffsetY": 0.3765925925925925,
+  "frameMode": "fit",
+  "clipMask": {
+    "bottom": 0.55,
+    "cornerRadius": 0,
+    "left": 0.58,
+    "right": 0.58,
+    "shape": "ellipse",
+    "top": 0.55
+  },
+  "keyframes": [
+    {
+      "parameter": "frameOffsetX",
+      "seconds": 0,
+      "value": 0,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetX",
+      "seconds": 12,
+      "value": 0,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 0,
+      "value": 0.3765925926,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8,
+      "value": 0.3765925926,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.033333333333333,
+      "value": 0.3765920474,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.066666666666666,
+      "value": 0.3765883682,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.1,
+      "value": 0.3765787902,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.133333333333333,
+      "value": 0.3765609354,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.166666666666666,
+      "value": 0.376532795,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.2,
+      "value": 0.376492712,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.233333333333333,
+      "value": 0.3764393632,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.266666666666667,
+      "value": 0.3763717421,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.3,
+      "value": 0.3762891411,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.333333333333334,
+      "value": 0.3761911336,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.366666666666667,
+      "value": 0.3760775572,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.4,
+      "value": 0.3759484954,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.433333333333334,
+      "value": 0.3758042601,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.466666666666667,
+      "value": 0.3756453745,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.5,
+      "value": 0.3754725551,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.533333333333333,
+      "value": 0.3752866941,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.566666666666666,
+      "value": 0.3750888421,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.6,
+      "value": 0.3748801902,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.633333333333333,
+      "value": 0.3746620528,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.666666666666666,
+      "value": 0.3744358496,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.7,
+      "value": 0.3742030883,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.733333333333333,
+      "value": 0.3739653468,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.766666666666667,
+      "value": 0.3737242559,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.8,
+      "value": 0.3734814815,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.833333333333334,
+      "value": 0.3732387071,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.866666666666667,
+      "value": 0.3729976162,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.9,
+      "value": 0.3727598747,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.933333333333334,
+      "value": 0.3725271133,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 8.966666666666667,
+      "value": 0.3723009101,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9,
+      "value": 0.3720827727,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.033333333333333,
+      "value": 0.3718741209,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.066666666666666,
+      "value": 0.3716762689,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.1,
+      "value": 0.3714904079,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.133333333333333,
+      "value": 0.3713175884,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.166666666666666,
+      "value": 0.3711587029,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.2,
+      "value": 0.3710144676,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.233333333333333,
+      "value": 0.3708854057,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.266666666666667,
+      "value": 0.3707718293,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.3,
+      "value": 0.3706738219,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.333333333333334,
+      "value": 0.3705912209,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.366666666666667,
+      "value": 0.3705235998,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.4,
+      "value": 0.370470251,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.433333333333334,
+      "value": 0.370430168,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.466666666666667,
+      "value": 0.3704020276,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.5,
+      "value": 0.3703841728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.533333333333333,
+      "value": 0.3703745948,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.566666666666666,
+      "value": 0.3703709156,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 9.6,
+      "value": 0.3703703704,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameOffsetY",
+      "seconds": 12,
+      "value": 0.3703703704,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 0,
+      "value": 0.92,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8,
+      "value": 0.92,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.033333333333333,
+      "value": 0.9200070096,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.066666666666666,
+      "value": 0.9200543138,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.1,
+      "value": 0.9201774597,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.133333333333333,
+      "value": 0.9204070216,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.166666666666666,
+      "value": 0.9207688263,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.2,
+      "value": 0.9212841797,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.233333333333333,
+      "value": 0.9219700924,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.266666666666667,
+      "value": 0.9228395062,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.3,
+      "value": 0.9239015198,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.333333333333334,
+      "value": 0.9251616151,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.366666666666667,
+      "value": 0.9266218831,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.4,
+      "value": 0.92828125,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.433333333333334,
+      "value": 0.9301357034,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.466666666666667,
+      "value": 0.932178518,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.5,
+      "value": 0.9344004822,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.533333333333333,
+      "value": 0.9367901235,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.566666666666666,
+      "value": 0.939333935,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.6,
+      "value": 0.9420166016,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.633333333333333,
+      "value": 0.9448212254,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.666666666666666,
+      "value": 0.9477295525,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.7,
+      "value": 0.9507221985,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.733333333333333,
+      "value": 0.9537788749,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.766666666666667,
+      "value": 0.956878615,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.8,
+      "value": 0.96,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.833333333333334,
+      "value": 0.963121385,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.866666666666667,
+      "value": 0.9662211251,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.9,
+      "value": 0.9692778015,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.933333333333334,
+      "value": 0.9722704475,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 8.966666666666667,
+      "value": 0.9751787746,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9,
+      "value": 0.9779833984,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.033333333333333,
+      "value": 0.980666065,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.066666666666666,
+      "value": 0.9832098765,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.1,
+      "value": 0.9855995178,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.133333333333333,
+      "value": 0.987821482,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.166666666666666,
+      "value": 0.9898642966,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.2,
+      "value": 0.99171875,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.233333333333333,
+      "value": 0.9933781169,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.266666666666667,
+      "value": 0.9948383849,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.3,
+      "value": 0.9960984802,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.333333333333334,
+      "value": 0.9971604938,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.366666666666667,
+      "value": 0.9980299076,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.4,
+      "value": 0.9987158203,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.433333333333334,
+      "value": 0.9992311737,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.466666666666667,
+      "value": 0.9995929784,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.5,
+      "value": 0.9998225403,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.533333333333333,
+      "value": 0.9999456862,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.566666666666666,
+      "value": 0.9999929904,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 9.6,
+      "value": 1,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "frameScale",
+      "seconds": 12,
+      "value": 1,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 0,
+      "value": 0.55,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8,
+      "value": 0.55,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.033333333333333,
+      "value": 0.5501557694,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.066666666666666,
+      "value": 0.5512069723,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.1,
+      "value": 0.5539435493,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.133333333333333,
+      "value": 0.5590449246,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.166666666666666,
+      "value": 0.5670850296,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.2,
+      "value": 0.5785373264,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.233333333333333,
+      "value": 0.593779831,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.266666666666667,
+      "value": 0.6131001372,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.3,
+      "value": 0.6367004395,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.333333333333334,
+      "value": 0.664702557,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.366666666666667,
+      "value": 0.6971529569,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.4,
+      "value": 0.7340277778,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.433333333333334,
+      "value": 0.7752378529,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.466666666666667,
+      "value": 0.8206337341,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.5,
+      "value": 0.8700107151,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.533333333333333,
+      "value": 0.9231138546,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.566666666666666,
+      "value": 0.9796430004,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.6,
+      "value": 1.0392578125,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.633333333333333,
+      "value": 1.1015827864,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.666666666666666,
+      "value": 1.1662122771,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.7,
+      "value": 1.2327155219,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.733333333333333,
+      "value": 1.3006416645,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.766666666666667,
+      "value": 1.3695247781,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.8,
+      "value": 1.4388888889,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.833333333333334,
+      "value": 1.5082529997,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.866666666666667,
+      "value": 1.5771361133,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.9,
+      "value": 1.6450622559,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.933333333333334,
+      "value": 1.7115655007,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 8.966666666666667,
+      "value": 1.7761949913,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9,
+      "value": 1.8385199653,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.033333333333333,
+      "value": 1.8981347773,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.066666666666666,
+      "value": 1.9546639232,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.1,
+      "value": 2.0077670627,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.133333333333333,
+      "value": 2.0571440436,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.166666666666666,
+      "value": 2.1025399249,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.2,
+      "value": 2.14375,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.233333333333333,
+      "value": 2.1806248208,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.266666666666667,
+      "value": 2.2130752208,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.3,
+      "value": 2.2410773383,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.333333333333334,
+      "value": 2.2646776406,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.366666666666667,
+      "value": 2.2839979467,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.4,
+      "value": 2.2992404514,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.433333333333334,
+      "value": 2.3106927482,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.466666666666667,
+      "value": 2.3187328532,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.5,
+      "value": 2.3238342285,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.533333333333333,
+      "value": 2.3265708055,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.566666666666666,
+      "value": 2.3276220084,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 9.6,
+      "value": 2.3277777778,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:bottom",
+      "seconds": 12,
+      "value": 2.3277777778,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 0,
+      "value": 0.58,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8,
+      "value": 0.58,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.033333333333333,
+      "value": 0.5799123797,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.066666666666666,
+      "value": 0.5793210781,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.1,
+      "value": 0.5777817535,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.133333333333333,
+      "value": 0.5749122299,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.166666666666666,
+      "value": 0.5703896709,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.2,
+      "value": 0.5639477539,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.233333333333333,
+      "value": 0.555373845,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.266666666666667,
+      "value": 0.5445061728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.3,
+      "value": 0.5312310028,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.333333333333334,
+      "value": 0.5154798117,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.366666666666667,
+      "value": 0.4972264617,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.4,
+      "value": 0.476484375,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.433333333333334,
+      "value": 0.4533037077,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.466666666666667,
+      "value": 0.4277685245,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.5,
+      "value": 0.3999939728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.533333333333333,
+      "value": 0.3701234568,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.566666666666666,
+      "value": 0.3383258123,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.6,
+      "value": 0.3047924805,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.633333333333333,
+      "value": 0.2697346826,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.666666666666666,
+      "value": 0.2333805941,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.7,
+      "value": 0.1959725189,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.733333333333333,
+      "value": 0.1577640637,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.766666666666667,
+      "value": 0.1190173123,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.8,
+      "value": 0.08,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.833333333333334,
+      "value": 0.0409826877,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.866666666666667,
+      "value": 0.0022359363,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.9,
+      "value": -0.0359725189,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.933333333333334,
+      "value": -0.0733805941,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 8.966666666666667,
+      "value": -0.1097346826,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9,
+      "value": -0.1447924805,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.033333333333333,
+      "value": -0.1783258123,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.066666666666666,
+      "value": -0.2101234568,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.1,
+      "value": -0.2399939728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.133333333333333,
+      "value": -0.2677685245,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.166666666666666,
+      "value": -0.2933037077,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.2,
+      "value": -0.316484375,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.233333333333333,
+      "value": -0.3372264617,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.266666666666667,
+      "value": -0.3554798117,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.3,
+      "value": -0.3712310028,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.333333333333334,
+      "value": -0.3845061728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.366666666666667,
+      "value": -0.395373845,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.4,
+      "value": -0.4039477539,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.433333333333334,
+      "value": -0.4103896709,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.466666666666667,
+      "value": -0.4149122299,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.5,
+      "value": -0.4177817535,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.533333333333333,
+      "value": -0.4193210781,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.566666666666666,
+      "value": -0.4199123797,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 9.6,
+      "value": -0.42,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:left",
+      "seconds": 12,
+      "value": -0.42,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 0,
+      "value": 0.58,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8,
+      "value": 0.58,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.033333333333333,
+      "value": 0.5800876203,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.066666666666666,
+      "value": 0.5806789219,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.1,
+      "value": 0.5822182465,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.133333333333333,
+      "value": 0.5850877701,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.166666666666666,
+      "value": 0.5896103291,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.2,
+      "value": 0.5960522461,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.233333333333333,
+      "value": 0.604626155,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.266666666666667,
+      "value": 0.6154938272,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.3,
+      "value": 0.6287689972,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.333333333333334,
+      "value": 0.6445201883,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.366666666666667,
+      "value": 0.6627735383,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.4,
+      "value": 0.683515625,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.433333333333334,
+      "value": 0.7066962923,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.466666666666667,
+      "value": 0.7322314755,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.5,
+      "value": 0.7600060272,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.533333333333333,
+      "value": 0.7898765432,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.566666666666666,
+      "value": 0.8216741877,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.6,
+      "value": 0.8552075195,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.633333333333333,
+      "value": 0.8902653174,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.666666666666666,
+      "value": 0.9266194059,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.7,
+      "value": 0.9640274811,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.733333333333333,
+      "value": 1.0022359363,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.766666666666667,
+      "value": 1.0409826877,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.8,
+      "value": 1.08,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.833333333333334,
+      "value": 1.1190173123,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.866666666666667,
+      "value": 1.1577640637,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.9,
+      "value": 1.1959725189,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.933333333333334,
+      "value": 1.2333805941,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 8.966666666666667,
+      "value": 1.2697346826,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9,
+      "value": 1.3047924805,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.033333333333333,
+      "value": 1.3383258123,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.066666666666666,
+      "value": 1.3701234568,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.1,
+      "value": 1.3999939728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.133333333333333,
+      "value": 1.4277685245,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.166666666666666,
+      "value": 1.4533037077,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.2,
+      "value": 1.476484375,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.233333333333333,
+      "value": 1.4972264617,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.266666666666667,
+      "value": 1.5154798117,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.3,
+      "value": 1.5312310028,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.333333333333334,
+      "value": 1.5445061728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.366666666666667,
+      "value": 1.555373845,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.4,
+      "value": 1.5639477539,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.433333333333334,
+      "value": 1.5703896709,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.466666666666667,
+      "value": 1.5749122299,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.5,
+      "value": 1.5777817535,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.533333333333333,
+      "value": 1.5793210781,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.566666666666666,
+      "value": 1.5799123797,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 9.6,
+      "value": 1.58,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:right",
+      "seconds": 12,
+      "value": 1.58,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 0,
+      "value": 0.55,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8,
+      "value": 0.55,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.033333333333333,
+      "value": 0.5498442306,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.066666666666666,
+      "value": 0.5487930277,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.1,
+      "value": 0.5460564507,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.133333333333333,
+      "value": 0.5409550754,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.166666666666666,
+      "value": 0.5329149704,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.2,
+      "value": 0.5214626736,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.233333333333333,
+      "value": 0.506220169,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.266666666666667,
+      "value": 0.4868998628,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.3,
+      "value": 0.4632995605,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.333333333333334,
+      "value": 0.435297443,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.366666666666667,
+      "value": 0.4028470431,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.4,
+      "value": 0.3659722222,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.433333333333334,
+      "value": 0.3247621471,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.466666666666667,
+      "value": 0.2793662659,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.5,
+      "value": 0.2299892849,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.533333333333333,
+      "value": 0.1768861454,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.566666666666666,
+      "value": 0.1203569996,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.6,
+      "value": 0.0607421875,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.633333333333333,
+      "value": -0.0015827864,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.666666666666666,
+      "value": -0.0662122771,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.7,
+      "value": -0.1327155219,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.733333333333333,
+      "value": -0.2006416645,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.766666666666667,
+      "value": -0.2695247781,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.8,
+      "value": -0.3388888889,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.833333333333334,
+      "value": -0.4082529997,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.866666666666667,
+      "value": -0.4771361133,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.9,
+      "value": -0.5450622559,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.933333333333334,
+      "value": -0.6115655007,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 8.966666666666667,
+      "value": -0.6761949913,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9,
+      "value": -0.7385199653,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.033333333333333,
+      "value": -0.7981347773,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.066666666666666,
+      "value": -0.8546639232,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.1,
+      "value": -0.9077670627,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.133333333333333,
+      "value": -0.9571440436,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.166666666666666,
+      "value": -1.0025399249,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.2,
+      "value": -1.04375,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.233333333333333,
+      "value": -1.0806248208,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.266666666666667,
+      "value": -1.1130752208,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.3,
+      "value": -1.1410773383,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.333333333333334,
+      "value": -1.1646776406,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.366666666666667,
+      "value": -1.1839979467,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.4,
+      "value": -1.1992404514,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.433333333333334,
+      "value": -1.2106927482,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.466666666666667,
+      "value": -1.2187328532,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.5,
+      "value": -1.2238342285,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.533333333333333,
+      "value": -1.2265708055,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.566666666666666,
+      "value": -1.2276220084,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 9.6,
+      "value": -1.2277777778,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "mask:top",
+      "seconds": 12,
+      "value": -1.2277777778,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 0,
+      "value": 0,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8,
+      "value": 0,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.033333333333333,
+      "value": 0.0000876203,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.066666666666666,
+      "value": 0.0006789219,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.1,
+      "value": 0.0022182465,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.133333333333333,
+      "value": 0.0050877701,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.166666666666666,
+      "value": 0.0096103291,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.2,
+      "value": 0.0160522461,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.233333333333333,
+      "value": 0.024626155,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.266666666666667,
+      "value": 0.0354938272,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.3,
+      "value": 0.0487689972,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.333333333333334,
+      "value": 0.0645201883,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.366666666666667,
+      "value": 0.0827735383,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.4,
+      "value": 0.103515625,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.433333333333334,
+      "value": 0.1266962923,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.466666666666667,
+      "value": 0.1522314755,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.5,
+      "value": 0.1800060272,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.533333333333333,
+      "value": 0.2098765432,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.566666666666666,
+      "value": 0.2416741877,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.6,
+      "value": 0.2752075195,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.633333333333333,
+      "value": 0.3102653174,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.666666666666666,
+      "value": 0.3466194059,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.7,
+      "value": 0.3840274811,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.733333333333333,
+      "value": 0.4222359363,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.766666666666667,
+      "value": 0.4609826877,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.8,
+      "value": 0.5,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.833333333333334,
+      "value": 0.5390173123,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.866666666666667,
+      "value": 0.5777640637,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.9,
+      "value": 0.6159725189,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.933333333333334,
+      "value": 0.6533805941,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 8.966666666666667,
+      "value": 0.6897346826,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9,
+      "value": 0.7247924805,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.033333333333333,
+      "value": 0.7583258123,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.066666666666666,
+      "value": 0.7901234568,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.1,
+      "value": 0.8199939728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.133333333333333,
+      "value": 0.8477685245,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.166666666666666,
+      "value": 0.8733037077,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.2,
+      "value": 0.896484375,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.233333333333333,
+      "value": 0.9172264617,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.266666666666667,
+      "value": 0.9354798117,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.3,
+      "value": 0.9512310028,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.333333333333334,
+      "value": 0.9645061728,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.366666666666667,
+      "value": 0.975373845,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.4,
+      "value": 0.9839477539,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.433333333333334,
+      "value": 0.9903896709,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.466666666666667,
+      "value": 0.9949122299,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.5,
+      "value": 0.9977817535,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.533333333333333,
+      "value": 0.9993210781,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.566666666666666,
+      "value": 0.9999123797,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 9.6,
+      "value": 1,
+      "interpolation": "linear"
+    },
+    {
+      "parameter": "opacity",
+      "seconds": 12,
+      "value": 1,
+      "interpolation": "linear"
+    }
+  ]
+}

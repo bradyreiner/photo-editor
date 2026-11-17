@@ -1,0 +1,18 @@
+{
+  "val_loss": 0.02812656989464393,
+  "val_nll": 0.02812656989464393,
+  "val_token_accuracy": 0.9903846153846154,
+  "val_num_padded_tokens": 36,
+  "val_num_processed_tokens": 2008,
+  "val_num_sequences": 4,
+  "val_num_tokens": 208,
+  "val_num_vision_tokens": 0,
+  "val_perplexity": 1.0285258565926199,
+  "val_time": 4.037984833004884,
+  "val_compute_time": 4.023385834065266,
+  "val_padded_tokens_per_second": 8.947687714957546,
+  "val_processed_tokens_per_second": 499.08213698985423,
+  "val_sequences_per_second": 0.9941875238841718,
+  "val_tokens_per_second": 51.69775124197693,
+  "val_vision_tokens_per_second": 0.0
+}

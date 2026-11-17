@@ -46,6 +46,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or_else(|| "both".to_string());
     let duplicate_policy =
         DuplicatePolicy::parse(arguments.get(10).map(String::as_str).unwrap_or("skip"))?;
+    let project_name = arguments
+        .get(11)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty() && *value != "-");
     logger.info(
         "catalog_import.started",
         serde_json::json!({
@@ -93,6 +97,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let catalog = CatalogRuntime::open(&runtime_paths).await?;
     let database_started_at = Instant::now();
     catalog.import_summary(&summary).await?;
+    // Use the imported asset identities, not the source paths: managed imports
+    // move into organized folders, and retries may outlive the UI's pending state.
+    // Membership writes are idempotent; do not report completion before they persist.
+    if let Some(project_name) = project_name {
+        let ids = summary
+            .assets
+            .iter()
+            .map(|asset| asset.asset_id.clone())
+            .collect::<Vec<_>>();
+        let missing = catalog
+            .update_project_memberships(project_name, &ids, &[])
+            .await?;
+        if !missing.is_empty() {
+            return Err(
+                "Imported assets could not all be assigned to the requested project".into(),
+            );
+        }
+    }
     let database_elapsed_ms = database_started_at.elapsed().as_millis() as u64;
 
     println!(
@@ -113,6 +135,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "backupDestination": backup_root.as_ref().map(|path| path.display().to_string()),
             "verificationAlgorithm": "SHA-256",
             "failureCount": 0,
+            "projectName": project_name,
+            "assignedToProjectCount": if project_name.is_some() { summary.assets.len() } else { 0 },
             "skippedPolicyCount": summary.skipped_policy,
             "skippedDuplicateCount": summary.skipped_duplicates,
         }))?
@@ -146,7 +170,7 @@ fn parse_import_mode(value: Option<&str>) -> ImportMode {
 
 fn print_usage(program_name: &str) {
     eprintln!(
-        "Usage: {program_name} <mount_path> <drive_id> <drive_name> [referenced|managed] [selection_manifest|-] [managed_root|-] [backup_root|-] [source|date-camera] [both|raw-only|jpeg-only] [skip|reuse-identical|replace]"
+        "Usage: {program_name} <mount_path> <drive_id> <drive_name> [referenced|managed] [selection_manifest|-] [managed_root|-] [backup_root|-] [source|date-camera] [both|raw-only|jpeg-only] [skip|reuse-identical|replace] [project_name|-]"
     );
 }
 

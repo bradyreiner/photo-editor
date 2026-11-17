@@ -1,6 +1,7 @@
 #include "canonical_composite_mask_alpha.h"
 
 #include "local_mask_compiler.h"
+#include "local_mask_set_settings.h"
 #include "working_image.h"
 
 #include <algorithm>
@@ -20,11 +21,13 @@ QString canonical_composite_mask_alpha_cache_key(
     const QImage& source_image,
     const QVariantList& masks,
     double exposure_gain,
-    const std::array<double, 3>& white_balance) {
+    const std::array<double, 3>& white_balance,
+    const QRectF& source_area,
+    const QSizeF& original_basis_pixel_extent) {
   QVariantMap payload;
   payload.insert(
       QStringLiteral("version"),
-      QStringLiteral("canonical-engine-composite-mask-alpha-v1"));
+      QStringLiteral("canonical-engine-composite-mask-alpha-v2"));
   payload.insert(
       QStringLiteral("imageCacheKey"),
       QString::number(source_image.cacheKey()));
@@ -51,6 +54,8 @@ QString canonical_composite_mask_alpha_cache_key(
       QStringLiteral("whiteBalanceB"),
       QString::number(white_balance[2], 'g', 17));
   payload.insert(QStringLiteral("masks"), masks);
+  payload.insert(QStringLiteral("sourceArea"), QVariantList{source_area.x(), source_area.y(), source_area.width(), source_area.height()});
+  payload.insert(QStringLiteral("basisExtent"), QVariantList{original_basis_pixel_extent.width(), original_basis_pixel_extent.height()});
   return QStringLiteral("sha1:%1").arg(QString::fromLatin1(
       QCryptographicHash::hash(
           QJsonDocument::fromVariant(payload).toJson(QJsonDocument::Compact),
@@ -61,6 +66,8 @@ QString canonical_composite_mask_alpha_cache_key(
 struct LazyCanonicalMaskAlpha final {
   QImage source_image;
   QVariantList mask_maps;
+  QRectF source_area{0, 0, 1, 1};
+  QSizeF original_basis_pixel_extent;
   std::vector<photo_editor::pipeline::LocalMask> compiled_masks;
   double exposure_gain = 1.0;
   std::array<double, 3> white_balance = {1.0, 1.0, 1.0};
@@ -96,6 +103,13 @@ struct LazyCanonicalMaskAlpha final {
     if (!compiled_masks.empty()) {
       mask_set.sources = compiled_masks;
     } else {
+      // Set refinements apply after Add/Subtract/Intersect have composed all sources.
+      // This provider normally receives exactly one selection set.
+      const auto first = mask_maps.first().toMap();
+      const auto set_id = first.value("maskSetId").toString();
+      if (std::ranges::all_of(mask_maps, [&set_id](const QVariant& value) {
+            return value.toMap().value("maskSetId").toString() == set_id;
+          })) mask_set = compile_local_mask_set_settings(first);
       mask_set.sources.reserve(static_cast<std::size_t>(mask_maps.size()));
       for (const auto& value : mask_maps) {
         const auto mask = value.toMap();
@@ -105,7 +119,7 @@ struct LazyCanonicalMaskAlpha final {
         mask_set.sources.push_back(compile_pipeline_local_mask(
             mask,
             LocalMaskRasterPolicy::RebuildEditableAtOutputResolution,
-            source_image.size()));
+            source_image.size(), source_area, original_basis_pixel_extent));
       }
     }
     if (mask_set.sources.empty()) {
@@ -128,6 +142,17 @@ MaskAlphaEvaluationResult evaluate_canonical_composite_mask_alpha(
     const QVariantList& masks,
     double exposure_gain,
     const std::array<double, 3>& white_balance) {
+  return evaluate_canonical_composite_mask_alpha(source_image, masks, exposure_gain,
+      white_balance, QRectF(0, 0, 1, 1), {});
+}
+
+MaskAlphaEvaluationResult evaluate_canonical_composite_mask_alpha(
+    const QImage& source_image,
+    const QVariantList& masks,
+    double exposure_gain,
+    const std::array<double, 3>& white_balance,
+    const QRectF& source_area,
+    const QSizeF& original_basis_pixel_extent) {
   if (source_image.isNull() || source_image.width() <= 0 ||
       source_image.height() <= 0 || masks.isEmpty() ||
       !std::isfinite(exposure_gain) || exposure_gain < 0.0 ||
@@ -141,6 +166,8 @@ MaskAlphaEvaluationResult evaluate_canonical_composite_mask_alpha(
       LazyCanonicalMaskAlpha{
           .source_image = source_image,
           .mask_maps = masks,
+          .source_area = source_area,
+          .original_basis_pixel_extent = original_basis_pixel_extent,
           .exposure_gain = exposure_gain,
           .white_balance = white_balance,
       });
@@ -152,7 +179,7 @@ MaskAlphaEvaluationResult evaluate_canonical_composite_mask_alpha(
           source_image,
           masks,
           exposure_gain,
-          white_balance),
+          white_balance, source_area, original_basis_pixel_extent),
       source_image.size(),
       static_cast<int>(masks.size()),
       [lazy_alpha, expected_alpha_size](int x, int y, double, double) {

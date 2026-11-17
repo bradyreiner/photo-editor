@@ -68,8 +68,9 @@ SpinBox {
 
     implicitWidth: theme.scaled(108)
     implicitHeight: theme.controlHeightTall
-    // Mono numerals keep typed and stepped values visually aligned.
-    font.family: theme.fontMono
+    // Tabular UI numerals keep typed and stepped values visually aligned.
+    font.family: theme.fontNumeric
+    font.features: theme.numericFontFeatures
     font.pixelSize: theme.typeControl
     font.weight: theme.weightControl
     leftPadding: theme.space8
@@ -119,12 +120,10 @@ SpinBox {
         onEditingFinished: root.commitTextEntry()
     }
 
-    background: Rectangle {
-        radius: theme.radiusControl
-        color: !root.enabled ? theme.alpha(theme.fieldFill, 0.45)
-               : root.hovered ? theme.fieldHoverFill : theme.fieldFill
-        border.width: root.activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
-        border.color: root.activeFocus ? theme.focusRing : theme.controlEdge
+    background: InputFieldSurface {
+        focused: root.activeFocus || editorInput.activeFocus
+        hovered: root.hovered
+        interactiveEnabled: root.enabled
     }
 
     up.indicator: Rectangle {

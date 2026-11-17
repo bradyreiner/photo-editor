@@ -46,7 +46,7 @@ Item {
     activeFocusOnTab: true
     Accessible.role: Accessible.Grouping
     Accessible.name: qsTr("Point curve editor")
-    Accessible.description: qsTr("Add points by clicking the graph. Use arrows to adjust the selected point, Shift for fine adjustment, and Delete to remove it.")
+    Accessible.description: qsTr("Input is the original value in the selected channel; Output is the adjusted value. Drag a point up to brighten. Add points by clicking the graph, use arrows to adjust the selected point, Shift for fine movement, and Delete to remove it.")
     implicitHeight: compactLayout ? 208 : 430
 
     Keys.onPressed: function(event) {
@@ -58,9 +58,7 @@ Item {
         if (interaction.gestureActive)
             return;
         if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
-            root.editStarted();
             root.deleteSelectedPoint();
-            root.editFinished();
             event.accepted = true;
             return;
         }
@@ -70,10 +68,8 @@ Item {
             return;
         const step = (event.modifiers & Qt.ShiftModifier) !== 0 ? 0.1 : 1;
         const point = currentPoints()[effectiveSelectedIndex()];
-        root.editStarted();
         updateSelectedNumeric(dx !== 0 ? "x" : "y",
                               String((dx !== 0 ? point.x : point.y) * 255 + (dx + dy) * step));
-        root.editFinished();
         event.accepted = true;
     }
 
@@ -116,7 +112,9 @@ Item {
     }
 
     function graphPoint(index) {
-        const point = displayPoints()[index];
+        // A removed point delegate can survive until the model update settles.
+        const points = displayPoints();
+        const point = points[Math.max(0, Math.min(index, points.length - 1))];
         const graphWidth = Math.max(1, curveArea.width - root.graphInset * 2);
         const graphHeight = Math.max(1, curveArea.height - root.graphInset * 2);
         return Qt.point(
@@ -217,19 +215,36 @@ Item {
 
     function deleteSelectedPoint() {
         const index = effectiveSelectedIndex();
-        if (!removePoint(index))
+        if (index <= 0 || index >= currentPoints().length - 1)
             return false;
+
+        root.editStarted();
+        const removed = removePoint(index);
+        if (!removed) {
+            root.editFinished();
+            return false;
+        }
         interaction.selectedIndex = Math.min(index, Math.max(0, currentPoints().length - 2));
         interaction.draggingIndex = -1;
         curveCanvas.requestPaint();
-        return true;
+        root.editFinished();
+        return removed;
     }
 
     function resetActiveCurve() {
+        const points = currentPoints();
+        if (points.length === 2 && Math.abs(points[0].x) < 0.000001 &&
+                Math.abs(points[0].y) < 0.000001 && Math.abs(points[1].x - 1.0) < 0.000001 &&
+                Math.abs(points[1].y - 1.0) < 0.000001)
+            return false;
+
+        root.editStarted();
         interaction.selectedIndex = -1;
         interaction.draggingIndex = -1;
         pointsEdited(defaultPoints());
         curveCanvas.requestPaint();
+        root.editFinished();
+        return true;
     }
 
     function testSelectPoint(index) {
@@ -288,9 +303,15 @@ Item {
         }
 
         if (updated.x === points[index].x && updated.y === points[index].y)
-            return;
+            return false;
+        root.editStarted();
         points[index] = updated;
-        pointsEdited(points);
+        try {
+            pointsEdited(points);
+        } finally {
+            root.editFinished();
+        }
+        return true;
     }
 
     function sampledCurvePoints() {
@@ -436,7 +457,6 @@ Item {
                 visible: root.selectedPointDeletable
                 enabled: root.selectedPointDeletable
                 text: "Delete"
-                font.pixelSize: theme.typeCaption
                 compact: true
                 tone: "danger"
                 tooltipText: "Delete the selected curve point."
@@ -448,7 +468,6 @@ Item {
                 Layout.preferredHeight: theme.controlHeightDense
                 Layout.preferredWidth: theme.scaled(58)
                 text: "Reset"
-                font.pixelSize: theme.typeCaption
                 compact: true
                 tooltipText: "Reset the active curve."
                 onClicked: root.resetActiveCurve()
@@ -693,23 +712,25 @@ Item {
                 Label {
                     anchors.left: parent.left
                     anchors.bottom: parent.bottom
-                    anchors.leftMargin: 4
-                    anchors.bottomMargin: 3
+                    anchors.leftMargin: root.graphInset + theme.space12
+                    anchors.bottomMargin: 0
                     text: "0"
                     color: theme.alpha(theme.textFaint, 0.78)
-                    font.family: theme.fontMono
-                    font.pixelSize: 8
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
+                    font.pixelSize: theme.typeCaption
                 }
 
                 Label {
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    anchors.rightMargin: 4
-                    anchors.topMargin: 3
+                    anchors.rightMargin: root.graphInset + theme.space12
+                    anchors.topMargin: 0
                     text: "255"
                     color: theme.alpha(theme.textFaint, 0.78)
-                    font.family: theme.fontMono
-                    font.pixelSize: 8
+                    font.family: theme.fontNumeric
+                    font.features: theme.numericFontFeatures
+                    font.pixelSize: theme.typeCaption
                 }
 
                 MouseArea {
@@ -800,31 +821,37 @@ Item {
                     onReleased: finishGesture(false)
                     onCanceled: finishGesture(true)
                 }
+
+                AppToolTip {
+                    targetItem: curveArea
+                    visible: interaction.containsMouse
+                    text: qsTr("Input is the original value in the selected channel; Output is adjusted. Drag up to brighten.")
+                    shortcutText: qsTr("Click: add point · Shift: fine · Delete: remove")
+                }
             }
         }
 
-        RowLayout {
+        GridLayout {
+            id: pointValueGrid
             Layout.fillWidth: true
-            spacing: 8
+            columns: root.width < theme.scaled(360) ? 2 : 4
+            columnSpacing: theme.space4
+            rowSpacing: theme.space2
 
             Label {
-                text: "Point " + (root.effectiveSelectedIndex() + 1)
-                color: theme.textFaint
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
-                font.weight: Font.DemiBold
-            }
-
-            Label {
-                text: "In"
+                text: "Input"
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
+                font.pixelSize: theme.typeLabel
             }
 
             ToneTextField {
+                numericEntry: true
                 objectName: "toneCurveInputField"
-                Layout.preferredWidth: theme.valueColumnWidth
+                accessibleLabel: qsTr("Input value")
+                Layout.preferredWidth: pointValueGrid.columns === 2 ? 0 : theme.inspectorValueWidth
+                Layout.minimumWidth: theme.scaled(72)
+                Layout.fillWidth: pointValueGrid.columns === 2
                 text: root.selectedInputText()
                 enabled: root.effectiveSelectedIndex() > 0 && root.effectiveSelectedIndex() < root.currentPoints().length - 1
                 horizontalAlignment: TextInput.AlignHCenter
@@ -834,15 +861,19 @@ Item {
             }
 
             Label {
-                text: "Out"
+                text: "Output"
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
+                font.pixelSize: theme.typeLabel
             }
 
             ToneTextField {
+                numericEntry: true
                 objectName: "toneCurveOutputField"
-                Layout.preferredWidth: theme.valueColumnWidth
+                accessibleLabel: qsTr("Output value")
+                Layout.preferredWidth: pointValueGrid.columns === 2 ? 0 : theme.inspectorValueWidth
+                Layout.minimumWidth: theme.scaled(72)
+                Layout.fillWidth: pointValueGrid.columns === 2
                 text: root.selectedOutputText()
                 horizontalAlignment: TextInput.AlignHCenter
                 validator: DoubleValidator { bottom: 0; top: 255; decimals: 3; notation: DoubleValidator.StandardNotation }
@@ -850,9 +881,6 @@ Item {
                 onEditingFinished: root.updateSelectedNumeric("y", text)
             }
 
-            Item {
-                Layout.fillWidth: true
-            }
         }
 
         RowLayout {

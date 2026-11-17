@@ -112,7 +112,8 @@ Rectangle {
             Label {
                 text: Math.round(hueRange.sourceHue * 360) + "\u00B0 -> " + Math.round(hueRange.targetHue * 360) + "\u00B0"
                 color: "#C8D2DC"
-                font.family: theme.fontMono
+                font.family: theme.fontNumeric
+                font.features: theme.numericFontFeatures
                 font.pixelSize: 10
                 font.weight: Font.Bold
                 font.letterSpacing: 0

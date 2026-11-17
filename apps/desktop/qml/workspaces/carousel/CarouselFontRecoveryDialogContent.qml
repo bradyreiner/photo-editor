@@ -255,7 +255,8 @@ ColumnLayout {
                           + Number(recoveryRow.modelData.afterHeight || 0).toFixed(1) + " px · Frame: "
                           + Number(recoveryRow.modelData.frameHeight || 0).toFixed(1) + " px"
                     color: content.theme.textMuted
-                    font.family: content.theme.fontMono
+                    font.family: content.theme.fontNumeric
+                    font.features: content.theme.numericFontFeatures
                     font.pixelSize: content.theme.typeCaption
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 }

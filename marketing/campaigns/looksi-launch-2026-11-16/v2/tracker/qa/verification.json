@@ -1,0 +1,250 @@
+{
+  "finalCounts": {
+    "scannedAtUtc": "2026-11-16T23:07:58.911Z",
+    "primaryFilesPresent": 15,
+    "approved": 0,
+    "ready": 0,
+    "assetFiles": 240,
+    "sourceFiles": 81,
+    "taskRows": 25,
+    "openPrimaryTasks": 12,
+    "photoProof": true,
+    "graphicProof": true,
+    "photoComparison": {
+      "sameDimensions": true,
+      "differentDecodedPixels": true,
+      "width": 1800,
+      "height": 1200
+    }
+  },
+  "checks": [
+    {
+      "label": "exactly fifteen primary file records",
+      "actual": 15
+    },
+    {
+      "label": "file-presence summary reconciles to scan",
+      "actual": 15
+    },
+    {
+      "label": "approval alone cannot schedule",
+      "actual": "Production open"
+    },
+    {
+      "label": "common tasks do not replace campaign review",
+      "actual": "Production open"
+    },
+    {
+      "label": "optional founder shoot does not block primary letter",
+      "actual": "Ready to schedule"
+    },
+    {
+      "label": "other campaign tasks do not block this campaign",
+      "actual": "Ready to schedule"
+    },
+    {
+      "label": "reopened primary prerequisite stays visible",
+      "actual": "Production open"
+    },
+    {
+      "label": "missing master file blocks readiness",
+      "actual": "Assets open"
+    },
+    {
+      "label": "unmeasured action rate stays blank",
+      "actual": ""
+    },
+    {
+      "label": "reach-based primary action rate",
+      "actual": 50
+    },
+    {
+      "label": "rate basis labels reach",
+      "actual": "Reach"
+    },
+    {
+      "label": "measured zero reach does not fall back",
+      "actual": "n.a."
+    },
+    {
+      "label": "missing reach uses stated impressions",
+      "actual": 25
+    },
+    {
+      "label": "fallback basis is labeled",
+      "actual": "Impressions"
+    },
+    {
+      "label": "campaign selector changes counted action to saves",
+      "actual": 8
+    },
+    {
+      "label": "completion uses exact video-view denominator",
+      "actual": 0.25
+    }
+  ],
+  "primaryValidation": [
+    {
+      "campaign": "C01",
+      "path": "campaign01/images/cover.png",
+      "kind": "Image",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 1080,
+      "height": 1350
+    },
+    {
+      "campaign": "C01",
+      "path": "campaign01/storyboard/board.png",
+      "kind": "Storyboard",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 2520,
+      "height": 1820
+    },
+    {
+      "campaign": "C01",
+      "path": "campaign01/videos/hero.mp4",
+      "kind": "Video",
+      "fullDecode": true,
+      "stableFile": true,
+      "seconds": 32,
+      "fps": 30,
+      "decodedFrames": 960,
+      "colorRange": "tv",
+      "colorSpace": "bt709",
+      "colorTransfer": "bt709",
+      "colorPrimaries": "bt709"
+    },
+    {
+      "campaign": "C02",
+      "path": "campaign02/images/cover.png",
+      "kind": "Image",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 1080,
+      "height": 1350
+    },
+    {
+      "campaign": "C02",
+      "path": "campaign02/storyboard/board.png",
+      "kind": "Storyboard",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 2400,
+      "height": 1500
+    },
+    {
+      "campaign": "C02",
+      "path": "campaign02/videos/hero.mp4",
+      "kind": "Video",
+      "fullDecode": true,
+      "stableFile": true,
+      "seconds": 42,
+      "fps": 30,
+      "decodedFrames": 1260,
+      "colorRange": "tv",
+      "colorSpace": "bt709",
+      "colorTransfer": "bt709",
+      "colorPrimaries": "bt709"
+    },
+    {
+      "campaign": "C03",
+      "path": "campaign03/images/cover.png",
+      "kind": "Image",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 1080,
+      "height": 1350
+    },
+    {
+      "campaign": "C03",
+      "path": "campaign03/storyboard/board.png",
+      "kind": "Storyboard",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 2400,
+      "height": 1500
+    },
+    {
+      "campaign": "C03",
+      "path": "campaign03/videos/hero.mp4",
+      "kind": "Video",
+      "fullDecode": true,
+      "stableFile": true,
+      "seconds": 33,
+      "fps": 30,
+      "decodedFrames": 990,
+      "colorRange": "tv",
+      "colorSpace": "bt709",
+      "colorTransfer": "bt709",
+      "colorPrimaries": "bt709"
+    },
+    {
+      "campaign": "C04",
+      "path": "campaign04/images/cover.png",
+      "kind": "Image",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 1080,
+      "height": 1350
+    },
+    {
+      "campaign": "C04",
+      "path": "campaign04/storyboard/board.png",
+      "kind": "Storyboard",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 2400,
+      "height": 1500
+    },
+    {
+      "campaign": "C04",
+      "path": "campaign04/videos/hero.mp4",
+      "kind": "Video",
+      "fullDecode": true,
+      "stableFile": true,
+      "seconds": 24,
+      "fps": 24,
+      "decodedFrames": 576,
+      "colorRange": "tv",
+      "colorSpace": "bt709",
+      "colorTransfer": "bt709",
+      "colorPrimaries": "bt709"
+    },
+    {
+      "campaign": "C05",
+      "path": "campaign05/images/cover.png",
+      "kind": "Image",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 1080,
+      "height": 1350
+    },
+    {
+      "campaign": "C05",
+      "path": "campaign05/storyboard/board.png",
+      "kind": "Storyboard",
+      "fullDecode": true,
+      "stableFile": true,
+      "width": 2400,
+      "height": 1500
+    },
+    {
+      "campaign": "C05",
+      "path": "campaign05/videos/hero.mp4",
+      "kind": "Video",
+      "fullDecode": true,
+      "stableFile": true,
+      "seconds": 36,
+      "fps": 30,
+      "decodedFrames": 1080,
+      "colorRange": "tv",
+      "colorSpace": "bt709",
+      "colorTransfer": "bt709",
+      "colorPrimaries": "bt709"
+    }
+  ],
+  "errors": "{\"kind\":\"notice\",\"message\":\"Cell search matched 0 entries.\"}",
+  "mainInspection": "{\"kind\":\"table\",\"sheet\":\"Campaigns\",\"address\":\"A8:G13\",\"rows\":6,\"cols\":7,\"values\":[[\"ID\",\"Campaign\",\"Core files\",\"Creative review\",\"Primary state\",\"Owner role\",\"Next step\"],[\"C01\",\"I wanted to make this.\",\"3 / 3\",\"Pending\",\"Review open\",\"Builder\",\"Review cover, storyboard and master\"],[\"C02\",\"NEPAL. In three forms.\",\"3 / 3\",\"Pending\",\"Review open\",\"Editor\",\"Review cover, storyboard and master\"],[\"C03\",\"Keep the gold.\\nKeep the quiet blues.\",\"3 / 3\",\"Pending\",\"Review open\",\"Editor\",\"Review cover, storyboard and master\"],[\"C04\",\"The last tweak. Again.\",\"3 / 3\",\"Pending\",\"Review open\",\"Motion director\",\"Review cover, storyboard and master\"],[\"C05\",\"Make room for your eye.\",\"3 / 3\",\"Pending\",\"Review open\",\"Creative director\",\"Review cover, storyboard and master\"]]}"
+}

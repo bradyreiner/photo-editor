@@ -1,20 +1,27 @@
 #pragma once
 
 #include <QByteArray>
+#include <QElapsedTimer>
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QJsonObject>
+#include <QSharedPointer>
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
 #include <QQueue>
 #include <functional>
+#include <memory>
 
 class QLocalServer;
 class QLocalSocket;
 class QTcpServer;
 class QTcpSocket;
 class QIODevice;
+class QEvent;
+class QQuickWindow;
+class QQuickItemGrabResult;
 
 namespace photo_editor::desktop {
 
@@ -25,11 +32,14 @@ class SearchEditWorkflow;
 class TimelineDocumentController;
 class TimelinePlaybackController;
 class AgentAppCommandRegistry;
+class JobQueueModel;
 
 class PhotoAutomationBridge final : public QObject {
   Q_OBJECT
 
  public:
+  using TimelineTaskLifecycleHandler = std::function<QVariantMap(const QString&, const QVariantMap&)>;
+  using TimelineDraftLifecycleHandler = std::function<QVariantMap(const QString&, const QVariantMap&)>;
   PhotoAutomationBridge(
       AgentEditController* agent_edit,
       CatalogAssetModel* catalog_model,
@@ -59,19 +69,31 @@ class PhotoAutomationBridge final : public QObject {
   void setSearchEditWorkflow(SearchEditWorkflow* workflow) { search_edit_ = workflow; }
   void setTimelineDocumentController(TimelineDocumentController* controller);
   void setTimelinePlaybackController(TimelinePlaybackController* controller);
+  void setTimelineJobQueueModel(JobQueueModel* model);
+  void setQmlRootObject(QObject* root_object);
   void setCompositionHandler(std::function<QVariantMap(const QVariantMap&)> handler) { composition_handler_ = std::move(handler); }
   void setEditAccessPolicy(std::function<bool()> policy) { edit_access_policy_ = std::move(policy); }
   void setAppCommandRegistry(AgentAppCommandRegistry* registry) { app_commands_ = registry; }
+  void setTimelineTaskLifecycleHandler(TimelineTaskLifecycleHandler handler) {
+    timeline_task_lifecycle_handler_ = std::move(handler);
+  }
+  void setTimelineDraftLifecycleHandler(TimelineDraftLifecycleHandler handler) {
+    timeline_draft_lifecycle_handler_ = std::move(handler);
+  }
+  [[nodiscard]] bool activateTimelineWorkspaceFromAutomation() const;
   [[nodiscard]] QJsonObject handleJsonRequest(const QJsonObject& request) const;
 
  private:
   friend class PhotoMcpServer;
+  friend class PhotoAutomationBridgeTestAccess;
   [[nodiscard]] QJsonObject handleAgentJsonRequest(const QJsonObject& request) const;
   [[nodiscard]] QJsonObject handleJsonRequestWithCapabilities(
       const QJsonObject& request, const QStringList& capabilities) const;
   QString agent_mcp_endpoint_;
   std::function<QVariantMap(const QVariantMap&)> composition_handler_;
   std::function<bool()> edit_access_policy_;
+  TimelineTaskLifecycleHandler timeline_task_lifecycle_handler_;
+  TimelineDraftLifecycleHandler timeline_draft_lifecycle_handler_;
   AgentAppCommandRegistry* app_commands_ = nullptr;
   SearchEditWorkflow* search_edit_ = nullptr;
   void acceptPendingConnections();
@@ -89,6 +111,14 @@ class PhotoAutomationBridge final : public QObject {
   [[nodiscard]] bool validMcpAuthorization(const QByteArray& authorization) const;
   [[nodiscard]] bool admitMcpRequest();
   [[nodiscard]] QJsonObject handleCommand(const QString& command, const QJsonObject& args) const;
+  [[nodiscard]] QJsonObject enqueueTimelineH264Export(const QJsonObject& args) const;
+  [[nodiscard]] QJsonObject inspectTimelineH264Export(const QJsonObject& args) const;
+  [[nodiscard]] QJsonObject cancelTimelineH264Export(const QJsonObject& args) const;
+  [[nodiscard]] QVariantMap inspectTimelineRenderGeometry(const QString& clip_id) const;
+  bool eventFilter(QObject* watched, QEvent* event) override;
+  [[nodiscard]] QVariantMap captureVisibleTimelineProof(const QString& capture_id) const;
+  void completeVisibleTimelineProofCapture(const QString& capture_id) const;
+  struct VisibleProofCapture;
   [[nodiscard]] bool writeSessionFile();
   void removeSessionFile() const;
   void recordMcpToolCall(const QString& tool_name, const QString& status);
@@ -97,6 +127,12 @@ class PhotoAutomationBridge final : public QObject {
   CatalogAssetModel* catalog_model_ = nullptr;
   QPointer<TimelineDocumentController> timeline_document_;
   QPointer<TimelinePlaybackController> timeline_playback_;
+  QPointer<JobQueueModel> timeline_job_queue_;
+  QPointer<QObject> qml_root_object_;
+  QPointer<QQuickWindow> wheel_diagnostic_window_;
+  QPointer<QObject> timeline_workspace_loader_;
+  mutable QVariantMap last_native_wheel_event_;
+  qint64 native_wheel_event_count_ = 0;
   QLocalServer* server_ = nullptr;
   QTcpServer* tcp_server_ = nullptr;
   QTcpServer* mcp_http_server_ = nullptr;
@@ -112,6 +148,8 @@ class PhotoAutomationBridge final : public QObject {
   QString mcp_last_tool_call_status_;
   QString mcp_last_tool_call_at_;
   QQueue<qint64> mcp_request_times_ms_;
+  mutable QHash<QString, std::shared_ptr<VisibleProofCapture>> visible_proof_captures_;
+  mutable QElapsedTimer visible_proof_rate_limit_timer_;
   int mcp_active_tool_calls_ = 0;
   QString token_;
   QString session_file_path_;

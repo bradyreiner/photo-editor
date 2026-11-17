@@ -1,0 +1,5 @@
+QCoreApplication::applicationDirPath: Please instantiate the QApplication object first
+QCoreApplication::applicationDirPath: Please instantiate the QApplication object first
+timeline recovery foreground latency: clips=128 checkpoints=40 journal_bytes=40155393 discovery_admission_ms=0.020459 open_admission_ms=0.0215
+timeline projection retention: warm_rss_mib=586.062 repeated_rss_mib=489.781 rss_delta_mib=-1 warm_default_malloc_in_use_mib=262.045 repeated_default_malloc_in_use_mib=89.2942 default_malloc_in_use_delta_mib=-1 warm_default_malloc_allocated_mib=520 repeated_default_malloc_allocated_mib=488 default_malloc_allocated_delta_mib=-1
+timeline scale proof: load=196ms projection=267ms seek_p95=4ms selection_p95=2ms edit_p95=26ms undo_p95=4ms rss_growth_mib=378

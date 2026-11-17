@@ -24,6 +24,10 @@
     auto* shape_type = find_named_item(studio_root, QStringLiteral("photoShapeTypeControl"));
     if (!shape_chooser || !shape_popup || !shape_type || !click_studio_item(shape_chooser) ||
         !wait_for_condition([&] { return shape_popup->property("opened").toBool(); }, 3000) ||
+        !click_studio_item(shape_chooser) ||
+        !wait_for_condition([&] { return !shape_popup->property("visible").toBool(); }, 3000) ||
+        !click_studio_item(shape_chooser) ||
+        !wait_for_condition([&] { return shape_popup->property("opened").toBool(); }, 3000) ||
         !capture_visual_proof(studio_window, studio_root, proof_dir, QStringLiteral("shape-visual-chooser"), 1440, 900,
           {QStringLiteral("photoShapeTypeOption0"), QStringLiteral("photoShapeTypeOption2"),
            QStringLiteral("photoShapeTypeOption4")}, &studio_manifest) ||
