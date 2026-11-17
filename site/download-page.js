@@ -110,8 +110,8 @@
     }
     enableLink(elements.supportPayment, config.supportPaymentUrl, "Support development");
     if (paid) {
-      document.getElementById("commerce-nav").textContent = "Buy";
-      elements.commerceTitle.textContent = both ? "Choose how you create." : "Buy once. Keep creating.";
+      document.getElementById("commerce-nav").textContent = "License";
+      elements.commerceTitle.textContent = both ? "Subscribe or buy a one-time license." : "Buy a one-time Looksy license.";
       elements.commerceDescription.textContent = config.licenseSummary || "Purchase details will be published before sales open.";
       elements.commerceDetail.textContent = both
         ? "Choose a subscription or a one-time license. When editing access ends, you can still view, save, and export existing work."

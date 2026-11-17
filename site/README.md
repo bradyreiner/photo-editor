@@ -74,21 +74,27 @@ GitHub Release assets.
 
 The landing page presents the current creative studio: photo/retouch, layered
 design, boards, video/audio, Scene/3D Motion, and optional local Agent Studio.
-`landing.css` controls the page; `product-tour.js` switches current app captures
-with pointer and arrow/Home/End keyboard support. Policy pages retain `styles.css`.
+`landing.css` presents nine full-screen sections with hidden scrollbars and native
+scroll snapping. `page-navigation.js` advances one screen per wheel gesture,
+keeps trackpad momentum together, and supports arrows, Page Up/Down, Space,
+Home/End, direct section links, and a mobile section picker. Reduced motion skips
+the animation. Short screens and enlarged text can scroll within a section to
+keep content reachable. Policy pages retain `styles.css`.
 
 ```sh
 python3 -m http.server 4173 --bind 127.0.0.1 --directory site
-node --test scripts/test-download-page.cjs
+node --test scripts/test-download-page.cjs scripts/test-page-navigation.cjs
 python3 scripts/validate-release-site.py site
 ```
 
 The screenshots under `assets/captures/2026-11-17/` were captured from the running
 macOS app on that date. Each is an unretouched native window capture, with its
 source, dimensions, and hash recorded beside it. Screenshots open at full size.
-The gallery defaults to an actual saved multi-board design, and offers the
-current photo editor and media library. Without scripting, all three remain
-available in document order. Do not reuse historical UI fixtures as current UI.
+The overview and design screens show an actual saved multi-board design; the
+photo and library screens show their corresponding workspaces. Video, Scene,
+and Agent examples are labeled illustrations or example requests. Without
+scripting, native scroll snapping and section links remain available. Do not
+reuse historical UI fixtures as current UI.
 
 Product copy is grounded in the current QML workspaces, controller interfaces,
 and feature verification documents; the screenshot set does not qualify every
