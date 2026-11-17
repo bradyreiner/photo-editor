@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load the real packaged QML in a private, windowless application instance."""
+"""Load the real packaged QML in a private application instance."""
 
 import argparse
 import os
@@ -13,6 +13,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=45)
+    parser.add_argument("--platform", choices=("offscreen", "cocoa"), default="offscreen",
+                        help="Use cocoa for a production Mac bundle containing only the native platform plugin.")
     args = parser.parse_args()
     app = args.app.resolve()
     if not app.is_file():
@@ -22,7 +24,7 @@ def main():
         root = Path(temporary)
         env = os.environ.copy()
         env.update({
-            "QT_QPA_PLATFORM": "offscreen",
+            "QT_QPA_PLATFORM": args.platform,
             "QT_QUICK_BACKEND": "software",
             "QML_DISABLE_DISK_CACHE": "1",
             "PHOTO_EDITOR_APP_DATA_DIR": str(root / "data"),
