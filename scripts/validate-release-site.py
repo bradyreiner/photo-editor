@@ -22,7 +22,7 @@ class References(HTMLParser):
         values = dict(attrs)
         if values.get("id"):
             self.ids.add(values["id"] or "")
-        for key in ("href", "src"):
+        for key in ("href", "src", "poster", "data-src"):
             value = values.get(key)
             if value:
                 self.references.append(value)

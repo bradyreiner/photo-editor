@@ -13,11 +13,12 @@
   <title>Looksy — Photo editing, graphic design, video & 3D</title>
   <link rel="icon" href="./assets/looksy-icon.png?v=2" type="image/png">
   <link rel="preload" href="./assets/fonts/Anton.ttf" as="font" type="font/ttf" crossorigin>
-  <link rel="stylesheet" href="./landing.css?v=4">
+  <link rel="stylesheet" href="./landing.css?v=5">
   <script defer src="./download-config.js?v=6"></script>
   <script defer src="./download-page.js?v=8"></script>
   <script defer src="./legal-page.js?v=1"></script>
-  <script defer src="./page-navigation.js?v=1"></script>
+  <script defer src="./page-navigation.js?v=2"></script>
+  <script defer src="./product-demos.js?v=1"></script>
 </head>
 <body>
   <a class="skip-link" href="#downloads">Skip to downloads</a>
@@ -32,15 +33,52 @@
       <div class="page-body split-page">
         <div class="page-copy">
           <p class="eyebrow"><span class="rgb-label" aria-hidden="true"><i></i><i></i><i></i></span> LOOKSY / NATIVE DESKTOP APP</p>
-          <h1 id="page-title">EDIT PHOTOS.<br>DESIGN GRAPHICS.<br>CUT VIDEO.</h1>
+          <h1 id="page-title"><span class="headline-line"><span>EDIT PHOTOS.</span></span>
+<span class="headline-line"><span>DESIGN GRAPHICS.</span></span>
+<span class="headline-line"><span>CUT VIDEO.</span></span>
+</h1>
           <p class="lede">Looksy brings photo editing, layered graphic design, video, and 3D motion into one desktop app.</p>
-          <p class="description">For photographers and visual creators who want to organize their media, make the work, and export it from the same place. Your library stays on your computer.</p>
+          <p class="description">Organize your media, build the project, and export finished work. Your library stays on your computer.</p>
           <div class="actions"><a class="button primary" href="#photos">See what you can make <span aria-hidden="true">↓</span></a><span class="release-pill micro" id="channel-pill">Public alpha</span></div>
         </div>
-        <figure class="app-figure">
-          <a href="./assets/captures/2026-11-17/boards.png" target="_blank" rel="noopener" aria-label="Open the Looksy design workspace screenshot full size"><img src="./assets/captures/2026-11-17/boards.png" width="2570" height="1676" fetchpriority="high" alt="Looksy showing an editable menu-board design, neighboring boards, and a stack of text and shape layers."></a>
-          <figcaption><span>Actual Looksy workspace · editable text, shapes, and boards</span><span class="micro">FULL SIZE ↗</span></figcaption>
-        </figure>
+        <figure class="demo-theater hero-demo" data-demo data-rotate aria-label="WATCH THE APP AT WORK">
+          <div class="demo-topline">
+          <span class="micro">
+          <i class="live-dot" aria-hidden="true">
+          </i> WATCH THE APP AT WORK</span>
+          <span class="micro">LOOKSY IN USE</span>
+          </div>
+          <div class="demo-choices" aria-label="Choose a demonstration">
+          <button type="button" data-demo-choice="0" aria-pressed="true">Photo edit</button>
+          <button type="button" data-demo-choice="1" aria-pressed="false">Board project</button>
+          <button type="button" data-demo-choice="2" aria-pressed="false">3D motion</button>
+          </div>
+          <div class="demo-screen">
+          <div class="demo-reel" data-reel>
+          <video data-src="./assets/demos/2026-11-17/photo-edit.mp4" poster="./assets/demos/2026-11-17/photo-edit.webp" preload="none" muted playsinline aria-label="Native photo edit sequence: original, exposure, then warmth and contrast">
+          </video>
+          <p class="demo-caption">Photo editing · native interaction snapshots · 17 Nov 2026</p>
+          </div>
+          <div class="demo-reel" data-reel hidden>
+          <video data-src="./assets/demos/2026-11-17/board-navigation.mp4" poster="./assets/demos/2026-11-17/board-navigation.webp" preload="none" muted playsinline aria-label="Native board navigation sequence: select a board and zoom out">
+          </video>
+          <p class="demo-caption">Board navigation · native interaction snapshots · 17 Nov 2026</p>
+          </div>
+          <div class="demo-reel" data-reel hidden>
+          <video data-src="./assets/demos/2026-11-17/depth-motion.mp4" poster="./assets/demos/2026-11-17/depth-motion.webp" preload="none" muted playsinline aria-label="Actual Looksy depth-motion render of a city photograph">
+          </video>
+          <p class="demo-caption">3D Motion · rendered from a photograph · 2 Nov 2026</p>
+          </div>
+          </div>
+          <figcaption class="demo-toolbar">
+          <button type="button" data-demo-play aria-label="Play demonstration">Play demo <span aria-hidden="true">▶</span>
+          </button>
+          <progress data-demo-progress max="1" value="0" aria-label="Demo progress">
+          </progress>
+          <span class="demo-time micro" data-demo-time>00:00</span>
+          <a class="micro" href="./assets/demos/2026-11-17/photo-edit.mp4" data-demo-open target="_blank" rel="noopener">OPEN VIDEO ↗</a>
+          </figcaption>
+          </figure>
       </div>
     </section>
 
@@ -48,12 +86,54 @@
       <div id="included" class="page-body split-page">
         <div class="page-copy">
           <p class="eyebrow accent-red">01 / PHOTO EDITING & RETOUCHING</p>
-          <h2 id="photos-title">CONTROL COLOR.<br>EDIT WITH MASKS.<br>RETOUCH DETAILS.</h2>
+          <h2 id="photos-title"><span class="headline-line"><span>CONTROL COLOR.</span></span>
+<span class="headline-line"><span>EDIT WITH MASKS.</span></span>
+<span class="headline-line"><span>RETOUCH DETAILS.</span></span>
+</h2>
           <p class="description">Develop RAW files, balance exposure and white balance, and shape the look with curves and color grading. Use selections and masks to edit a face, a sky, or a background separately.</p>
-          <dl class="feature-details"><div><dt>Correct the photograph</dt><dd>Adjust light, color, detail, and lens corrections.</dd></div><div><dt>Work on one area</dt><dd>Use local adjustments, brushes, and layer masks.</dd></div><div><dt>Retouch and match a set</dt><dd>Heal, clone, or use inpainting; copy edits or compare reference-based matching proposals.</dd></div></dl>
+          <details class="tool-details" open><summary>Explore photo tools</summary><dl class="feature-details"><div><dt>Correct the photograph</dt><dd>Adjust light, color, detail, and lens corrections.</dd></div><div><dt>Work on one area</dt><dd>Use local adjustments, brushes, and layer masks.</dd></div><div><dt>Retouch and match a set</dt><dd>Heal, clone, or use inpainting; copy edits or compare reference-based matching proposals.</dd></div></dl></details>
           <a class="text-link" href="#design">Next: build a design from your images →</a>
         </div>
-        <figure class="app-figure"><a href="./assets/captures/2026-11-17/photo.png" target="_blank" rel="noopener" aria-label="Open the current photo editor screenshot full size"><img src="./assets/captures/2026-11-17/photo.png" width="3024" height="1898" loading="lazy" alt="Looksy photo editor with a portrait, filmstrip, white balance, exposure and tone controls, and tabs for effects, layers, and history."></a><figcaption><span>Photo editing · non-destructive adjustments and editable layers</span><span class="micro">FULL SIZE ↗</span></figcaption></figure>
+        <figure class="demo-theater photo-demo" data-demo aria-label="TRY THE PHOTO EDIT">
+          <div class="demo-topline">
+          <span class="micro">
+          <i class="live-dot" aria-hidden="true">
+          </i> TRY THE PHOTO EDIT</span>
+          <span class="micro">LOOKSY IN USE</span>
+          </div>
+          <div class="demo-choices" aria-label="Choose a demonstration">
+          <button type="button" data-demo-choice="0" aria-pressed="true">Drag to compare</button>
+          <button type="button" data-demo-choice="1" aria-pressed="false">See editing steps</button>
+          </div>
+          <div class="demo-screen">
+          <div class="demo-reel" data-reel>
+          <div class="compare-stage" data-comparison>
+          <img src="./assets/demos/2026-11-17/portrait-after.webp" width="600" height="900" alt="Portrait after the exposure, temperature and contrast edit in Looksy">
+          <img class="compare-before" src="./assets/demos/2026-11-17/portrait-before.webp" width="600" height="900" alt="Same portrait before those three adjustments">
+          <span class="compare-label before-label">BEFORE</span>
+          <span class="compare-label after-label">AFTER</span>
+          <span class="compare-divider" aria-hidden="true">
+          <b>↔</b>
+          </span>
+          <input type="range" min="0" max="100" value="50" aria-label="Reveal the before and after photo" data-compare-range>
+          </div>
+          <p class="demo-caption">Same photo, actual app pixels · +0.45 EV / 6000 K / +12% contrast</p>
+          </div>
+          <div class="demo-reel" data-reel hidden>
+          <video data-src="./assets/demos/2026-11-17/photo-edit.mp4" poster="./assets/demos/2026-11-17/photo-edit.webp" preload="none" muted playsinline loop aria-label="Real photo adjustment sequence in the current Looksy editor">
+          </video>
+          <p class="demo-caption">Original → lift exposure → warm the color and add contrast · 17 Nov 2026</p>
+          </div>
+          </div>
+          <figcaption class="demo-toolbar">
+          <button type="button" data-demo-play aria-label="Play demonstration">Play demo <span aria-hidden="true">▶</span>
+          </button>
+          <progress data-demo-progress max="1" value="0" aria-label="Demo progress">
+          </progress>
+          <span class="demo-time micro" data-demo-time>00:00</span>
+          <a class="micro" href="./assets/demos/2026-11-17/photo-edit.mp4" data-demo-open target="_blank" rel="noopener">OPEN VIDEO ↗</a>
+          </figcaption>
+          </figure>
       </div>
     </section>
 
@@ -61,12 +141,37 @@
       <div class="page-body split-page">
         <div class="page-copy">
           <p class="eyebrow accent-green">02 / GRAPHIC DESIGN & BOARDS</p>
-          <h2 id="design-title">DESIGN POSTERS,<br>CAROUSELS &<br>CAMPAIGN GRAPHICS.</h2>
+          <h2 id="design-title"><span class="headline-line"><span>DESIGN POSTERS,</span></span>
+<span class="headline-line"><span>CAROUSELS &</span></span>
+<span class="headline-line"><span>CAMPAIGN GRAPHICS.</span></span>
+</h2>
           <p class="description">Combine photographs, editable type, shapes, paths, and paint on a layered canvas. Arrange several boards in one document to design a carousel, a menu, or a coordinated set of graphics.</p>
-          <dl class="feature-details"><div><dt>Keep the design editable</dt><dd>Move, restyle, mask, and blend individual layers.</dd></div><div><dt>Build a consistent set</dt><dd>Use reusable components, templates, brand kits, and shared-canvas layouts.</dd></div><div><dt>Prepare the deliverables</dt><dd>Export multiple sizes and create a proof PDF for review.</dd></div></dl>
+          <details class="tool-details" open><summary>Explore design tools</summary><dl class="feature-details"><div><dt>Keep the design editable</dt><dd>Move, restyle, mask, and blend individual layers.</dd></div><div><dt>Build a consistent set</dt><dd>Use reusable components, templates, brand kits, and shared-canvas layouts.</dd></div><div><dt>Prepare the deliverables</dt><dd>Export multiple sizes and create a proof PDF for review.</dd></div></dl></details>
           <a class="text-link" href="#video">Next: edit video and audio →</a>
         </div>
-        <figure class="app-figure"><a href="./assets/captures/2026-11-17/boards.png" target="_blank" rel="noopener" aria-label="Open the current boards screenshot full size"><img src="./assets/captures/2026-11-17/boards.png" width="2570" height="1676" loading="lazy" alt="Three saved La Esquina menu boards in Looksy, with 24 editable text and shape layers on the active board."></a><figcaption><span>A real saved project · three boards, with 24 layers on this board</span><span class="micro">FULL SIZE ↗</span></figcaption></figure>
+        <figure class="demo-theater board-demo" data-demo aria-label="BROWSE A REAL BOARD PROJECT">
+          <div class="demo-topline">
+          <span class="micro">
+          <i class="live-dot" aria-hidden="true">
+          </i> BROWSE A REAL BOARD PROJECT</span>
+          <span class="micro">LOOKSY IN USE</span>
+          </div>
+          <div class="demo-screen">
+          <div class="demo-reel" data-reel>
+          <video data-src="./assets/demos/2026-11-17/board-navigation.mp4" poster="./assets/demos/2026-11-17/board-navigation.webp" preload="none" muted playsinline loop aria-label="Native Looksy board navigation and zoom sequence">
+          </video>
+          <p class="demo-caption">Select a neighboring board, then zoom out to see the set · 17 Nov 2026</p>
+          </div>
+          </div>
+          <figcaption class="demo-toolbar">
+          <button type="button" data-demo-play aria-label="Play demonstration">Play demo <span aria-hidden="true">▶</span>
+          </button>
+          <progress data-demo-progress max="1" value="0" aria-label="Demo progress">
+          </progress>
+          <span class="demo-time micro" data-demo-time>00:00</span>
+          <a class="micro" href="./assets/demos/2026-11-17/board-navigation.mp4" data-demo-open target="_blank" rel="noopener">OPEN VIDEO ↗</a>
+          </figcaption>
+          </figure>
       </div>
     </section>
 
@@ -74,20 +179,37 @@
       <div class="page-body split-page">
         <div class="page-copy">
           <p class="eyebrow accent-blue">03 / VIDEO EDITING & AUDIO</p>
-          <h2 id="video-title">CUT VIDEO.<br>ANIMATE TITLES.<br>MIX YOUR AUDIO.</h2>
+          <h2 id="video-title"><span class="headline-line"><span>CUT VIDEO.</span></span>
+<span class="headline-line"><span>ANIMATE TITLES.</span></span>
+<span class="headline-line"><span>MIX YOUR AUDIO.</span></span>
+</h2>
           <p class="description">Build a film or social video from clips, photographs, titles, captions, and sound. Arrange tracks, trim the timing, animate properties with keyframes, and finish the sequence with effects and color.</p>
-          <dl class="feature-details"><div><dt>Edit the sequence</dt><dd>Use blade, ripple, roll, slip, and slide tools.</dd></div><div><dt>Shape movement and sound</dt><dd>Edit Bézier animation curves, mix audio, and work with captions.</dd></div><div><dt>Check before delivery</dt><dd>Inspect color scopes and run export preflight.</dd></div></dl>
+          <details class="tool-details" open><summary>Explore video tools</summary><dl class="feature-details"><div><dt>Edit the sequence</dt><dd>Use blade, ripple, roll, slip, and slide tools.</dd></div><div><dt>Shape movement and sound</dt><dd>Edit Bézier animation curves, mix audio, and work with captions.</dd></div><div><dt>Check before delivery</dt><dd>Inspect color scopes and run export preflight.</dd></div></dl></details>
           <a class="text-link" href="#scene">Next: animate photos and 3D captures →</a>
         </div>
-        <figure class="workflow-figure timeline-example" aria-labelledby="timeline-example-title">
-          <div class="diagram-heading"><span class="micro">TIMELINE WORKFLOW / ILLUSTRATION</span><span class="micro">VIDEO + TITLES + AUDIO</span></div>
-          <h3 id="timeline-example-title">Build a sequence<br>from separate tracks.</h3>
-          <div class="timeline-ruler" aria-hidden="true"><span>00:00</span><span>00:05</span><span>00:10</span><span>00:15</span></div>
-          <div class="track"><span class="track-name">VIDEO</span><div class="track-clips"><span class="clip clip-red">Opening shot</span><span class="clip clip-blue">Detail shot</span><span class="clip clip-green">Final shot</span></div></div>
-          <div class="track"><span class="track-name">TITLES</span><div class="track-clips"><span class="clip clip-title">Opening title</span><span class="clip-space"></span><span class="clip clip-title">End card</span></div></div>
-          <div class="track"><span class="track-name">AUDIO</span><div class="track-clips"><span class="clip clip-audio">Dialogue / music / ambience</span></div></div>
-          <figcaption>Trim the story. Layer in graphics. Set the rhythm with sound.</figcaption>
-        </figure>
+        <figure class="demo-theater film-demo" data-demo aria-label="PLAY A TIMELINE EXPORT">
+          <div class="demo-topline">
+          <span class="micro">
+          <i class="live-dot" aria-hidden="true">
+          </i> PLAY A TIMELINE EXPORT</span>
+          <span class="micro">LOOKSY IN USE</span>
+          </div>
+          <div class="demo-screen">
+          <div class="demo-reel" data-reel>
+          <video data-src="./assets/demos/2026-11-17/timeline-output.mp4" poster="./assets/demos/2026-11-17/timeline-output.webp" preload="none" muted playsinline loop aria-label="A 12-second motion design excerpt exported from Looksy Timeline">
+          </video>
+          <p class="demo-caption">A real Timeline export · motion graphics over film · 2 Nov 2026</p>
+          </div>
+          </div>
+          <figcaption class="demo-toolbar">
+          <button type="button" data-demo-play aria-label="Play demonstration">Play demo <span aria-hidden="true">▶</span>
+          </button>
+          <progress data-demo-progress max="1" value="0" aria-label="Demo progress">
+          </progress>
+          <span class="demo-time micro" data-demo-time>00:00</span>
+          <a class="micro" href="./assets/demos/2026-11-17/timeline-output.mp4" data-demo-open target="_blank" rel="noopener">OPEN VIDEO ↗</a>
+          </figcaption>
+          </figure>
       </div>
     </section>
 
@@ -95,17 +217,37 @@
       <div class="page-body split-page">
         <div class="page-copy">
           <p class="eyebrow accent-red">04 / SCENE & 3D MOTION</p>
-          <h2 id="scene-title">ANIMATE PHOTOS.<br>EXPLORE CAPTURES<br>WITH A 3D CAMERA.</h2>
+          <h2 id="scene-title"><span class="headline-line"><span>ANIMATE PHOTOS.</span></span>
+<span class="headline-line"><span>EXPLORE CAPTURES</span></span>
+<span class="headline-line"><span>WITH A 3D CAMERA.</span></span>
+</h2>
           <p class="description">Use 3D Motion to create depth-based camera movement from a photograph. In Scene, open a Gaussian capture, choose virtual camera positions, and connect saved views into a camera path.</p>
-          <dl class="feature-details"><div><dt>Start with a source</dt><dd>A photograph for depth motion, or a Gaussian PLY for Scene.</dd></div><div><dt>Choose the camera and look</dt><dd>Set framing, focus, lens character, lighting, color, and film controls.</dd></div><div><dt>Render the result</dt><dd>Export a still image, film, or numbered frame sequence.</dd></div></dl>
+          <details class="tool-details" open><summary>Explore motion tools</summary><dl class="feature-details"><div><dt>Start with a source</dt><dd>A photograph for depth motion, or a Gaussian PLY for Scene.</dd></div><div><dt>Choose the camera and look</dt><dd>Set framing, focus, lens character, lighting, color, and film controls.</dd></div><div><dt>Render the result</dt><dd>Export a still image, film, or numbered frame sequence.</dd></div></dl></details>
           <a class="text-link" href="#agent">Next: work with a local AI agent →</a>
         </div>
-        <div class="workflow-figure scene-workflow">
-          <div class="diagram-heading"><span class="micro">TWO WAYS TO CREATE SPATIAL MOTION</span></div>
-          <article><span class="workflow-number accent-red">01</span><div><h3>Animate a photograph</h3><p>Photo → depth → camera movement → film</p></div></article>
-          <article><span class="workflow-number accent-green">02</span><div><h3>Film a captured scene</h3><p>Gaussian scene → saved views → camera path → render</p></div></article>
-          <p class="visual-note">For a parallax shot, a virtual-camera move, or a new viewpoint inside a captured scene.</p>
-        </div>
+        <figure class="demo-theater depth-demo" data-demo aria-label="SEE A PHOTOGRAPH MOVE">
+          <div class="demo-topline">
+          <span class="micro">
+          <i class="live-dot" aria-hidden="true">
+          </i> SEE A PHOTOGRAPH MOVE</span>
+          <span class="micro">LOOKSY IN USE</span>
+          </div>
+          <div class="demo-screen">
+          <div class="demo-reel" data-reel>
+          <video data-src="./assets/demos/2026-11-17/depth-motion.mp4" poster="./assets/demos/2026-11-17/depth-motion.webp" preload="none" muted playsinline loop aria-label="Actual parallax and camera motion rendered from a still city photograph">
+          </video>
+          <p class="demo-caption">One photograph → depth → camera movement · native output · 2 Nov 2026</p>
+          </div>
+          </div>
+          <figcaption class="demo-toolbar">
+          <button type="button" data-demo-play aria-label="Play demonstration">Play demo <span aria-hidden="true">▶</span>
+          </button>
+          <progress data-demo-progress max="1" value="0" aria-label="Demo progress">
+          </progress>
+          <span class="demo-time micro" data-demo-time>00:00</span>
+          <a class="micro" href="./assets/demos/2026-11-17/depth-motion.mp4" data-demo-open target="_blank" rel="noopener">OPEN VIDEO ↗</a>
+          </figcaption>
+          </figure>
       </div>
     </section>
 
@@ -113,9 +255,12 @@
       <div class="page-body split-page">
         <div class="page-copy">
           <p class="eyebrow accent-green">05 / OPTIONAL LOCAL AGENT STUDIO</p>
-          <h2 id="agent-title">DESCRIBE THE EDIT.<br>ADD A REFERENCE.<br>REVIEW THE DRAFT.</h2>
+          <h2 id="agent-title"><span class="headline-line"><span>DESCRIBE THE EDIT.</span></span>
+<span class="headline-line"><span>ADD A REFERENCE.</span></span>
+<span class="headline-line"><span>REVIEW THE DRAFT.</span></span>
+</h2>
           <p class="description">Agent Studio gives you a conversational way to work in Looksy. Choose the photo or project, explain what you want to make, and add a reference to guide the direction.</p>
-          <dl class="feature-details"><div><dt>Define the target</dt><dd>Choose the work the agent should act on.</dd></div><div><dt>Give creative direction</dt><dd>Write a brief and optionally supply a reference photo or look.</dd></div><div><dt>Stay involved</dt><dd>Review proposed work and drafts before accepting changes.</dd></div></dl>
+          <details class="tool-details" open><summary>Explore agent workflow</summary><dl class="feature-details"><div><dt>Define the target</dt><dd>Choose the work the agent should act on.</dd></div><div><dt>Give creative direction</dt><dd>Write a brief and optionally supply a reference photo or look.</dd></div><div><dt>Stay involved</dt><dd>Review proposed work and drafts before accepting changes.</dd></div></dl></details>
           <p class="setup-note">Requires a compatible model and runtime. Available agent actions depend on the build and configuration.</p>
         </div>
         <div class="workflow-figure agent-example">
@@ -131,9 +276,12 @@
       <div class="page-body split-page">
         <div class="page-copy">
           <p class="eyebrow accent-blue">06 / MEDIA LIBRARY & DELIVERY</p>
-          <h2 id="library-title">FIND YOUR MEDIA.<br>KEEP PROJECTS<br>IN ONE LIBRARY.</h2>
+          <h2 id="library-title"><span class="headline-line"><span>FIND YOUR MEDIA.</span></span>
+<span class="headline-line"><span>KEEP PROJECTS</span></span>
+<span class="headline-line"><span>IN ONE LIBRARY.</span></span>
+</h2>
           <p class="description">Browse photographs and clips alongside your saved canvases, board documents, timelines, and scenes. Rate selects, search the library, and return to the project you want to finish.</p>
-          <dl class="feature-details"><div><dt>Organize a shoot</dt><dd>Use projects, ratings, flags, filters, and search.</dd></div><div><dt>Keep media local</dt><dd>Use managed or referenced libraries on your computer.</dd></div><div><dt>Deliver the work</dt><dd>Choose output format, size, and color profile; queue exports and inspect their status.</dd></div></dl>
+          <details class="tool-details" open><summary>Explore library tools</summary><dl class="feature-details"><div><dt>Organize a shoot</dt><dd>Use projects, ratings, flags, filters, and search.</dd></div><div><dt>Keep media local</dt><dd>Use managed or referenced libraries on your computer.</dd></div><div><dt>Deliver the work</dt><dd>Choose output format, size, and color profile; queue exports and inspect their status.</dd></div></dl></details>
           <a class="text-link" href="#downloads">Choose a build for your computer →</a>
         </div>
         <figure class="app-figure"><a href="./assets/captures/2026-11-17/library.png" target="_blank" rel="noopener" aria-label="Open the current Library screenshot full size"><img src="./assets/captures/2026-11-17/library.png" width="2570" height="1676" loading="lazy" alt="Looksy Library showing photographs, video clips, ratings, search, and collections for saved canvases, boards, timelines, and scenes."></a><figcaption><span>Your media and saved creative documents · stored locally</span><span class="micro">FULL SIZE ↗</span></figcaption></figure>
@@ -144,7 +292,9 @@
       <div class="page-body download-layout">
         <div class="page-copy">
           <p class="eyebrow">07 / INSTALL THE APP</p>
-          <h2 id="download-heading">DOWNLOAD<br>LOOKSY.</h2>
+          <h2 id="download-heading"><span class="headline-line"><span>DOWNLOAD</span></span>
+<span class="headline-line"><span>LOOKSY.</span></span>
+</h2>
           <p class="description">Choose the build for your computer. Looksy is in public alpha, so the interface and features will continue to change.</p>
           <details class="requirements"><summary>System requirements & installation</summary><dl class="feature-details"><div><dt>System requirements</dt><dd id="mac-requirement">macOS 13 or newer.</dd><dd id="windows-requirement">Windows 10 22H2 or Windows 11, 64-bit.</dd></div><div><dt>Need help installing?</dt><dd><a id="support-link" href="./support.html">Installation and update support ↗</a></dd></div></dl></details>
           <a class="text-link" href="#support-development">View license options →</a>
@@ -166,7 +316,9 @@
 
     <section id="support-development" class="page" data-page data-label="License & support" aria-labelledby="commerce-title" tabindex="-1">
       <div class="page-body license-layout">
-        <div class="page-copy"><p class="eyebrow">08 / LICENSE & SUPPORT</p><h2 id="commerce-title">SUPPORT LOOKSY<br>DEVELOPMENT.</h2><p id="commerce-description" class="description">Optional support helps fund development, camera coverage, signing, and hardware testing.</p><p class="description">Check the license terms and current build availability before purchasing.</p></div>
+        <div class="page-copy"><p class="eyebrow">08 / LICENSE & SUPPORT</p><h2 id="commerce-title"><span class="headline-line"><span>SUPPORT LOOKSY</span></span>
+<span class="headline-line"><span>DEVELOPMENT.</span></span>
+</h2><p id="commerce-description" class="description">Optional support helps fund development, camera coverage, signing, and hardware testing.</p><p class="description">Check the license terms and current build availability before purchasing.</p></div>
         <div class="license-panel"><div class="commerce-actions"><a id="support-payment" class="commerce-button disabled" href="#" aria-disabled="true" tabindex="-1">Support development</a><a id="purchase-button" class="commerce-button disabled" href="#" aria-disabled="true" tabindex="-1">Buy a supporter license</a><a id="subscription-button" class="commerce-button disabled" href="#" aria-disabled="true" tabindex="-1" hidden>Subscriptions opening soon</a><a id="purchase-recovery" class="commerce-button disabled" href="#" aria-disabled="true" tabindex="-1" hidden>Find my purchase</a><p id="commerce-detail" class="license-detail">Payments are not represented as tax-deductible charitable donations.</p></div><nav class="policy-links" aria-label="Policies and support"><a href="./terms.html">License terms ↗</a><a href="./privacy.html">Privacy ↗</a><a href="./refunds.html">Refunds ↗</a><a href="./licenses.html">Third-party licenses ↗</a><a href="./support.html">Get support ↗</a></nav><p class="publisher">© 2026 <span data-legal-publisher>Publisher identity pending release approval</span></p></div>
       </div>
     </section>

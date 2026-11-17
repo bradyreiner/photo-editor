@@ -49,6 +49,7 @@
 
   function go(index, animate = true, focus = false, writeHash = true) {
     const destination = Math.max(0, Math.min(pages.length - 1, index));
+    document.body.dataset.direction = destination >= current ? 'forward' : 'backward';
     requested = destination;
     showCurrent(destination, writeHash);
     const smooth = animate && !reducedMotion.matches;

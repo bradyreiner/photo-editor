@@ -56,7 +56,7 @@ jobs:
           python3 -B scripts/test-release-commerce.py
           python3 -B scripts/test-bundle-dependency-parser.py
           python3 -B scripts/validate-release-site.py site
-          node --test scripts/test-download-page.cjs scripts/test-page-navigation.cjs
+          node --test scripts/test-download-page.cjs scripts/test-page-navigation.cjs scripts/test-product-demos.cjs
 
       - name: Validate preview proof tooling
         run: |

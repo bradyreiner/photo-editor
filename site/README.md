@@ -83,18 +83,25 @@ keep content reachable. Policy pages retain `styles.css`.
 
 ```sh
 python3 -m http.server 4173 --bind 127.0.0.1 --directory site
-node --test scripts/test-download-page.cjs scripts/test-page-navigation.cjs
+node --test scripts/test-download-page.cjs scripts/test-page-navigation.cjs scripts/test-product-demos.cjs
 python3 scripts/validate-release-site.py site
 ```
 
-The screenshots under `assets/captures/2026-11-17/` were captured from the running
-macOS app on that date. Each is an unretouched native window capture, with its
-source, dimensions, and hash recorded beside it. Screenshots open at full size.
-The overview and design screens show an actual saved multi-board design; the
-photo and library screens show their corresponding workspaces. Video, Scene,
-and Agent examples are labeled illustrations or example requests. Without
-scripting, native scroll snapping and section links remain available. Do not
-reuse historical UI fixtures as current UI.
+The product demonstrations under `assets/demos/2026-11-17/` use fresh native
+photo-edit and board-navigation snapshots, an interactive before/after made
+from actual app pixels, and dated native Timeline and 3D Motion output clips.
+The snapshot sequences use editorial cuts; they are not continuous recordings.
+See their README and provenance for source dates, transformations, and hashes.
+The library screen retains its November 17 native capture; Agent Studio uses an
+explicit example request rather than pretending to show a recorded result.
+
+`product-demos.js` loads and plays only the selected demo in the active section.
+Videos are silent, pause offscreen or when the document is hidden, and expose
+play/pause controls. Reduced motion disables automatic playback and comparison
+animation; explicit play remains available. On phones, tool details use native
+expandable sections to keep the real examples prominent and controls reachable.
+Without scripting, posters remain visible and the video links remain available.
+Do not reuse historical UI fixtures as current UI.
 
 Product copy is grounded in the current QML workspaces, controller interfaces,
 and feature verification documents; the screenshot set does not qualify every

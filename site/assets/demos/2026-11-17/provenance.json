@@ -1,0 +1,237 @@
+{
+  "preparedAt": "2026-11-17",
+  "records": [
+    {
+      "file": "board-navigation.mp4",
+      "sha256": "c2c3aeef6b59906026b2e8e2719cb5c08cad87bcfa76da8828e5fdbebcd05ca2",
+      "bytes": 135254,
+      "kind": "native interaction snapshot sequence",
+      "sourceDate": "2026-11-17",
+      "sources": [
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/boards-01.png",
+          "sha256": "eca6dbe8ae26fa89a8dfc8b563e304ada583e1b35dbffe3fe9acedb0bd87bd55"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/boards-02.png",
+          "sha256": "47a64111c18e236fb163a5c9382164bb232b90c5ab6c73199d6f164c9573dab1"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/boards-wide.png",
+          "sha256": "5ead7474113d4ea52edd8232264ab3b1ecf1aa1b38043ae0c492bda65112bc07"
+        }
+      ],
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1440,
+            "height": 810,
+            "avg_frame_rate": "24/1",
+            "side_data_list": [
+              {}
+            ]
+          }
+        ],
+        "format": {
+          "duration": "10.041667"
+        }
+      }
+    },
+    {
+      "file": "board-navigation.webp",
+      "sha256": "53f8a90a39823c641725385f66cc25cdc2a01f7c0cc406f3af3ca99e808e8544",
+      "bytes": 63520,
+      "kind": "native interaction snapshot sequence",
+      "sourceDate": "2026-11-17",
+      "sources": [
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/boards-01.png",
+          "sha256": "eca6dbe8ae26fa89a8dfc8b563e304ada583e1b35dbffe3fe9acedb0bd87bd55"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/boards-02.png",
+          "sha256": "47a64111c18e236fb163a5c9382164bb232b90c5ab6c73199d6f164c9573dab1"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/boards-wide.png",
+          "sha256": "5ead7474113d4ea52edd8232264ab3b1ecf1aa1b38043ae0c492bda65112bc07"
+        }
+      ]
+    },
+    {
+      "file": "depth-motion.mp4",
+      "sha256": "87c7c9d5b5e78518f78bab640044ba4cd1834ed145f58b3b8a703c08bdb0a602",
+      "bytes": 608443,
+      "kind": "native rendered output",
+      "sourceDate": "2026-11-02",
+      "sources": [
+        {
+          "path": ".photo-editor/depth-motion/photo-final/motion.mp4",
+          "sha256": "757bbf858a94bef2f1ae45d5f104566396687ba41155e1c0d4521b3f98a015f4"
+        }
+      ],
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 640,
+            "height": 512,
+            "avg_frame_rate": "24/1"
+          }
+        ],
+        "format": {
+          "duration": "4.000000"
+        }
+      }
+    },
+    {
+      "file": "depth-motion.webp",
+      "sha256": "e9d1dccb1850b4ea0351c57efdea7dad0a420cf796ecd0a82e8ef25627ea606f",
+      "bytes": 45192,
+      "kind": "native rendered output",
+      "sourceDate": "2026-11-02",
+      "sources": [
+        {
+          "path": ".photo-editor/depth-motion/photo-final/motion.mp4",
+          "sha256": "757bbf858a94bef2f1ae45d5f104566396687ba41155e1c0d4521b3f98a015f4"
+        }
+      ]
+    },
+    {
+      "file": "photo-edit.mp4",
+      "sha256": "29f659396fdd55a7fa443e629ff9ba307df39ace8b3fda1a1c120cf9e5af5b72",
+      "bytes": 145503,
+      "kind": "native interaction snapshot sequence",
+      "sourceDate": "2026-11-17",
+      "sources": [
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-before.png",
+          "sha256": "e31811cccdc587a0054a507b218c5a54f8e4eaa6a672cf2efa99ac7b22326075"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-exposure.png",
+          "sha256": "29ca23b97630572aec2b5a86970120ccb917a53ad099921fe6d4132e1967aafc"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-after.png",
+          "sha256": "2a33da6f08d552b8511d2a59a8edfe2ee120c98072737e8d52efa28163f39214"
+        }
+      ],
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1440,
+            "height": 810,
+            "avg_frame_rate": "24/1",
+            "side_data_list": [
+              {}
+            ]
+          }
+        ],
+        "format": {
+          "duration": "10.041667"
+        }
+      }
+    },
+    {
+      "file": "photo-edit.webp",
+      "sha256": "291ee97c12370235774b2a0742be42b821e1d3ef0804062b5dab8bcda098d272",
+      "bytes": 54354,
+      "kind": "native interaction snapshot sequence",
+      "sourceDate": "2026-11-17",
+      "sources": [
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-before.png",
+          "sha256": "e31811cccdc587a0054a507b218c5a54f8e4eaa6a672cf2efa99ac7b22326075"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-exposure.png",
+          "sha256": "29ca23b97630572aec2b5a86970120ccb917a53ad099921fe6d4132e1967aafc"
+        },
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-after.png",
+          "sha256": "2a33da6f08d552b8511d2a59a8edfe2ee120c98072737e8d52efa28163f39214"
+        }
+      ]
+    },
+    {
+      "file": "portrait-after.webp",
+      "sha256": "4677b08a17063f8d70bfaa0ff0bd71f78510afccd9bdd7f88563e0bf2ec1480d",
+      "bytes": 92298,
+      "kind": "native photo before/after capture crop",
+      "sourceDate": "2026-11-17",
+      "sources": [
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-after.png",
+          "sha256": "2a33da6f08d552b8511d2a59a8edfe2ee120c98072737e8d52efa28163f39214"
+        }
+      ]
+    },
+    {
+      "file": "portrait-before.webp",
+      "sha256": "c5c1d866481c49159e4ae3177e674f51188e663a7c57e5c259ad2aa3e0ff2f16",
+      "bytes": 85788,
+      "kind": "native photo before/after capture crop",
+      "sourceDate": "2026-11-17",
+      "sources": [
+        {
+          "path": ".photo-editor/site-demo-source/2026-11-17/photo-before.png",
+          "sha256": "e31811cccdc587a0054a507b218c5a54f8e4eaa6a672cf2efa99ac7b22326075"
+        }
+      ]
+    },
+    {
+      "file": "timeline-output.mp4",
+      "sha256": "0c21926c689157085adf55fc8f074074505b99af958a7ae065c5e7a9cf659636",
+      "bytes": 1639566,
+      "kind": "native rendered output",
+      "sourceDate": "2026-11-02",
+      "sources": [
+        {
+          "path": "marketing/campaigns/looksi-launch-2026-11-16/v2/media/archive/native-timeline-review-2026-11-02.mp4",
+          "sha256": "6cedcbd366c42d2d4b116557016bf2fbd0905f48d5fc1e8d6f92f7ed9f3bb596"
+        }
+      ],
+      "media": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "30/1"
+          }
+        ],
+        "format": {
+          "duration": "12.000000"
+        }
+      }
+    },
+    {
+      "file": "timeline-output.webp",
+      "sha256": "4accf2dfd71e111bba6ca5e824a048d8a838409707ea00584205bb6e5abda2ff",
+      "bytes": 71868,
+      "kind": "native rendered output",
+      "sourceDate": "2026-11-02",
+      "sources": [
+        {
+          "path": "marketing/campaigns/looksi-launch-2026-11-16/v2/media/archive/native-timeline-review-2026-11-02.mp4",
+          "sha256": "6cedcbd366c42d2d4b116557016bf2fbd0905f48d5fc1e8d6f92f7ed9f3bb596"
+        }
+      ]
+    }
+  ],
+  "captureNotes": "Fresh screenshots from the exposed running release app through native CUA. The photo controls were changed from 5500 K / 0 EV / 0% contrast to 6000 K / +0.45 EV / +12%, then all three were restored. Board selection and zoom were view operations. The original unsaved timeline was preserved and restored as the active workspace.",
+  "editingNotes": "Photo and board MP4s are editorial sequences of three native snapshots held for 2.5 seconds each, with hard cuts. They are not continuous screen recordings and do not claim interaction latency. The viewport crops remove the filmstrip. Portrait comparisons crop the exact same photo rectangle from before/after screenshots. No generated app pixels or simulated photographic treatment. Video output examples retain their older source dates and are not current UI recordings.",
+  "timelineReceipt": "marketing/campaigns/looksi-launch-2026-11-16/v2/media/archive/native-timeline-render-receipt.json",
+  "depthProject": ".photo-editor/depth-motion/photo-final/project.depthmotion.json"
+}
