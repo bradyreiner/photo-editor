@@ -8389,7 +8389,8 @@ set_tests_properties(timeline_owned_clip_map_snapshot_metacall_workflow_test PRO
   photo_editor_apply_warnings(mask_edit_normalization_test)
   add_test(NAME mask_edit_normalization_test COMMAND mask_edit_normalization_test)
 
-  add_executable(timeline_history_workflow_regression timeline_document_controller_test.cpp)
+  add_executable(timeline_history_workflow_regression
+    timeline_document_controller_test.cpp timeline_mask_frame_cache_test.cpp)
   target_include_directories(timeline_history_workflow_regression PRIVATE ../apps/desktop/src)
   target_compile_definitions(timeline_history_workflow_regression PRIVATE PHOTO_EDITOR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
   target_link_libraries(timeline_history_workflow_regression PRIVATE desktop_shell_test_runtime Qt6::Widgets Qt6::Quick Qt6::Multimedia Qt6::Concurrent photo_engine)
@@ -9238,6 +9239,16 @@ foreach(target IN LISTS photo_editor_test_targets)
       ../apps/desktop/src/timeline_voiceover_recorder.cpp)
   endif()
   if(target_sources AND "../apps/desktop/src/timeline_document_controller.cpp" IN_LIST target_sources)
+    if(NOT "../apps/desktop/src/carousel_document_controller.cpp" IN_LIST target_sources)
+      target_sources("${target}" PRIVATE
+        ../apps/desktop/src/carousel_document_controller.h
+        ../apps/desktop/src/carousel_document_controller.cpp)
+    endif()
+    if(NOT "../apps/desktop/src/timeline_video_grade_runtime.cpp" IN_LIST target_sources)
+      target_sources("${target}" PRIVATE
+        ../apps/desktop/src/timeline_video_grade_runtime.h
+        ../apps/desktop/src/timeline_video_grade_runtime.cpp)
+    endif()
     if(NOT "../apps/desktop/src/timeline_asset_record_lookup.cpp" IN_LIST target_sources)
       target_sources("${target}" PRIVATE
         ../apps/desktop/src/timeline_asset_record_lookup.h

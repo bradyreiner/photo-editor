@@ -102,6 +102,7 @@
 #include "counting_preview_image_provider.h"
 #include "native_preview_readback.h"
 #include "editor_preview_texture_item.h"
+#include "scope_plot_item.h"
 #include "export_job_controller.h"
 #include "job_queue_model.h"
 #include "job_runner.h"
@@ -6476,6 +6477,7 @@ int run_actual_app_workflow(int argc, char** argv) {
   editor_preview.setPreviewTargetEdge(960);
 
   qmlRegisterType<photo_editor::desktop::PhotoTextDocumentStyle>("PhotoEditor", 1, 0, "PhotoTextDocumentStyle");
+  qmlRegisterType<photo_editor::desktop::ScopePlotItem>("PhotoEditor", 1, 0, "ScopePlotItem");
   qmlRegisterType<photo_editor::desktop::SceneLibraryController>("PhotoEditor", 1, 0, "SceneLibraryController");
   qmlRegisterType<photo_editor::desktop::SceneVideoRecorder>("PhotoEditor", 1, 0, "SceneVideoRecorder");
   qmlRegisterType<photo_editor::desktop::DepthMotionController>("PhotoEditor", 1, 0, "DepthMotionController");

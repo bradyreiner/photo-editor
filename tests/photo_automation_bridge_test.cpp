@@ -10560,9 +10560,12 @@ int main(int argc, char** argv) {
         planning_continuation.value(QStringLiteral("completedStages"))
             .toStringList();
     QStringList expected_model_tool_stages{QStringLiteral("primary-plan")};
-    for (int round = 1; round <= expected_tool_rounds; ++round)
-      expected_model_tool_stages.append(round == 1 ? QStringLiteral("model-tool-follow-up") :
-          QStringLiteral("model-tool-follow-up-%1").arg(round));
+    for (int round = 1; round <= expected_tool_rounds; ++round) {
+      if (round == 1)
+        expected_model_tool_stages.append(QStringLiteral("model-tool-follow-up"));
+      else
+        expected_model_tool_stages.append(QStringLiteral("model-tool-follow-up-%1").arg(round));
+    }
     const auto completed_repair_stages =
         completed_planning_stages.mid(expected_model_tool_stages.size());
     const auto is_valid_repair_stage = [](const QString& stage) {

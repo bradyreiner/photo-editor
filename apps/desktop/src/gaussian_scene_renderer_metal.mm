@@ -1705,11 +1705,14 @@ class MetalGaussianRenderer final : public GaussianSceneRenderer {
     pipeline_ = [device_ newRenderPipelineStateWithDescriptor:descriptor error:&error];
     encode_ = [device_ newComputePipelineStateWithFunction:[library newFunctionWithName:@"encode_output"] error:&error];
     integrate_ = [device_ newComputePipelineStateWithFunction:[library newFunctionWithName:@"integrate_aperture"] error:&error];
+    auto* ray_constants = [MTLFunctionConstantValues new]; const bool no_spatial = false;
+    [ray_constants setConstantValue:&no_spatial type:MTLDataTypeBool atIndex:0];
+    [ray_constants setConstantValue:&no_spatial type:MTLDataTypeBool atIndex:1];
+    id<MTLFunction> ray_capture_function = [library newFunctionWithName:@"trace_primary_capture" constantValues:ray_constants error:&error];
+    if (ray_capture_function == nil) {
+      error_ = error ? QString::fromNSString(error.localizedDescription) : "Cannot initialize primary-ray function."; return false;
+    }
     if (native_scan_) {
-      auto* ray_constants = [MTLFunctionConstantValues new]; const bool no_spatial = false;
-      [ray_constants setConstantValue:&no_spatial type:MTLDataTypeBool atIndex:0];
-      [ray_constants setConstantValue:&no_spatial type:MTLDataTypeBool atIndex:1];
-      id<MTLFunction> ray_capture_function = [library newFunctionWithName:@"trace_primary_capture" constantValues:ray_constants error:&error];
       id<MTLFunction> shadow_intersection = [library newFunctionWithName:@"scan_particle_intersection"];
       id<MTLFunction> radiance_intersection = [library newFunctionWithName:@"scan_radiance_intersection"];
       if (ray_capture_function == nil || shadow_intersection == nil || radiance_intersection == nil) {
@@ -1728,7 +1731,7 @@ class MetalGaussianRenderer final : public GaussianSceneRenderer {
       [ray_capture_shadow_functions_ setFunction:[trace_primary_capture_ functionHandleWithFunction:shadow_intersection] atIndex:0];
       [ray_capture_radiance_functions_ setFunction:[trace_primary_capture_ functionHandleWithFunction:radiance_intersection] atIndex:0];
     } else {
-      trace_primary_capture_ = [device_ newComputePipelineStateWithFunction:[library newFunctionWithName:@"trace_primary_capture"] error:&error];
+      trace_primary_capture_ = [device_ newComputePipelineStateWithFunction:ray_capture_function error:&error];
     }
     halation_ = [device_ newComputePipelineStateWithFunction:[library newFunctionWithName:@"halation_horizontal"] error:&error];
     camera_highlights_ = [device_ newComputePipelineStateWithFunction:[library newFunctionWithName:@"camera_highlights"] error:&error];
