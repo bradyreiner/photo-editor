@@ -6866,6 +6866,16 @@ TimelineDocumentController::TimelineDocumentController(QObject* parent)
 }
 
 TimelineDocumentController::~TimelineDocumentController() {
+  // The catalog reader uses Qt networking. Finish this controller's reader
+  // before its application can tear down the socket-engine registry.
+  if (recent_timelines_watcher_ != nullptr) {
+    recent_timelines_refresh_pending_ = false;
+    recent_timelines_watcher_->disconnect(this);
+    recent_timelines_watcher_->cancel();
+    recent_timelines_watcher_->waitForFinished();
+    delete recent_timelines_watcher_;
+    recent_timelines_watcher_ = nullptr;
+  }
   if (carousel_board_cancel_) carousel_board_cancel_->store(true, std::memory_order_relaxed);
   if (render_cache_generator_cancel_token_) {
     render_cache_generator_cancel_token_->store(true, std::memory_order_relaxed);
