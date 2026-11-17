@@ -1,10 +1,25 @@
 # Looksy commercial launch
 
+## Billing provider decision required — 2026-11-17
+
+The current adapter and product configuration use Lemon Squeezy. Resolve the
+replacement provider and licensing/fulfillment design before a new paid launch;
+the verified vendor announcement and dates are recorded in the
+[production launch checklist](production-launch-checklist.md). Existing purchases
+and receipt-only rights must survive migration. No provider switch or production
+payment configuration has occurred.
+
+The [production launch checklist](production-launch-checklist.md) now includes
+the required email-account/recovery, VIP/admin, payment, diagnostics and installed
+updater walkthrough. Existing license-key activation does not satisfy the newly
+confirmed email sign-in requirement.
+
 ## Agreed product
 
 - Both subscriptions and one-time licenses for the purchased major version.
 - Direct downloads for Apple silicon Macs and Windows x64; Intel Macs are deferred.
-- Lemon Squeezy hosted checkout, receipts, and purchase recovery.
+- Hosted checkout, receipts and purchase recovery; the original Lemon Squeezy
+  integration now requires a replacement provider decision.
 - Price is undecided. Legal publisher and domain are undecided.
 - After expiry, viewing, saving and exporting existing work remain available;
   new edits require active access.

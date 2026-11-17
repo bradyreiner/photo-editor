@@ -1,5 +1,16 @@
 # Customer accounts, guests, keys and roles
 
+**Launch scope update — 2026-11-17:** real customer email sign-in and account
+recovery are now required, along with owner-managed VIP code creation and
+revocation. Those workflows are not implemented by the setup commands below.
+Use the [production launch checklist](production-launch-checklist.md) for the
+ordered implementation and installed-app acceptance matrix.
+
+The provider-specific instructions below describe the existing Lemon Squeezy
+adapter. Resolve billing replacement before new hosted payment setup; the
+vendor announcement and dates are in the production launch checklist. Retain
+these instructions for reviewing the current adapter and any legacy store.
+
 The existing account model uses guest trials and purchase license keys. A guest
 is an anonymous installation; a paid customer is identified by the verified
 Lemon Squeezy purchase. Email sign-in, passwords and cross-device guest recovery

@@ -2,7 +2,19 @@
 
 Worker + D1 service, Cloudflare Access staff dashboard, Lemon Squeezy purchase
 validation, and device-bound Ed25519 desktop entitlements. No production resources
-have been created. The checked-in configuration intentionally cannot issue leases.
+are established by the checked-in setup; live deployment has not been verified
+in this checkout. The checked-in configuration intentionally cannot issue leases.
+
+**Launch planning update — 2026-11-17:** customer email sign-in/recovery and an
+admin-issued VIP grant workflow are required but not implemented. The pushed
+customer CI job also fails its edit-admission audit on newer APIs. Follow the
+[production launch checklist](../../docs/production-launch-checklist.md) before
+calling the installed customer journey ready.
+
+The existing Lemon Squeezy billing adapter is also pending replacement. The
+vendor announcement and dates are recorded in the production launch checklist.
+The provider-specific setup below documents the current implementation; choose
+the replacement/migration path before provisioning a new paid launch.
 
 For the guided account/guest/key/role setup, start with
 [Customer platform setup](../../docs/customer-platform-setup.md). `npm run
