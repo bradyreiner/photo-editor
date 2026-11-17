@@ -8391,7 +8391,7 @@ set_tests_properties(timeline_owned_clip_map_snapshot_metacall_workflow_test PRO
 
   add_executable(timeline_history_workflow_regression timeline_document_controller_test.cpp)
   target_include_directories(timeline_history_workflow_regression PRIVATE ../apps/desktop/src)
-  target_link_libraries(timeline_history_workflow_regression PRIVATE desktop_shell_test_runtime Qt6::Widgets Qt6::Concurrent photo_engine)
+  target_link_libraries(timeline_history_workflow_regression PRIVATE desktop_shell_test_runtime Qt6::Widgets Qt6::Quick Qt6::Multimedia Qt6::Concurrent photo_engine)
   photo_editor_apply_warnings(timeline_history_workflow_regression)
   foreach(workflow color-grade-curve cube-lut shared-keyframe-curve title-motion-keyframe)
     add_test(NAME timeline_history_${workflow}_regression

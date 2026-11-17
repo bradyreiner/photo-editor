@@ -106,6 +106,7 @@ jobs:
           python3 -B scripts/test-prune-qt-quick-controls-styles.py
           python3 -B scripts/test-prune-qt-macos-runtime.py
           python3 -B scripts/test-sign-macos-bundle.py
+          python3 -B scripts/test-preserve-prepared-app-runtimes.py
           python3 -B scripts/validate-checklist-index.py
           python3 -B scripts/test-architecture-boundaries.py
 

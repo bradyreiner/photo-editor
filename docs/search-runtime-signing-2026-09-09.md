@@ -15,9 +15,14 @@ The corrected sequence is:
    the final inventory. The input runtime is not modified. Output cannot already
    exist or be nested within the source. Failed work is not silently promoted.
 3. Configure/build the app with the prepared output. CMake embeds the same final
-   receipt digest in the executable and `FramehouseSearchRuntimeReceiptSHA256`
+   receipt digest in the executable and `LooksySearchRuntimeReceiptSHA256`
    in Info.plist. Plist generation now follows runtime selection.
-4. The normal app signer verifies that exact inventory and its native signatures
+4. During Qt deployment, independently prepared search and agent runtimes are
+   temporarily moved outside the app bundle. They are restored byte-for-byte
+   after `macdeployqt` finishes, before final app sealing. Qt must not strip or
+   rewrite their binaries after inventory generation. Stale staging and occupied
+   restore destinations fail rather than overwriting either artifact.
+5. The normal app signer verifies that exact inventory and its native signatures
    before any signing writes. It leaves the prepared runtime's files and nested
    frameworks untouched while signing the rest of the app. It checks the runtime
    again after the outer app seal and normal deep/strict signature verification.

@@ -135,7 +135,6 @@ jobs:
         run: echo "Candidate only. Native release qualification has not been granted." >> "$GITHUB_STEP_SUMMARY"
 
   package:
-    timeout-minutes: 90
     needs: [quality-gate, editor-regression-proof]
     env:
       FRAMEHOUSE_WEBSITE_URL: ${{ vars.LOOKSY_WEBSITE_URL || vars.FRAMEHOUSE_WEBSITE_URL || vars.VIREL_WEBSITE_URL }}

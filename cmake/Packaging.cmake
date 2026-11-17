@@ -173,10 +173,13 @@ include(\"${CMAKE_SOURCE_DIR}/cmake/PruneQtQuickControlsStyles.cmake\")
 framehouse_prune_deployed_qt_quick_controls_styles(\"${FRAMEHOUSE_PRODUCT_SLUG}.app\" plugins_found)
 include(\"${CMAKE_SOURCE_DIR}/cmake/DereferenceQtQmlPlugins.cmake\")
 framehouse_dereference_deployed_qml_plugins(\"${FRAMEHOUSE_PRODUCT_SLUG}.app\" \${plugins_found})
+include(\"${CMAKE_SOURCE_DIR}/cmake/PreservePreparedAppRuntimes.cmake\")
+photo_editor_preserve_prepared_app_runtimes(\"${FRAMEHOUSE_PRODUCT_SLUG}.app\")
 qt6_deploy_runtime_dependencies(
   EXECUTABLE \"$<TARGET_FILE_NAME:${target_name}>.app\"
   ADDITIONAL_MODULES \${plugins_found}
   NO_OVERWRITE)
+photo_editor_restore_prepared_app_runtimes(\"${FRAMEHOUSE_PRODUCT_SLUG}.app\")
 include(\"${CMAKE_SOURCE_DIR}/cmake/PruneQtMacosRuntime.cmake\")
 framehouse_prune_deployed_qt_macos_runtime(\"${FRAMEHOUSE_PRODUCT_SLUG}.app\")")
     install(SCRIPT ${deploy_script})
