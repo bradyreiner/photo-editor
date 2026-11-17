@@ -254,7 +254,8 @@ Item {
                         background: InputFieldSurface { inputControl: parent }
                         onAccepted: {
                             root.sizeTextAccepted(text);
-                            if (root.acceptSizeText === null || root.acceptSizeText(text))
+                            const acceptSizeText = root.acceptSizeText
+                            if (typeof acceptSizeText !== "function" || acceptSizeText.call(root, text))
                                 focus = false;
                             else {
                                 text = root.sizePercentText;
@@ -264,8 +265,9 @@ Item {
                         onActiveFocusChanged: {
                             if (!activeFocus) {
                                 root.sizeTextEditingFinished(text);
-                                if (root.commitSizeText !== null)
-                                    root.commitSizeText(text);
+                                const commitSizeText = root.commitSizeText
+                                if (typeof commitSizeText === "function")
+                                    commitSizeText.call(root, text);
                             }
                         }
                     }
@@ -348,8 +350,9 @@ Item {
                     stepSize: 1
                     value: Number(root.sizePercentText)
                     onMoved: {
-                        if (root.acceptSizeText !== null)
-                            root.acceptSizeText(String(Math.round(value)));
+                        const acceptSizeText = root.acceptSizeText
+                        if (typeof acceptSizeText === "function")
+                            acceptSizeText.call(root, String(Math.round(value)));
                         else
                             root.sizeTextAccepted(String(Math.round(value)));
                     }

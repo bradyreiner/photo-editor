@@ -1691,15 +1691,14 @@ std::array<double, 3> aces2_render_to_linear_display_rgb(
       rendered_jmh,
       parameters.output_appearance);
 
-  if (!rgb_inside_display_cube(
-          physical_rgb,
-          parameters.maximum_physical_rgb) &&
-      rendered_jmh.m > 0.0) {
-    // The uncached reference path finds the exact constant-J/h boundary. A
-    // compiled processor samples its immutable boundary table, then verifies
-    // containment and falls back to the exact search if interpolation was
-    // optimistic. Both paths use the same smooth 75-percent onset.
+  if (rendered_jmh.m > 0.0) {
+    // Apply the smooth compression before the gamut boundary is crossed. If
+    // this is gated on an out-of-cube RGB, the 75-percent onset is skipped
+    // for in-gamut colors and the output jumps at the boundary.
     const auto original_colorfulness = rendered_jmh.m;
+    const auto initially_inside = rgb_inside_display_cube(
+        physical_rgb,
+        parameters.maximum_physical_rgb);
     const auto has_compiled_boundary =
         parameters.gamut_boundary_table != nullptr &&
         gamut_boundary_table_valid(*parameters.gamut_boundary_table);
@@ -1710,36 +1709,68 @@ std::array<double, 3> aces2_render_to_linear_display_rgb(
                   rendered_jmh.h_degrees,
                   *parameters.gamut_boundary_table)
             : 0.0;
-    const auto boundary =
-        has_compiled_boundary
-            ? boundary_estimate
-            : exact_target_gamut_boundary(
-                  rendered_jmh.j,
-                  rendered_jmh.h_degrees,
-                  parameters.output_appearance,
-                  parameters.maximum_physical_rgb,
-                  original_colorfulness);
-    rendered_jmh.m = compress_colorfulness_to_boundary(
-        original_colorfulness,
-        boundary);
-    physical_rgb = aces2_hellwig_jmh_to_linear_rgb(
-        rendered_jmh,
-        parameters.output_appearance);
-    if (!rgb_inside_display_cube(
-            physical_rgb,
-            parameters.maximum_physical_rgb)) {
-      const auto exact_boundary = exact_target_gamut_boundary(
-          rendered_jmh.j,
-          rendered_jmh.h_degrees,
-          parameters.output_appearance,
-          parameters.maximum_physical_rgb,
-          original_colorfulness);
-      rendered_jmh.m = compress_colorfulness_to_boundary(
-          original_colorfulness,
-          exact_boundary);
-      physical_rgb = aces2_hellwig_jmh_to_linear_rgb(
-          rendered_jmh,
+    auto needs_compression = false;
+    auto boundary = boundary_estimate;
+    if (has_compiled_boundary) {
+      needs_compression =
+          !initially_inside ||
+          original_colorfulness > 0.75 * boundary_estimate;
+    } else {
+      // The exact reference path has no cached boundary table. Probe at the
+      // inverse of the smooth-compression onset: if that larger colorfulness
+      // is still in gamut, the current sample is at or below 75% of the exact
+      // boundary and needs no compression or boundary search.
+      const auto probe_colorfulness = original_colorfulness / 0.75;
+      const auto probe_rgb = aces2_hellwig_jmh_to_linear_rgb(
+          {.j = rendered_jmh.j,
+           .m = probe_colorfulness,
+           .h_degrees = rendered_jmh.h_degrees},
           parameters.output_appearance);
+      const auto probe_inside = rgb_inside_display_cube(
+          probe_rgb,
+          parameters.maximum_physical_rgb);
+      needs_compression = !initially_inside || !probe_inside;
+      if (needs_compression) {
+        boundary = exact_target_gamut_boundary(
+            rendered_jmh.j,
+            rendered_jmh.h_degrees,
+            parameters.output_appearance,
+            parameters.maximum_physical_rgb,
+            probe_inside ? original_colorfulness : probe_colorfulness);
+      }
+    }
+
+    if (needs_compression) {
+      const auto compressed_colorfulness = compress_colorfulness_to_boundary(
+          original_colorfulness,
+          boundary);
+      if (compressed_colorfulness != original_colorfulness) {
+        rendered_jmh.m = compressed_colorfulness;
+        physical_rgb = aces2_hellwig_jmh_to_linear_rgb(
+            rendered_jmh,
+            parameters.output_appearance);
+      }
+      if (!rgb_inside_display_cube(
+              physical_rgb,
+              parameters.maximum_physical_rgb)) {
+        // The compiled table is interpolated; verify its result and use an
+        // exact constant-J/h boundary if that estimate was optimistic.
+        const auto exact_boundary = exact_target_gamut_boundary(
+            rendered_jmh.j,
+            rendered_jmh.h_degrees,
+            parameters.output_appearance,
+            parameters.maximum_physical_rgb,
+            original_colorfulness);
+        const auto exact_colorfulness = compress_colorfulness_to_boundary(
+            original_colorfulness,
+            exact_boundary);
+        if (exact_colorfulness != rendered_jmh.m) {
+          rendered_jmh.m = exact_colorfulness;
+          physical_rgb = aces2_hellwig_jmh_to_linear_rgb(
+              rendered_jmh,
+              parameters.output_appearance);
+        }
+      }
     }
   }
 

@@ -160,6 +160,7 @@
     if (httpsUrl(state.notesUrl)) {
       elements.notes.href = state.notesUrl;
       elements.notes.removeAttribute("aria-disabled");
+      elements.notes.removeAttribute("tabindex");
       elements.notes.textContent = "Read release notes and checksums";
     }
 

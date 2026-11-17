@@ -2,6 +2,13 @@
 
 #include <algorithm>
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
+#include <QStringList>
+
 namespace photo_editor::desktop {
 
 namespace {

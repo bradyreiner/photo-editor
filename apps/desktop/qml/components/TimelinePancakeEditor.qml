@@ -444,7 +444,7 @@ Item {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    height: 1
+                    Layout.preferredHeight: 1
                     color: theme.alpha(theme.lineSoft, 0.30)
                 }
 

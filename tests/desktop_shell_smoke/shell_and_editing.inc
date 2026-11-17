@@ -2209,6 +2209,7 @@ ApplicationWindow {
             influencesProofCritique: true,
             numericThresholdOverridesAllowed: false,
             professionalReadinessClaimed: false,
+)qml") + QByteArray(R"qml(
             storesImageBytes: false,
             storesSourcePaths: false
         })
@@ -2408,6 +2409,7 @@ ApplicationWindow {
             { stage: "render", status: "complete", detail: "Rendered actual before and after proofs." },
             { stage: "validate", status: "complete", detail: "Verified the samples against the requested result." }
         ]
+)qml") + QByteArray(R"qml(
         property var progressivePreview: harness.showProgressivePreview ? ({
             contract: "agent-progressive-draft-preview-v1",
             twoSpeedContract: "agent-two-speed-planning-preview-v1",
@@ -2617,6 +2619,7 @@ ApplicationWindow {
                         {
                             clusterId: "reception-tungsten",
                             label: "Reception",
+)qml") + QByteArray(R"qml(
                             photoCount: 172,
                             consistentCount: 171,
                             driftCount: 1,
@@ -2821,6 +2824,7 @@ ApplicationWindow {
                         semanticRequestedCount: 0,
                         guidedRequestedCount: 1,
                         generatedCount: 1,
+)qml") + QByteArray(R"qml(
                         semanticGeneratedCount: 0,
                         guidedGeneratedCount: 1,
                         fallbackCount: 0,
@@ -3036,6 +3040,7 @@ ApplicationWindow {
                 confidence: "medium",
                 priorRunCount: 3,
                 priorPhotoCount: 120,
+)qml") + QByteArray(R"qml(
                 estimatedAutomaticCount: 18,
                 estimatedReviewCount: 2,
                 lowerReviewCount: 1,
@@ -3257,6 +3262,7 @@ ApplicationWindow {
         function reviseAssignmentStoryRole(assetId, role) {
             const requestedAssetId = String(assetId || "")
             const requestedRole = String(role || "")
+)qml") + QByteArray(R"qml(
             const allowedRoles = ["atmosphere", "hero", "detail", "transition", "support"]
             const currentAssignments = harness.storyRoleAssignments || ({})
             if (!currentAssignments[requestedAssetId] ||
@@ -3469,6 +3475,7 @@ ApplicationWindow {
                 handoffContract: "agent-photographer-calibration-clipboard-handoff-v1",
                 caseCount: 9,
                 humanPassCount: 7,
+)qml") + QByteArray(R"qml(
                 humanFailCount: 2,
                 ratingsFileRequired: false,
                 clipboardCleared: true,
@@ -3691,6 +3698,7 @@ ApplicationWindow {
         agentPointTargetingEnabled: harness.workspaceSpatialTargetMode
         agentPointTargetRegion: workspaceReview.spatialTargetChosen
                                 ? ({
+)qml") + QByteArray(R"qml(
                                        centerX: workspaceReview.spatialTargetPoint.x,
                                        centerY: workspaceReview.spatialTargetPoint.y,
                                        radiusX: 0.12,

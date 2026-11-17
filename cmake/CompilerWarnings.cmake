@@ -1,14 +1,19 @@
 function(photo_editor_apply_warnings target_name)
   if(MSVC)
-    target_compile_options(${target_name} PRIVATE /W4 /permissive-)
+    target_compile_options(
+      ${target_name}
+      PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:/W4>
+        $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+        $<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
   else()
     target_compile_options(
       ${target_name}
       PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wconversion
-        -Wsign-conversion)
+        $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-Wextra>
+        $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-Wconversion>
+        $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-Wsign-conversion>)
   endif()
 endfunction()

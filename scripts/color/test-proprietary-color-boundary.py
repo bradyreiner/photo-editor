@@ -49,6 +49,13 @@ def main() -> int:
     if errors:
       raise AssertionError(f"valid proprietary fixture rejected: {errors}")
 
+    write(root / "apps/metadata.h",
+          'const char* photoshop = "http://ns.adobe.com/photoshop/1.0/";\n'
+          'const char* exif = "http://ns.adobe.com/exif/1.0/";\n')
+    errors, _ = validator.validate_root(root)
+    if errors:
+      raise AssertionError(f"local metadata namespaces rejected: {errors}")
+
     cases: list[tuple[str, Callable[[], None], str]] = [
         (
             "dependency",
@@ -66,6 +73,12 @@ def main() -> int:
                 root / "apps/client.cpp",
                 'const char* endpoint = "https://api.adobe.com/color";\n',
             ),
+            "network API",
+        ),
+        (
+            "namespace-host-endpoint",
+            lambda: write(root / "apps/client.cpp",
+                          'const char* endpoint = "http://ns.adobe.com/photoshop/1.0/upload";\n'),
             "network API",
         ),
         (

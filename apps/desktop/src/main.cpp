@@ -1563,7 +1563,7 @@ int main(int argc, char* argv[]) {
       if (editor_preview.photoPaintBusy())
         return {{"ok", false}, {"error", "Wait for the owned photo pixels to finish before rendering planning evidence."}};
       return {{"ok", true}, {"assetId", asset_id},
-          {"recipeJson", editor_preview.currentAssetBoundAdjustmentPatchJson()},
+          {"adjustmentPatchJson", editor_preview.currentAssetBoundAdjustmentPatchJson()},
           {"source", "native-photo"},
           {"taskStateHash", agent_tasks.journal()->checkpointHash(asset_id)}};
     }
@@ -1577,7 +1577,7 @@ int main(int argc, char* argv[]) {
           {"error", "The saved edit recipe is still loading. Retry after it finishes."}};
     }
     return {{"ok", !asset.isEmpty()}, {"assetId", asset_id},
-        {"recipeJson", asset.value("adjustmentPatchJson")}, {"source", "catalog-photo"}};
+        {"adjustmentPatchJson", asset.value("adjustmentPatchJson")}, {"source", "catalog-photo"}};
   });
   photo_automation.setSearchEditWorkflow(&search_edit);
   agent_edit.setMcpEndpoint(photo_automation.agentMcpEndpoint(), QStringLiteral("in-process"));

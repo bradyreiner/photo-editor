@@ -236,7 +236,11 @@ template <typename Result>
       working, target_color_space, output_format, working_profile_name,
       output_transform, allow_native_srgb_surface, true, cancellation);
   if (publication.image.isNull() && publication.surface == nullptr) {
-    return {};
+    Result result;
+    if constexpr (requires(Result& value) { value.failure_reason = QString{}; }) {
+      result.failure_reason = publication.telemetry.failure_reason;
+    }
+    return result;
   }
   Result result;
   result.image = std::move(publication.image);
@@ -323,9 +327,17 @@ template <typename Result>
     const QRect& patch_rect,
     const QSize& destination_size,
     const QSize& result_size) {
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   return surface != nullptr && patch_rect.isValid() && !patch_rect.isEmpty() &&
          QSize(surface->width(), surface->height()) == patch_rect.size() &&
          destination_size == result_size;
+#else
+  Q_UNUSED(surface)
+  Q_UNUSED(patch_rect)
+  Q_UNUSED(destination_size)
+  Q_UNUSED(result_size)
+  return false;
+#endif
 }
 
 [[nodiscard]] inline bool upload_native_surface_patch_async(
@@ -334,6 +346,7 @@ template <typename Result>
     const QRect& destination_rect,
     EditorPreviewTexture::NativePatchCommitGuard commit_guard,
     EditorPreviewTexture::NativePatchUploadCompletion completion) {
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   return texture != nullptr && surface != nullptr &&
          texture->uploadNativePatchAsync(
              *surface,
@@ -345,6 +358,14 @@ template <typename Result>
              [completion = std::move(completion)](bool published) {
                if (completion) completion(published);
              });
+#else
+  Q_UNUSED(texture)
+  Q_UNUSED(surface)
+  Q_UNUSED(destination_rect)
+  Q_UNUSED(commit_guard)
+  Q_UNUSED(completion)
+  return false;
+#endif
 }
 
 [[nodiscard]] inline bool adopt_native_full_surface_async(
@@ -353,6 +374,7 @@ template <typename Result>
     const QSize& result_size,
     EditorPreviewTexture::NativePatchCommitGuard commit_guard,
     EditorPreviewTexture::NativePatchUploadCompletion completion) {
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   return texture != nullptr && surface != nullptr && result_size.isValid() &&
          QSize(surface->width(), surface->height()) == result_size &&
          texture->adoptNativeSurfaceAsync(
@@ -364,6 +386,14 @@ template <typename Result>
              [completion = std::move(completion)](bool published) {
                if (completion) completion(published);
              });
+#else
+  Q_UNUSED(texture)
+  Q_UNUSED(surface)
+  Q_UNUSED(result_size)
+  Q_UNUSED(commit_guard)
+  Q_UNUSED(completion)
+  return false;
+#endif
 }
 
 template <typename Rendered>

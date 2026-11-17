@@ -69,6 +69,52 @@ int main() {
     return fail("invalid images and invalid target profiles must fail closed");
   }
 
+  QImage eight_bit_source(2, 1, QImage::Format_ARGB32);
+  eight_bit_source.setColorSpace(srgb);
+  eight_bit_source.setPixelColor(0, 0, QColor(119, 82, 43, 255));
+  eight_bit_source.setPixelColor(1, 0, QColor(36, 157, 203, 255));
+  auto float_source = eight_bit_source.convertToFormat(QImage::Format_RGBA32FPx4);
+  float_source.setColorSpace(eight_bit_source.colorSpace());
+  const auto eight_bit_working = photo_editor::desktop::working_image_from_qimage(
+      eight_bit_source, QStringLiteral("Linear ProPhoto RGB"));
+  const auto float_working = photo_editor::desktop::working_image_from_qimage(
+      float_source, QStringLiteral("Linear ProPhoto RGB"));
+  if (eight_bit_working.isNull() || float_working.isNull() ||
+      eight_bit_working.pixels.size() != float_working.pixels.size()) {
+    return fail("8-bit and float source samples should both reach the working profile");
+  }
+  for (std::size_t index = 0; index < eight_bit_working.pixels.size(); ++index) {
+    const auto& eight_bit = eight_bit_working.pixels[index];
+    const auto& floating = float_working.pixels[index];
+    if (std::abs(eight_bit.red - floating.red) > 0.001F ||
+        std::abs(eight_bit.green - floating.green) > 0.001F ||
+        std::abs(eight_bit.blue - floating.blue) > 0.001F ||
+        std::abs(eight_bit.alpha - floating.alpha) > 0.001F) {
+      return fail("high-precision working conversion must not quantize 8-bit source colors");
+    }
+  }
+
+  photo_editor::desktop::WorkingImage one_pixel_working_red;
+  one_pixel_working_red.width = 1;
+  one_pixel_working_red.height = 1;
+  one_pixel_working_red.pixels.push_back({1.0F, 0.0F, 0.0F, 1.0F});
+  const auto one_pixel_output =
+      photo_editor::desktop::qimage_from_working_image(
+          one_pixel_working_red,
+          srgb,
+          QImage::Format_ARGB32,
+          QStringLiteral("Linear sRGB"));
+  if (one_pixel_output.isNull() ||
+      one_pixel_output.format() != QImage::Format_ARGB32) {
+    return fail("one-pixel ARGB32 publication should return the requested image format");
+  }
+  const auto one_pixel_published_red = one_pixel_output.pixelColor(0, 0);
+  if (one_pixel_published_red.red() < 250 ||
+      one_pixel_published_red.green() > 5 ||
+      one_pixel_published_red.blue() > 5) {
+    return fail("one-pixel ARGB32 publication should preserve a linear red sample");
+  }
+
   // A source color outside the working gamut needs signed channels. Round-trip
   // all built-in raster profiles through each desktop linear working space so
   // an input clamp cannot hide behind an otherwise correctly tagged image.

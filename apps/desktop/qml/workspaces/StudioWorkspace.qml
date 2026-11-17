@@ -203,7 +203,8 @@ Rectangle {
         if (root.textEditSessionActive) { root.undoTextSession(false); return }
         if (!root.canUndoEdit) return
         root.cancelEditHistoryHoverPreview()
-        if (root.undoEditHandler) root.undoEditHandler()
+        const undoHandler = root.undoEditHandler
+        if (typeof undoHandler === "function") undoHandler.call(root)
         else root.editorPreviewController.undo()
     }
 
@@ -211,7 +212,8 @@ Rectangle {
         if (root.textEditSessionActive) { root.undoTextSession(true); return }
         if (!root.canRedoEdit) return
         root.cancelEditHistoryHoverPreview()
-        if (root.redoEditHandler) root.redoEditHandler()
+        const redoHandler = root.redoEditHandler
+        if (typeof redoHandler === "function") redoHandler.call(root)
         else root.editorPreviewController.redo()
     }
     property bool editActionFeedbackError: false
@@ -1277,7 +1279,7 @@ Rectangle {
     property bool brushHudSizeDragActive: false
     property real brushHudSizeDragStartX: 0
     property real brushHudSizeDragStartSize: 0.08
-    property real selectionOutlinePhase: 0
+    property real selectionOutlinePhase
     property bool maskOutlineActivationDeferred: false
     readonly property int selectionOutlineAnimationPointBudget: 1800
     readonly property string selectionOutlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"

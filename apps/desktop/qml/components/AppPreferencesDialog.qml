@@ -230,23 +230,32 @@ AppDialog {
                     Layout.alignment: Qt.AlignRight
                     spacing: cardTheme.space2
                     ActionButton {
-                        visible: card.disableFn !== null
+                        visible: typeof card.disableFn === "function"
                         text: "Disable"
                         compact: true
-                        onClicked: card.disableFn()
+                        onClicked: {
+                            const handler = card.disableFn
+                            if (typeof handler === "function") handler.call(card)
+                        }
                     }
                     ActionButton {
-                        visible: card.changeFn !== null
+                        visible: typeof card.changeFn === "function"
                         text: card.path.length > 0 ? "Change" : "Choose"
                         compact: true
                         enabled: card.changeEnabled
-                        onClicked: card.changeFn()
+                        onClicked: {
+                            const handler = card.changeFn
+                            if (typeof handler === "function") handler.call(card)
+                        }
                     }
                     ActionButton {
                         text: "Open"
                         compact: true
                         enabled: card.path.length > 0
-                        onClicked: card.openFn()
+                        onClicked: {
+                            const handler = card.openFn
+                            if (typeof handler === "function") handler.call(card)
+                        }
                     }
                     ActionButton {
                         objectName: "storagePathDetailsButton"

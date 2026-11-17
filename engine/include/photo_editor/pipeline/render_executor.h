@@ -285,6 +285,8 @@ struct ColorPlanExecutionOptions final {
   // Interactive-preview opt-in for parallel CPU ICC device conversion. The
   // default keeps the serial reference route for export and unrelated callers.
   bool allow_parallel_cpu_device_transform = false;
+  bool allow_cuda_scene_adjustments = false;
+  bool allow_cuda_photographic_output = false;
 };
 [[nodiscard]] bool apply_cpu_icc_transform(
     std::vector<ColorPixel>* pixels,

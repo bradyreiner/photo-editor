@@ -11,6 +11,7 @@ Item {
     property bool retryable: false
     property bool failed: false
     property bool dismissible: false
+    property bool detailsAvailable: false
     property string actionText: ""
     property string statusIcon: ""
     property color accent: theme.accentWarm400
@@ -19,6 +20,7 @@ Item {
     signal retryRequested()
     signal actionRequested()
     signal dismissRequested()
+    signal detailsRequested()
 
     readonly property string summaryText: title.length === 0 ? detail
                                             : detail.length === 0 || detail === title ? title
@@ -80,6 +82,17 @@ Item {
             elide: Text.ElideRight
             maximumLineCount: 1
             verticalAlignment: Text.AlignVCenter
+        }
+
+        ActionButton {
+            objectName: "activityDetailsButton"
+            visible: root.detailsAvailable
+            text: "Details"
+            compact: true
+            embedded: true
+            tone: "tertiary"
+            tooltipText: "Show the full failure diagnostic"
+            onClicked: root.detailsRequested()
         }
 
         ActionButton {

@@ -1,3 +1,21 @@
+function(photo_editor_link_private_visual_search_index target_name)
+  if(WIN32)
+    target_link_libraries(${target_name} PRIVATE Advapi32)
+  endif()
+endfunction()
+
+if(WIN32 AND PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND)
+  add_executable(
+    cuda_aces2_output_lut_test
+    cuda_aces2_output_lut_test.cpp)
+  target_link_libraries(cuda_aces2_output_lut_test PRIVATE photo_engine)
+  photo_editor_apply_warnings(cuda_aces2_output_lut_test)
+  add_test(NAME cuda_aces2_output_lut_test COMMAND cuda_aces2_output_lut_test)
+  set_tests_properties(
+    cuda_aces2_output_lut_test
+    PROPERTIES SKIP_RETURN_CODE 77 LABELS "windows;cuda;color;preview")
+endif()
+
 add_executable(gaussian_compound_lens_test gaussian_compound_lens_test.cpp)
 target_include_directories(gaussian_compound_lens_test PRIVATE ../apps/desktop/src)
 photo_editor_apply_warnings(gaussian_compound_lens_test)
@@ -1385,7 +1403,8 @@ endif()
   target_link_libraries(
     preset_registry_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Gui)
   photo_editor_apply_warnings(preset_registry_test)
   add_test(
     NAME preset_registry_test
@@ -2287,7 +2306,9 @@ endif()
     brush_matte_rebuild_test.cpp
     ../apps/desktop/src/brush_input_schema.cpp
     ../apps/desktop/src/brush_rasterizer.cpp
-    ../apps/desktop/src/brush_matte_rebuild.cpp)
+    ../apps/desktop/src/brush_matte_rebuild.cpp
+    ../apps/desktop/src/scaled_mask_matte_service.cpp
+    ../apps/desktop/src/segmentation_mask_ops.cpp)
   target_include_directories(
     brush_matte_rebuild_test
     PRIVATE
@@ -3049,6 +3070,7 @@ endif()
   set_target_properties(visual_search_controller_test PROPERTIES AUTOMOC ON)
   target_include_directories(visual_search_controller_test PRIVATE ../apps/desktop/src)
   target_link_libraries(visual_search_controller_test PRIVATE Qt6::Core Qt6::Gui Qt6::Concurrent Qt6::Network SQLite3::SQLite3)
+  photo_editor_link_private_visual_search_index(visual_search_controller_test)
   photo_editor_apply_warnings(visual_search_controller_test)
   add_test(NAME visual_search_controller_test COMMAND visual_search_controller_test)
   add_executable(visual_search_preparation_benchmark
@@ -3059,6 +3081,7 @@ endif()
   set_target_properties(visual_search_preparation_benchmark PROPERTIES AUTOMOC ON)
   target_include_directories(visual_search_preparation_benchmark PRIVATE ../apps/desktop/src)
   target_link_libraries(visual_search_preparation_benchmark PRIVATE Qt6::Core Qt6::Gui Qt6::Concurrent Qt6::Network SQLite3::SQLite3)
+  photo_editor_link_private_visual_search_index(visual_search_preparation_benchmark)
   photo_editor_apply_warnings(visual_search_preparation_benchmark)
   add_test(NAME visual_search_preparation_benchmark COMMAND visual_search_preparation_benchmark)
   set_tests_properties(visual_search_preparation_benchmark PROPERTIES TIMEOUT 180 LABELS "desktop;search;performance")
@@ -3314,6 +3337,7 @@ endif()
   endif()
   photo_editor_apply_warnings(agent_edit_controller_test)
   target_link_libraries(agent_edit_controller_test PRIVATE SQLite3::SQLite3)
+  photo_editor_link_private_visual_search_index(agent_edit_controller_test)
 
   add_test(NAME agent_edit_controller_test COMMAND agent_edit_controller_test)
   add_test(NAME search_edit_workflow_contract COMMAND agent_edit_controller_test --search-edit-contract)
@@ -3447,6 +3471,24 @@ endif()
   endif()
   photo_editor_apply_warnings(photo_automation_bridge_test)
   target_link_libraries(photo_automation_bridge_test PRIVATE SQLite3::SQLite3)
+  photo_editor_link_private_visual_search_index(photo_automation_bridge_test)
+  if(APPLE)
+    # This integration runner keeps its mock model, bridge, task controller,
+    # and many scenario-local fixtures in one large main() function. Reserve
+    # enough main-thread stack for the debug build as the scenarios grow.
+    target_link_options(
+      photo_automation_bridge_test
+      PRIVATE
+        "LINKER:-stack_size,0x2000000")
+  elseif(MSVC)
+    # Windows defaults executable stack reserve to 1 MiB; the monolithic
+    # integration-test frame can exceed that before an individual test slice
+    # reaches its own assertions.
+    target_link_options(
+      photo_automation_bridge_test
+      PRIVATE
+        "/STACK:33554432")
+  endif()
 
   add_test(NAME photo_automation_bridge_test COMMAND photo_automation_bridge_test)
   add_test(NAME agent_mcp_discovery_contract_test COMMAND photo_automation_bridge_test --mcp-discovery-contract)
@@ -3980,10 +4022,22 @@ endif()
   target_link_libraries(
     photo_composition_bridge_runtime
     PRIVATE desktop_shell_test_runtime Qt6::Concurrent Qt6::Core Qt6::Gui Qt6::Network Qt6::Quick Qt6::Multimedia SQLite3::SQLite3 photo_engine)
+  photo_editor_link_private_visual_search_index(photo_composition_bridge_runtime)
   photo_editor_apply_warnings(photo_composition_bridge_runtime)
+
+  function(photo_editor_apply_desktop_shell_smoke_stack target)
+    if(MSVC)
+      # The shared smoke runner dispatches a large inlined proof suite. Its
+      # stack frame exceeds Windows' 1 MiB executable default before the
+      # selected shard can return, so reserve the same 32 MiB used by the
+      # similarly large editor-preview integration test.
+      target_link_options(${target} PRIVATE "/STACK:33554432")
+    endif()
+  endfunction()
 
   add_executable(desktop_shell_smoke_test desktop_shell_smoke_test.cpp)
   target_link_libraries(desktop_shell_smoke_test PRIVATE desktop_shell_test_runtime)
+  photo_editor_apply_desktop_shell_smoke_stack(desktop_shell_smoke_test)
   photo_editor_apply_warnings(desktop_shell_smoke_test)
 
   add_test(NAME desktop_shell_smoke_test COMMAND desktop_shell_smoke_test)
@@ -4050,6 +4104,7 @@ endif()
       PRIVATE
         PHOTO_EDITOR_DESKTOP_SHELL_STOP_ENV="${stop_environment}")
     target_link_libraries(${target} PRIVATE Qt6::Core desktop_shell_test_runtime)
+    photo_editor_apply_desktop_shell_smoke_stack(${target})
     photo_editor_apply_warnings(${target})
 
     add_test(NAME ${target} COMMAND ${target})
@@ -4145,7 +4200,7 @@ endif()
   add_desktop_shell_shard(
     desktop_shell_library_collection_test
     PHOTO_EDITOR_SMOKE_STOP_AFTER_LIBRARY_COLLECTIONS
-    90
+    300
     "desktop;ui-shard;library;interaction;visual-proof")
   add_desktop_shell_shard(
     desktop_shell_professional_library_test
@@ -4743,6 +4798,13 @@ endif()
       editor_preview_controller_test
       PRIVATE
         "LINKER:-stack_size,0x1000000")
+  elseif(MSVC)
+    # MSVC's debug frame for this monolithic test is about 16 MiB; Windows'
+    # default 1 MiB stack overflows in the prologue before main can run.
+    target_link_options(
+      editor_preview_controller_test
+      PRIVATE
+        "/STACK:33554432")
   endif()
 
   add_test(NAME editor_preview_controller_test COMMAND editor_preview_controller_test)
@@ -4789,6 +4851,34 @@ endif()
   set_tests_properties(editor_preview_live_brush_test PROPERTIES
     ENVIRONMENT "PHOTO_EDITOR_TEST_LIVE_BRUSH_ONLY=1"
     TIMEOUT 60 RUN_SERIAL TRUE RESOURCE_LOCK photo_editor_desktop_runtime)
+  add_test(
+    NAME editor_preview_color_tool_sampling_test
+    COMMAND editor_preview_controller_test)
+  set_tests_properties(editor_preview_color_tool_sampling_test PROPERTIES
+    ENVIRONMENT "PHOTO_EDITOR_TEST_COLOR_TOOL_SAMPLING_ONLY=1;QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60 RUN_SERIAL TRUE RESOURCE_LOCK photo_editor_desktop_runtime
+    LABELS "desktop;color;sampling;regression")
+  add_test(
+    NAME editor_preview_monitor_prewarm_test
+    COMMAND editor_preview_controller_test)
+  set_tests_properties(editor_preview_monitor_prewarm_test PROPERTIES
+    ENVIRONMENT "PHOTO_EDITOR_TEST_MONITOR_PREWARM_ONLY=1;QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 90 RUN_SERIAL TRUE RESOURCE_LOCK photo_editor_desktop_runtime
+    LABELS "desktop;color;monitor;prewarm;regression")
+  add_test(
+    NAME editor_preview_display_p3_boundary_test
+    COMMAND editor_preview_controller_test)
+  set_tests_properties(editor_preview_display_p3_boundary_test PROPERTIES
+    ENVIRONMENT "PHOTO_EDITOR_TEST_DISPLAY_P3_BOUNDARY_ONLY=1;QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60 RUN_SERIAL TRUE RESOURCE_LOCK photo_editor_desktop_runtime
+    LABELS "desktop;color;display;regression")
+  add_test(
+    NAME editor_preview_display_p3_boundary_cpu_test
+    COMMAND editor_preview_controller_test)
+  set_tests_properties(editor_preview_display_p3_boundary_cpu_test PROPERTIES
+    ENVIRONMENT "PHOTO_EDITOR_TEST_DISPLAY_P3_BOUNDARY_ONLY=1;PHOTO_EDITOR_DISABLE_CUDA_PREVIEW=1;QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 60 RUN_SERIAL TRUE RESOURCE_LOCK photo_editor_desktop_runtime
+    LABELS "desktop;color;display;cpu;regression")
   add_test(NAME editor_preview_brush_automask_idempotence_test
     COMMAND editor_preview_controller_test)
   set_tests_properties(editor_preview_brush_automask_idempotence_test PROPERTIES
@@ -4824,10 +4914,16 @@ endif()
   set_tests_properties(
     editor_preview_controller_test
     PROPERTIES
-      TIMEOUT 600
       RUN_SERIAL TRUE
       RESOURCE_LOCK photo_editor_desktop_runtime
   )
+  if(MSVC)
+    # This integration test processes many large previews serially in Debug;
+    # leave enough time for the measured multi-minute Windows run to finish.
+    set_tests_properties(editor_preview_controller_test PROPERTIES TIMEOUT 1200)
+  else()
+    set_tests_properties(editor_preview_controller_test PROPERTIES TIMEOUT 600)
+  endif()
 
   add_executable(
     editor_preview_history_test
@@ -6076,6 +6172,7 @@ endif()
       ${photo_editor_desktop_image_decoder_frameworks}
       photo_engine
       photo_rust_ffi)
+  photo_editor_link_private_visual_search_index(actual_app_workflow_benchmark_driver)
   find_package(Qt6 REQUIRED COMPONENTS Test)
   target_link_libraries(actual_app_workflow_benchmark_driver PRIVATE Qt6::Test)
 if(TARGET Qt6::Qml AND TARGET Qt6::Quick AND TARGET Qt6::QuickControls2)
@@ -8871,12 +8968,15 @@ set_tests_properties(timeline_owned_clip_map_snapshot_metacall_workflow_test PRO
     target_compile_definitions(customer_access_controller_test PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     add_test(NAME customer_access_controller_test COMMAND customer_access_controller_test)
     set_tests_properties(customer_access_controller_test PROPERTIES TIMEOUT 45)
-    add_executable(customer_account_panel_test customer_account_panel_test.cpp)
-    target_link_libraries(customer_account_panel_test PRIVATE Qt6::Quick Qt6::Qml Qt6::QuickControls2)
-    target_compile_definitions(customer_account_panel_test PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-    add_test(NAME customer_account_panel_test COMMAND customer_account_panel_test)
-    set_tests_properties(customer_account_panel_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
   endif()
+
+  # The panel uses a synthetic QML controller in this test and remains part of
+  # the application resources even when the optional customer service is off.
+  add_executable(customer_account_panel_test customer_account_panel_test.cpp)
+  target_link_libraries(customer_account_panel_test PRIVATE Qt6::Quick Qt6::Qml Qt6::QuickControls2)
+  target_compile_definitions(customer_account_panel_test PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  add_test(NAME customer_account_panel_test COMMAND customer_account_panel_test)
+  set_tests_properties(customer_account_panel_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
   add_executable(preview_corrupt_cache_test preview_corrupt_cache_test.cpp)
   target_include_directories(preview_corrupt_cache_test PRIVATE ../apps/desktop/src)

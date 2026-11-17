@@ -6,6 +6,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
+#include <QtGlobal>
 
 #include <optional>
 
@@ -35,6 +36,18 @@ struct StoredAdjustmentState final {
   bool legacy_compatibility_read = false;
 };
 
+inline constexpr qint64 kMaxBrushHistoryIdentityCacheMemoryBytes =
+    64 * 1024 * 1024;
+inline constexpr int kMaxBrushHistoryIdentityCacheEntries = 32;
+
+struct BrushHistoryIdentityCacheSnapshot final {
+  int entries = 0;
+  qint64 retained_bytes = 0;
+  int hit_count = 0;
+  int miss_count = 0;
+  int eviction_count = 0;
+};
+
 [[nodiscard]] QJsonObject serialize_adjustment_patch(
     const EditRecipeState& state,
     const QStringList& groups,
@@ -56,6 +69,10 @@ struct StoredAdjustmentState final {
 
 [[nodiscard]] QString adjustment_patch_identity_json(
     const EditRecipeState& state);
+
+// Internal cache diagnostics used by focused identity-payload tests.
+[[nodiscard]] BrushHistoryIdentityCacheSnapshot
+brush_history_identity_cache_snapshot();
 
 [[nodiscard]] AdjustmentPatchDecodeResult
 parse_adjustment_patch(const QJsonObject& patch);

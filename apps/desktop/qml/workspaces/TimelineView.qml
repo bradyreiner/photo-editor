@@ -26285,6 +26285,9 @@ Rectangle {
                                                         playback.audioOutput.resetForDiscontinuity()
                                                     programAudioLayer.audioSourceIdentity = nextSourceIdentity
                                                 }
+                                                layerAudioOutput.setPlayerPitchCompensation(
+                                                            player,
+                                                            String(modelData.retimePitchStrategy || "preserve") !== "follow-speed")
                                                 const targetPosition = Math.round(root.programLayerSourceSeconds(modelData) * 1000)
                                                 const effectiveRate = Number(modelData.effectivePlaybackRate !== undefined
                                                                              ? modelData.effectivePlaybackRate
@@ -26416,10 +26419,7 @@ Rectangle {
                                                                 id: audioPlayer
                                                                 source: programAudioLayer.visible
                                                                         ? root.programPlaybackSourceUrl(programAudioLayer.modelData) : ""
-                                                                pitchCompensation: String(
-                                                                                       programAudioLayer.modelData.retimePitchStrategy
-                                                                                       || "preserve") !== "follow-speed"
-                                                                audioBufferOutput: layerAudioOutput.bufferOutput
+                                                                Component.onCompleted: layerAudioOutput.attachPlayer(audioPlayer)
                                                                 onMediaStatusChanged: programAudioLayer.syncAudioPlayer()
                                                                 onSourceChanged: programAudioLayer.syncAudioPlayer()
                                                             }

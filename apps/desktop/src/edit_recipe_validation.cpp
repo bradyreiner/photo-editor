@@ -7,6 +7,9 @@
 
 #include <cmath>
 
+#include <QJsonDocument>
+#include <QJsonParseError>
+
 namespace photo_editor::desktop {
 EditRecipeValidationResult validate_edit_recipe_json(
     const QString& recipe_json) {

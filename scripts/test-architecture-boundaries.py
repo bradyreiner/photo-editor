@@ -30,6 +30,11 @@ def configure(source: Path, build: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def normalize_cmake_output(result: subprocess.CompletedProcess[str]) -> str:
+    """Collapse formatter-dependent line breaks before matching diagnostics."""
+    return " ".join(f"{result.stdout}\n{result.stderr}".split())
+
+
 def write_project(root: Path, source_text: str, link_qt: bool = False) -> None:
     (root / "engine.cpp").write_text(source_text, encoding="utf-8")
     qt_setup = ""
@@ -93,6 +98,9 @@ def check_maintainability_boundaries() -> list[str]:
         REPO_ROOT
         / "apps/desktop/src/desktop_pipeline_state_compiler.cpp"
     ).read_text(encoding="utf-8")
+    local_mask_set_settings = (
+        REPO_ROOT / "apps/desktop/src/local_mask_set_settings.h"
+    ).read_text(encoding="utf-8")
     if '#include <QSettings>' in controller or "system_monitor_profile_cache()" in controller:
         errors.append(
             "EditorPreviewController must not reclaim display-profile settings or cache ownership"
@@ -137,7 +145,9 @@ def check_maintainability_boundaries() -> list[str]:
         or "compile_base_color_adjustment_state(" in controller
         or "compile_base_color_adjustment_state(" in photo_render_utils
         or "maskSetPreviewBypassed" not in desktop_pipeline_state_compiler
-        or "maskSetSelectionEdgeContrast" not in desktop_pipeline_state_compiler
+        or "compile_local_mask_set_settings(mask)" not in
+        desktop_pipeline_state_compiler
+        or "maskSetSelectionEdgeContrast" not in local_mask_set_settings
         or "src/desktop_pipeline_state_compiler.cpp" not in desktop_cmake
         or "desktop_pipeline_state_compiler.cpp" not in tests_cmake
     ):
@@ -836,7 +846,15 @@ def check_maintainability_boundaries() -> list[str]:
                 f"{path.relative_to(REPO_ROOT)} bypasses the explicit-purpose QImage color conversion boundary"
             )
     qimage_conversion_source = qimage_conversion_owner.read_text(encoding="utf-8")
-    if qimage_conversion_source.count(".convertedToColorSpace(") != 2:
+    if (
+        qimage_conversion_source.count(
+            "inline QImage convert_tagged_qimage_color_space("
+        ) != 2
+        or "image.convertedToColorSpace(target_color_space, output_format, flags)"
+        not in qimage_conversion_source
+        or "#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)" not in
+        qimage_conversion_source
+    ):
         errors.append(
             "qimage_color_conversion.h must remain the sole two-overload Qt color conversion owner"
         )
@@ -1282,8 +1300,7 @@ def check_maintainability_boundaries() -> list[str]:
         editor_persistence_launcher
         or "upsert_edit_recipe_compatibility_pair(" not in
         save_recipe_helper
-        or 'ok_or("missing canonical_recipe_payload argument")' not in
-        save_recipe_helper
+        or "validate_canonical_edit_recipe_v13_input(" not in catalog_library
         or '"set-edit-recipe" =>' in
         catalog_state_helper
         or '"set-recipe-migration" =>' not in
@@ -1359,7 +1376,8 @@ def check_maintainability_boundaries() -> list[str]:
         or "prepare-macos-postgres-runtime.sh" not in release_builder
         or "Relocating PostgreSQL and its non-system dylibs" not in release_builder
         or "share/**/postgres.bki" not in release_builder
-        or "Set FRAMEHOUSE_LEGAL_PUBLISHER" not in release_builder
+        or "LOOKSY_LEGAL_PUBLISHER" not in release_builder
+        or "FRAMEHOUSE_LEGAL_PUBLISHER" not in release_builder
         or "Production macOS packaging requires PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR" not in
         release_builder
         or "Unable to locate a PostgreSQL runtime root containing initdb, pg_ctl, pg_dump, pg_restore, postgres, psql, and share/**/postgres.bki" not in
@@ -1610,7 +1628,8 @@ def check_maintainability_boundaries() -> list[str]:
         or "diagnose_rendering_migration_pairs_test" not in tests_cmake
         or "RendererTransitionLook" not in color_pipeline_header
         or "photo-editor-edit-recipe-v13.2" not in canonical_recipe_source
-        or "photographic-output-aces2-v4" not in recipe_compiler_source
+        or "photographic-output-aces2-v6-display-text-policy" not in
+        recipe_compiler_source
         or "aces2-output-lut:v2" not in (
             REPO_ROOT / "engine/src/pipeline/output_rendering.cpp"
         ).read_text(encoding="utf-8")
@@ -2191,7 +2210,6 @@ def check_maintainability_boundaries() -> list[str]:
         preview_controller_source
         or "outline_execution_mode\"), QStringLiteral(\"async_worker\")" not in
         preview_controller_source
-        or "kSynchronousOutlinePixelCeiling" not in preview_controller_source
         or "fast_outline_paths_for_brush_mask(fallback_mask)" not in
         preview_controller_source
         or any(
@@ -2300,7 +2318,9 @@ def check_maintainability_boundaries() -> list[str]:
         thumbnail_worker_renderer_factory_source
         or "canonical_composite_mask_thumbnail_alpha_metadata(" not in
         thumbnail_worker_renderer_factory_source
-        or "canonical_mask_thumbnail_payload" not in
+        or "rasterize_local_mask_set_alpha_with_context(" not in
+        thumbnail_worker_renderer_factory_source
+        or "mask_thumbnail_payload_from_alpha(displayed)" not in
         thumbnail_worker_renderer_factory_source
         or "rasterize_local_mask_set_alpha(" not in
         canonical_composite_mask_alpha_source
@@ -2435,7 +2455,6 @@ def check_maintainability_boundaries() -> list[str]:
         or "QString mask_tile_source_revision(" in preview_controller_source
         or ".scaled_mask_source =" in preview_controller_source
         or ".thumbnail_metadata =" in preview_controller_source
-        or ".source_revision =" in preview_controller_source
         or "scaledMaskForTesting" in preview_controller_source
         or "scaledMaskForTesting" in controller_header
         or "ScaledMaskMatteCacheForTesting" in preview_controller_source
@@ -2471,7 +2490,8 @@ def check_maintainability_boundaries() -> list[str]:
         or "compile_pipeline_photo_layers(" in preview_controller_source
         or "compile_desktop_pipeline_state(" not in preview_controller_source
         or "compile_pipeline_photo_layers(" not in desktop_pipeline_state_compiler
-        or "rasterize_local_mask_set_alpha(" not in photo_render_utils
+        or "detail::rasterize_layer_selection_alpha(" not in
+        photo_render_utils
         or "local_mask_set_weight_for_layer_mask(" in preview_controller_source
         or "populate_photo_layer_selection_mask(" in preview_controller_source
         or "local_mask_weight_for_preview(" in preview_controller_source
@@ -2534,9 +2554,11 @@ def check_maintainability_boundaries() -> list[str]:
         or "presentPhotoLayers(" not in thumbnail_presentation_service
         or "layer_recipe_hash" in thumbnail_presentation_service
         or "layer_entry_recipe_hash" in thumbnail_presentation_service
-        or "photo_layer_thumbnail_recipe_hash(layer)" not in
+        or "photo_layer_thumbnail_recipe_hash(layer, facts.photo_layer_revision)"
+        not in
         thumbnail_presentation_service_source
-        or "photo_layer_thumbnail_entry_recipe_hash(layer)" not in
+        or "photo_layer_thumbnail_entry_recipe_hash(layer, facts.photo_layer_revision)"
+        not in
         thumbnail_presentation_service_source
         or "photo_layer_adjustment_recipe_keys()" not in
         photo_layer_adjustment_recipe_source
@@ -3015,7 +3037,7 @@ def check_maintainability_boundaries() -> list[str]:
         mask_outline_tracing_source
         or "traced_outline_paths_for_alpha_mask_with_edge_padding(" not in
         mask_outline_tracing_source
-        or "kMinSecondaryOutlineAreaPixels = 16.0" not in
+        or "Pixel selections retain every cell boundary" not in
         mask_outline_tracing_source
         or "QSet<QPair<quint64, quint64>> visited_edges" not in
         mask_outline_tracing_source
@@ -3031,7 +3053,7 @@ def check_maintainability_boundaries() -> list[str]:
         or "mask_outline_tracing_test.cpp" not in tests_cmake
     ):
         errors.append(
-            "mask outline tracing must own validated raster admission, deterministic contour walking, hull/bounds fallbacks, loop filtering, simplification, and edge-padding recovery outside EditorPreviewController"
+            "mask outline tracing must own validated raster admission, deterministic contour walking, hull/bounds fallbacks, exact pixel-island preservation, simplification, and edge-padding recovery outside EditorPreviewController"
         )
     if (
         "struct OutlineNoiseFilterStats final" not in
@@ -3352,7 +3374,7 @@ def check_maintainability_boundaries() -> list[str]:
     if (
         "photo-v4-canonical-metadata" in
         catalog_asset_model
-        or "photo-v5-canonical-adjustments" not in
+        or "photo-v7-display-text-color-policy" not in
         catalog_asset_model
         or "thumbnail_adjustment_identity(" not in
         catalog_asset_model
@@ -3917,9 +3939,10 @@ def main() -> int:
 
         write_project(fixture, "#include <QImage>\nint boundary_value() { return 1; }\n")
         qt_import = configure(fixture, Path(temporary) / "build-import")
+        qt_import_output = normalize_cmake_output(qt_import)
         if (
             qt_import.returncode == 0
-            or "imports a Qt header" not in qt_import.stdout + qt_import.stderr
+            or "imports a Qt header" not in qt_import_output
         ):
             print("Qt source imports must fail the engine boundary", file=sys.stderr)
             return 1
@@ -3930,10 +3953,10 @@ def main() -> int:
             link_qt=True,
         )
         qt_link = configure(fixture, Path(temporary) / "build-link")
+        qt_link_output = normalize_cmake_output(qt_link)
         if (
             qt_link.returncode == 0
-            or "is Qt-independent but links Qt6::Core"
-            not in qt_link.stdout + qt_link.stderr
+            or "is Qt-independent but links Qt6::Core" not in qt_link_output
         ):
             print("Qt link dependencies must fail the engine boundary", file=sys.stderr)
             return 1

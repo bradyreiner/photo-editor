@@ -476,6 +476,16 @@ bool apply_export_color_pipeline_with_executor(
           engine_telemetry);
   if (!full_result.ok() ||
       !full_result.output.has_value()) {
+    if (backend_telemetry != nullptr) {
+      const auto stage = QString::fromStdString(
+          full_result.failure_stage);
+      const auto reason = QString::fromStdString(
+          full_result.failure_reason);
+      backend_telemetry->fallback_reason =
+          stage.isEmpty()
+              ? reason
+              : QStringLiteral("%1: %2").arg(stage, reason);
+    }
     return false;
   }
   if (backend_telemetry != nullptr) {
@@ -2713,18 +2723,6 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
         .shadows = layer_adjustment_value(layer, QStringLiteral("shadows")),
         .whites = layer_adjustment_value(layer, QStringLiteral("whites")),
         .blacks = layer_adjustment_value(layer, QStringLiteral("blacks")),
-        .brightness = layer_adjustment_value(layer, QStringLiteral("brightness")),
-        .filmic_shoulder = layer_adjustment_value(layer, QStringLiteral("filmicShoulder")),
-        .filmic_toe = layer_adjustment_value(layer, QStringLiteral("filmicToe")),
-        .adaptive_contrast = layer_adjustment_value(layer, QStringLiteral("adaptiveContrast")),
-        .levels_black_point = layer_adjustment_value(layer, QStringLiteral("levelsBlackPoint")),
-        .levels_gamma = layer_adjustment_value(layer, QStringLiteral("levelsGamma")),
-        .levels_white_point = layer_adjustment_value(layer, QStringLiteral("levelsWhitePoint")),
-        .zone_deep_shadows = layer_adjustment_value(layer, QStringLiteral("zoneDeepShadows")),
-        .zone_shadows = layer_adjustment_value(layer, QStringLiteral("zoneShadows")),
-        .zone_midtones = layer_adjustment_value(layer, QStringLiteral("zoneMidtones")),
-        .zone_lights = layer_adjustment_value(layer, QStringLiteral("zoneLights")),
-        .zone_highlights = layer_adjustment_value(layer, QStringLiteral("zoneHighlights")),
         .temperature = layer_adjustment_value(layer, QStringLiteral("temperature")),
         .tint = layer_adjustment_value(layer, QStringLiteral("tint")),
         .texture = layer_adjustment_value(layer, QStringLiteral("texture")),
@@ -2785,6 +2783,18 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
         .saturation_shift = layer_adjustment_value(layer, QStringLiteral("saturationShift")),
         .colorize_hue = layer_adjustment_value(layer, QStringLiteral("colorizeHue")),
         .colorize_strength = layer_adjustment_value(layer, QStringLiteral("colorizeStrength")),
+        .brightness = layer_adjustment_value(layer, QStringLiteral("brightness")),
+        .filmic_shoulder = layer_adjustment_value(layer, QStringLiteral("filmicShoulder")),
+        .filmic_toe = layer_adjustment_value(layer, QStringLiteral("filmicToe")),
+        .adaptive_contrast = layer_adjustment_value(layer, QStringLiteral("adaptiveContrast")),
+        .levels_black_point = layer_adjustment_value(layer, QStringLiteral("levelsBlackPoint")),
+        .levels_gamma = layer_adjustment_value(layer, QStringLiteral("levelsGamma")),
+        .levels_white_point = layer_adjustment_value(layer, QStringLiteral("levelsWhitePoint")),
+        .zone_deep_shadows = layer_adjustment_value(layer, QStringLiteral("zoneDeepShadows")),
+        .zone_shadows = layer_adjustment_value(layer, QStringLiteral("zoneShadows")),
+        .zone_midtones = layer_adjustment_value(layer, QStringLiteral("zoneMidtones")),
+        .zone_lights = layer_adjustment_value(layer, QStringLiteral("zoneLights")),
+        .zone_highlights = layer_adjustment_value(layer, QStringLiteral("zoneHighlights")),
         .curve_shadows = layer_adjustment_value(layer, QStringLiteral("curveShadows")),
         .curve_darks = layer_adjustment_value(layer, QStringLiteral("curveDarks")),
         .curve_lights = layer_adjustment_value(layer, QStringLiteral("curveLights")),
@@ -5275,7 +5285,8 @@ QImage render_output_image_with_backend_impl(
     QImage device_image(
         working.width,
         working.height,
-        working_publication_format(output_format));
+        working_publication_format(
+            output_format, working.width, working.height));
     if (device_image.isNull() ||
         !pack_working_rows_for_publication(
             working,
@@ -5322,6 +5333,7 @@ QImage render_output_image_with_backend_impl(
                                       : nullptr,
                 .target = photo_editor::pipeline::GamutWarningTarget::ExportOutput,
                 .allow_metal_output_lut = backend_preference != RenderBackendPreference::CpuOnly,
+                .allow_cuda_output_lut = backend_preference != RenderBackendPreference::CpuOnly,
             });
   if (cancellation.cancelled() || output_image.isNull()) {
     if (telemetry != nullptr && !output_transform_telemetry.failure_reason.isEmpty()) {

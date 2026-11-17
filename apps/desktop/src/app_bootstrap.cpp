@@ -6,6 +6,9 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>

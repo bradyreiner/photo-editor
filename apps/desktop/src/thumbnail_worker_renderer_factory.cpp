@@ -16,6 +16,7 @@
 #include "mask_source_revision.h"
 #include "photo_render_utils.h"
 #include "photo_source_precision.h"
+#include "render_plan_store.h"
 #include "photo_layer_adjustment_recipe.h"
 #include "render_plan_store.h"
 #include "scaled_mask_matte_service.h"
@@ -117,13 +118,14 @@ QString render_source_layer_thumbnail(
     content_state.working_color_profile = request.state.working_color_profile;
   }
   std::optional<photo_editor::pipeline::RenderPlan> paint_plan;
-  if (float_paint && normalized_photographic_rendering_model_name(
+  if ((float_paint || scene_linear_source || !content_state.layers.isEmpty()) &&
+      normalized_photographic_rendering_model_name(
           content_state.photographic_rendering_model) == QStringLiteral("aces2-ocio-v1")) {
     const auto admission = RenderPlanStore::shared().admit(
         QStringLiteral("paint-content-thumbnail:%1").arg(decoded.cacheKey()), {}, content_state,
         decoded.size(), photo_editor::pipeline::RenderPurpose::Thumbnail,
         photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation);
-    if (!admission.admitted) return {};
+    if (!admission.admitted || !admission.plan.has_value()) return {};
     paint_plan = *admission.plan;
   }
   const auto rendered = float_paint || scene_linear_source || !content_state.layers.isEmpty() ? render_output_image_with_backend(
@@ -451,30 +453,29 @@ QString render_adjustment_layer_thumbnail_source(
   thumbnail_state.layers = QVariantList{layer};
   thumbnail_state.mask_stack = request.mask_stack;
   thumbnail_state.active_mask_index = -1;
-  const auto render_request = ThumbnailAdjustmentSharedRenderRequest{
-      .asset_id = request.job.asset_id,
-      .file_path = request.job.file_path,
-      .state = thumbnail_state,
-      .job = make_thumbnail_adjustment_render_job(
-          request.job.asset_id,
-          request.job.file_path,
-          thumbnail_state,
-          request.job.state_revision),
-      .mask_alpha_trace_fields = trace_metadata,
-      .render_reason = QStringLiteral("photo_layer_thumbnail"),
-      .interaction_mode = QStringLiteral("thumbnail"),
-      .render_mode = QStringLiteral("layer_thumbnail"),
-      .render_priority = 4,
-      .dirty_domain = QStringLiteral("layers_composite"),
-      .dirty_stages = QStringList{
-          QStringLiteral("layers_composite"),
-          QStringLiteral("lut_post_color"),
-          QStringLiteral("display_transform"),
-      },
-      .max_edge = kLayerThumbnailEdge,
-      .jpeg_quality = 90,
-      .render_latency_budget_ms = 100,
+  ThumbnailAdjustmentSharedRenderRequest render_request;
+  render_request.asset_id = request.job.asset_id;
+  render_request.file_path = request.job.file_path;
+  render_request.state = thumbnail_state;
+  render_request.job = make_thumbnail_adjustment_render_job(
+      request.job.asset_id,
+      request.job.file_path,
+      thumbnail_state,
+      request.job.state_revision);
+  render_request.mask_alpha_trace_fields = trace_metadata;
+  render_request.render_reason = QStringLiteral("photo_layer_thumbnail");
+  render_request.interaction_mode = QStringLiteral("thumbnail");
+  render_request.render_mode = QStringLiteral("layer_thumbnail");
+  render_request.render_priority = 4;
+  render_request.dirty_domain = QStringLiteral("layers_composite");
+  render_request.dirty_stages = QStringList{
+      QStringLiteral("layers_composite"),
+      QStringLiteral("lut_post_color"),
+      QStringLiteral("display_transform"),
   };
+  render_request.max_edge = kLayerThumbnailEdge;
+  render_request.jpeg_quality = 90;
+  render_request.render_latency_budget_ms = 100;
   const auto shared_render = dependencies.shared_render(render_request);
   if (!shared_render.success || shared_render.image.isNull()) {
     return {};
@@ -776,53 +777,51 @@ QVariantMap render_mask_thumbnail_entries(
 
 ThumbnailRefreshQueueRenderers make_thumbnail_worker_renderers(
     ThumbnailAdjustmentRendererDependencies adjustment_renderer_dependencies) {
-  return ThumbnailRefreshQueueRenderers{
-      .adjustment_layer_dependencies =
-          ThumbnailRefreshQueueAdjustmentLayerDependencies{
-              .recipe_hash = [](const QVariantMap& layer) {
-                return photo_layer_thumbnail_recipe_hash(layer);
-              },
-              .entry_recipe_hash = [](const QVariantMap& layer) {
-                return photo_layer_thumbnail_entry_recipe_hash(layer);
-              },
-              .thumbnail_source =
-                  [renderer_dependencies =
-                       std::move(adjustment_renderer_dependencies)](
-                      const QVariantMap& layer,
-                      const QImage& cropped_image,
-                      const ThumbnailRefreshQueueRequest& request,
-                      QVariantMap* metadata) {
-                    return render_adjustment_layer_thumbnail_source(
-                        cropped_image,
-                        layer,
-                        request,
-                        mask_tile_source_revision(
-                            request.job.file_path,
-                            request.state,
-                            QSize(kLayerThumbnailEdge, kLayerThumbnailEdge)),
-                        renderer_dependencies,
-                        metadata);
-                  },
-          },
-      .adjustment_thumbnail_source_image =
-          [](const ThumbnailRefreshQueueRequest& request) {
-            QImage source_image;
-            if (!decode_source_image(
-                    request.job.file_path,
-                    &source_image,
-                    96,
-                    request.state,
-                    nullptr,
-                    photo_editor::pipeline::CancellationToken{
-                        .cancellation_requested = request.cancellation.get(),
-                    })) {
-              return QImage{};
-            }
-            return apply_crop(source_image, request.state);
-          },
-      .mask_thumbnail_entries = render_mask_thumbnail_entries,
-      .source_layer_thumbnail = render_source_layer_thumbnail,
-  };
+  ThumbnailRefreshQueueRenderers renderers;
+  renderers.adjustment_layer_dependencies.recipe_hash =
+      [](const QVariantMap& layer) {
+        return photo_layer_thumbnail_recipe_hash(layer);
+      };
+  renderers.adjustment_layer_dependencies.entry_recipe_hash =
+      [](const QVariantMap& layer) {
+        return photo_layer_thumbnail_entry_recipe_hash(layer);
+      };
+  renderers.adjustment_layer_dependencies.thumbnail_source =
+      [renderer_dependencies = std::move(adjustment_renderer_dependencies)](
+          const QVariantMap& layer,
+          const QImage& cropped_image,
+          const ThumbnailRefreshQueueRequest& request,
+          QVariantMap* metadata) {
+        return render_adjustment_layer_thumbnail_source(
+            cropped_image,
+            layer,
+            request,
+            mask_tile_source_revision(
+                request.job.file_path,
+                request.state,
+                QSize(kLayerThumbnailEdge, kLayerThumbnailEdge)),
+            renderer_dependencies,
+            metadata);
+      };
+  renderers.adjustment_thumbnail_source_image =
+      [](const ThumbnailRefreshQueueRequest& request) {
+        QImage source_image;
+        if (!decode_source_image(
+                request.job.file_path,
+                &source_image,
+                96,
+                request.state,
+                nullptr,
+                photo_editor::pipeline::CancellationToken{
+                    .cancellation_requested = request.cancellation.get(),
+                })) {
+          return QImage{};
+        }
+        return apply_crop(source_image, request.state);
+      };
+  renderers.mask_thumbnail_entries = render_mask_thumbnail_entries;
+  renderers.source_layer_thumbnail = render_source_layer_thumbnail;
+  return renderers;
 }
 
 }  // namespace photo_editor::desktop

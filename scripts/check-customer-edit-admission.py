@@ -161,6 +161,12 @@ def cpp_methods(source, class_name):
 def source_for(root, stem):
     source_root = root / 'apps/desktop/src'
     paths = sorted(source_root.glob(stem + '*.cpp'))
+    if stem == 'timeline_document_controller':
+        # Tracking implementations are split into focused include units that
+        # are compiled by timeline_document_controller.cpp. They remain part
+        # of the controller's QML mutation surface and must not escape this
+        # admission audit merely because their definitions live in .inc files.
+        paths.extend(sorted(source_root.glob('timeline_*_controller.inc')))
     text = '\n'.join(path.read_text() for path in paths)
     if stem == 'editor_preview_controller':
         migration = source_root / 'editor_rendering_migration.inc'

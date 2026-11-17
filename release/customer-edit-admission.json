@@ -407,7 +407,12 @@
     "setPhotoLayerPosterize": "edit",
     "setPhotoLayerSolo": "edit",
     "setPhotoLayerText": "edit",
-    "setPhotoLayerTextBox": "edit",
+    "setPhotoLayerTextBox": {
+      "mode": "edit",
+      "delegates": [
+        "resizePhotoLayerTextBox"
+      ]
+    },
     "setPhotoLayerTextStyle": "edit",
     "setPhotoLayerTransform": "edit",
     "setPhotoLayerTypography": "edit",
@@ -549,7 +554,23 @@
     "setPhotoLayerPerspective": "edit",
     "setPhotoLayerShapeStyle": "edit",
     "setPhotoLayerTextPathFromActiveSelection": "edit",
-    "ungroupPhotoLayer": "edit"
+    "ungroupPhotoLayer": "edit",
+    "applyPhotoLayerEffectLook": "edit",
+    "cancelColorMixerSample": "read",
+    "copyPhotoLayers": "read",
+    "duplicatePreset": "read",
+    "maskSetSnapshot": "read",
+    "movePhotoLayersByPixels": "edit",
+    "pastePhotoLayers": "edit",
+    "resizePhotoLayerTextBox": "edit",
+    "saveCustomPreset": "read",
+    "setBaseImageLocked": "edit",
+    "setCatalogRecipePersistenceEnabled": "read",
+    "setPhotoLayerDisplacementMap": "edit",
+    "setPhotoLayerEffectParameters": "edit",
+    "setPhotoLayerShapeFill": "edit",
+    "setPhotoLayerShapeTexture": "edit",
+    "setPhotoLayersTypography": "edit"
   },
   "carousel_document_controller": {
     "addBrushStroke": "edit",
@@ -875,7 +896,21 @@
     "ungroupSelectedItems": "edit",
     "updateSelectedComponentDefinition": "edit",
     "updateSelectedConstraintStack": "edit",
-    "useSelectedMediaOriginal": "edit"
+    "useSelectedMediaOriginal": "edit",
+    "addEditBoard": "edit",
+    "addEditPhotoBoard": "edit",
+    "createBoardVariant": "edit",
+    "createBoardsFromEdit": "edit",
+    "createEditCanvas": "edit",
+    "detachEditBoardPhotoText": "edit",
+    "editBoardPayload": "read",
+    "linkEditBoardPhotoText": "edit",
+    "moveEditBoard": "edit",
+    "prepareEditBoards": "edit",
+    "removeEditBoard": "edit",
+    "replaceEditBoardImage": "edit",
+    "undoEditBoardImageReplacement": "edit",
+    "undoEditBoardMove": "edit"
   },
   "timeline_document_controller": {
     "activateSourceTapeIndex": "read",
@@ -1288,7 +1323,67 @@
     "setTrackGroupParent": "edit",
     "setTrackGroupState": "edit",
     "setTrackGroupTransform": "edit",
-    "splitSelectedClipsAtSequenceSeconds": "edit"
+    "splitSelectedClipsAtSequenceSeconds": "edit",
+    "analyzeSelectedClipCutout": {
+      "mode": "edit",
+      "delegates": [
+        "startTrackingAnalysis"
+      ]
+    },
+    "analyzeSelectedClipMotion": {
+      "mode": "edit",
+      "delegates": [
+        "startTrackingAnalysis"
+      ]
+    },
+    "analyzeSelectedClipOcclusion": {
+      "mode": "edit",
+      "delegates": [
+        "startTrackingAnalysis"
+      ]
+    },
+    "analyzeSelectedClipRotoscope": {
+      "mode": "edit",
+      "delegates": [
+        "startTrackingAnalysis"
+      ]
+    },
+    "analyzeSelectedClipSceneCamera": {
+      "mode": "edit",
+      "delegates": [
+        "startTrackingAnalysis"
+      ]
+    },
+    "analyzeSelectedClipSurface": {
+      "mode": "edit",
+      "delegates": [
+        "startTrackingAnalysis"
+      ]
+    },
+    "attachMotionTrackToSelectedClip": "edit",
+    "attachSceneTrackToSelectedClip": "edit",
+    "attachSurfaceTrackToSelectedClip": "edit",
+    "cancelRecoveryOpen": "read",
+    "cancelTrackingAnalysis": "read",
+    "correctSelectedRotoscope": {
+      "mode": "edit",
+      "delegates": [
+        "startTrackingAnalysis"
+      ]
+    },
+    "correctSelectedSurfaceTrack": {
+      "mode": "edit",
+      "delegates": [
+        "analyzeSelectedClipSurface"
+      ]
+    },
+    "detachSelectedSceneAttachment": "edit",
+    "requestSelectedClipColorScopes": "read",
+    "setPhotoWorkIntent": "read",
+    "setSelectedClipForegroundCutout": "edit",
+    "setSelectedClipKeyframeSelectionInterpolation": "edit",
+    "setSelectedSceneAttachmentOcclusion": "edit",
+    "setSelectedSceneAttachmentPlacement": "edit"
   },
   "gaussian_scene_controller": {
     "buildPartialScene": "edit",

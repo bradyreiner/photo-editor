@@ -35,6 +35,12 @@ jobs:
             bash -n "$script"
           done
 
+      - name: Exercise native launcher orchestration
+        run: python3 -B scripts/test-run-native.py
+
+      - name: Validate optional CUDA and Little CMS build contracts
+        run: python3 -B scripts/test-cuda-build-contract.py
+
       - name: Validate Looksy brand surface
         run: |
           python3 -B scripts/test-brand-surface.py

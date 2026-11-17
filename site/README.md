@@ -69,3 +69,22 @@ GitHub Release assets.
 - The Content Security Policy permits only same-origin resources and the public GitHub API.
 - Payment happens on the configured provider's hosted page.
 - `.appinstaller`, `.msix`, DMG, appcast, manifest, and checksums are released together.
+
+## Design and local preview
+
+The download landing page uses `landing.css` and the progressive Three.js
+scene in `optical-scene.js`. Policy/support pages retain `styles.css`.
+The app icon is the canonical logo; see `assets/README.md` for its source.
+
+```sh
+python3 -m http.server 4173 --bind 127.0.0.1 --directory site
+node --test scripts/test-download-page.cjs
+python3 scripts/validate-release-site.py site
+```
+
+Open `http://127.0.0.1:4173`. The R/G/B buttons toggle individual light rings,
+and the motion button pauses/resumes the sculpture. Reduced-motion preferences
+start it paused. Rendering stops while the hero is offscreen or the tab is hidden.
+If WebGL or the Three.js module is unavailable, CSS artwork remains visible and
+download resolution continues independently. All fonts and scripts are hosted
+locally, preserving the existing Content Security Policy.

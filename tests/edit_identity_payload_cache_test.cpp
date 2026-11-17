@@ -1,5 +1,6 @@
 #include "edit_adjustment_patch.h"
 
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QJsonDocument>
@@ -26,6 +27,50 @@ EditRecipeState fixture(int tile_count) {
   }
   state.layers.append(QVariantMap{{"id", "text"}, {"kind", "text"}, {"text", "Trip"}});
   return state;
+}
+
+EditRecipeState brush_history_fixture(int point_count, int geometry_revision = 0) {
+  QVariantList points;
+  points.reserve(point_count);
+  for (int index = 0; index < point_count; ++index) {
+    points.append(QVariantMap{
+        {QStringLiteral("x"), index == 0
+             ? static_cast<double>(geometry_revision) / 1000.0
+             : static_cast<double>(index % 997) / 996.0},
+        {QStringLiteral("y"), static_cast<double>(index % 991) / 990.0},
+        {QStringLiteral("size"), 0.08},
+        {QStringLiteral("flow"), 0.75},
+        {QStringLiteral("opacity"), 0.9},
+        {QStringLiteral("pressure"), 0.8},
+    });
+  }
+  const QVariantMap settings{
+      {QStringLiteral("rasterVersion"), 2},
+      {QStringLiteral("feather"), 0.75},
+      {QStringLiteral("hardness"), 0.3},
+  };
+  const QVariantMap stroke{
+      {QStringLiteral("operation"), QStringLiteral("paint")},
+      {QStringLiteral("settings"), settings},
+      {QStringLiteral("samples"), points},
+  };
+  const QVariantMap mask{
+      {QStringLiteral("id"), QStringLiteral("brush-mask")},
+      {QStringLiteral("kind"), QStringLiteral("brush")},
+      {QStringLiteral("brushPoints"), points},
+      {QStringLiteral("brushStrokes"), QVariantList{stroke}},
+  };
+  EditRecipeState state;
+  state.mask_stack.append(mask);
+  return state;
+}
+
+QVariantMap mask_with_points(
+    const EditRecipeState& state,
+    const QVariantList& points) {
+  auto mask = state.mask_stack.at(0).toMap();
+  mask.insert(QStringLiteral("brushPoints"), points);
+  return mask;
 }
 
 bool check(bool condition, const char* message) {
@@ -93,6 +138,120 @@ int main(int argc, char** argv) {
       if (!check(read.get(), "Concurrent preview and UI queries must retain their own identities")) return 1;
   }
 
+  const auto brush_state = brush_history_fixture(10'000);
+  const auto brush_identity = adjustment_patch_identity_json(brush_state);
+  auto history_cache = brush_history_identity_cache_snapshot();
+  if (!check(history_cache.entries == 2 && history_cache.miss_count == 2 &&
+                 history_cache.hit_count >= 1 &&
+                 history_cache.retained_bytes > 0,
+             "Shared point/sample payloads must reuse one exact content digest")) {
+    return 1;
+  }
+  const auto cache_before_scalar = history_cache;
+  auto exposure_revision = brush_state;
+  exposure_revision.exposure = 0.4;
+  auto opacity_revision_mask = exposure_revision.mask_stack.at(0).toMap();
+  opacity_revision_mask.insert(QStringLiteral("opacity"), 0.55);
+  exposure_revision.mask_stack[0] = opacity_revision_mask;
+  const auto exposure_identity = adjustment_patch_identity_json(exposure_revision);
+  history_cache = brush_history_identity_cache_snapshot();
+  if (!check(exposure_identity != brush_identity &&
+                 history_cache.hit_count >= cache_before_scalar.hit_count + 3 &&
+                 history_cache.miss_count == cache_before_scalar.miss_count,
+             "Scalar revisions must reuse exact cached brush-history digests")) {
+    return 1;
+  }
+
+  auto changed_points = brush_state;
+  auto points = changed_points.mask_stack.at(0).toMap()
+                    .value(QStringLiteral("brushPoints")).toList();
+  auto changed_point = points.at(5'000).toMap();
+  changed_point.insert(QStringLiteral("x"), 0.123456);
+  points[5'000] = changed_point;
+  auto changed_mask = mask_with_points(changed_points, points);
+  auto changed_strokes = changed_mask.value(QStringLiteral("brushStrokes")).toList();
+  auto changed_stroke = changed_strokes.at(0).toMap();
+  auto changed_samples = changed_stroke.value(QStringLiteral("samples")).toList();
+  changed_samples[5'000] = changed_point;
+  changed_stroke.insert(QStringLiteral("samples"), changed_samples);
+  changed_strokes[0] = changed_stroke;
+  changed_mask.insert(QStringLiteral("brushStrokes"), changed_strokes);
+  changed_points.mask_stack[0] = changed_mask;
+  const auto geometry_identity = adjustment_patch_identity_json(changed_points);
+  const auto cache_after_geometry = brush_history_identity_cache_snapshot();
+  if (!check(geometry_identity != brush_identity &&
+                 cache_after_geometry.miss_count >= history_cache.miss_count + 1,
+             "A brush geometry edit must invalidate the compact history digest")) {
+    return 1;
+  }
+
+  auto changed_settings = brush_state;
+  auto settings_stroke = changed_settings.mask_stack.at(0).toMap()
+                             .value(QStringLiteral("brushStrokes")).toList().at(0).toMap();
+  auto settings = settings_stroke.value(QStringLiteral("settings")).toMap();
+  settings.insert(QStringLiteral("hardness"), 0.65);
+  settings_stroke.insert(QStringLiteral("settings"), settings);
+  auto strokes = QVariantList{settings_stroke};
+  auto settings_mask = changed_settings.mask_stack.at(0).toMap();
+  settings_mask.insert(QStringLiteral("brushStrokes"), strokes);
+  changed_settings.mask_stack[0] = settings_mask;
+  const auto settings_identity = adjustment_patch_identity_json(changed_settings);
+  const auto cache_after_settings = brush_history_identity_cache_snapshot();
+  if (!check(settings_identity != brush_identity &&
+                 cache_after_settings.miss_count >= cache_after_geometry.miss_count + 1 &&
+                 cache_after_settings.retained_bytes <=
+                     kMaxBrushHistoryIdentityCacheMemoryBytes &&
+                 cache_after_settings.entries <= kMaxBrushHistoryIdentityCacheEntries,
+             "Brush raster-setting changes must invalidate history identity "
+             "within the cache budget")) {
+    return 1;
+  }
+
+  auto reordered_brush = brush_state;
+  auto reordered_mask = reordered_brush.mask_stack.at(0).toMap();
+  auto reordered_points = reordered_mask.value(QStringLiteral("brushPoints")).toList();
+  std::swap(reordered_points[0], reordered_points[1]);
+  reordered_mask.insert(QStringLiteral("brushPoints"), reordered_points);
+  auto reordered_stroke = reordered_mask.value(QStringLiteral("brushStrokes"))
+                              .toList().at(0).toMap();
+  auto reordered_samples = reordered_stroke.value(QStringLiteral("samples")).toList();
+  std::swap(reordered_samples[0], reordered_samples[1]);
+  reordered_stroke.insert(QStringLiteral("samples"), reordered_samples);
+  reordered_mask.insert(
+      QStringLiteral("brushStrokes"), QVariantList{reordered_stroke});
+  reordered_brush.mask_stack[0] = reordered_mask;
+  if (!check(adjustment_patch_identity_json(reordered_brush) != brush_identity,
+             "Brush sample ordering must remain part of the compact identity")) {
+    return 1;
+  }
+
+  EditRecipeState byte_payload_a;
+  QVariantMap byte_mask{{QStringLiteral("id"), QStringLiteral("byte-mask")}};
+  byte_mask.insert(QStringLiteral("brushPoints"), QByteArray(8192, 'A'));
+  byte_payload_a.mask_stack.append(byte_mask);
+  auto byte_payload_b = byte_payload_a;
+  byte_mask.insert(QStringLiteral("brushPoints"), QByteArray(8192, 'B'));
+  byte_payload_b.mask_stack[0] = byte_mask;
+  if (!check(adjustment_patch_identity_json(byte_payload_a) !=
+                 adjustment_patch_identity_json(byte_payload_b),
+             "Large scalar payloads must retain their content in compact identity")) {
+    return 1;
+  }
+
+  for (int revision = 1;
+       revision <= kMaxBrushHistoryIdentityCacheEntries / 2 + 1;
+       ++revision) {
+    const auto history_revision = brush_history_fixture(300, revision);
+    (void)adjustment_patch_identity_json(history_revision);
+  }
+  history_cache = brush_history_identity_cache_snapshot();
+  if (!check(history_cache.entries == kMaxBrushHistoryIdentityCacheEntries &&
+                 history_cache.eviction_count > 0 &&
+                 history_cache.retained_bytes <=
+                     kMaxBrushHistoryIdentityCacheMemoryBytes,
+             "Brush history identity cache must enforce its bounded LRU budget")) {
+    return 1;
+  }
   if (benchmark) {
     QVector<double> warm, transforms;
     for (int sample = 0; sample < 7; ++sample) {

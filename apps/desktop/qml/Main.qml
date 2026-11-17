@@ -111,6 +111,60 @@ ApplicationWindow {
         coordinator: window.closeCoordinator
     }
 
+    AppPopup {
+        id: previewFailureDetailsDialog
+        objectName: "previewFailureDetailsDialog"
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        width: Math.min(popupAvailableWidth, Math.max(1, 620))
+        x: (parent.width - width) / 2
+        y: Math.max(16, (parent.height - height) / 2)
+        padding: 20
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        contentItem: ColumnLayout {
+            spacing: 14
+            Label {
+                Layout.fillWidth: true
+                text: "Preview failure details"
+                color: theme.textStrong
+                font.pixelSize: theme.typeTitle
+                font.weight: Font.DemiBold
+            }
+            Label {
+                Layout.fillWidth: true
+                text: "Stage: " + String(editorPreview.previewFailureStage || "unknown")
+                color: theme.textMuted
+                wrapMode: Text.Wrap
+            }
+            TextArea {
+                objectName: "previewFailureDetailsText"
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(220, Math.max(90, contentHeight + 20))
+                readOnly: true
+                selectByMouse: true
+                wrapMode: TextEdit.Wrap
+                text: String(editorPreview.previewFailureDetail || editorPreview.status || "No diagnostic was provided.")
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                ActionButton {
+                    text: "Retry"
+                    iconName: "retry"
+                    onClicked: {
+                        previewFailureDetailsDialog.close()
+                        window.handleAppActivityStatusAction()
+                    }
+                }
+                ActionButton {
+                    text: "Close"
+                    tone: "tertiary"
+                    onClicked: previewFailureDetailsDialog.close()
+                }
+            }
+        }
+    }
+
     Theme { id: theme }
 
     readonly property var componentWorkspaceController: typeof componentWorkspace !== "undefined" ? componentWorkspace : null
@@ -4926,6 +4980,7 @@ ApplicationWindow {
             accent: window.recoveryBannerVisible ? theme.success : window.primaryActivityAccent
             statusIcon: window.recoveryBannerVisible ? "check" : ""
             dismissible: window.recoveryBannerVisible
+            detailsAvailable: !window.recoveryBannerVisible && window.editorPreviewFailureVisible
             actionText: window.recoveryBannerVisible ? "Review work" : ""
             cancelable: !window.recoveryBannerVisible && window.appActivityStatusCancelable
             retryable: window.appActivityStatusRetryable
@@ -4933,6 +4988,7 @@ ApplicationWindow {
             onRetryRequested: window.handleAppActivityStatusAction()
             onActionRequested: if (window.recoveryBannerVisible) window.reviewRecoveredWork()
             onDismissRequested: if (window.recoveryBannerVisible) window.dismissRecoverySurface()
+            onDetailsRequested: previewFailureDetailsDialog.open()
         }
 
         RecoveryStatusPanel {

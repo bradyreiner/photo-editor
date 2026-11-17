@@ -1,5 +1,6 @@
 #include "gaussian_capture_preparation.h"
 #include "photo_render_utils.h"
+#include "render_plan_store.h"
 #include "raw_image_decoder.h"
 #include "capture_camera_metadata.h"
 #include "gaussian_camera_priors.h"
@@ -12,6 +13,8 @@
 #include <QFileInfo>
 #include <QDateTime>
 #include <QImageReader>
+#include <QJsonDocument>
+#include <QJsonParseError>
 
 namespace photo_editor::desktop {
 QVariantMap validate_prepared_gaussian_timed_capture(const QString& project,

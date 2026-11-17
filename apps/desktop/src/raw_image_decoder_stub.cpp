@@ -65,10 +65,13 @@ double raw_decode_false_color_suppression_amount(
   return std::clamp(settings.false_color_suppression_amount, 0.0, 1.0);
 }
 
-bool apply_raw_hot_dead_pixel_cleanup(QImage* image, double amount) {
+bool apply_raw_hot_dead_pixel_cleanup(
+    QImage* image,
+    double amount,
+    photo_editor::pipeline::CancellationToken cancellation) {
   amount = std::clamp(amount, 0.0, 1.0);
   if (image == nullptr || image->isNull() || amount <= 0.0 ||
-      image->width() < 3 || image->height() < 3) {
+      image->width() < 3 || image->height() < 3 || cancellation.cancelled()) {
     return false;
   }
 
@@ -86,6 +89,9 @@ bool apply_raw_hot_dead_pixel_cleanup(QImage* image, double amount) {
   auto changed = false;
   const auto threshold_scale = 0.45 - amount * 0.37;
   for (int y = 1; y < source.height() - 1; ++y) {
+    if (cancellation.cancelled()) {
+      return false;
+    }
     for (int x = 1; x < source.width() - 1; ++x) {
       std::array<double, 8> red{};
       std::array<double, 8> green{};
@@ -134,16 +140,19 @@ bool apply_raw_hot_dead_pixel_cleanup(QImage* image, double amount) {
     }
   }
 
-  if (changed) {
+  if (changed && !cancellation.cancelled()) {
     *image = std::move(output);
   }
-  return changed;
+  return changed && !cancellation.cancelled();
 }
 
-bool apply_raw_false_color_suppression(QImage* image, double amount) {
+bool apply_raw_false_color_suppression(
+    QImage* image,
+    double amount,
+    photo_editor::pipeline::CancellationToken cancellation) {
   amount = std::clamp(amount, 0.0, 1.0);
   if (image == nullptr || image->isNull() || amount <= 0.0 ||
-      image->width() < 3 || image->height() < 3) {
+      image->width() < 3 || image->height() < 3 || cancellation.cancelled()) {
     return false;
   }
 
@@ -161,6 +170,9 @@ bool apply_raw_false_color_suppression(QImage* image, double amount) {
   auto changed = false;
   const auto threshold = 0.18 - amount * 0.12;
   for (int y = 1; y < source.height() - 1; ++y) {
+    if (cancellation.cancelled()) {
+      return false;
+    }
     for (int x = 1; x < source.width() - 1; ++x) {
       std::array<double, 8> red{};
       std::array<double, 8> green{};
@@ -219,10 +231,10 @@ bool apply_raw_false_color_suppression(QImage* image, double amount) {
     }
   }
 
-  if (changed) {
+  if (changed && !cancellation.cancelled()) {
     *image = std::move(output);
   }
-  return changed;
+  return changed && !cancellation.cancelled();
 }
 
 QSize raw_image_size(const QString& file_path) {
@@ -233,12 +245,13 @@ QSize raw_image_size(const QString& file_path) {
 
 bool decode_raw_image(const QString& file_path, QImage* image, int max_edge,
                       const RawDecodeSettings& settings,
-                      photo_editor::pipeline::DecodedImageMetadata* metadata) {
+                      photo_editor::pipeline::DecodedImageMetadata* metadata,
+                      photo_editor::pipeline::CancellationToken cancellation) {
   auto rendered_settings = settings;
   rendered_settings.input_transform_enabled = false;
   QImage linear;
   if (!decode_raw_linear_image(file_path, &linear, max_edge, rendered_settings,
-                               metadata)) {
+                               metadata, cancellation)) {
     return false;
   }
   *image = finalize_output_image(std::move(linear), preview_color_space());
@@ -248,25 +261,26 @@ bool decode_raw_image(const QString& file_path, QImage* image, int max_edge,
 bool decode_raw_linear_image(
     const QString& file_path, QImage* image, int max_edge,
     const RawDecodeSettings& settings,
-    photo_editor::pipeline::DecodedImageMetadata* metadata) {
-  if (!has_raw_extension(file_path)) {
+    photo_editor::pipeline::DecodedImageMetadata* metadata,
+    photo_editor::pipeline::CancellationToken cancellation) {
+  if (!has_raw_extension(file_path) || cancellation.cancelled()) {
     return false;
   }
   const auto camera_linear =
       raw_decode_requests_camera_linear_backend(settings);
   const auto decoded =
       camera_linear ? decode_libraw_camera_linear_image(
-                          file_path, image, max_edge, settings, metadata)
+                          file_path, image, max_edge, settings, metadata, cancellation)
                     : decode_libraw_scene_linear_image(
-                          file_path, image, max_edge, settings, metadata);
+                          file_path, image, max_edge, settings, metadata, cancellation);
   if (!decoded) {
     return false;
   }
   apply_raw_hot_dead_pixel_cleanup(
-      image, raw_decode_hot_dead_pixel_cleanup_amount(settings));
+      image, raw_decode_hot_dead_pixel_cleanup_amount(settings), cancellation);
   apply_raw_false_color_suppression(
-      image, raw_decode_false_color_suppression_amount(settings));
-  return true;
+      image, raw_decode_false_color_suppression_amount(settings), cancellation);
+  return !cancellation.cancelled();
 }
 
 bool read_raw_decoded_metadata(
@@ -286,12 +300,14 @@ bool native_image_supported(const QString& /*file_path*/) { return false; }
 QSize native_image_size(const QString& /*file_path*/) { return {}; }
 
 bool decode_native_image(const QString& /*file_path*/, QImage* /*image*/,
-                         int /*max_edge*/) {
+                         int /*max_edge*/,
+                         photo_editor::pipeline::CancellationToken /*cancellation*/) {
   return false;
 }
 
 bool decode_native_linear_image(const QString& /*file_path*/, QImage* /*image*/,
-                                int /*max_edge*/) {
+                                int /*max_edge*/,
+                                photo_editor::pipeline::CancellationToken /*cancellation*/) {
   return false;
 }
 

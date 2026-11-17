@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -15,6 +16,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QFileInfo>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -22,6 +24,12 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <windows.h>
+#include <aclapi.h>
+#endif
 
 using photo_editor::desktop::VisualSearchController;
 namespace {
@@ -35,6 +43,82 @@ bool wait_until(const std::function<bool()>& predicate, int timeout = 10000) {
   return predicate();
 }
 int fail(const char* message) { std::cerr << message << '\n'; return EXIT_FAILURE; }
+
+#ifdef Q_OS_WIN
+bool has_owner_only_acl(const QString& path, BYTE expected_ace_flags) {
+  PSID owner_sid = nullptr;
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR security_descriptor = nullptr;
+  const auto native_path = reinterpret_cast<LPWSTR>(const_cast<ushort*>(path.utf16()));
+  const auto acl_result = GetNamedSecurityInfoW(
+      native_path, SE_FILE_OBJECT,
+      OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+      &owner_sid, nullptr, &dacl, nullptr, &security_descriptor);
+  if (acl_result != ERROR_SUCCESS || owner_sid == nullptr || dacl == nullptr ||
+      security_descriptor == nullptr) {
+    if (security_descriptor != nullptr) LocalFree(security_descriptor);
+    return false;
+  }
+
+  HANDLE token = nullptr;
+  DWORD user_info_size = 0;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+    LocalFree(security_descriptor);
+    return false;
+  }
+  (void)GetTokenInformation(token, TokenUser, nullptr, 0, &user_info_size);
+  QByteArray user_info(static_cast<qsizetype>(user_info_size), Qt::Uninitialized);
+  const bool has_user = user_info_size > 0 &&
+      GetTokenInformation(token, TokenUser, user_info.data(), user_info_size, &user_info_size);
+  CloseHandle(token);
+
+  ACL_SIZE_INFORMATION acl_size{};
+  bool private_acl = has_user && GetAclInformation(
+      dacl, &acl_size, sizeof(acl_size), AclSizeInformation) && acl_size.AceCount == 1;
+  if (private_acl) {
+    void* raw_ace = nullptr;
+    private_acl = GetAce(dacl, 0, &raw_ace) != FALSE;
+    if (private_acl) {
+      const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw_ace);
+      const auto* user = reinterpret_cast<const TOKEN_USER*>(user_info.constData());
+      auto* ace_sid = reinterpret_cast<BYTE*>(const_cast<DWORD*>(&ace->SidStart));
+      SECURITY_DESCRIPTOR_CONTROL control = 0;
+      DWORD revision = 0;
+      private_acl = ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
+          ace->Header.AceFlags == expected_ace_flags &&
+          (ace->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS &&
+          EqualSid(owner_sid, user->User.Sid) &&
+          EqualSid(ace_sid, user->User.Sid) &&
+          GetSecurityDescriptorControl(security_descriptor, &control, &revision) &&
+          (control & SE_DACL_PROTECTED) != 0;
+    }
+  }
+  LocalFree(security_descriptor);
+  return private_acl;
+}
+
+bool index_file_is_private(const QString& path) {
+  return has_owner_only_acl(path, 0) &&
+      has_owner_only_acl(
+          QFileInfo(path).absolutePath(),
+          OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE);
+}
+#else
+bool has_no_shared_permissions(const QString& path) {
+  const auto permissions = QFile::permissions(path);
+  return !permissions.testFlag(QFile::ReadGroup) &&
+      !permissions.testFlag(QFile::WriteGroup) &&
+      !permissions.testFlag(QFile::ExeGroup) &&
+      !permissions.testFlag(QFile::ReadOther) &&
+      !permissions.testFlag(QFile::WriteOther) &&
+      !permissions.testFlag(QFile::ExeOther);
+}
+
+bool index_file_is_private(const QString& path) {
+  return has_no_shared_permissions(path) &&
+      has_no_shared_permissions(QFileInfo(path).absolutePath());
+}
+#endif
 
 using visual_search_test::Server;
 }  // namespace
@@ -364,10 +448,9 @@ int main(int argc, char** argv) {
   if (!wait_until([&] { return !restarted.running(); }) || restarted.reusedDescriptions() != 3 ||
       restarted.newDescriptions() != 0 || server.descriptions != saved_descriptions ||
       restarted.resultIds() != QStringList{"0", "1"}) return fail("new query after restart must reuse descriptions and retain stable tie order");
-  const auto permissions = QFile::permissions(index_path);
-  if (permissions.testFlag(QFile::ReadGroup) || permissions.testFlag(QFile::ReadOther) ||
-      permissions.testFlag(QFile::WriteGroup) || permissions.testFlag(QFile::WriteOther))
+  if (!index_file_is_private(index_path)) {
     return fail("saved image descriptions must be owner-private");
+  }
   restarted.search("red excluded by current view", {assets.first()}, server.model());
   if (!wait_until([&] { return !restarted.running(); }) || !restarted.results().isEmpty() || restarted.total() != 1)
     return fail("persistent index must not resurrect assets outside the supplied catalog view");
@@ -423,7 +506,9 @@ int main(int argc, char** argv) {
     return fail("index write failure must preserve search and expose nonpersistent status");
   if (!server.protocol_ok) return fail("indexed ranking leaked image payload or metadata");
   restarted.forgetIndex();
-  if (!wait_until([&] { return !restarted.running(); }) || !VisualSearchIndex::lookup(index_path, key).isEmpty())
+  const auto forget_finished = wait_until([&] { return !restarted.running(); });
+  const auto remaining_description = VisualSearchIndex::lookup(index_path, key);
+  if (!forget_finished || !remaining_description.isEmpty())
     return fail("forget index must remove persisted descriptions");
   std::cout << "visual search protocol, privacy, caching, cancellation, ranking and batching passed\n";
   return EXIT_SUCCESS;

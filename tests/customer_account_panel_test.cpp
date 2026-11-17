@@ -1,13 +1,20 @@
 #include <QGuiApplication>
+#include <QQmlError>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickWindow>
+#include <QStringList>
 #include <QThread>
 #include <iostream>
 
 int main(int argc, char** argv) {
   QGuiApplication app(argc, argv);
   QQmlEngine engine;
+  QStringList qmlWarnings;
+  QObject::connect(&engine, &QQmlEngine::warnings, &engine,
+                   [&qmlWarnings](const QList<QQmlError>& warnings) {
+                     for (const auto& warning : warnings) qmlWarnings.append(warning.toString());
+                   });
   QQmlComponent component(&engine);
   component.setData(R"(
 import QtQuick
@@ -97,5 +104,17 @@ ApplicationWindow {
   settle();
   if (access->property("recovered").toString() != "synthetic-recovery-key" ||
       !field->property("text").toString().isEmpty()) return 1;
-  std::cout << "Account panel renders guest, paid-device and revoked-recovery states; masks and clears purchase keys.\n";
+  QObject* panel = window->findChild<QObject*>("customerAccountPanel");
+  if (!panel) return 1;
+  panel->setProperty("controller", QVariant::fromValue(static_cast<QObject*>(nullptr)));
+  settle();
+  if (deactivate->property("visible").toBool() || deactivate->property("enabled").toBool()) return 1;
+  for (const auto& warning : qmlWarnings) {
+    if (warning.contains("busy", Qt::CaseInsensitive) &&
+        warning.contains("null", Qt::CaseInsensitive)) {
+      std::cerr << warning.toStdString() << '\n';
+      return 1;
+    }
+  }
+  std::cout << "Account panel renders guest, paid-device, revoked-recovery, and unavailable-service states without a null-controller warning.\n";
 }

@@ -4,6 +4,7 @@
   "version-string": "0.1",
   "builtin-baseline": "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
   "dependencies": [
+    "lcms",
     "openssl",
     "sqlite3",
     {

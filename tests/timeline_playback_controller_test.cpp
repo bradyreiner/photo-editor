@@ -1319,8 +1319,13 @@ int main(int argc, char** argv) {
   playback.seekSequenceSeconds(0.0);
 
   photo_editor::desktop::TimelineAudioOutput panned_output;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
   if (panned_output.bufferOutput()->format().isValid()) {
     return fail("decoded-buffer output should retain each source's native sample rate, channel layout, and sample format");
+  }
+#endif
+  if (!panned_output.bufferFormat().isValid()) {
+    return fail("audio output should expose a valid fallback format");
   }
   const QVector<float> stereo_samples = {0.50F, 0.50F, -0.50F, -0.50F};
   const auto centered_samples = panned_output.processStereoSamplesForTesting(stereo_samples);

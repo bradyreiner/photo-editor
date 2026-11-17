@@ -52,6 +52,12 @@ SDK_SYMBOL_PATTERN = re.compile(
 ADOBE_API_PATTERN = re.compile(
     r"https?://[^\s\"']*(?:api\.)?adobe\.com(?:[/:]|$)", re.IGNORECASE
 )
+# XMP namespace identifiers describe local metadata; they are not requests.
+# Match complete identifiers so a different path or endpoint still fails.
+PUBLIC_METADATA_NAMESPACE_URIS = {
+    "http://ns.adobe.com/photoshop/1.0/",
+    "http://ns.adobe.com/exif/1.0/",
+}
 FORBIDDEN_FIXTURE_PATH_PATTERN = re.compile(
     r"(?:^|[-_.])(?:adobe|camera[-_.]?raw|dng[-_.]?sdk|xmp[-_.]?sdk)"
     r"(?:[-_.]|$)",
@@ -154,7 +160,8 @@ def validate_root(root: Path) -> tuple[list[str], dict[str, int]]:
       errors.append(f"{logical} includes an Adobe DNG/XMP SDK header")
     if SDK_SYMBOL_PATTERN.search(text):
       errors.append(f"{logical} references an Adobe DNG SDK runtime symbol")
-    if ADOBE_API_PATTERN.search(text):
+    if any(match.group(0) not in PUBLIC_METADATA_NAMESPACE_URIS
+           for match in ADOBE_API_PATTERN.finditer(text)):
       errors.append(f"{logical} references an Adobe network API")
 
   for fixture_root in FIXTURE_ROOTS:

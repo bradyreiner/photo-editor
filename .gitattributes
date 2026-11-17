@@ -1,0 +1,2 @@
+# Keep source and hashed text fixtures identical on macOS, Linux and Windows.
+* text=auto eol=lf

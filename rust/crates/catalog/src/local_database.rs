@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use getrandom::getrandom;
@@ -44,21 +44,21 @@ pub struct LocalPostgresState {
 impl LocalPostgresState {
     pub fn database_url(&self) -> String {
         format!(
-            "postgresql://{}:{}@{}:{}/{}",
+            "postgresql://{}:{}@{}:{}/{}?sslmode=disable",
             self.user_name, self.password, self.host, self.port, self.database_name
         )
     }
 
     pub fn maintenance_database_url(&self) -> String {
         format!(
-            "postgresql://{}:{}@{}:{}/postgres",
+            "postgresql://{}:{}@{}:{}/postgres?sslmode=disable",
             self.user_name, self.password, self.host, self.port
         )
     }
 
     pub fn redacted_database_url(&self) -> String {
         format!(
-            "postgresql://{}:<redacted>@{}:{}/{}",
+            "postgresql://{}:<redacted>@{}:{}/{}?sslmode=disable",
             self.user_name, self.host, self.port, self.database_name
         )
     }
@@ -560,22 +560,42 @@ impl LocalCatalogDatabaseManager {
     }
 
     fn start_cluster(&self, state: &LocalPostgresState) -> LocalDatabaseResult<()> {
-        self.run_postgres_command(
-            "pg_ctl",
-            &[
-                "-D".to_string(),
-                self.cluster_data_dir().display().to_string(),
-                "-l".to_string(),
-                self.cluster_log_file().display().to_string(),
-                "-w".to_string(),
-                "start".to_string(),
-                "-o".to_string(),
-                format!(
-                    "-c listen_addresses={} -c port={} -c max_connections=32",
-                    state.host, state.port
-                ),
-            ],
-        )
+        let mut command = Command::new(self.postgres_executable("pg_ctl"));
+        command.args([
+            "-D".to_string(),
+            self.cluster_data_dir().display().to_string(),
+            "-l".to_string(),
+            self.cluster_log_file().display().to_string(),
+            "-w".to_string(),
+            "start".to_string(),
+            "-o".to_string(),
+            format!(
+                "-c listen_addresses={} -c port={} -c max_connections=32",
+                state.host, state.port
+            ),
+        ]);
+        apply_runtime_environment(&mut command);
+
+        // On Windows, the postmaster created by `pg_ctl start` can retain the
+        // anonymous stdout/stderr pipes installed by `Command::output`. Waiting
+        // for those pipes to reach EOF then blocks until PostgreSQL itself exits,
+        // even though pg_ctl has already reported a successful start. Give the
+        // server independent handles and wait only for pg_ctl to finish.
+        let status = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if status.success() {
+            return Ok(());
+        }
+
+        Err(io::Error::other(format!(
+            "pg_ctl failed to start PostgreSQL with code {:?}; inspect {}",
+            status.code(),
+            self.cluster_log_file().display()
+        ))
+        .into())
     }
 
     fn load_or_create_state(&self) -> LocalDatabaseResult<LocalPostgresState> {
@@ -921,11 +941,11 @@ mod tests {
 
         assert_eq!(
             state.database_url(),
-            "postgresql://photo_editor:secret@127.0.0.1:15432/photo_editor"
+            "postgresql://photo_editor:secret@127.0.0.1:15432/photo_editor?sslmode=disable"
         );
         assert_eq!(
             state.redacted_database_url(),
-            "postgresql://photo_editor:<redacted>@127.0.0.1:15432/photo_editor"
+            "postgresql://photo_editor:<redacted>@127.0.0.1:15432/photo_editor?sslmode=disable"
         );
     }
 

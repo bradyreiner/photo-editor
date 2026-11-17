@@ -2403,10 +2403,12 @@ Rectangle {
                             menuWidth: 190
                             onMenuItemTriggered: function(key) { root.handleSelectionActionMenu(key) }
                         }
-                    }
                 }
+            }
 
                 Item {
+                    objectName: "libraryViewportSurface"
+                    readonly property string viewportContract: "library-viewport:v1|layout:single-fill-slot|panes:overlaid"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
 
@@ -2717,9 +2719,7 @@ Rectangle {
                                 }
                             }
                         }
-                }
-            }
-
+                    }
                     Item {
                         objectName: "libraryRecentImportsCollection"
                         anchors.fill: parent
@@ -3532,6 +3532,7 @@ Rectangle {
                             }
                         }
                     }
+                }
                 }
             }
         }
