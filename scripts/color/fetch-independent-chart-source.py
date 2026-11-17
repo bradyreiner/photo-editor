@@ -16,6 +16,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    sha256_file,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = (
@@ -76,12 +82,6 @@ def load_json(path: Path) -> dict[str, Any]:
   return value
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
 def download_archive(

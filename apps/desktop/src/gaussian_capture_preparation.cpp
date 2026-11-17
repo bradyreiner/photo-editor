@@ -141,9 +141,19 @@ QVariantMap prepare_gaussian_capture(const QStringList& sources, const QString& 
     // Share the source-content thumbnail policy: ICC conversion for processed
     // pixels, canonical neutral develop only for camera-linear RAW sources.
     const bool raw_source = raw_image_supported(source);
-    const auto rendered = raw_source ? render_output_image_with_backend(decoded, state, QColorSpace(QColorSpace::SRgb),
-        QImage::Format_RGB888, RenderBackendPreference::CpuOnly, &metadata, nullptr, {},
-        photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred, nullptr, cancellation)
+    std::optional<photo_editor::pipeline::RenderPlan> raw_plan;
+    if (raw_source) {
+      const auto admission = RenderPlanStore::shared().admit(
+          QStringLiteral("gaussian-capture:%1").arg(QFileInfo(source).absoluteFilePath()),
+          source, state, decoded.size(), photo_editor::pipeline::RenderPurpose::Export,
+          photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation, std::nullopt, &metadata);
+      if (!admission.admitted || !admission.plan.has_value())
+        return {{"ok", false}, {"error", admission.error}};
+      raw_plan = *admission.plan;
+    }
+    const auto rendered = raw_source ? render_output_image(decoded, state, QColorSpace(QColorSpace::SRgb),
+        QImage::Format_RGB888, &metadata, nullptr, {},
+        photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred, &*raw_plan, cancellation)
         : convert_tagged_qimage_color_space(decoded,QColorSpace(QColorSpace::SRgb),QImage::Format_RGB888,
             QImageColorConversionPurpose::OutputPublication);
     const auto relative = QStringLiteral("images/frame_%1.png").arg(index, 6, 10, QLatin1Char('0'));

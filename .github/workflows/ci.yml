@@ -345,7 +345,7 @@ jobs:
 
   desktop-windows:
     runs-on: windows-2022
-    timeout-minutes: 35
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -358,7 +358,8 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.3"
+          version: "6.10.2"
+          arch: win64_msvc2022_64
           modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
           cache: true
 
@@ -402,7 +403,7 @@ jobs:
 
   desktop-macos:
     runs-on: macos-14
-    timeout-minutes: 35
+    timeout-minutes: 90
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -417,7 +418,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.3"
+          version: "6.10.2"
           modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
           cache: true
 
@@ -644,7 +645,7 @@ jobs:
 
   release-macos-build:
     runs-on: macos-14
-    timeout-minutes: 35
+    timeout-minutes: 90
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -656,7 +657,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.3"
+          version: "6.10.2"
           modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
           cache: true
 

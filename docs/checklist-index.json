@@ -462,6 +462,27 @@
       "area": "capability-acceptance",
       "state": "supporting",
       "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-AGENT-MOTION-GRAPHICS",
+      "path": "docs/agent-motion-graphics-improvement-plan.md",
+      "area": "agent-authoring",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-AGENT-VIDEO-PRODUCTION",
+      "path": "docs/agent-video-production-improvement-plan.md",
+      "area": "agent-authoring",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-DIMENSIONAL-TYPOGRAPHY",
+      "path": "docs/dimensional-typography-plan.md",
+      "area": "typography",
+      "state": "supporting",
+      "canonicalOwner": "docs/capability-verification-plan.md"
     }
   ]
 }

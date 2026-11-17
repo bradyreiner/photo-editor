@@ -11,6 +11,12 @@ fail() {
   exit 1
 }
 
+write_catalog_snapshot() {
+  # The helper streams compact JSON. Validate and format it before the proof's
+  # field/count assertions so whitespace changes cannot hide catalog mutations.
+  "${catalog_bin_dir}/catalog_snapshot" | python3 -m json.tool
+}
+
 while IFS= read -r helper; do
   [ -n "${helper}" ] || continue
   [ -x "${catalog_bin_dir}/${helper}" ] ||
@@ -60,7 +66,7 @@ original_credential="$({
   fail "managed state did not contain a recoverable credential"
 printf '%s\n' "${original_credential}" >"${legacy_credential_path}"
 chmod 600 "${legacy_credential_path}"
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/credential-recovery-before.json"
+write_catalog_snapshot >"${proof_root}/credential-recovery-before.json"
 sed 's/"password":[[:space:]]*"[^"]*"/"password": "invalid-replacement-authority"/' \
   "${credential_state_path}" >"${credential_state_path}.replacement"
 chmod 600 "${credential_state_path}.replacement"
@@ -72,7 +78,7 @@ recovered_credential="$({
 } | head -n 1)"
 [ "${recovered_credential}" = "${original_credential}" ] ||
   fail "managed startup did not restore the proven legacy credential"
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/credential-recovery-after.json"
+write_catalog_snapshot >"${proof_root}/credential-recovery-after.json"
 cmp -s "${proof_root}/credential-recovery-before.json" \
   "${proof_root}/credential-recovery-after.json" ||
   fail "credential recovery changed catalog contents"
@@ -85,7 +91,7 @@ pre_migration_backup_path="$(sed -n '1p' "${proof_root}/pre-migration-backups.tx
 "${postgres_runtime_dir}/bin/pg_restore" --list "${pre_migration_backup_path}" \
   >/dev/null || fail "pre-migration backup is not a valid PostgreSQL archive"
 "${catalog_bin_dir}/catalog_local_db" restore-latest >/dev/null
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/pre-migration-restored-snapshot.json"
+write_catalog_snapshot >"${proof_root}/pre-migration-restored-snapshot.json"
 if grep -Fq '"name": "RemovedByPreMigrationRestore"' \
     "${proof_root}/pre-migration-restored-snapshot.json"; then
   fail "pre-migration restore retained a post-backup catalog mutation"
@@ -100,7 +106,7 @@ backup_path="$("${catalog_bin_dir}/catalog_local_db" backup)"
 [ -f "${backup_path}" ] || fail "managed backup was not created"
 "${catalog_bin_dir}/catalog_state" create-project AfterBackup
 "${catalog_bin_dir}/catalog_local_db" restore-latest >/dev/null
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/restored-snapshot.json"
+write_catalog_snapshot >"${proof_root}/restored-snapshot.json"
 grep -Fq '"name": "BeforeBackup"' "${proof_root}/restored-snapshot.json" ||
   fail "restore lost the pre-backup project"
 if grep -Fq '"name": "AfterBackup"' "${proof_root}/restored-snapshot.json"; then
@@ -118,7 +124,7 @@ fi
 grep -Fq "PostgreSQL backup validation failed" \
   "${proof_root}/corrupt-restore.stderr" ||
   fail "corrupt restore refusal did not report archive validation failure"
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/post-corrupt-snapshot.json"
+write_catalog_snapshot >"${proof_root}/post-corrupt-snapshot.json"
 grep -Fq '"name": "SurvivesCorruptRestore"' \
   "${proof_root}/post-corrupt-snapshot.json" ||
   fail "corrupt restore changed the live catalog before validation"
@@ -166,7 +172,7 @@ cmp -s "${proof_root}/backups-before-interruption.txt" \
   "${proof_root}/backups-after-interruption.txt" ||
   fail "interrupted pg_dump published a false completed backup"
 export PHOTO_EDITOR_POSTGRES_BIN_DIR="${postgres_runtime_dir}/bin"
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/post-interruption-snapshot.json"
+write_catalog_snapshot >"${proof_root}/post-interruption-snapshot.json"
 grep -Fq '"name": "SurvivesCorruptRestore"' \
   "${proof_root}/post-interruption-snapshot.json" ||
   fail "interrupted backup changed the live catalog"
@@ -212,7 +218,7 @@ grep -Fq "pre-restore safety backup was reapplied" \
   fail "failed restore did not report successful safety-backup reapplication"
 export PHOTO_EDITOR_POSTGRES_BIN_DIR="${postgres_runtime_dir}/bin"
 unset PHOTO_EDITOR_REAL_PG_RESTORE
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/post-failed-restore-snapshot.json"
+write_catalog_snapshot >"${proof_root}/post-failed-restore-snapshot.json"
 grep -Fq '"name": "RestoreRollbackBaseline"' \
   "${proof_root}/post-failed-restore-snapshot.json" ||
   fail "failed restore rollback lost the candidate baseline"
@@ -242,7 +248,7 @@ printf '%s\n' 'proof raw b' >"${drive_b_root}/proof-b.dng"
 "${catalog_bin_dir}/import_catalog" \
   "${drive_b_root}" proof-drive-b "Proof Drive B" referenced \
   >"${proof_root}/import-drive-b.txt"
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/multi-drive-snapshot.json"
+write_catalog_snapshot >"${proof_root}/multi-drive-snapshot.json"
 [ "$(grep -c '"asset_id":' "${proof_root}/multi-drive-snapshot.json")" = "2" ] ||
   fail "repeat import duplicated a stable referenced asset"
 [ "$(grep -c '"display_name":' "${proof_root}/multi-drive-snapshot.json")" = "2" ] ||
@@ -306,7 +312,7 @@ grep -Fq '"oldLibraryRetained":true' "${proof_root}/managed-library-move.json" |
   fail "library move did not report old-library retention"
 find "${PHOTO_EDITOR_BACKUP_DIR}" -type f -name 'pre-library-move-*.dump' -print -quit |
   grep -q . || fail "library move did not create its PostgreSQL safety backup"
-"${catalog_bin_dir}/catalog_snapshot" >"${proof_root}/managed-library-snapshot.json"
+write_catalog_snapshot >"${proof_root}/managed-library-snapshot.json"
 grep -Fq "${managed_library_after}/proof-managed-card" \
   "${proof_root}/managed-library-snapshot.json" ||
   fail "catalog did not adopt the relocated managed-library root"

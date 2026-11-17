@@ -11,6 +11,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    exact_keys,
+    read_json_object as load_json,
+    sha256_file,
+)
+
 
 VALIDATOR_PATH = Path(__file__).with_name("validate-real-raw-render-set.py")
 SCHEMA = "photo-editor-camera-support-report:v1"
@@ -43,31 +51,10 @@ def load_validator() -> Any:
   return module
 
 
-def load_json(path: Path) -> dict[str, Any]:
-  with path.open("r", encoding="utf-8") as handle:
-    value = json.load(handle)
-  if not isinstance(value, dict):
-    raise ValueError(f"JSON root must be an object: {path}")
-  return value
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
-def exact_keys(value: Any, keys: set[str], label: str, errors: list[str]) -> dict[str, Any] | None:
-  if not isinstance(value, dict):
-    errors.append(f"{label} must be an object")
-    return None
-  for key in sorted(set(value) - keys):
-    errors.append(f"{label}: unknown field {key!r}")
-  for key in sorted(keys - set(value)):
-    errors.append(f"{label}: missing required field {key!r}")
-  return value
 
 
 def camera_id(make: str, model: str) -> str:

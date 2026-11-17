@@ -72,9 +72,10 @@ GitHub Release assets.
 
 ## Design and local preview
 
-The download landing page uses `landing.css` and the progressive Three.js
-scene in `optical-scene.js`. Policy/support pages retain `styles.css`.
-The app icon is the canonical logo; see `assets/README.md` for its source.
+The landing page presents the current creative studio: photo/retouch, layered
+design, boards, video/audio, Scene/3D Motion, and optional local Agent Studio.
+`landing.css` controls the page; `product-tour.js` switches current app captures
+with pointer and arrow/Home/End keyboard support. Policy pages retain `styles.css`.
 
 ```sh
 python3 -m http.server 4173 --bind 127.0.0.1 --directory site
@@ -82,9 +83,20 @@ node --test scripts/test-download-page.cjs
 python3 scripts/validate-release-site.py site
 ```
 
-Open `http://127.0.0.1:4173`. The R/G/B buttons toggle individual light rings,
-and the motion button pauses/resumes the sculpture. Reduced-motion preferences
-start it paused. Rendering stops while the hero is offscreen or the tab is hidden.
-If WebGL or the Three.js module is unavailable, CSS artwork remains visible and
-download resolution continues independently. All fonts and scripts are hosted
-locally, preserving the existing Content Security Policy.
+The screenshots under `assets/captures/2026-11-17/` were captured from the running
+macOS app on that date. Each is an unretouched native window capture, with its
+source, dimensions, and hash recorded beside it. Screenshots open at full size.
+The gallery defaults to an actual saved multi-board design, and offers the
+current photo editor and media library. Without scripting, all three remain
+available in document order. Do not reuse historical UI fixtures as current UI.
+
+Product copy is grounded in the current QML workspaces, controller interfaces,
+and feature verification documents; the screenshot set does not qualify every
+advertised workflow. Local models and model-dependent tools need setup, and
+Agent availability depends on the build and configuration. Roadmap-only tools
+are not presented as shipped capabilities.
+
+The platform resolver must not overwrite `.lede`: platform availability belongs
+in the download cards and system requirements. Increment the script URL revision
+when changing it, so previously cached marketing copy cannot override the page.
+Release and commerce controls retain the existing configuration-driven behavior.

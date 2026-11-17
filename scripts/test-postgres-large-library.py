@@ -55,7 +55,9 @@ def canonical_sha256(value: Any) -> str:
 def require_executable(path: Path) -> Path:
     if not path.is_file() or not os.access(path, os.X_OK):
         raise ValueError(f"missing executable: {path}")
-    return path.resolve()
+    # macOS dispatches the multicall helper from argv[0]. Resolving the final
+    # symlink would invoke catalog_helper instead of its selected command.
+    return path.absolute()
 
 
 def available_port() -> int:

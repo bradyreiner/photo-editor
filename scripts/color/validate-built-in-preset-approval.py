@@ -12,6 +12,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    exact_object,
+    sha256_file,
+)
+
 
 SCRIPT_DIR = Path(__file__).parent
 INVENTORY_VALIDATOR_PATH = SCRIPT_DIR / "validate-built-in-preset-inventory.py"
@@ -65,12 +72,6 @@ def load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | Non
   return value
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
 def resolve_path(manifest_path: Path, value: Any) -> Path:
@@ -80,17 +81,6 @@ def resolve_path(manifest_path: Path, value: Any) -> Path:
   return path if path.is_absolute() else (manifest_path.parent / path).resolve()
 
 
-def exact_object(
-    value: Any, keys: set[str], label: str, errors: list[str]
-) -> dict[str, Any]:
-  if not isinstance(value, dict):
-    errors.append(f"{label} must be an object")
-    return {}
-  for key in sorted(set(value) - keys):
-    errors.append(f"{label}: unknown field {key!r}")
-  for key in sorted(keys - set(value)):
-    errors.append(f"{label}: missing required field {key!r}")
-  return value
 
 
 def valid_sha256(value: Any) -> bool:

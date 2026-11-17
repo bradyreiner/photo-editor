@@ -13,6 +13,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    read_json_object as load_json,
+    sha256_file,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE_MANIFEST = (
@@ -68,20 +75,8 @@ def load_module(path: Path, name: str) -> Any:
   return module
 
 
-def load_json(path: Path) -> dict[str, Any]:
-  with path.open("r", encoding="utf-8") as handle:
-    value = json.load(handle)
-  if not isinstance(value, dict):
-    raise ValueError(f"JSON root must be an object: {path}")
-  return value
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
 def artifact_set_digest(root: Path, paths: list[str]) -> tuple[int, str]:

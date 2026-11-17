@@ -210,7 +210,7 @@ QPair<QImage, QString> load_still_photo_grade_source(
   }
   const auto rec709 = timeline_video_rec709_color_space();
   if (image.colorSpace().isValid() && image.colorSpace() != rec709) {
-    image.convertToColorSpace(rec709);
+    image = convert_tagged_qimage_color_space(image, rec709, QImageColorConversionPurpose::DecodeNormalization);
   }
   image.setColorSpace(rec709);
   image = image.convertToFormat(QImage::Format_RGBA8888);

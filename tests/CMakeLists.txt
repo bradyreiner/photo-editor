@@ -1,3 +1,109 @@
+# Shared source lists preserve each test target while avoiding repeated manifests.
+set(photo_editor_test_decoded_image_cache_sources
+  ../apps/desktop/src/decoded_image_cache.h
+  ../apps/desktop/src/decoded_image_cache.cpp
+  ../apps/desktop/src/editor_preview_controller.h
+  ../apps/desktop/src/editor_preview_controller.cpp
+  ../apps/desktop/src/editor_selection_controller.cpp
+  ../apps/desktop/src/editor_professional_tools_controller.cpp
+  ../apps/desktop/src/editor_smart_document_controller.cpp
+  ../apps/desktop/src/editor_layer_style_controller.cpp
+  ../apps/desktop/src/photo_component_workspace_controller.h
+  ../apps/desktop/src/photo_component_workspace_controller.cpp
+  ../apps/desktop/src/editor_vector_path_io_controller.cpp
+  ../apps/desktop/src/editor_recipe_save_journal.cpp
+  ../apps/desktop/src/preset_registry.cpp
+  ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
+  ../apps/desktop/src/histogram_scope_service.cpp
+  ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+  ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
+  ../apps/desktop/src/thumbnail_presentation_service.cpp
+)
+
+set(photo_editor_test_app_bootstrap_sources
+  ../apps/desktop/src/app_bootstrap.h
+  ../apps/desktop/src/app_bootstrap.cpp
+  ../apps/desktop/src/app_shell_controller.h
+  ../apps/desktop/src/app_shell_controller.cpp
+  ../apps/desktop/src/scope_plot_item.h
+  ../apps/desktop/src/scope_plot_item.cpp
+  ../apps/desktop/src/brush_live_preview_item.h
+  ../apps/desktop/src/photo_text_document_style.h
+  ../apps/desktop/src/brush_live_preview_item.cpp
+  ../apps/desktop/src/tablet_input_area.h
+  ../apps/desktop/src/tablet_input_area.cpp
+  ../apps/desktop/src/editor_preview_texture_item.h
+  ../apps/desktop/src/editor_preview_texture_item.cpp
+  ../apps/desktop/src/carousel_document_controller.h
+  ../apps/desktop/src/carousel_document_controller.cpp
+  ../apps/desktop/src/catalog_asset_model.h
+  ../apps/desktop/src/catalog_asset_model.cpp
+  ../apps/desktop/src/catalog_duplicate_analysis.cpp
+)
+
+set(photo_editor_test_edit_recipe_content_validation_sources
+  ../apps/desktop/src/edit_recipe_content_validation.cpp
+  ../apps/desktop/src/edit_recipe_curve_codec.cpp
+  ../apps/desktop/src/edit_recipe_diff.cpp
+  ../apps/desktop/src/edit_recipe_document_codec.cpp
+  ../apps/desktop/src/edit_recipe_group_normalization.cpp
+  ../apps/desktop/src/edit_recipe_history.cpp
+  ../apps/desktop/src/edit_recipe_layer_codec.cpp
+  ../apps/desktop/src/edit_recipe_mask_schema.h
+  ../apps/desktop/src/edit_recipe_json_readers.cpp
+  ../apps/desktop/src/edit_recipe_migration.cpp
+  ../apps/desktop/src/edit_recipe_model_normalization.cpp
+  ../apps/desktop/src/edit_recipe_profile_codec.cpp
+  ../apps/desktop/src/edit_recipe_profile_validation.cpp
+)
+
+set(photo_editor_test_export_job_sources
+  ../apps/desktop/src/export_job_controller.h
+  ../apps/desktop/src/export_job_controller.cpp
+  ../apps/desktop/src/macos_updater.h
+  ../apps/desktop/src/macos_updater_stub.cpp
+  ../apps/desktop/src/job_queue_model.h
+  ../apps/desktop/src/job_queue_model.cpp
+  ../apps/desktop/src/job_runner.h
+  ../apps/desktop/src/job_runner.cpp
+  ../apps/desktop/src/job_store.h
+  ../apps/desktop/src/job_store.cpp
+  ../apps/desktop/src/decoded_image_cache.h
+  ../apps/desktop/src/decoded_image_cache.cpp
+  ../apps/desktop/src/photo_render_utils.h
+)
+
+set(photo_editor_test_editor_preview_sources
+  ../apps/desktop/src/editor_preview_controller.h
+  ../apps/desktop/src/editor_preview_controller.cpp
+  ../apps/desktop/src/editor_selection_controller.cpp
+  ../apps/desktop/src/editor_professional_tools_controller.cpp
+  ../apps/desktop/src/editor_smart_document_controller.cpp
+  ../apps/desktop/src/editor_layer_style_controller.cpp
+  ../apps/desktop/src/photo_component_workspace_controller.h
+  ../apps/desktop/src/photo_component_workspace_controller.cpp
+  ../apps/desktop/src/editor_vector_path_io_controller.cpp
+  ../apps/desktop/src/editor_recipe_save_journal.cpp
+  ../apps/desktop/src/preset_registry.cpp
+  ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
+  ../apps/desktop/src/histogram_scope_service.cpp
+)
+
+set(photo_editor_test_agent_edit_recipe_patch_sources
+  ../apps/desktop/src/agent_edit_recipe_patch.h
+  ../apps/desktop/src/agent_edit_recipe_patch.cpp
+  ../apps/desktop/src/agent_edit_style.h
+  ../apps/desktop/src/agent_edit_style.cpp
+  ../apps/desktop/src/agent_image_validation.h
+  ../apps/desktop/src/agent_image_validation.cpp
+  ../apps/desktop/src/agent_local_model.h
+  ../apps/desktop/src/agent_local_model.cpp
+  ../apps/desktop/src/agent_memory.h
+  ../apps/desktop/src/agent_memory.cpp
+  ../apps/desktop/src/agent_mcp_client.h
+  ../apps/desktop/src/agent_mcp_client.cpp
+)
+
 function(photo_editor_link_private_visual_search_index target_name)
   if(WIN32)
     target_link_libraries(${target_name} PRIVATE Advapi32)
@@ -1383,7 +1489,8 @@ endif()
   target_link_libraries(
     preset_service_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Gui)
   photo_editor_apply_warnings(preset_service_test)
   add_test(
     NAME preset_service_test
@@ -1448,7 +1555,8 @@ endif()
   target_link_libraries(
     history_service_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Gui)
   photo_editor_apply_warnings(history_service_test)
   add_test(
     NAME history_service_test
@@ -1899,7 +2007,8 @@ endif()
   target_link_libraries(
     generated_mask_cleanup_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Gui)
   photo_editor_apply_warnings(generated_mask_cleanup_test)
   add_test(
     NAME generated_mask_cleanup_test
@@ -1919,7 +2028,8 @@ endif()
   target_link_libraries(
     generated_mask_metadata_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Gui)
   photo_editor_apply_warnings(generated_mask_metadata_test)
   add_test(
     NAME generated_mask_metadata_test
@@ -1980,7 +2090,8 @@ endif()
   target_link_libraries(
     segmentation_mask_ops_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Gui)
   photo_editor_apply_warnings(segmentation_mask_ops_test)
   add_test(
     NAME segmentation_mask_ops_test
@@ -2022,7 +2133,8 @@ endif()
   target_link_libraries(
     sensor_dust_map_store_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Gui)
   photo_editor_apply_warnings(sensor_dust_map_store_test)
   add_test(
     NAME sensor_dust_map_store_test
@@ -2471,19 +2583,7 @@ endif()
     ../apps/desktop/src/render_executor_service.cpp
     ../apps/desktop/src/recipe_asset_store.h
     ../apps/desktop/src/recipe_asset_store.cpp
-    ../apps/desktop/src/edit_recipe_content_validation.cpp
-    ../apps/desktop/src/edit_recipe_curve_codec.cpp
-    ../apps/desktop/src/edit_recipe_diff.cpp
-    ../apps/desktop/src/edit_recipe_document_codec.cpp
-    ../apps/desktop/src/edit_recipe_group_normalization.cpp
-    ../apps/desktop/src/edit_recipe_history.cpp
-    ../apps/desktop/src/edit_recipe_layer_codec.cpp
-    ../apps/desktop/src/edit_recipe_mask_schema.h
-    ../apps/desktop/src/edit_recipe_json_readers.cpp
-    ../apps/desktop/src/edit_recipe_migration.cpp
-    ../apps/desktop/src/edit_recipe_model_normalization.cpp
-    ../apps/desktop/src/edit_recipe_profile_codec.cpp
-    ../apps/desktop/src/edit_recipe_profile_validation.cpp
+    ${photo_editor_test_edit_recipe_content_validation_sources}
     ../apps/desktop/src/edit_recipe_validation.cpp
     ../apps/desktop/src/edit_recipe_v13_adapter.h
     ../apps/desktop/src/edit_recipe_v13_adapter.cpp
@@ -3259,18 +3359,7 @@ endif()
     ../apps/desktop/src/agent_edit_controller.cpp
     ../apps/desktop/src/agent_image_validation.h
     ../apps/desktop/src/agent_image_validation.cpp
-    ../apps/desktop/src/agent_edit_recipe_patch.h
-    ../apps/desktop/src/agent_edit_recipe_patch.cpp
-    ../apps/desktop/src/agent_edit_style.h
-    ../apps/desktop/src/agent_edit_style.cpp
-    ../apps/desktop/src/agent_image_validation.h
-    ../apps/desktop/src/agent_image_validation.cpp
-    ../apps/desktop/src/agent_local_model.h
-    ../apps/desktop/src/agent_local_model.cpp
-    ../apps/desktop/src/agent_memory.h
-    ../apps/desktop/src/agent_memory.cpp
-    ../apps/desktop/src/agent_mcp_client.h
-    ../apps/desktop/src/agent_mcp_client.cpp
+    ${photo_editor_test_agent_edit_recipe_patch_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
@@ -3382,18 +3471,7 @@ endif()
     ${photo_editor_desktop_observability_sources}
     ../apps/desktop/src/agent_edit_controller.h
     ../apps/desktop/src/agent_edit_controller.cpp
-    ../apps/desktop/src/agent_edit_recipe_patch.h
-    ../apps/desktop/src/agent_edit_recipe_patch.cpp
-    ../apps/desktop/src/agent_edit_style.h
-    ../apps/desktop/src/agent_edit_style.cpp
-    ../apps/desktop/src/agent_image_validation.h
-    ../apps/desktop/src/agent_image_validation.cpp
-    ../apps/desktop/src/agent_local_model.h
-    ../apps/desktop/src/agent_local_model.cpp
-    ../apps/desktop/src/agent_memory.h
-    ../apps/desktop/src/agent_memory.cpp
-    ../apps/desktop/src/agent_mcp_client.h
-    ../apps/desktop/src/agent_mcp_client.cpp
+    ${photo_editor_test_agent_edit_recipe_patch_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
@@ -3876,24 +3954,7 @@ endif()
     ../apps/desktop/src/library_workflow_controller.cpp
     ../apps/desktop/src/library_original_image_provider.cpp
     ${photo_editor_desktop_observability_sources}
-    ../apps/desktop/src/app_bootstrap.h
-    ../apps/desktop/src/app_bootstrap.cpp
-    ../apps/desktop/src/app_shell_controller.h
-    ../apps/desktop/src/app_shell_controller.cpp
-    ../apps/desktop/src/scope_plot_item.h
-    ../apps/desktop/src/scope_plot_item.cpp
-    ../apps/desktop/src/brush_live_preview_item.h
-    ../apps/desktop/src/photo_text_document_style.h
-    ../apps/desktop/src/brush_live_preview_item.cpp
-    ../apps/desktop/src/tablet_input_area.h
-    ../apps/desktop/src/tablet_input_area.cpp
-    ../apps/desktop/src/editor_preview_texture_item.h
-    ../apps/desktop/src/editor_preview_texture_item.cpp
-    ../apps/desktop/src/carousel_document_controller.h
-    ../apps/desktop/src/carousel_document_controller.cpp
-    ../apps/desktop/src/catalog_asset_model.h
-    ../apps/desktop/src/catalog_asset_model.cpp
-    ../apps/desktop/src/catalog_duplicate_analysis.cpp
+    ${photo_editor_test_app_bootstrap_sources}
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/editor_preview_controller.h
@@ -3924,19 +3985,7 @@ endif()
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/vision_segmentation.h
     ../apps/desktop/src/vision_segmentation_stub.cpp
-    ../apps/desktop/src/export_job_controller.h
-    ../apps/desktop/src/export_job_controller.cpp
-    ../apps/desktop/src/macos_updater.h
-    ../apps/desktop/src/macos_updater_stub.cpp
-    ../apps/desktop/src/job_queue_model.h
-    ../apps/desktop/src/job_queue_model.cpp
-    ../apps/desktop/src/job_runner.h
-    ../apps/desktop/src/job_runner.cpp
-    ../apps/desktop/src/job_store.h
-    ../apps/desktop/src/job_store.cpp
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/photo_render_utils.h
+    ${photo_editor_test_export_job_sources}
     ${photo_editor_desktop_photo_render_utils_sources}
     ${photo_editor_desktop_recipe_v13_sources}
     ${photo_editor_desktop_render_plan_store_sources}
@@ -4705,19 +4754,7 @@ endif()
     edit_recipe_state_test.cpp
     ../apps/desktop/src/edit_adjustment_patch.cpp
     ../apps/desktop/src/edit_history_snapshot_store.cpp
-    ../apps/desktop/src/edit_recipe_content_validation.cpp
-    ../apps/desktop/src/edit_recipe_curve_codec.cpp
-    ../apps/desktop/src/edit_recipe_diff.cpp
-    ../apps/desktop/src/edit_recipe_document_codec.cpp
-    ../apps/desktop/src/edit_recipe_group_normalization.cpp
-    ../apps/desktop/src/edit_recipe_history.cpp
-    ../apps/desktop/src/edit_recipe_layer_codec.cpp
-    ../apps/desktop/src/edit_recipe_mask_schema.h
-    ../apps/desktop/src/edit_recipe_json_readers.cpp
-    ../apps/desktop/src/edit_recipe_migration.cpp
-    ../apps/desktop/src/edit_recipe_model_normalization.cpp
-    ../apps/desktop/src/edit_recipe_profile_codec.cpp
-    ../apps/desktop/src/edit_recipe_profile_validation.cpp
+    ${photo_editor_test_edit_recipe_content_validation_sources}
     ../apps/desktop/src/edit_recipe_sidecar.cpp
     ../apps/desktop/src/edit_recipe_validation.cpp)
   target_include_directories(
@@ -4744,19 +4781,7 @@ endif()
     ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
+    ${photo_editor_test_editor_preview_sources}
     ../apps/desktop/src/preview_backend_controller.h
     ../apps/desktop/src/preview_backend_controller.cpp
     ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
@@ -4933,24 +4958,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ../apps/desktop/src/worker_queue_registry.h
     ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -4992,24 +5000,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ../apps/desktop/src/worker_queue_registry.h
     ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -5051,24 +5042,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ../apps/desktop/src/worker_queue_registry.h
     ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -5107,24 +5081,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ../apps/desktop/src/worker_queue_registry.h
     ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -5202,24 +5159,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ../apps/desktop/src/worker_queue_registry.h
     ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -5258,24 +5198,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ../apps/desktop/src/worker_queue_registry.h
     ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -5314,24 +5237,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ../apps/desktop/src/worker_queue_registry.h
     ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -5374,24 +5280,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ${photo_editor_desktop_photo_render_utils_sources}
@@ -5426,24 +5315,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ${photo_editor_desktop_photo_render_utils_sources}
@@ -5478,24 +5350,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ${photo_editor_desktop_photo_render_utils_sources}
@@ -5754,24 +5609,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ${photo_editor_desktop_photo_render_utils_sources}
@@ -5813,24 +5651,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ${photo_editor_desktop_photo_render_utils_sources}
@@ -5868,24 +5689,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ${photo_editor_desktop_photo_render_utils_sources}
@@ -5922,24 +5726,7 @@ endif()
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
-    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
-    ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
-    ../apps/desktop/src/thumbnail_presentation_service.cpp
+    ${photo_editor_test_decoded_image_cache_sources}
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ${photo_editor_desktop_photo_render_utils_sources}
@@ -6043,39 +5830,10 @@ endif()
     ../apps/desktop/src/visual_search_controller.h
     ../apps/desktop/src/visual_search_controller.cpp
     ${photo_editor_desktop_observability_sources}
-    ../apps/desktop/src/app_bootstrap.h
-    ../apps/desktop/src/app_bootstrap.cpp
-    ../apps/desktop/src/app_shell_controller.h
-    ../apps/desktop/src/app_shell_controller.cpp
-    ../apps/desktop/src/scope_plot_item.h
-    ../apps/desktop/src/scope_plot_item.cpp
-    ../apps/desktop/src/brush_live_preview_item.h
-    ../apps/desktop/src/photo_text_document_style.h
-    ../apps/desktop/src/brush_live_preview_item.cpp
-    ../apps/desktop/src/tablet_input_area.h
-    ../apps/desktop/src/tablet_input_area.cpp
-    ../apps/desktop/src/editor_preview_texture_item.h
-    ../apps/desktop/src/editor_preview_texture_item.cpp
-    ../apps/desktop/src/carousel_document_controller.h
-    ../apps/desktop/src/carousel_document_controller.cpp
-    ../apps/desktop/src/catalog_asset_model.h
-    ../apps/desktop/src/catalog_asset_model.cpp
-    ../apps/desktop/src/catalog_duplicate_analysis.cpp
+    ${photo_editor_test_app_bootstrap_sources}
     ${photo_editor_desktop_brush_preview_sources}
     ${photo_editor_desktop_mask_alpha_provider_sources}
-    ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp
-    ../apps/desktop/src/editor_selection_controller.cpp
-    ../apps/desktop/src/editor_professional_tools_controller.cpp
-    ../apps/desktop/src/editor_smart_document_controller.cpp
-    ../apps/desktop/src/editor_layer_style_controller.cpp
-    ../apps/desktop/src/photo_component_workspace_controller.h
-    ../apps/desktop/src/photo_component_workspace_controller.cpp
-    ../apps/desktop/src/editor_vector_path_io_controller.cpp
-    ../apps/desktop/src/editor_recipe_save_journal.cpp
-    ../apps/desktop/src/preset_registry.cpp
-    ../apps/desktop/src/thumbnail_worker_renderer_factory.cpp
-    ../apps/desktop/src/histogram_scope_service.cpp
+    ${photo_editor_test_editor_preview_sources}
     ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
     ../apps/desktop/src/photo_layer_adjustment_recipe.cpp
     ../apps/desktop/src/thumbnail_presentation_service.cpp
@@ -6083,19 +5841,7 @@ endif()
     ../apps/desktop/src/editor_preview_image_provider.cpp
     ${photo_editor_desktop_ai_model_sources}
     ${photo_editor_desktop_vision_sources}
-    ../apps/desktop/src/export_job_controller.h
-    ../apps/desktop/src/export_job_controller.cpp
-    ../apps/desktop/src/macos_updater.h
-    ../apps/desktop/src/macos_updater_stub.cpp
-    ../apps/desktop/src/job_queue_model.h
-    ../apps/desktop/src/job_queue_model.cpp
-    ../apps/desktop/src/job_runner.h
-    ../apps/desktop/src/job_runner.cpp
-    ../apps/desktop/src/job_store.h
-    ../apps/desktop/src/job_store.cpp
-    ../apps/desktop/src/decoded_image_cache.h
-    ../apps/desktop/src/decoded_image_cache.cpp
-    ../apps/desktop/src/photo_render_utils.h
+    ${photo_editor_test_export_job_sources}
     ${photo_editor_desktop_photo_render_utils_sources}
     ${photo_editor_desktop_recipe_v13_sources}
     ${photo_editor_desktop_render_plan_store_sources}

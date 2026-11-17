@@ -1,4 +1,5 @@
 #pragma once
+#include "qimage_color_conversion.h"
 #include "gaussian_scene_mesh.h"
 #include <QBuffer>
 #include <QColorSpace>
@@ -74,7 +75,7 @@ inline std::shared_ptr<const GaussianColorTexture> decode_gaussian_color_texture
   QImageReader reader(&buffer); reader.setAutoTransform(false);
   const auto size = reader.size(); if (size.isEmpty() || size.width() > 8192 || size.height() > 8192) return {};
   auto image = reader.read(); if (image.isNull()) return {};
-  if (image.colorSpace().isValid()) image = image.convertedToColorSpace(QColorSpace::SRgb);
+  if (image.colorSpace().isValid()) image = convert_tagged_qimage_color_space(image, QColorSpace(QColorSpace::SRgb), QImageColorConversionPurpose::DecodeNormalization);
   image = image.convertToFormat(QImage::Format_RGBA8888); image.setColorSpace(QColorSpace::SRgb);
   if (image.isNull()) return {};
   auto texture = std::make_shared<GaussianColorTexture>(GaussianColorTexture{hash,std::move(image)});

@@ -2,6 +2,7 @@
 #include "photo_smart_document.h"
 #include "photo_smart_object.h"
 #include "photo_render_utils.h"
+#include "render_plan_store.h"
 #include "photo_layer_source.h"
 #include "photo_text_style.h"
 #include "photo_point_text.h"
@@ -316,7 +317,15 @@ void EditorPreviewController::requestPhotoComponentPreview() {
     const QSize canvas(draft.value("canvasWidth").toInt(), draft.value("canvasHeight").toInt());
     const auto size = canvas.scaled(512, 512, Qt::KeepAspectRatio); QImage base(size, QImage::Format_ARGB32_Premultiplied); base.fill(Qt::transparent); base.setColorSpace(QColorSpace(QColorSpace::SRgb));
     RenderMaskOptions masks; masks.source_geometry = {canvas, QRect(QPoint(), canvas)};
-    const auto image = render_output_image_with_backend(base, state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32, RenderBackendPreference::CpuOnly, nullptr, nullptr, masks);
+    const auto admission = RenderPlanStore::shared().admit(
+        QStringLiteral("smart-document-preview"), {}, state, size,
+        photo_editor::pipeline::RenderPurpose::Thumbnail,
+        photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation);
+    if (!admission.admitted || !admission.plan.has_value()) return QString{};
+    const auto image = render_output_image(base, state, QColorSpace(QColorSpace::SRgb),
+        QImage::Format_ARGB32, nullptr, nullptr, masks,
+        photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred,
+        &*admission.plan);
     QByteArray png; QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly); if (image.isNull() || !image.save(&buffer, "PNG")) return QString{};
     return QString("data:image/png;base64,") + QString::fromLatin1(png.toBase64());
   }));

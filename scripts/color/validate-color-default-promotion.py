@@ -14,6 +14,14 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    exact_object,
+    load_json_with_errors as load_json,
+    sha256_file,
+)
+
 
 SCRIPT_DIR = Path(__file__).parent
 APPLE_VALIDATOR_PATH = SCRIPT_DIR / "validate-apple-device-color-proof.py"
@@ -90,25 +98,8 @@ def load_module(path: Path, name: str) -> Any:
   return module
 
 
-def load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:
-  try:
-    with path.open("r", encoding="utf-8") as handle:
-      value = json.load(handle)
-  except (OSError, json.JSONDecodeError) as exc:
-    errors.append(f"unable to read {label}: {exc}")
-    return None
-  if not isinstance(value, dict):
-    errors.append(f"{label} root must be an object")
-    return None
-  return value
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
 def canonical_sha256(value: Any) -> str:
@@ -203,17 +194,6 @@ def verify_ssh_signature(
   return result.returncode == 0
 
 
-def exact_object(
-    value: Any, keys: set[str], label: str, errors: list[str]
-) -> dict[str, Any]:
-  if not isinstance(value, dict):
-    errors.append(f"{label} must be an object")
-    return {}
-  for key in sorted(set(value) - keys):
-    errors.append(f"{label}: unknown field {key!r}")
-  for key in sorted(keys - set(value)):
-    errors.append(f"{label}: missing required field {key!r}")
-  return value
 
 
 def valid_sha256(value: Any) -> bool:

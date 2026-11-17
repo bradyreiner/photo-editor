@@ -1,0 +1,36 @@
+{
+  "capturedOn": "2026-11-17",
+  "platform": "macOS",
+  "source": "Running Looksy application via native UI screenshot",
+  "appPath": "build/release-macos/apps/desktop/Looksy.app",
+  "pixelEdits": false,
+  "captures": [
+    {
+      "file": "boards.png",
+      "dimensions": [
+        2570,
+        1676
+      ],
+      "sha256": "a9044becc329f46a39575344566c3a6fd237e5b6e96dc8941ae97aeb61af6b5d",
+      "description": "La Esquina menu-board document, three boards, 24 editable native layers on the active board"
+    },
+    {
+      "file": "photo.png",
+      "dimensions": [
+        3024,
+        1898
+      ],
+      "sha256": "25c7e97fb535293ba1247b05eeb173532f61ff1bcf7ab409f3dc9f346dbd3e6d",
+      "description": "Current Edit workspace with a portrait and white balance/tone controls"
+    },
+    {
+      "file": "library.png",
+      "dimensions": [
+        2570,
+        1676
+      ],
+      "sha256": "1c70919c59704c0a0879595caa69a3b4a94101d615f4acfe5306111778ab684c",
+      "description": "Current Library filtered to photographic media, with photo/video thumbnails and document collections"
+    }
+  ]
+}

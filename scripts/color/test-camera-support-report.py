@@ -33,7 +33,28 @@ def main() -> int:
   publisher = load_module("camera_report", SCRIPT_DIR / "publish-camera-support-report.py")
   with tempfile.TemporaryDirectory(prefix="camera-support-report-test-") as temporary:
     root = Path(temporary)
-    manifest_path, inventory_path, _, _ = render_test.make_fixture(root, render_validator)
+    manifest_path, inventory_path, manifest, report_paths = render_test.make_fixture(root, render_validator)
+    native_report = publisher.build_report(manifest_path, inventory_path, root)
+    if (native_report["summary"]["fallback_camera_count"] != 0 or
+        native_report["cameras"][0]["fallback_status"] != "native"):
+      raise AssertionError("distinct shipping camera-linear route must not be classified as fallback")
+
+    # Explicitly exercise a shipping route that resolves to the portable decoder.
+    portable = render_test.load_json(report_paths["portable-libraw"])
+    shipping = render_test.load_json(report_paths["shipping-default"])
+    shipping["decoded_metadata"]["decoder_backend"] = portable["decoded_metadata"]["decoder_backend"]
+    write_json(report_paths["shipping-default"], shipping)
+    cell = manifest["cells"][0]
+    cell["same_decoder_backend"] = True
+    artifacts = []
+    for render in cell["renders"]:
+      if render["decode_path"] == "shipping-default":
+        render["decoder_backend"] = shipping["decoded_metadata"]["decoder_backend"]
+        render["report_sha256"] = render_validator.sha256_file(report_paths["shipping-default"])
+      artifacts.extend((render["output_path"], render["report_path"]))
+    size, digest = render_validator.artifact_set_digest(root, artifacts)
+    manifest["artifact_summary"].update(byte_size=size, artifact_set_sha256=digest)
+    write_json(manifest_path, manifest)
     report = publisher.build_report(manifest_path, inventory_path, root)
     if report["summary"] != {
         "camera_count": 1,

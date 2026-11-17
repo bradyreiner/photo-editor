@@ -1,4 +1,5 @@
 #include "timeline_color_edit_controller.h"
+#include "qimage_color_conversion.h"
 #include "editor_preview_controller.h"
 #include "editor_preview_image_sink.h"
 #include "edit_adjustment_patch.h"
@@ -98,7 +99,7 @@ QString prepare_frame(const QString& source, const QString& destination, double 
       }
     }
   } else if (reader.canRead() && image.colorSpace().isValid()) {
-    image.convertToColorSpace(timeline_video_rec709_color_space());
+    image = convert_tagged_qimage_color_space(image, timeline_video_rec709_color_space(), QImageColorConversionPurpose::DecodeNormalization);
   }
   image.setColorSpace(timeline_video_rec709_color_space());
   return image.save(destination, "PNG") ? QString{} : QStringLiteral("The color reference frame could not be saved.");

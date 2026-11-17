@@ -11,6 +11,15 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    artifact_set_digest,
+    exact_keys,
+    load_json_with_errors as load_json,
+    sha256_file,
+)
+
 
 SCHEMA = "photo-editor-independent-chart-render-set:v1"
 TAGGED_SET_SCHEMA = "photo-editor-independent-chart-tagged-set:v1"
@@ -84,54 +93,12 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
-def load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:
-  try:
-    with path.open("r", encoding="utf-8") as handle:
-      value = json.load(handle)
-  except (OSError, json.JSONDecodeError) as exc:
-    errors.append(f"unable to read {label}: {exc}")
-    return None
-  if not isinstance(value, dict):
-    errors.append(f"{label} root must be an object")
-    return None
-  return value
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
-def artifact_set_digest(root: Path, paths: list[str]) -> tuple[int, str]:
-  total = 0
-  digest = hashlib.sha256()
-  for logical_path in sorted(paths):
-    path = root / logical_path
-    size = path.stat().st_size
-    digest.update(logical_path.encode("utf-8"))
-    digest.update(b"\0")
-    digest.update(str(size).encode("ascii"))
-    digest.update(b"\0")
-    digest.update(sha256_file(path).encode("ascii"))
-    digest.update(b"\n")
-    total += size
-  return total, digest.hexdigest()
 
 
-def exact_keys(
-    value: Any, keys: set[str], label: str, errors: list[str]
-) -> dict[str, Any] | None:
-  if not isinstance(value, dict):
-    errors.append(f"{label} must be an object")
-    return None
-  for key in sorted(set(value) - keys):
-    errors.append(f"{label}: unknown field {key!r}")
-  for key in sorted(keys - set(value)):
-    errors.append(f"{label}: missing required field {key!r}")
-  return value
 
 
 def valid_sha256(value: Any) -> bool:

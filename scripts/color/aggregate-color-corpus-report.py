@@ -12,6 +12,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    sha256_file,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR_PATH = REPO_ROOT / "scripts/color/validate-color-corpus.py"
@@ -67,12 +73,6 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def same_number(left: Any, right: Any) -> bool:

@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import re
+import os
+import importlib.util
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -16,6 +20,25 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
+    spec = importlib.util.spec_from_file_location(
+        "large_library_proof", ROOT / "scripts/test-postgres-large-library.py")
+    proof = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(proof)
+    if os.name != "nt":  # Only macOS packages use command-name symlinks.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "catalog_helper"
+            executable.write_text(
+                '#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n'
+                'print(Path(sys.argv[0]).name)\n')
+            executable.chmod(0o755)
+            alias = root / "catalog_snapshot"
+            alias.symlink_to("catalog_helper")
+            result = subprocess.run([str(proof.require_executable(alias))],
+                                    check=True, capture_output=True, text=True)
+            require(result.stdout.strip() == "catalog_snapshot",
+                    "release proofs must invoke the selected multicall alias")
+
     helpers = {
         line.strip()
         for line in (ROOT / "cmake/CatalogHelpers.txt").read_text(encoding="utf-8").splitlines()

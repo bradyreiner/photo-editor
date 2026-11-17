@@ -1,4 +1,5 @@
 #include "photo_text_dimension_render.h"
+#include "qimage_color_conversion.h"
 
 #include "photo_text_dimension_mesh.h"
 #include "photo_text_dimension_outline.h"
@@ -330,7 +331,7 @@ PhotoTextDimensionFrame render_photo_text_dimension(const QVariantMap& layer, QS
   }
   if (source.isNull()) { result.error = QStringLiteral("Could not prepare dimensional text pixels."); return result; }
   if (!source.colorSpace().isValid()) source.setColorSpace(QColorSpace(QColorSpace::SRgb));
-  source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgbLinear), QImage::Format_RGBA32FPx4);
+  source = convert_tagged_qimage_color_space(source, QColorSpace(QColorSpace::SRgbLinear), QImage::Format_RGBA32FPx4, QImageColorConversionPurpose::DecodeNormalization);
   if (source.isNull()) { result.error = QStringLiteral("Could not preserve the dimensional text's linear colors."); return result; }
   const auto plane = photo_text_dimension_plane_transform(layer, *settings, box);
   if (!settings->enabled && plane.isIdentity()) {

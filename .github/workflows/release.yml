@@ -135,6 +135,7 @@ jobs:
         run: echo "Candidate only. Native release qualification has not been granted." >> "$GITHUB_STEP_SUMMARY"
 
   package:
+    timeout-minutes: 90
     needs: [quality-gate, editor-regression-proof]
     env:
       FRAMEHOUSE_WEBSITE_URL: ${{ vars.LOOKSY_WEBSITE_URL || vars.FRAMEHOUSE_WEBSITE_URL || vars.VIREL_WEBSITE_URL }}
@@ -172,7 +173,8 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.7.3"
+          version: "6.10.2"
+          arch: ${{ runner.os == 'Windows' && 'win64_msvc2022_64' || '' }}
           modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
 
       - name: Install macOS native dependencies

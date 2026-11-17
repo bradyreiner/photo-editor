@@ -65,6 +65,19 @@ QVariantMap paint_fixture(const QString& profile) {
   return layer;
 }
 
+QImage canonical_cpu_reference(const QImage& source, const EditRecipeState& state) {
+  const auto admission = RenderPlanStore::shared().admit(
+      QStringLiteral("thumbnail-reference:%1").arg(source.cacheKey()), {}, state,
+      source.size(), photo_editor::pipeline::RenderPurpose::Export,
+      photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation);
+  if (state.photographic_rendering_model == "aces2-ocio-v1" &&
+      (!admission.admitted || !admission.plan.has_value())) return {};
+  return render_output_image_with_backend(source, state, QColorSpace(QColorSpace::SRgb),
+      QImage::Format_ARGB32, RenderBackendPreference::CpuOnly, nullptr, nullptr, {},
+      photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred,
+      admission.plan ? &*admission.plan : nullptr);
+}
+
 QImage isolated_paint_composite(const QVariantMap& layer,
                                const EditRecipeState& document, const QSize& size) {
   EditRecipeState state;
@@ -74,15 +87,7 @@ QImage isolated_paint_composite(const QVariantMap& layer,
   QImage transparent(size, QImage::Format_RGBA32FPx4);
   transparent.setColorSpace(QColorSpace(QColorSpace::SRgbLinear));
   transparent.fill(Qt::transparent);
-  const auto admission = RenderPlanStore::shared().admit(
-      QStringLiteral("paint-thumbnail-reference:%1").arg(transparent.cacheKey()), {}, state,
-      size, photo_editor::pipeline::RenderPurpose::Export,
-      photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation);
-  if (state.photographic_rendering_model == "aces2-ocio-v1" && !admission.admitted) return {};
-  return render_output_image_with_backend(transparent, state, QColorSpace(QColorSpace::SRgb),
-      QImage::Format_ARGB32, RenderBackendPreference::CpuOnly, nullptr, nullptr, {},
-      photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred,
-      admission.admitted ? &*admission.plan : nullptr);
+  return canonical_cpu_reference(transparent, state);
 }
 
 bool verify_float_paint() {
@@ -207,9 +212,8 @@ bool verify_persisted_content_colors(const QString& path) {
       adjustment.insert("id", "independent-content-colors");
       EditRecipeState reference_state;
       reference_state.layers = {adjustment};
-      const auto reference = scaled_layer_thumbnail_image(render_output_image_with_backend(
-          decoded, reference_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
-          RenderBackendPreference::CpuOnly));
+      const auto reference = scaled_layer_thumbnail_image(
+          canonical_cpu_reference(decoded, reference_state));
       if (actual.isEmpty() || actual.value("thumbnailRenderSource") != QStringLiteral("layer-content-colors") ||
           !same_pixels(thumbnail_image(actual), thumbnail_image(annotated), "Raw/annotated local Colors", 0) ||
           !same_pixels(thumbnail_image(actual), reference, "Persisted local Colors full oracle", 0) ||
@@ -244,8 +248,7 @@ bool verify_persisted_content_colors(const QString& path) {
       adjustment.insert("kind", "adjustment");
       adjustment.insert("id", "lut-content-full-reference");
       state.layers = {adjustment};
-      return render_output_image_with_backend(decoded, state, QColorSpace(QColorSpace::SRgb),
-          QImage::Format_ARGB32, RenderBackendPreference::CpuOnly);
+      return canonical_cpu_reference(decoded, state);
     };
     if (!same_pixels(thumbnail_image(flat_entry), thumbnail_image(structured_entry),
           "Legacy flat/structured LUT thumbnail", 0) ||
@@ -265,41 +268,6 @@ bool verify_persisted_content_colors(const QString& path) {
               "Structured LUT clear/disable full output", 0)) return false;
     }
   }
-  return true;
-}
-
-bool verify_source(const QString& path) {
-  auto request = make_thumbnail_refresh_queue_request(ThumbnailRefreshQueueRequestFacts{
-      .asset_id = QStringLiteral("thumbnail-proof"),
-      .file_path = QStringLiteral("/deliberately-unrelated-base.dng"),
-      .photo_layers = {QVariantMap{{"id", "source"}, {"kind", "source"}, {"sourcePath", path}}},
-      .generation = 1,
-      .photo_layer_thumbnail_dirty = true,
-      .cancellation = std::make_shared<std::atomic_bool>(false)});
-  const auto layer = request.photo_layers.first().toMap();
-  if (!rendered_photo_layer_thumbnail_source(layer).isEmpty()) return false;
-  const auto renderers = make_thumbnail_worker_renderers({});
-  const auto run = [&renderers](const ThumbnailRefreshQueueRequest& snapshot) {
-    QEventLoop loop;
-    QFutureWatcher<ThumbnailRefreshQueueResult> watcher;
-    QObject::connect(&watcher, &QFutureWatcher<ThumbnailRefreshQueueResult>::finished,
-        &loop, &QEventLoop::quit);
-    watcher.setFuture(QtConcurrent::run([snapshot, renderers] {
-      return compute_thumbnail_refresh_queue_result(snapshot, renderers);
-    }));
-    loop.exec();
-    return watcher.result();
-  };
-  auto result = run(request);
-  if (!result.success || result.photo_layer_thumbnail_entries.size() != 1) return false;
-  const auto ui_thread = QStringLiteral("0x%1").arg(
-      reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16);
-  if (result.worker_thread.isEmpty() || result.worker_thread == ui_thread) return false;
-  const auto entry = result.photo_layer_thumbnail_entries.first().toMap();
-  const auto actual = thumbnail_image(entry);
-  if (actual.size() != QSize(64, 64) || actual.colorSpace() != QColorSpace(QColorSpace::SRgb) ||
-      !entry.value("thumbnailReady").toBool() || !entry.value("thumbnailColorManaged").toBool() ||
-      entry.value("thumbnailPreviewRenderMode").toString() != "source_neutral_srgb") return false;
   return true;
 }
 

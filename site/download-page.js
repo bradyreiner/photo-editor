@@ -145,9 +145,6 @@
     if (supports("mac-arm") && !supports("mac-intel")) {
       elements.macRequirement.textContent = "macOS 13 or newer on Apple silicon. Intel Macs are not supported by this release.";
     }
-    if (supportedPlatforms.length === 1 && supports("mac-arm")) {
-      document.querySelector(".lede").textContent = "Looksy is a native, local-first photo editor for organizing and shaping photography on Apple silicon Macs.";
-    }
   }
 
   function render() {

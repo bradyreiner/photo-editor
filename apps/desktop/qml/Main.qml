@@ -120,7 +120,6 @@ ApplicationWindow {
         width: Math.min(popupAvailableWidth, Math.max(1, 620))
         x: (parent.width - width) / 2
         y: Math.max(16, (parent.height - height) / 2)
-        padding: 20
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         contentItem: ColumnLayout {
             spacing: 14
@@ -137,7 +136,7 @@ ApplicationWindow {
                 color: theme.textMuted
                 wrapMode: Text.Wrap
             }
-            TextArea {
+            ToneTextArea {
                 objectName: "previewFailureDetailsText"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(220, Math.max(90, contentHeight + 20))

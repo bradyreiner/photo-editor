@@ -12,6 +12,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    sha256_file,
+)
+
 
 SCHEMA = "photo-editor-color-validation-corpus:v1"
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -171,12 +177,6 @@ def resolve_path(manifest_path: Path, value: str) -> Path:
     return (manifest_path.parent / candidate).resolve()
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def check_keys(

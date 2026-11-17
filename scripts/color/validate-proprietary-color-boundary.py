@@ -50,7 +50,7 @@ SDK_SYMBOL_PATTERN = re.compile(
     r"dng_pixel_buffer)\b"
 )
 ADOBE_API_PATTERN = re.compile(
-    r"https?://[^\s\"']*(?:api\.)?adobe\.com(?:[/:]|$)", re.IGNORECASE
+    r"https?://[^\s\"']*(?:api\.)?adobe\.com(?:[/:][^\s\"']*|$)", re.IGNORECASE
 )
 # XMP namespace identifiers describe local metadata; they are not requests.
 # Match complete identifiers so a different path or endpoint still fails.

@@ -1,4 +1,5 @@
 #include "timeline_source_matte.h"
+#include "qimage_color_conversion.h"
 
 #include <QColorSpace>
 #include <QStringList>
@@ -64,7 +65,7 @@ QImage timeline_source_matte_alpha(
   if (!color_managed.colorSpace().isValid()) {
     color_managed.setColorSpace(srgb);
   } else if (color_managed.colorSpace() != srgb) {
-    color_managed = color_managed.convertedToColorSpace(srgb);
+    color_managed = convert_tagged_qimage_color_space(color_managed, srgb, QImageColorConversionPurpose::DecodeNormalization);
     if (color_managed.isNull()) {
       return fail(QStringLiteral("The matte color space could not be converted to sRGB."));
     }

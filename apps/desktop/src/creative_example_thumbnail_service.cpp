@@ -1,4 +1,5 @@
 #include "creative_example_thumbnail_service.h"
+#include "qimage_color_conversion.h"
 
 #include "edit_adjustment_patch.h"
 #include "edit_recipe_pipeline_bridge.h"
@@ -79,7 +80,7 @@ QImage sample_fixture() {
         kFixtureHeight);
     auto result = scaled.copy(crop);
     if (result.colorSpace().isValid() && result.colorSpace() != srgb)
-      result = result.convertedToColorSpace(srgb);
+      result = convert_tagged_qimage_color_space(result, srgb, QImageColorConversionPurpose::OutputPublication);
     else
       result.setColorSpace(srgb);
     return result;

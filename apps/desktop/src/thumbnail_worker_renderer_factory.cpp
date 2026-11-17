@@ -128,9 +128,9 @@ QString render_source_layer_thumbnail(
     if (!admission.admitted || !admission.plan.has_value()) return {};
     paint_plan = *admission.plan;
   }
-  const auto rendered = float_paint || scene_linear_source || !content_state.layers.isEmpty() ? render_output_image_with_backend(
+  const auto rendered = float_paint || scene_linear_source || !content_state.layers.isEmpty() ? render_output_image(
       decoded, content_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
-      RenderBackendPreference::CpuOnly, &source_metadata, nullptr, {},
+      &source_metadata, nullptr, {},
       photo_editor::pipeline::RemovalQuality::Final,
       RenderOutputPolicy::DisplayReferred, paint_plan ? &*paint_plan : nullptr, cancellation)
       : convert_tagged_qimage_color_space(decoded, QColorSpace(QColorSpace::SRgb),

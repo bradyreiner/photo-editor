@@ -11,6 +11,15 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+import sys
+
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    artifact_set_digest,
+    read_json_object as load_json,
+    sha256_file,
+)
 
 
 VALIDATOR_PATH = Path(__file__).with_name("validate-real-raw-render-set.py")
@@ -36,12 +45,6 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
-def load_json(path: Path) -> dict[str, Any]:
-  with path.open("r", encoding="utf-8") as handle:
-    value = json.load(handle)
-  if not isinstance(value, dict):
-    raise ValueError(f"JSON root must be an object: {path}")
-  return value
 
 
 def load_validator() -> Any:
@@ -55,28 +58,8 @@ def load_validator() -> Any:
   return module
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
-def artifact_set_digest(root: Path, paths: list[str]) -> tuple[int, str]:
-  total = 0
-  digest = hashlib.sha256()
-  for logical_path in sorted(paths):
-    path = root / logical_path
-    size = path.stat().st_size
-    digest.update(logical_path.encode("utf-8"))
-    digest.update(b"\0")
-    digest.update(str(size).encode("ascii"))
-    digest.update(b"\0")
-    digest.update(sha256_file(path).encode("ascii"))
-    digest.update(b"\n")
-    total += size
-  return total, digest.hexdigest()
 
 
 def run_checked(command: list[str], label: str) -> None:

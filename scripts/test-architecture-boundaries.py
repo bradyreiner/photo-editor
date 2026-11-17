@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import subprocess
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -275,7 +276,7 @@ def check_maintainability_boundaries() -> list[str]:
         )
     if (
         '#include "local_mask_compiler.h"' not in controller
-        or "compile_pipeline_local_mask(" not in controller
+        or "compile_pipeline_local_mask(" not in desktop_pipeline_state_compiler
         or "LocalMask pipeline_local_mask(" in controller
         or "enum class MaskRasterPolicy" in controller
         or "compile_pipeline_local_mask(" not in photo_render_utils
@@ -3242,10 +3243,12 @@ def check_maintainability_boundaries() -> list[str]:
         or "HistogramComputationResult compute_histogram_scope_data(" not in
         histogram_scope_service_source
         or "constexpr int kInternalBins = 4096" not in histogram_scope_service_source
-        or "constexpr int kScopeColumns = 128" not in histogram_scope_service_source
-        or "constexpr int kScopeLevels = 64" not in histogram_scope_service_source
-        or "constexpr int kVectorscopeSampleTarget = 1800" not in
-        histogram_scope_service_source
+        or "int columns = 128" not in histogram_scope_service_header
+        or "int levels = 64" not in histogram_scope_service_header
+        or "int vector_samples = 1800" not in histogram_scope_service_header
+        or "std::clamp(options.columns, 16, 512)" not in histogram_scope_service_source
+        or "std::clamp(options.levels, 16, 256)" not in histogram_scope_service_source
+        or "std::clamp(options.vector_samples, 64, 16384)" not in histogram_scope_service_source
         or "#include \"histogram_scope_service.h\"" not in controller_header
         or "compute_histogram_scope_data(" not in preview_controller_source
         or "compute_histogram_data(" in preview_controller_source
@@ -3374,8 +3377,7 @@ def check_maintainability_boundaries() -> list[str]:
     if (
         "photo-v4-canonical-metadata" in
         catalog_asset_model
-        or "photo-v7-display-text-color-policy" not in
-        catalog_asset_model
+        or re.search(r'photo-v(?:[7-9]|[1-9][0-9]+)-', catalog_asset_model) is None
         or "thumbnail_adjustment_identity(" not in
         catalog_asset_model
         or "canonical_asset_bound_adjustment_patch_json("
@@ -3714,7 +3716,8 @@ def check_maintainability_boundaries() -> list[str]:
         or 'inputHandlerRole: "pan-zoom"' not in studio_viewport_input
         or "viewport.handleSamplingPointerPressed(mouse)" not in studio_viewport_input
         or "viewport.handleMaskPointerPressed(mouse)" not in studio_viewport_input
-        or "viewport.wheelZoomFactor(wheel)" not in studio_viewport_input
+        or "viewport.handleViewportWheel(wheel)" not in studio_viewport_input
+        or "wheelZoomFactor(wheel)" not in studio_image_viewport
     ):
         errors.append(
             "Studio pan, zoom, sampling, and tool input dispatch must remain in the extracted viewport input command surface"

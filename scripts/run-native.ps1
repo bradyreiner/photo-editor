@@ -262,7 +262,7 @@ function Resolve-QtRoot {
         }
     }
 
-    Fail "Qt was not found. Install Qt 6.7.3 for MSVC 2019 64-bit with Qt Multimedia, Shader Tools, Qt 5 Compatibility, and Qt Image Formats; then set QT_ROOT to that kit (for example C:\Qt\6.7.3\msvc2019_64)."
+    Fail "Qt was not found. Install Qt 6.10.2 for MSVC 2022 64-bit with Qt Multimedia, Shader Tools, Qt 5 Compatibility, and Qt Image Formats; then set QT_ROOT to that kit (for example C:\Qt\6.10.2\msvc2022_64)."
 }
 
 function Resolve-VcpkgRoot {

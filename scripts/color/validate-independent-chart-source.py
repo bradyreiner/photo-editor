@@ -16,6 +16,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
+# Resolve the repository package for both direct scripts and file-based proof loaders.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.color.proof_helpers import (
+    sha256_file,
+)
+
 
 SCHEMA = "photo-editor-independent-chart-source:v1"
 SOURCE_PAGE = "https://vision.middlebury.edu/color/data/"
@@ -81,12 +87,6 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
-def sha256_file(path: Path) -> str:
-  digest = hashlib.sha256()
-  with path.open("rb") as handle:
-    for block in iter(lambda: handle.read(1024 * 1024), b""):
-      digest.update(block)
-  return digest.hexdigest()
 
 
 def check_keys(

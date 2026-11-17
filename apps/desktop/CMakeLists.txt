@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Network Quick Qml QuickControls2 ShaderTools Widgets)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Network Quick Qml QuickControls2 ShaderTools Widgets)
 find_package(SQLite3 REQUIRED)
 find_package(ZLIB REQUIRED)
 
@@ -14,7 +14,7 @@ if(NOT TARGET SQLite3::SQLite3)
   add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
 endif()
 
-qt_standard_project_setup(REQUIRES 6.5)
+qt_standard_project_setup(REQUIRES 6.10)
 include(${PROJECT_SOURCE_DIR}/cmake/CustomerPlatform.cmake)
 if(Qt6_VERSION VERSION_GREATER_EQUAL 6.8)
   qt_policy(SET QTP0004 NEW)
