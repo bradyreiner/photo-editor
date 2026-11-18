@@ -34,9 +34,61 @@ proof_root="$(mktemp -d /tmp/framehouse-postgres-runtime-proof.XXXXXX)"
 managed_root="${proof_root}/managed"
 external_client_root="${proof_root}/external-client"
 
+print_failure_diagnostics() {
+  # Preserve the useful server startup error in CI logs before removing this
+  # disposable proof. Never print state files or their generated credentials.
+  python3 - "${managed_root}" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+service = Path(sys.argv[1]) / 'app-data/postgres'
+secrets = []
+try:
+    password = json.loads((service / 'state.json').read_text()).get('password')
+    if isinstance(password, str) and password:
+        secrets.append(password)
+except (OSError, ValueError):
+    pass
+try:
+    legacy = (service / '.credential').read_text().strip()
+    if legacy:
+        secrets.append(legacy)
+except OSError:
+    pass
+try:
+    with (service / 'logs/postgres.log').open('rb') as log:
+        log.seek(0, os.SEEK_END)
+        start = max(0, log.tell() - 32768)
+        log.seek(start)
+        tail = log.read(32768)
+    if start:
+        # Never expose a partial credential or URI split by the read boundary.
+        _, _, tail = tail.partition(b'\n')
+    text = '\n'.join(tail.decode('utf-8', errors='replace').splitlines()[-80:]) + '\n'
+except OSError:
+    text = '(PostgreSQL did not create a readable server log.)\n'
+for secret in secrets:
+    text = text.replace(secret, '<redacted>')
+text = re.sub(r'(postgres(?:ql)?://[^:\s/@]+:)[^@\s]+@', r'\1<redacted>@', text)
+text = text.encode('utf-8')[-16384:].decode('utf-8', errors='replace')
+print('postgres catalog runtime proof: last PostgreSQL server log lines (credentials redacted):', file=sys.stderr)
+print(text, file=sys.stderr, end='')
+PY
+}
+
 cleanup() {
+  local proof_status=$?
+  if [ "${proof_status}" -ne 0 ]; then
+    print_failure_diagnostics || true
+  fi
   unset PHOTO_EDITOR_DATABASE_URL
   unset PHOTO_EDITOR_REAL_PG_RESTORE
+  # Failure injection replaces this variable during backup/restore cases.
+  # Always stop through the real runtime even if an assertion fails there.
+  export PHOTO_EDITOR_POSTGRES_BIN_DIR="${postgres_runtime_dir}/bin"
   export PHOTO_EDITOR_APP_DATA_DIR="${managed_root}/app-data"
   export PHOTO_EDITOR_LOG_DIR="${managed_root}/logs"
   export PHOTO_EDITOR_BACKUP_DIR="${managed_root}/backups"
@@ -46,6 +98,7 @@ cleanup() {
       rm -rf -- "${proof_root}"
       ;;
   esac
+  return "${proof_status}"
 }
 trap cleanup EXIT
 
@@ -56,6 +109,11 @@ export PHOTO_EDITOR_LOG_DIR="${managed_root}/logs"
 export PHOTO_EDITOR_BACKUP_DIR="${managed_root}/backups"
 
 "${catalog_bin_dir}/catalog_local_db" ensure-running >/dev/null
+managed_database_url="$("${catalog_bin_dir}/catalog_local_db" connection-url --ensure-running)"
+socket_directories="$("${postgres_runtime_dir}/bin/psql" "${managed_database_url}" \
+  --no-psqlrc --tuples-only --no-align --command 'SHOW unix_socket_directories')"
+[ -z "${socket_directories}" ] ||
+  fail "managed PostgreSQL inherited a system Unix socket directory instead of authenticated loopback TCP"
 credential_state_path="${PHOTO_EDITOR_APP_DATA_DIR}/postgres/state.json"
 legacy_credential_path="${PHOTO_EDITOR_APP_DATA_DIR}/postgres/.credential"
 original_credential="$({

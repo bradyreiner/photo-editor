@@ -253,7 +253,7 @@ jobs:
 
       - name: Prove explicit behavior without ICC backend
         run: |
-          cmake --preset ci-headless -B build/ci-headless-no-lcms -DPHOTO_EDITOR_ENABLE_LCMS_COLOR_MANAGEMENT=OFF -DPHOTO_EDITOR_REQUIRE_LCMS_COLOR_MANAGEMENT=OFF
+          cmake --preset ci-headless -B build/ci-headless-no-lcms -DPHOTO_EDITOR_ENABLE_LCMS_COLOR_MANAGEMENT=OFF -DPHOTO_EDITOR_REQUIRE_LCMS_COLOR_MANAGEMENT=OFF -DPHOTO_EDITOR_STRICT_LCMS_VERSION=OFF
           cmake --build build/ci-headless-no-lcms --target color_transform_reference_test --parallel
           ./build/ci-headless-no-lcms/tests/color_transform_reference_test --expect-no-icc-backend
 
@@ -417,7 +417,7 @@ jobs:
           if-no-files-found: error
 
   desktop-macos:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       QT_QPA_PLATFORM: offscreen
@@ -659,7 +659,7 @@ jobs:
           if-no-files-found: error
 
   release-macos-build:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       QT_QPA_PLATFORM: offscreen

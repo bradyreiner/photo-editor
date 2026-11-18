@@ -301,3 +301,72 @@ synthetic credentials in all seven exception paths. A CI-equivalent scan of remo
 refs/tags and HEAD passes: 71 commits, 191.08 MB, zero findings. The larger earlier
 local scan included a local backup branch, explaining its different byte count.
 New CI must still verify the coordinated follow-up revision.
+
+## Supported Mac runners and catalog startup
+
+`530f5f71` passes the remote security and customer-platform workflows, and
+repository hygiene. Its Rust formatting, Clippy and unit tests pass; the managed
+PostgreSQL runtime proof then fails at server startup. The cancelled Mac jobs
+use `macos-14`, which GitHub [retired on November 2](https://github.com/actions/runner-images/blob/main/README.md#available-images).
+The follow-up changes both Mac CI jobs, the generated Apple-silicon release matrix
+and the appcast job to the supported standard `macos-15` Apple-silicon image.
+No larger-runner label or plan upgrade is used. Workflow lint and all 17 commerce
+configuration tests pass; generated platform selection preserves Apple-silicon
+and Windows x64 artifacts.
+
+Managed PostgreSQL previously inherited the distribution's Unix socket directory.
+A controlled same-catalog experiment reproduced startup failure with an unwritable
+socket directory. The fixed helper explicitly disables Unix sockets and starts
+that catalog on authenticated loopback TCP. It completes migrations, reports
+`unix_socket_directories` empty and `listen_addresses=127.0.0.1`, and rejects an
+incorrect password. The complete managed/external runtime proof passes all 12
+steps, including credential recovery, pre-migration rollback, backup/restore,
+corrupt/interrupted/failed-restore guards, relink, library move and external
+catalog authority. Catalog unit tests pass 67 cases with five existing ignored;
+workspace Clippy passes with warnings denied. Ubuntu's actual packaged runtime
+still requires fresh CI confirmation. Failure cleanup now prints a bounded,
+credential-redacted server-log tail before stopping and removing its own cluster.
+
+## Title render visibility qualification
+
+The fixed-region average from the earlier title test did not describe the authored
+callout position. The exact retained document rendered natively in 344 ms; the old
+sample averaged RGB 237/49/5 and failed its red-channel cutoff while visible text
+and a panel existed to its right. No title clamping or production rendering change
+was inferred from that test: freely positioned titles may extend beyond the canvas.
+
+The focused workflow now compares against the source-only frame rendered by the
+same native pipeline. It requires visible near-white glyphs and a dark panel in
+the authored in-canvas region, plus an unchanged left-side background. Controls
+reject no title, a textless panel and a wrongly positioned callout. The registered
+focused CTest passes in 4.11 seconds: 907 glyph pixels, 5,771 panel pixels and all
+19,200 reference background pixels unchanged. Missing-font fallback also renders.
+The broad workflow retains real queued export, exact output publication and all
+recipe/reopen/artifact checks. Its final queued-path result is recorded separately;
+this focused pass does not establish all desktop or clean-machine acceptance.
+
+The final broad queued timeline run **passes in 389.05 seconds**, including the
+same 907/5,771/19,200 title evidence, original role/mutation guards and all later
+workflow checks. Both focused and broad temporary PostgreSQL clusters were
+stopped and their isolated database data removed; synthetic image/video proof was
+retained. This remains local functional evidence, rather than installed-app or
+physical-display qualification.
+
+The current Linux main 92-case suite passes remotely, as do Windows headless,
+Linux ThreadSanitizer and exported-source closure. Linux's extra deliberately
+no-ICC configuration inherited the preset's strict-backend requirement despite
+explicitly disabling the backend. That negative test now also disables strict
+version enforcement for its own build directory. The normal production/CI preset
+still requires the validated ICC backend. The local no-ICC target builds and its
+`--expect-no-icc-backend` check passes without changing production requirements.
+
+Local dependency qualification is limited to this host: link diagnostics show
+some Homebrew libraries built for macOS 26 while CMake declares a 13.0 deployment
+target. Before any public Mac installer is qualified, bundled dependencies must
+meet its declared minimum OS and pass clean-machine checks. Neither signing nor
+this local successful build alone proves compatibility with older Macs.
+
+The final Rust release workspace/FFI rebuild with the TCP-only startup fix passes
+(5m22s), and the macOS app target completes successfully. Rust CLI helpers are
+installed by the packaging stage; a build-tree `.app` is not the fresh managed,
+self-contained staging installer required for the customer walkthrough.

@@ -9,7 +9,7 @@ source repository is never used as the anonymous download host.
 1. Private source repository receives tag `vX.Y.Z` matching `VERSION`.
 2. `quality-gate` runs Rust and headless native tests and exports dependency evidence.
 3. Platform jobs build:
-   - macOS arm64 on `macos-14`
+   - macOS arm64 on `macos-15`
    - macOS x86_64 on `macos-15-intel`
    - Windows x64 on `windows-2022`
 4. macOS jobs sign with Hardened Runtime, notarize, staple, and assess each DMG.

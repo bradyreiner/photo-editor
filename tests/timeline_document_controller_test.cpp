@@ -7135,6 +7135,228 @@ bool run_timeline_delivery_reopen_workflow(const QString& workspace_path) {
   return true;
 }
 
+bool run_timeline_title_template_render_workflow(
+    const QString& ffmpeg,
+    const QString& source_path,
+    const QString& workspace_path,
+    bool queue_render = true) {
+  const auto reject = [](const char* message) {
+    std::cerr << message << '\n';
+    return false;
+  };
+  TimelineDocumentController title_controller;
+  title_controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Title Timeline")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  if (title_controller.titleTemplates().size() != 6) {
+    return reject("the title library should expose all six low-density production templates");
+  }
+  title_controller.addClipFromGallery(
+      QStringLiteral("video:title-base"), source_path, QStringLiteral("Title Base"), 0.0, QString{});
+  title_controller.seekSequenceSeconds(0.10);
+  if (!title_controller.addTitleClipFromTemplate(QStringLiteral("lower-third"))) {
+    return reject("a lower-third template should create a title clip");
+  }
+  if (title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
+          QStringLiteral("lower-third") ||
+      title_controller.currentClip().value(QStringLiteral("titleText")).toString() !=
+          QStringLiteral("Name · Role") ||
+      title_controller.currentClip().value(QStringLiteral("titleAlignment")).toString() !=
+          QStringLiteral("left") ||
+      !nearly_equal(title_controller.currentClip().value(QStringLiteral("titleFontSize")).toDouble(), 48.0) ||
+      !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionX")).toDouble(), 0.10) ||
+      !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionY")).toDouble(), 0.82)) {
+    return reject("the lower-third template should set its text, type, alignment, and title-safe position");
+  }
+  title_controller.updateSelectedTitle({
+      {QStringLiteral("text"), QStringLiteral("MVP TITLE")},
+      {QStringLiteral("fontFamily"), QStringLiteral("Definitely Missing Font Family")},
+      {QStringLiteral("fontSize"), 72.0},
+      {QStringLiteral("color"), QStringLiteral("#ffffffff")},
+      {QStringLiteral("backgroundColor"), QStringLiteral("#d0000000")},
+      {QStringLiteral("alignment"), QStringLiteral("center")},
+      {QStringLiteral("positionX"), 0.5},
+      {QStringLiteral("positionY"), 0.5},
+  });
+  if (title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
+      QStringLiteral("custom")) {
+    return reject("manual title styling should identify the clip as customized");
+  }
+  if (!title_controller.applySelectedTitleTemplate(QStringLiteral("callout"))) {
+    return reject("an existing title should accept another production template");
+  }
+  if (title_controller.currentClip().value(QStringLiteral("mediaType")).toString() != QStringLiteral("title") ||
+      title_controller.currentClip().value(QStringLiteral("titleText")).toString() != QStringLiteral("MVP TITLE") ||
+      title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
+          QStringLiteral("callout") ||
+      title_controller.currentClip().value(QStringLiteral("titleFontFamily")).toString() !=
+          QStringLiteral("Definitely Missing Font Family") ||
+      !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionX")).toDouble(), 0.68) ||
+      !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionY")).toDouble(), 0.35)) {
+    return reject("applying a title template should preserve authored text while updating its reusable style");
+  }
+  title_controller.undo();
+  if (title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
+          QStringLiteral("custom") ||
+      !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionX")).toDouble(), 0.5)) {
+    return reject("undo should restore the complete custom title style in one step");
+  }
+  title_controller.redo();
+  if (!title_controller.saveTimeline(queue_render)) {
+    return reject("title fixture should save and enqueue a render");
+  }
+  const auto title_job_id =
+      QStringLiteral("timeline-render-%1").arg(title_controller.timelineAssetId().section(':', 1));
+  if (queue_render && !wait_for_published_job(title_job_id, title_controller)) {
+    return reject("title fixture render should complete through the shared job runner");
+  }
+  TimelineDocumentController reopened_title_controller;
+  if (!reopened_title_controller.loadTimeline(title_controller.savedDocumentPath())) {
+    return reject("saved title fixture should reopen");
+  }
+  auto reopened_title_found = false;
+  for (const auto& clip_value : reopened_title_controller.clips()) {
+    const auto clip = clip_value.toMap();
+    if (clip.value(QStringLiteral("mediaType")).toString() == QStringLiteral("title") &&
+        clip.value(QStringLiteral("titleText")).toString() == QStringLiteral("MVP TITLE") &&
+        clip.value(QStringLiteral("titleTemplateKey")).toString() == QStringLiteral("callout") &&
+        nearly_equal(clip.value(QStringLiteral("titlePositionX")).toDouble(), 0.68) &&
+        nearly_equal(clip.value(QStringLiteral("titlePositionY")).toDouble(), 0.35)) {
+      reopened_title_found = true;
+      break;
+    }
+  }
+  if (!reopened_title_found) {
+    return reject("title text, reusable template identity, style, and position should survive save and reopen");
+  }
+  const auto rendered_title_path = queue_render
+      ? title_controller.savedRenderPath()
+      : QDir(workspace_path).filePath(QStringLiteral("title-template-direct.mp4"));
+  if (!queue_render && !title_controller.renderCurrentTimeline(rendered_title_path)) {
+    return reject("the saved title recipe should render through the native export path");
+  }
+  // Decode an independently rendered source-only reference through the same
+  // color/export pipeline. This separates actual title pixels from source
+  // colors and normal codec variation without averaging away small glyphs.
+  TimelineDocumentController source_controller;
+  source_controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Title Source Reference")},
+      {QStringLiteral("width"), 320},
+      {QStringLiteral("height"), 240},
+      {QStringLiteral("frameRate"), 30.0},
+  });
+  source_controller.addClipFromGallery(
+      QStringLiteral("video:title-source-reference"), source_path,
+      QStringLiteral("Title Source Reference"), 0.0, QString{});
+  const auto reference_path = QDir(workspace_path).filePath(QStringLiteral("title-source-reference.mp4"));
+  if (!source_controller.renderCurrentTimeline(reference_path)) {
+    return reject("the title source-only reference should render through the same native pipeline");
+  }
+  const auto decode_frame = [&ffmpeg](const QString& path) {
+    const auto bytes = process_bytes(ffmpeg,
+        {QStringLiteral("-v"), QStringLiteral("error"),
+         QStringLiteral("-ss"), QStringLiteral("0.50"), QStringLiteral("-i"), path,
+         QStringLiteral("-frames:v"), QStringLiteral("1"),
+         QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+         QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1")});
+    return bytes.size() == 320 * 240 * 3
+        ? QImage(reinterpret_cast<const uchar*>(bytes.constData()), 320, 240,
+                 QImage::Format_RGB888).copy()
+        : QImage{};
+  };
+  const auto rendered_frame = decode_frame(rendered_title_path);
+  const auto source_frame = decode_frame(reference_path);
+  if (rendered_frame.isNull() || source_frame.isNull()) {
+    return reject("title and source reference exports should decode to complete RGB frames");
+  }
+  const auto title_style = title_controller.currentClip();
+  const auto anchor_x = title_style.value(QStringLiteral("titlePositionX")).toDouble() * 320.0;
+  const auto anchor_y = title_style.value(QStringLiteral("titlePositionY")).toDouble() * 240.0;
+  const auto font_size = title_style.value(QStringLiteral("titleFontSize")).toDouble();
+  // This authored left-aligned callout intentionally extends off the right
+  // canvas edge. Verify its visible glyphs/panel near its actual anchor; do not
+  // impose a separate centered crop or change creative off-canvas positioning.
+  const auto authored_region = QRect(
+      qFloor(anchor_x - 8.0), qFloor(anchor_y - font_size * 2.0),
+      320, qCeil(font_size * 4.0)).intersected(rendered_frame.rect());
+  const QRect background_region(0, 0, 80, 240);
+  struct VisibilityEvidence {
+    int glyph_pixels = 0;
+    int panel_pixels = 0;
+    int unchanged_background_pixels = 0;
+    bool visible() const {
+      return glyph_pixels >= 200 && panel_pixels >= 1000 &&
+             unchanged_background_pixels >= 19008; // 99% of the left source region.
+    }
+  };
+  const auto evidence_for = [&source_frame, &authored_region, &background_region](const QImage& frame) {
+    VisibilityEvidence evidence;
+    for (int y = authored_region.top(); y <= authored_region.bottom(); ++y) {
+      for (int x = authored_region.left(); x <= authored_region.right(); ++x) {
+        const auto pixel = frame.pixelColor(x, y);
+        const auto source = source_frame.pixelColor(x, y);
+        if (pixel.red() > 170 && pixel.green() > 170 && pixel.blue() > 170 &&
+            pixel.green() > source.green() + 80 && pixel.blue() > source.blue() + 80) {
+          ++evidence.glyph_pixels;
+        }
+        if (pixel.red() < source.red() - 80 && pixel.red() < 130 &&
+            pixel.green() < 100 && pixel.blue() < 110) {
+          ++evidence.panel_pixels;
+        }
+      }
+    }
+    for (int y = background_region.top(); y <= background_region.bottom(); ++y) {
+      for (int x = background_region.left(); x <= background_region.right(); ++x) {
+        const auto pixel = frame.pixelColor(x, y);
+        const auto source = source_frame.pixelColor(x, y);
+        if (qAbs(pixel.red() - source.red()) <= 8 &&
+            qAbs(pixel.green() - source.green()) <= 8 &&
+            qAbs(pixel.blue() - source.blue()) <= 8) {
+          ++evidence.unchanged_background_pixels;
+        }
+      }
+    }
+    return evidence;
+  };
+  auto panel_only = source_frame.copy();
+  {
+    QPainter painter(&panel_only);
+    painter.fillRect(authored_region, Qt::black);
+  }
+  auto wrong_placement = source_frame.copy();
+  {
+    QPainter painter(&wrong_placement);
+    painter.drawImage(QPoint(0, 0), rendered_frame, authored_region);
+  }
+  if (evidence_for(source_frame).visible() || evidence_for(panel_only).visible() ||
+      evidence_for(wrong_placement).visible()) {
+    return reject("title visibility evidence must reject no title, a textless panel, and incorrect placement");
+  }
+  const auto evidence = evidence_for(rendered_frame);
+  std::cout << "title template render evidence: glyphPixels=" << evidence.glyph_pixels
+            << " panelPixels=" << evidence.panel_pixels
+            << " unchangedBackground=" << evidence.unchanged_background_pixels
+            << " authoredRegion=" << authored_region.x() << ',' << authored_region.y()
+            << ',' << authored_region.width() << ',' << authored_region.height()
+            << " output=" << rendered_title_path.toStdString() << '\n';
+  if (!evidence.visible() || qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_TEST_KEEP_FAILURE_ARTIFACTS")) {
+    const auto frame_path = QDir(workspace_path).filePath(QStringLiteral("title-template-frame.png"));
+    rendered_frame.save(frame_path);
+    source_frame.save(QDir(workspace_path).filePath(QStringLiteral("title-template-source.png")));
+    std::cerr << "title template evidence: frame=" << frame_path.toStdString()
+              << " document=" << title_controller.savedDocumentPath().toStdString()
+              << " fontFamily=" << title_style.value(QStringLiteral("titleFontFamily")).toString().toStdString()
+              << " fontSize=" << font_size << " anchor=" << anchor_x << ',' << anchor_y << '\n';
+  }
+  if (!evidence.visible()) {
+    return reject("exported title should show white glyphs and its dark panel at the authored position while preserving the source background");
+  }
+  return true;
+}
+
 bool run_timeline_publish_revision_workflow(const QString& workspace_path) {
   const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
   if (ffmpeg.isEmpty()) {
@@ -10769,6 +10991,24 @@ int main(int argc, char** argv) {
     return run_timeline_shared_keyframe_curve_workflow()
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-title-template-render-workflow"))) {
+    const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    if (ffmpeg.isEmpty()) return fail("title template workflow requires FFmpeg");
+    const auto source = create_test_video(
+        ffmpeg, workspace.filePath(QStringLiteral("title-template-base.mp4")),
+        QStringLiteral("red"), true);
+    if (source.isEmpty()) return fail("title template source should be created");
+    // The focused quality proof uses the same saved native recipe and direct
+    // exporter; broad mode separately requires the real job/publication path.
+    const auto passed = run_timeline_title_template_render_workflow(
+        ffmpeg, source, workspace.path(), false);
+    if (!passed || qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_TEST_KEEP_FAILURE_ARTIFACTS")) {
+      workspace.setAutoRemove(false);
+      std::cerr << "title template synthetic artifacts retained at " << workspace.path().toStdString() << '\n';
+    }
+    return passed ? EXIT_SUCCESS : EXIT_FAILURE;
   }
   if (QCoreApplication::arguments().contains(
           QStringLiteral("--timeline-title-motion-keyframe-workflow"))) {
@@ -19237,108 +19477,12 @@ int main(int argc, char** argv) {
       return fail("Cross Dissolve pixels should progress from outgoing through a balanced blend to incoming");
     }
 
-    TimelineDocumentController title_controller;
-    title_controller.createTimelineWithSettings({
-        {QStringLiteral("timelineName"), QStringLiteral("Title Timeline")},
-        {QStringLiteral("width"), 320},
-        {QStringLiteral("height"), 240},
-        {QStringLiteral("frameRate"), 30.0},
-    });
-    if (title_controller.titleTemplates().size() != 6) {
-      return fail("the title library should expose all six low-density production templates");
-    }
-    title_controller.addClipFromGallery(
-        QStringLiteral("video:title-base"), render_video_one, QStringLiteral("Title Base"), 0.0, QString{});
-    title_controller.seekSequenceSeconds(0.10);
-    if (!title_controller.addTitleClipFromTemplate(QStringLiteral("lower-third"))) {
-      return fail("a lower-third template should create a title clip");
-    }
-    if (title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
-            QStringLiteral("lower-third") ||
-        title_controller.currentClip().value(QStringLiteral("titleText")).toString() !=
-            QStringLiteral("Name · Role") ||
-        title_controller.currentClip().value(QStringLiteral("titleAlignment")).toString() !=
-            QStringLiteral("left") ||
-        !nearly_equal(title_controller.currentClip().value(QStringLiteral("titleFontSize")).toDouble(), 48.0) ||
-        !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionX")).toDouble(), 0.10) ||
-        !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionY")).toDouble(), 0.82)) {
-      return fail("the lower-third template should set its text, type, alignment, and title-safe position");
-    }
-    title_controller.updateSelectedTitle({
-        {QStringLiteral("text"), QStringLiteral("MVP TITLE")},
-        {QStringLiteral("fontFamily"), QStringLiteral("Definitely Missing Font Family")},
-        {QStringLiteral("fontSize"), 72.0},
-        {QStringLiteral("color"), QStringLiteral("#ffffffff")},
-        {QStringLiteral("backgroundColor"), QStringLiteral("#d0000000")},
-        {QStringLiteral("alignment"), QStringLiteral("center")},
-        {QStringLiteral("positionX"), 0.5},
-        {QStringLiteral("positionY"), 0.5},
-    });
-    if (title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
-        QStringLiteral("custom")) {
-      return fail("manual title styling should identify the clip as customized");
-    }
-    if (!title_controller.applySelectedTitleTemplate(QStringLiteral("callout"))) {
-      return fail("an existing title should accept another production template");
-    }
-    if (title_controller.currentClip().value(QStringLiteral("mediaType")).toString() != QStringLiteral("title") ||
-        title_controller.currentClip().value(QStringLiteral("titleText")).toString() != QStringLiteral("MVP TITLE") ||
-        title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
-            QStringLiteral("callout") ||
-        title_controller.currentClip().value(QStringLiteral("titleFontFamily")).toString() !=
-            QStringLiteral("Definitely Missing Font Family") ||
-        !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionX")).toDouble(), 0.68) ||
-        !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionY")).toDouble(), 0.35)) {
-      return fail("applying a title template should preserve authored text while updating its reusable style");
-    }
-    title_controller.undo();
-    if (title_controller.currentClip().value(QStringLiteral("titleTemplateKey")).toString() !=
-            QStringLiteral("custom") ||
-        !nearly_equal(title_controller.currentClip().value(QStringLiteral("titlePositionX")).toDouble(), 0.5)) {
-      return fail("undo should restore the complete custom title style in one step");
-    }
-    title_controller.redo();
-    if (!title_controller.saveTimeline(true)) {
-      return fail("title fixture should save and enqueue a render");
-    }
-    const auto title_job_id =
-        QStringLiteral("timeline-render-%1").arg(title_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_published_job(title_job_id, title_controller)) {
-      return fail("title fixture render should complete through the shared job runner");
-    }
-    TimelineDocumentController reopened_title_controller;
-    if (!reopened_title_controller.loadTimeline(title_controller.savedDocumentPath())) {
-      return fail("saved title fixture should reopen");
-    }
-    auto reopened_title_found = false;
-    for (const auto& clip_value : reopened_title_controller.clips()) {
-      const auto clip = clip_value.toMap();
-      if (clip.value(QStringLiteral("mediaType")).toString() == QStringLiteral("title") &&
-          clip.value(QStringLiteral("titleText")).toString() == QStringLiteral("MVP TITLE") &&
-          clip.value(QStringLiteral("titleTemplateKey")).toString() == QStringLiteral("callout") &&
-          nearly_equal(clip.value(QStringLiteral("titlePositionX")).toDouble(), 0.68) &&
-          nearly_equal(clip.value(QStringLiteral("titlePositionY")).toDouble(), 0.35)) {
-        reopened_title_found = true;
-        break;
+    if (!run_timeline_title_template_render_workflow(ffmpeg, render_video_one, workspace.path())) {
+      if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_TEST_KEEP_FAILURE_ARTIFACTS")) {
+        workspace.setAutoRemove(false);
+        std::cerr << "title template synthetic artifacts retained at " << workspace.path().toStdString() << '\n';
       }
-    }
-    if (!reopened_title_found) {
-      return fail("title text, reusable template identity, style, and position should survive save and reopen");
-    }
-    const auto title_sample = process_bytes(
-        ffmpeg,
-        {
-            QStringLiteral("-v"), QStringLiteral("error"),
-            QStringLiteral("-ss"), QStringLiteral("0.50"),
-            QStringLiteral("-i"), title_controller.savedRenderPath(),
-            QStringLiteral("-frames:v"), QStringLiteral("1"),
-            QStringLiteral("-vf"), QStringLiteral("crop=180:110:70:65,scale=1:1"),
-            QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
-            QStringLiteral("-f"), QStringLiteral("rawvideo"),
-            QStringLiteral("pipe:1"),
-        });
-    if (title_sample.size() < 3 || static_cast<unsigned char>(title_sample.at(0)) > 225) {
-      return fail("exported title pixels should visibly overlay the underlying red video");
+      return EXIT_FAILURE;
     }
 
     const QVector<QPair<QString, QSize>> title_motion_formats{

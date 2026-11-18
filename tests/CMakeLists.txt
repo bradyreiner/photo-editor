@@ -7168,6 +7168,11 @@ endif()
     LABELS "desktop;timeline;render;geometry")
 
   add_test(NAME timeline_document_controller_test COMMAND timeline_document_controller_test)
+  add_test(NAME timeline_title_template_render_workflow_test
+    COMMAND timeline_document_controller_test --timeline-title-template-render-workflow)
+  set_tests_properties(timeline_title_template_render_workflow_test PROPERTIES
+    TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    LABELS "desktop;timeline;title;render")
   add_test(
     NAME timeline_display_label_roundtrip_test
     COMMAND timeline_document_controller_test --timeline-display-label-roundtrip)

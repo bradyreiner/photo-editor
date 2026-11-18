@@ -572,7 +572,11 @@ impl LocalCatalogDatabaseManager {
             "start".to_string(),
             "-o".to_string(),
             format!(
-                "-c listen_addresses={} -c port={} -c max_connections=32",
+                // All managed clients use authenticated loopback TCP. Do not
+                // inherit distro socket directories (for example Debian's
+                // /var/run/postgresql, which an ordinary app user cannot write)
+                // or expose initdb's local-trust authentication through a socket.
+                "-c listen_addresses={} -c port={} -c max_connections=32 -c unix_socket_directories=",
                 state.host, state.port
             ),
         ]);

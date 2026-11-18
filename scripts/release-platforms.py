@@ -9,7 +9,7 @@ from release_commerce import commerce_config
 
 
 TARGETS = {
-    "mac-arm": dict(os="macos-14", configure_preset="release-macos", build_preset="build-release-macos", artifact_suffix="macos-arm64"),
+    "mac-arm": dict(os="macos-15", configure_preset="release-macos", build_preset="build-release-macos", artifact_suffix="macos-arm64"),
     "mac-intel": dict(os="macos-15-intel", configure_preset="release-macos", build_preset="build-release-macos", artifact_suffix="macos-x86_64"),
     "windows": dict(os="windows-2022", configure_preset="release-windows", build_preset="build-release-windows", artifact_suffix="windows-x64"),
 }
