@@ -126,7 +126,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config
+          sudo apt-get install -y clang cmake ninja-build pkg-config ffmpeg
 
       - name: Export and inventory tracked source
         id: source
@@ -240,7 +240,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config liblcms2-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config ffmpeg liblcms2-dev
 
       - name: Configure CMake
         run: cmake --preset ci-headless
@@ -281,7 +281,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config
+          sudo apt-get install -y clang cmake ninja-build pkg-config ffmpeg
 
       - name: Configure CMake (ASAN/UBSAN)
         run: cmake --preset ci-headless-asan-ubsan
@@ -307,7 +307,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config
+          sudo apt-get install -y clang cmake ninja-build pkg-config ffmpeg
 
       - name: Configure CMake (ThreadSanitizer)
         run: cmake --preset ci-headless-tsan

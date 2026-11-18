@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -23,28 +24,40 @@ def main() -> int:
     bash = shutil.which("bash")
     require(bash is not None, "Bash is required for the bundle-signing contract test")
     signer_command = [bash, SIGNER.as_posix()]
-    with tempfile.TemporaryDirectory() as temporary:
+    with tempfile.TemporaryDirectory(prefix="looksy signing fixture ") as temporary:
         root = Path(temporary)
-        fake_bin = root / "bin"
-        fake_bin.mkdir()
         log = root / "codesign.log"
-        fake_codesign = fake_bin / "codesign"
-        fake_codesign.write_text(
-            "#!/usr/bin/env bash\n"
-            "printf '%s\\n' \"$*\" >> \"${FRAMEHOUSE_SIGN_TEST_LOG}\"\n",
-            encoding="utf-8",
-        )
-        fake_file = fake_bin / "file"
-        fake_file.write_text(
-            "#!/usr/bin/env bash\n"
-            "case \"$*\" in\n"
-            "  *.macho) printf 'Mach-O 64-bit executable\\n' ;;\n"
-            "  *) printf 'data\\n' ;;\n"
-            "esac\n",
-            encoding="utf-8",
-        )
-        fake_codesign.chmod(0o755)
-        fake_file.chmod(0o755)
+        file_log = root / "file.log"
+        bash_environment = root / "signing-fixture.bash"
+        # Shell functions avoid PATH/executable-extension differences on MSYS.
+        # Explicit LF keeps the Bash fixture portable on CRLF-native Windows.
+        with bash_environment.open("w", encoding="utf-8", newline="\n") as fixture:
+            fixture.write(
+                "codesign() {\n"
+                "  printf '%s\\n' \"$*\" >> \"${FRAMEHOUSE_SIGN_TEST_LOG}\"\n"
+                "}\n"
+                "file() {\n"
+                "  printf '%s\\n' \"$*\" >> \"${FRAMEHOUSE_SIGN_TEST_FILE_LOG}\"\n"
+                "  case \"$*\" in\n"
+                "    *.macho) printf 'Mach-O 64-bit executable\\n' ;;\n"
+                "    *) printf 'data\\n' ;;\n"
+                "  esac\n"
+                "}\n"
+                "python3() {\n"
+                "  if [ \"${FRAMEHOUSE_SIGN_TEST_MOCK_RUNTIME:-0}\" = 1 ]; then\n"
+                "    printf 'runtime-check %s\\n' \"$*\" >> \"${FRAMEHOUSE_SIGN_TEST_LOG}\"\n"
+                "  else\n"
+                "    \"${FRAMEHOUSE_SIGN_TEST_PYTHON}\" \"$@\"\n"
+                "  fi\n"
+                "}\n"
+            )
+        canonical_root = subprocess.run(
+            [bash, "-c", 'cd "$1" && pwd -P', "signing-fixture", root.as_posix()],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+        def shell_path(path: Path) -> str:
+            return canonical_root + "/" + path.relative_to(root).as_posix()
 
         app = root / "Looksy.app"
         app_binary = app / "Contents" / "MacOS" / "Looksy.macho"
@@ -56,8 +69,10 @@ def main() -> int:
             fixture.write_text("fixture", encoding="utf-8")
 
         environment = os.environ.copy()
-        environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+        environment["BASH_ENV"] = bash_environment.as_posix()
         environment["FRAMEHOUSE_SIGN_TEST_LOG"] = log.as_posix()
+        environment["FRAMEHOUSE_SIGN_TEST_FILE_LOG"] = file_log.as_posix()
+        environment["FRAMEHOUSE_SIGN_TEST_PYTHON"] = Path(sys.executable).as_posix()
         result = subprocess.run(
             [
                 *signer_command,
@@ -79,14 +94,22 @@ def main() -> int:
             all("--options runtime" in line and "--timestamp" in line for line in sign_calls),
             "release signing options were not applied consistently",
         )
-        app_leaf = next(index for index, line in enumerate(calls) if app_binary.as_posix() in line)
+        probes = file_log.read_text(encoding="utf-8").splitlines()
+        require(
+            len(probes) == 3 and all(
+                any(shell_path(path) in probe for probe in probes)
+                for path in (app_binary, framework_binary, resource)
+            ),
+            f"the fixture file probe must inspect both code leaves and the resource: {probes}",
+        )
+        app_leaf = next(index for index, line in enumerate(calls) if shell_path(app_binary) in line)
         framework_leaf = next(
-            index for index, line in enumerate(calls) if framework_binary.as_posix() in line
+            index for index, line in enumerate(calls) if shell_path(framework_binary) in line
         )
         framework_seal = next(
-            index for index, line in enumerate(calls) if line.endswith(framework.as_posix())
+            index for index, line in enumerate(calls) if line.endswith(shell_path(framework))
         )
-        app_seal = next(index for index, line in enumerate(calls) if line.endswith(app.as_posix()))
+        app_seal = next(index for index, line in enumerate(calls) if line.endswith(shell_path(app)))
         verification = next(index for index, line in enumerate(calls) if "--verify" in line)
         require(
             app_leaf < framework_seal
@@ -95,7 +118,7 @@ def main() -> int:
             f"bundle signing order is not leaves-to-outer-seal: {calls}",
         )
         require(
-            all(resource.as_posix() not in line for line in calls),
+            all(shell_path(resource) not in line for line in calls),
             "non-Mach-O resources must not be individually signed",
         )
 
@@ -116,19 +139,14 @@ def main() -> int:
         runtime_framework = runtime / "Python.framework"
         runtime_framework.mkdir()
         (runtime_framework / "Python.macho").write_text("prepared fixture")
-        fake_python = fake_bin / "python3"
-        fake_python.write_text(
-            "#!/usr/bin/env bash\n"
-            "printf 'runtime-check %s\\n' \"$*\" >> \"${FRAMEHOUSE_SIGN_TEST_LOG}\"\n",
-            encoding="utf-8")
-        fake_python.chmod(0o755)
+        environment["FRAMEHOUSE_SIGN_TEST_MOCK_RUNTIME"] = "1"
         preserved = subprocess.run([*signer_command, app.as_posix(), "-"], capture_output=True,
                                    text=True, env=environment, check=False)
         require(preserved.returncode == 0, preserved.stderr)
         new_calls = log.read_text(encoding="utf-8").splitlines()[len(calls):]
         require(new_calls[0].startswith("runtime-check ") and new_calls[-1].startswith("runtime-check "),
                 "prepared runtime needs both preflight and post-seal verification")
-        require(all(runtime.as_posix() not in line for line in new_calls if not line.startswith("runtime-check ")),
+        require(all(shell_path(runtime) not in line for line in new_calls if not line.startswith("runtime-check ")),
                 "prepared runtime leaves and nested frameworks must not be re-signed")
         require(len([line for line in new_calls if "--sign -" in line]) == 4,
                 "preserving the search runtime must not skip other app signing")

@@ -10,7 +10,7 @@ namespace photo_editor::pipeline::detail {
 // CIE 1931 2-degree standard observer (CIE 15 / ISO 11664-1), sampled
 // from 360 through 830 nm at 1 nm. DNG 1.6 spectrum-form IlluminantData
 // integrates this observer without resampling.
-inline constexpr std::array kCie1931Observer1Nm = {
+inline constexpr std::array<std::array<double, 3>, 471> kCie1931Observer1Nm = {
     std::array<double, 3>{0.0001299, 0.000003917, 0.0006061},
     std::array<double, 3>{0.000145847, 0.000004393581, 0.0006808792},
     std::array<double, 3>{0.0001638021, 0.000004929604, 0.0007651456},

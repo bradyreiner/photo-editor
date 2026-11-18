@@ -1913,38 +1913,6 @@ bool has_explicit_limited_range_conversion(
       "out_color_matrix=bt709,setparams=range=limited"));
 }
 
-bool wait_for_persisted_job(const QString& job_id, int timeout_ms = 120000) {
-  QElapsedTimer timer;
-  timer.start();
-  while (timer.elapsed() < timeout_ms) {
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-    for (const auto& job : loadPersistedJobRecords()) {
-      if (job.job_id != job_id) {
-        continue;
-      }
-      if (job.status == QStringLiteral("Completed") || job.status == QStringLiteral("Failed")) {
-        if (job.status == QStringLiteral("Failed")) {
-          std::cerr << "timeline render job failed: " << job.error_message.toStdString() << '\n';
-          return false;
-        }
-        return true;
-      }
-    }
-  }
-  for (const auto& job : loadPersistedJobRecords()) {
-    if (job.job_id == job_id) {
-      std::cerr << "timeline render job timed out: id=" << job.job_id.toStdString()
-                << " status=" << job.status.toStdString()
-                << " progress=" << job.progress
-                << " error=" << job.error_message.toStdString() << '\n';
-      return false;
-    }
-  }
-  std::cerr << "timeline render job timed out without a matching persisted record: "
-            << job_id.toStdString() << '\n';
-  return false;
-}
-
 QString persisted_job_diagnostic(const QString& job_id) {
   QString load_error;
   const auto records = loadPersistedJobRecords(&load_error);
@@ -1967,10 +1935,14 @@ QString persisted_job_diagnostic(const QString& job_id) {
                    .arg(job_id, load_error);
 }
 
-bool wait_for_persisted_job_with_new_output(
+// A completed database job precedes asynchronous controller/catalog publication.
+// Match the exact revision's output so an older existing render cannot satisfy
+// consumers that immediately probe savedRenderPath().
+bool wait_for_published_job(
     const QString& job_id,
-    const QString& previous_output_path,
-    int timeout_ms = 120000) {
+    TimelineDocumentController& controller,
+    int timeout_ms = 120000,
+    const QString& previous_output_path = {}) {
   QElapsedTimer timer;
   timer.start();
   while (timer.elapsed() < timeout_ms) {
@@ -1980,18 +1952,24 @@ bool wait_for_persisted_job_with_new_output(
         continue;
       }
       if (job.status == QStringLiteral("Failed")) {
-        std::cerr << "timeline render revision failed: "
+        std::cerr << "timeline render job failed: "
                   << persisted_job_diagnostic(job_id).toStdString() << '\n';
         return false;
       }
       if (job.status == QStringLiteral("Completed") &&
-          job.output_path != previous_output_path) {
+          !job.output_path.isEmpty() && job.output_path != previous_output_path &&
+          controller.savedRenderPath() == job.output_path &&
+          QFileInfo(job.output_path).isFile()) {
         return true;
       }
     }
+    QThread::msleep(1);
   }
-  std::cerr << "timeline render revision timed out without a new completed output: "
-            << persisted_job_diagnostic(job_id).toStdString() << '\n';
+  std::cerr << "timeline render publication timed out: "
+            << persisted_job_diagnostic(job_id).toStdString()
+            << " controllerPath=" << controller.savedRenderPath().toStdString()
+            << " controllerOutputExists=" << QFileInfo(controller.savedRenderPath()).isFile()
+            << " previousOutput=" << previous_output_path.toStdString() << '\n';
   return false;
 }
 
@@ -7249,7 +7227,7 @@ bool run_timeline_publish_revision_workflow(const QString& workspace_path) {
   }
   const auto job_id = QStringLiteral("timeline-render-%1")
                           .arg(controller.timelineAssetId().section(':', 1));
-  if (!wait_for_persisted_job(job_id)) {
+  if (!wait_for_published_job(job_id, controller)) {
     return false;
   }
   auto render_path_for_job = [&job_id]() {
@@ -7294,7 +7272,7 @@ bool run_timeline_publish_revision_workflow(const QString& workspace_path) {
               << persisted_job_diagnostic(job_id).toStdString() << '\n';
     return false;
   }
-  if (!wait_for_persisted_job_with_new_output(job_id, revision_a_path)) {
+  if (!wait_for_published_job(job_id, controller, 120000, revision_a_path)) {
     std::cerr << "second Publish did not produce a new completed output after edits: "
               << persisted_job_diagnostic(job_id).toStdString() << '\n';
     return false;
@@ -15356,7 +15334,7 @@ int main(int argc, char** argv) {
     }
     const auto encoded_fit_job_id = QStringLiteral("timeline-render-%1").arg(
         encoded_fit_to_fill_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_persisted_job(encoded_fit_job_id, 30000)) {
+    if (!wait_for_published_job(encoded_fit_job_id, encoded_fit_to_fill_controller, 30000)) {
       std::cerr << "job runner recovery: finished=" << runner_recovery_finished
                 << " error=" << runner_recovery_error.toStdString() << '\n';
       return fail("Fit to Fill should render through the ordinary timeline export path");
@@ -15390,6 +15368,16 @@ int main(int argc, char** argv) {
         encoded_fit_duration > 0.70 || encoded_fit_pixel.size() < 3 ||
         static_cast<unsigned char>(encoded_fit_pixel.at(0)) < 150 ||
         static_cast<unsigned char>(encoded_fit_pixel.at(2)) > 90) {
+      std::cerr << "Fit to Fill render diagnostic: durationOk=" << encoded_fit_duration_ok
+                << " duration=" << encoded_fit_duration << " pixelBytes=" << encoded_fit_pixel.size()
+                << " red=" << (encoded_fit_pixel.size() < 3 ? -1 : static_cast<unsigned char>(encoded_fit_pixel.at(0)))
+                << " green=" << (encoded_fit_pixel.size() < 3 ? -1 : static_cast<unsigned char>(encoded_fit_pixel.at(1)))
+                << " blue=" << (encoded_fit_pixel.size() < 3 ? -1 : static_cast<unsigned char>(encoded_fit_pixel.at(2)))
+                << " probeError=" << encoded_fit_probe_error.toStdString() << '\n';
+      if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_TEST_KEEP_FAILURE_ARTIFACTS")) {
+        workspace.setAutoRemove(false);
+        std::cerr << "Fit to Fill synthetic artifacts retained at " << workspace.path().toStdString() << '\n';
+      }
       return fail("Fit to Fill export should preserve the target duration and render the replacement Source");
     }
 
@@ -15476,7 +15464,28 @@ int main(int argc, char** argv) {
       return fail("one undo should restore the complete source-channel interpretation");
     }
     channel_mapping_controller.redo();
-    if (!channel_mapping_controller.saveTimeline()) {
+    // Follow the real Timeline save action, which awaits checkpoint/catalog I/O
+    // asynchronously rather than assuming a synchronous journal is already idle.
+    const auto channel_save_accepted = channel_mapping_controller.saveTimelineAsync(false);
+    QElapsedTimer channel_save_timer;
+    channel_save_timer.start();
+    while (channel_save_accepted && channel_mapping_controller.timelineSaveInProgress() &&
+           channel_save_timer.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+      QThread::msleep(1);
+    }
+    if (!channel_save_accepted || channel_mapping_controller.timelineSaveInProgress() ||
+        channel_mapping_controller.timelineSaveFailed() ||
+        !QFileInfo::exists(channel_mapping_controller.savedDocumentPath())) {
+      std::cerr << "Channel mapping save diagnostic: status="
+                << channel_mapping_controller.status().toStdString()
+                << " accepted=" << channel_save_accepted
+                << " saveFailed=" << channel_mapping_controller.timelineSaveFailed()
+                << " saveInProgress=" << channel_mapping_controller.timelineSaveInProgress() << '\n';
+      if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_TEST_KEEP_FAILURE_ARTIFACTS")) {
+        workspace.setAutoRemove(false);
+        std::cerr << "Channel mapping synthetic artifacts retained at " << workspace.path().toStdString() << '\n';
+      }
       return fail("channel mapping truth fixture should save");
     }
     TimelineDocumentController reopened_channel_mapping_controller;
@@ -17501,7 +17510,7 @@ int main(int argc, char** argv) {
     }
     const auto mixer_render_job_id = QStringLiteral("timeline-render-%1").arg(
         mixer_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_persisted_job(mixer_render_job_id, 120000)) {
+    if (!wait_for_published_job(mixer_render_job_id, mixer_controller)) {
       return fail("the professional delivery package should finish through the background timeline job");
     }
     const QFileInfo delivery_master_info(mixer_controller.savedRenderPath());
@@ -17516,6 +17525,22 @@ int main(int argc, char** argv) {
     if (!delivery_master_info.exists() || !QFileInfo::exists(dialogue_stem) ||
         !QFileInfo::exists(music_stem) || delivery_frames.size() < 25 ||
         QFileInfo::exists(mixer_controller.savedRenderPath() + QStringLiteral(".passlog-0.log"))) {
+      std::cerr << "two-pass delivery diagnostic: master="
+                << delivery_master_info.absoluteFilePath().toStdString()
+                << " masterExists=" << delivery_master_info.exists()
+                << " stemRoot=" << delivery_stem_root.toStdString()
+                << " dialogueExists=" << QFileInfo::exists(dialogue_stem)
+                << " musicExists=" << QFileInfo::exists(music_stem)
+                << " frameRoot=" << delivery_frame_root.toStdString()
+                << " frameCount=" << delivery_frames.size()
+                << " passLogExists="
+                << QFileInfo::exists(mixer_controller.savedRenderPath() + QStringLiteral(".passlog-0.log"))
+                << ' ' << persisted_job_diagnostic(mixer_render_job_id).toStdString() << '\n';
+      if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_TEST_KEEP_FAILURE_ARTIFACTS")) {
+        workspace.setAutoRemove(false);
+        std::cerr << "two-pass delivery synthetic artifacts retained at "
+                  << workspace.path().toStdString() << '\n';
+      }
       return fail("two-pass delivery should leave one playable master, isolated WAV stems, numbered PNG frames, and no pass logs");
     }
     if (detected_channel_mean_volume_db(ffmpeg, dialogue_stem, 0) <
@@ -19278,7 +19303,7 @@ int main(int argc, char** argv) {
     }
     const auto title_job_id =
         QStringLiteral("timeline-render-%1").arg(title_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_persisted_job(title_job_id)) {
+    if (!wait_for_published_job(title_job_id, title_controller)) {
       return fail("title fixture render should complete through the shared job runner");
     }
     TimelineDocumentController reopened_title_controller;
@@ -19451,7 +19476,7 @@ int main(int argc, char** argv) {
         }
         const auto motion_job_id = QStringLiteral("timeline-render-%1")
                                        .arg(motion_controller.timelineAssetId().section(':', 1));
-        if (!wait_for_persisted_job(motion_job_id)) {
+        if (!wait_for_published_job(motion_job_id, motion_controller)) {
           return fail("title motion should render through the saved timeline render path");
         }
         TimelineDocumentController reopened_motion_controller;
@@ -19782,7 +19807,7 @@ int main(int argc, char** argv) {
     }
     const auto caption_job_id =
         QStringLiteral("timeline-render-%1").arg(caption_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_persisted_job(caption_job_id)) {
+    if (!wait_for_published_job(caption_job_id, caption_controller)) {
       return fail("caption burn-in render should complete through the shared job runner");
     }
     TimelineDocumentController reopened_caption_controller;
@@ -20757,7 +20782,7 @@ int main(int argc, char** argv) {
     }
     const auto keyframe_render_job_id = QStringLiteral("timeline-render-%1").arg(
         keyframe_render_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_persisted_job(keyframe_render_job_id)) {
+    if (!wait_for_published_job(keyframe_render_job_id, keyframe_render_controller)) {
       return fail("time-varying keyframe expressions should render through ffmpeg");
     }
     const auto early_keyframe_sample = process_bytes(
@@ -20908,7 +20933,7 @@ int main(int argc, char** argv) {
     newer_document_file.close();
     const auto render_job_id =
         QStringLiteral("timeline-render-%1").arg(render_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_persisted_job(render_job_id)) {
+    if (!wait_for_published_job(render_job_id, render_controller)) {
       return fail("queued timeline renders should complete through the shared job runner");
     }
 

@@ -59,6 +59,7 @@ def main():
         model = 'apps/desktop/src/search_model_install.h'
         sony = 'apps/desktop/qml/components/TimelineColorConsole.qml'
         jwt_path = 'tests/fixtures/customer-lease.json'
+        self_test = 'scripts/test-secret-scanner.py'
         thumbnail = next(r for r in policy['allowlists'] if r['targetRules'] == ['sourcegraph-access-token'])['regexes'][0][1:-1]
         write(ordinary, json.dumps({'canonical_plan_cache_key': 'render-plan-v2-fnv1a64-' + secrets.token_hex(8),
                                    'sampleCanonicalRenderPlanCacheKey': 'render-plan-v2-fnv1a64-' + secrets.token_hex(8),
@@ -67,6 +68,9 @@ def main():
         write(receipt, json.dumps({'service': 'sourcegraph', 'thumbnailInvalidationKey': 'sha1:' + thumbnail}))
         write(model, '{"tokenizer.json", "' + secrets.token_hex(32) + '", 1234};\n')
         write(sony, '{"key": "slog3-sgamut3-cine"}\n')
+        # Scan this actual source too: uncommitted test literals must not escape
+        # verification merely because a git-history scan cannot see them yet.
+        write(self_test, (ROOT / self_test).read_text())
         fixture = json.loads((ROOT / jwt_path).read_text())
         write(jwt_path, json.dumps(fixture))
         def scan():
@@ -91,6 +95,7 @@ def main():
             (receipt, 'sourcegraph_legacy_token', synthetic_credential(20)),
             (model, 'service_api_key', synthetic_credential(32)),
             (sony, 'service_api_key', synthetic_credential(32)),
+            (self_test, 'service_api_key', synthetic_credential(32)),
         ]:
             with (directory / relative).open('a') as output:
                 output.write('\n' + field + '="' + value + '"\n')
@@ -101,8 +106,8 @@ def main():
         fixture['tokens']['unexpectedProductionShapedSession'] = token
         write(jwt_path, json.dumps(fixture))
         status, findings = scan()
-        observed = {next((path for path in (ordinary, journal, receipt, model, sony, jwt_path) if r['File'].endswith(path)), '') for r in findings}
-        expected = {ordinary, journal, receipt, model, sony, jwt_path}
+        observed = {next((path for path in (ordinary, journal, receipt, model, sony, jwt_path, self_test) if r['File'].endswith(path)), '') for r in findings}
+        expected = {ordinary, journal, receipt, model, sony, jwt_path, self_test}
         if status != 1 or observed != expected:
             raise AssertionError('Synthetic credentials must remain detectable in every exception path')
         sourcegraph_findings = [r for r in findings if r['RuleID'] == 'sourcegraph-access-token']
@@ -111,7 +116,7 @@ def main():
         jwt_findings = [r for r in findings if r['RuleID'] == 'jwt']
         if len(jwt_findings) != 1 or not jwt_findings[0]['File'].endswith(jwt_path):
             raise AssertionError('JWT exception must match only the exact public test values')
-        print('Secret scanner policy passed: seven non-secret families accepted; synthetic credentials detected in all six exception paths.')
+        print('Secret scanner policy passed: reviewed benign values accepted; synthetic credentials detected in all seven exception paths.')
 
 
 if __name__ == '__main__':

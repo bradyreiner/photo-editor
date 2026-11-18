@@ -76,8 +76,9 @@ account subdomain `brady-reiner.workers.dev` and existing Pages project host
 `https://looksy-customers-staging.brady-reiner.workers.dev`; no customer Worker or D1
 resource was created. A mode-0600, git-ignored local handoff configuration at
 `services/customer-platform/wrangler.staging-handoff.local.jsonc` selects that
-account and proposed issuer. Unverified D1, Access, sender-recipient and merchant
-values remain explicit placeholders; it is not deployment-ready configuration.
+account, proposed issuer and the known Access team domain. D1, the Access app
+audience/MFA/owner identity, sender-recipient and merchant values remain unresolved;
+it is not deployment-ready configuration.
 
 The user completed Zero Trust Free onboarding. The root session then read the
 Zero Trust overview: team `noisy-base-e9d1`, plan **Zero Trust Free**. The ignored
@@ -96,13 +97,84 @@ file. [Pages already serves matching extensionless HTML routes and redirects `.h
 
 The source fix removes all six redundant checkout/legal HTML rewrites and retains
 Pages' native routing. Eleven checkout Node tests pass, including a regression
-check covering checkout, privacy, terms, refunds, support and licenses. The public
-checkout remains blocked until a new Pages deployment publishes this fix and a
-fresh GET confirms real checkout HTML without a loop, preserving `?_ptxn=`.
-The known Pages origin in the ignored handoff is a candidate, not proof of a
-working merchant checkout. Its public Paddle client configuration also remains
-an operator setup requirement. A local Pages emulator served the customer-service
-asset directory instead of the site; that diagnostic is excluded from acceptance.
+check covering checkout, privacy, terms, refunds, support and licenses. After the
+existing Git-integrated Pages project automatically deployed the pushed fix, the
+root session verified a public GET of
+[`/checkout.html`](https://photo-editor-48a.pages.dev/checkout.html) reached HTTP 200
+at `/checkout`, with the real Checkout — Looksy title and both `paddle-config.js`
+and `checkout-page.js` script references. Public checkout routing is now verified.
+
+The page's Paddle client configuration, provider products and authenticated
+transaction flow remain unconfigured. This HTTP proof does not establish a paid
+or sandbox purchase, webhook fulfillment, portal access or email delivery. A
+local Pages emulator served the customer-service asset directory instead of the
+site; that earlier diagnostic is excluded from acceptance.
+
+## Free-only private staging constraint
+
+The user requires staging to stay within the free allowances. The root session
+verified the account's Workers plans page: **Free, $0, Current plan**; the Paid
+$5/month-plus-usage upgrade was not selected. Zero Trust overview also shows
+**Zero Trust Free**, team `noisy-base-e9d1`. No plan, subscription, payment method,
+paid add-on or billing setting was changed by the agent. Usage counters and
+other account subscriptions still need review; these confirmations do not certify
+that every product in the account has no charges.
+
+Published Cloudflare allowances checked on November 18:
+
+| Product | Free allowance | Boundary relevant to this test |
+| --- | --- | --- |
+| [Workers](https://developers.cloudflare.com/workers/platform/limits/#daily-requests) | 100,000 requests/day, resetting at 00:00 UTC; 10 ms CPU/invocation | Daily request exhaustion returns error 1027; CPU exhaustion stops the invocation. The quota is shared by the account, including any Pages Functions. Keep the account on Free. |
+| [D1](https://developers.cloudflare.com/d1/platform/pricing/#what-happens-if-i-exceed-the-daily-limits-on-reads-and-writes-or-the-total-storage-limit-on-the-free-plan) | 5 million rows read/day, 100,000 rows written/day, 5 GB total storage | Daily exhaustion returns query errors; full storage blocks new writes/schema changes. [Free limits](https://developers.cloudflare.com/d1/platform/limits/) also cap each database at 500 MB and the account at 10 databases. |
+| [Pages](https://developers.cloudflare.com/pages/platform/limits/) | 500 builds/month; one concurrent build; 20-minute build timeout | Keep the existing project and limit unnecessary/preview builds. [Pure static requests are free and unlimited](https://developers.cloudflare.com/pages/functions/pricing/#static-asset-requests); adding Functions consumes Workers quota. |
+| [Zero Trust Free](https://developers.cloudflare.com/reference-architecture/architectures/sase/) | Up to 50 users | Allow only the owner to the staff application initially. [An authenticated user consumes one seat; further users are blocked when seats are exhausted](https://developers.cloudflare.com/cloudflare-one/team-and-resources/users/seat-management/). Looksy customer email sign-in does not need an Access seat. |
+| [Workers Logs through November 30](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing) | 200,000 log events/day; three-day retention | The private handoff keeps logs enabled with 1% head sampling. Sampling reduces volume; it is not a billing cap or a promise that every error is persisted. |
+| [Observability from December 1](https://developers.cloudflare.com/observability/pricing/) | Free: 0.5 GB ingested/day; seven-day retention | Free ingestion stops at its daily allowance and resumes at 00:00 UTC. Extra ingestion is unavailable on Free. Paid continues ingesting with charges. Recheck the transition before extending the test. |
+
+The ignored handoff now retains `observability.enabled=true` with
+`head_sampling_rate=0.01`, and sets `triggers.crons=[]` for the initial manual
+owner-only test. No production default was changed. With automatic cron paused,
+billing reconciliation, queued webhook retries and expiry cleanup do not run on
+a schedule; this configuration cannot qualify those operations. Webhooks and
+explicit customer refresh still run on request. Enable a reviewed bounded schedule
+only when testing scheduled recovery/retention, while still keeping the account
+on Free. Existing application rate limits reduce email/API abuse after a request
+arrives; they do not prevent all Worker invocations or guarantee account-wide
+quota availability.
+
+Before any deployment, confirm Workers Free and Zero Trust Free are still selected,
+review existing usage, keep the Access allow policy restricted to the owner's
+trusted identity, and resolve the remaining audience/MFA/identity and D1 fields.
+Use one customer Worker and one dedicated staging D1 database, keep the checkout
+site static, preserve `sandbox` billing, and avoid paid bindings, Logpush or other
+paid products. No paid upgrade is authorized to repair an exhausted quota or a
+Free-plan CPU failure; allow the test to stop and inspect usage instead. Pages
+build watch paths and preview-branch settings can reduce builds, but no hosted
+setting was changed in this audit.
+
+[Spending limits](https://developers.cloudflare.com/workers/platform/spend-management/)
+and alerts are distinct: alerts notify rather than block. Cloudflare's Workers
+spending limit can reject invocations, but explicitly has reporting/enforcement
+lag, excludes subscription fees and does not cover other products' charges. It is
+not an exact maximum bill and is not a substitute for remaining on Free. Neither
+source configuration nor a sampled log setting can certify a universal zero-cost
+account; external email, payment, crash-reporting and signing providers have
+separate plans that this Cloudflare audit did not verify. No email, payment or
+remote workload was generated while preparing these controls.
+
+## Remaining provider-account setup
+
+The user confirmed that neither a Paddle nor a Resend account exists yet. The
+next account steps are [Paddle sandbox signup](https://sandbox-login.paddle.com/signup)
+and [Resend signup](https://resend.com/signup), completed by the user with their
+own identity, business details and terms acceptance. The agent has not accepted
+terms, created either account, selected a paid plan or entered payment details.
+Use Paddle sandbox only. Select Resend's free option and keep transactional-overage
+opt-in off; do not enable paid overages to complete testing. After signup, obtain
+the sandbox product/price IDs, public checkout token, notification secret and
+sending API key through the private operator setup. Keep secret values out of
+source and chat. The owner's registered Resend email is still needed for the
+strict test-recipient field. No real payment or email has been generated.
 
 ## Cloudflare authorization boundary
 
@@ -116,7 +188,8 @@ copy the subdomain from the dashboard without changing authorization.
 and `workers_scripts:write`; it does not expose `workers:read` as a Wrangler login
 scope. Consequently, its minimal supported OAuth addition for this endpoint is
 `workers_scripts:write`, which also permits changes and must not be described as
-read-only. No OAuth scopes or credentials were changed during this remediation.
+read-only. The user completed the requested fresh account/user read-only login;
+no broader Worker deployment or Access scopes were granted.
 [Wrangler scope selection documentation](https://developers.cloudflare.com/workers/wrangler/commands/general/#login).
 
 Access application/policy inspection needs [Access: Apps and Policies Read](https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/get/).
@@ -143,14 +216,25 @@ frame-scheduling fixtures then passed three consecutive runs after correcting
 stale independent-selection setup and cross-thread event-order assumptions.
 Neither correction changed production preset or playback behavior.
 
-The broader timeline controller check remains failing. A stale audio assertion
-was corrected to require zero gain for placeholder video without a known audio
-stream and to prove gain editing independently on a declared audio clip. That
-section now passes. With a real bundled PostgreSQL runtime and isolated writable
-test directories, the run then reaches an actual Fit-to-Fill export assertion
-failure; duration/pixel diagnosis remains open. Program-scope and generated-source
-workflows passed. Do not infer that all desktop regressions pass from the focused
-results above.
+The broader timeline controller check exposed stale audio and asynchronous
+readiness assumptions. Placeholder video without a known audio stream must retain
+zero gain; a declared audio clip independently proves gain editing. The Fit-to-Fill
+test now awaits the controller's revision-specific output path after job completion.
+An exact-object A/B comparison with the pre-refactor timeline implementation
+produced identical real exports: duration 0.600 seconds and RGB 249/47/2, meeting
+the unchanged strict thresholds. Channel-mapping save/reopen now follows the UI's
+asynchronous save path and awaits completion rather than requiring an idle
+synchronous checkpoint immediately after redo. One shared bounded job wait now
+requires the exact completed output to exist and be published by the controller;
+repeated Publish must produce a new path, using the original deadlines.
+
+The final broad run passed those checks, professional two-pass delivery with
+isolated WAV stems/PNG frames and saved mixer reopen, then **failed the strict
+title-rendering pixel assertion** after 122.58 seconds. That actual pixel gate
+remains unresolved and was not weakened. Program-scope and generated-source
+workflows passed. All owned temporary PostgreSQL servers were stopped; user
+catalogs were untouched. Do not infer that all desktop regressions pass from the
+focused results above.
 
 Windows/Linux remediation includes explicit standard-library headers, portable
 move-only edit scopes and designated initializer order, UTF-8/path handling in
@@ -161,8 +245,8 @@ Actual Windows execution of those repairs remains a fresh-CI requirement.
 
 The duplication gate passed unchanged limits: **725 total / 504 production**
 clones against limits **732 / 505**. Permission admission continues to be enforced;
-shared helpers do not grant new access. The staged tracked-only source export
-inventoried 4,075 files and passed source closure. Two absolute local `node_modules`
+shared helpers do not grant new access. The final staged tracked-only source export
+inventoried 4,076 files and passed source closure. Two absolute local `node_modules`
 symlinks were removed from tracking, while their local installations were retained.
 New cache/dependency paths are ignored.
 
@@ -193,3 +277,27 @@ No installer, public release tag, new hosted customer service, payment or real
 email was published by these checks. Apple membership/Developer ID/notarization,
 Windows signing, isolated hosted accounts/admin authorization, sandbox purchases,
 crash delivery/symbols and two-version installed updates remain acceptance gates.
+
+## Follow-up CI findings and repairs
+
+The `a81e96f9` customer-platform workflow and Rust dependency audit pass. Windows
+headless compilation and six formerly failing checks pass; only the Mac-signing
+shell fixture remains failing on Git Bash. Linux headless compilation passes and
+only the media diagnosis test fails for missing FFmpeg. The follow-up source adds
+FFmpeg to the Linux test dependencies and makes the signing mock LF-only Bash
+functions with canonical shell paths, preserving all signing-order assertions.
+
+Sanitizer compilation exposed Clang's 256-level fold-expression limit while
+inferring the 471-entry CIE observer table. Its type and length are now explicit;
+all samples remain unchanged and three DCP/profile checks pass. A Rust 1.100
+Clippy sort idiom and the architecture guard's old inline location for exclusive
+private-file creation are also corrected; local Clippy and architecture checks
+pass without relaxed checks.
+
+The scanner's three new CI findings were public cache-prefix/profile literals in
+the scanner test source itself. An exact script/rule/literal exception handles
+those values; the guard now scans its actual current source and still detects
+synthetic credentials in all seven exception paths. A CI-equivalent scan of remote
+refs/tags and HEAD passes: 71 commits, 191.08 MB, zero findings. The larger earlier
+local scan included a local backup branch, explaining its different byte count.
+New CI must still verify the coordinated follow-up revision.

@@ -159,23 +159,26 @@ part of acceptance. Sparkle update archives require cryptographic signatures.
 
 ### Pushed CI snapshot
 
-`55932696` was pushed to `main` on November 18; the earlier PAT/push blocker is
-resolved. Its [customer-platform run](https://github.com/bradyreiner/photo-editor/actions/runs/44348880475)
+`a81e96f9` was pushed to `main` on November 18; the earlier PAT/push blocker is
+resolved. Its [customer-platform run](https://github.com/bradyreiner/photo-editor/actions/runs/44359197518)
 passes, including the native permission-admission audit. Its
-[native CI run](https://github.com/bradyreiner/photo-editor/actions/runs/44348880554)
-passes repository hygiene and the Windows headless build; Windows headless tests
-still fail seven portability/dependency checks. Linux builds fail missing
-standard-library includes, Rust formatting fails, source export finds tracked
-out-of-tree dependency symlinks, and Mac jobs are cancelled. Windows desktop
-was still building at this check. A cancelled job is not platform qualification.
+[native CI run](https://github.com/bradyreiner/photo-editor/actions/runs/44359197605)
+builds both Windows and Linux headless targets. Windows tests are down from seven
+failures to one Git Bash signing-fixture failure; Linux tests have one missing
+FFmpeg dependency. Sanitizer builds expose Clang's large-array deduction limit;
+Rust 1.100 Clippy and a moved architecture guard also need the follow-up repairs.
+Mac jobs are cancelled and source closure is skipped behind the failed guard.
+Windows desktop was still preparing dependencies. A cancelled or skipped job is
+not platform qualification.
 
-The [security run](https://github.com/bradyreiner/photo-editor/actions/runs/44348880405)
-fails on the earlier dependency graph and scanner setup. The next source revision
-repairs these failures, replaces the licensed scanner wrapper with the verified
-open-source CLI, and consolidates duplicate implementation without increasing
-the duplication limits. Local results and remaining hosted/installed-app gates
-are recorded in [the remediation record](releases/release-readiness-2026-11-18.md).
-Fresh CI must verify that revision before any platform is marked qualified.
+The [security run](https://github.com/bradyreiner/photo-editor/actions/runs/44359197196)
+passes Rust dependency auditing. Its scanner correctly flags three public literals
+newly committed in the scanner's own test; reviewed exact exceptions and a guard
+that scans its current source now pass locally. No actual credential was found.
+The follow-up repairs preserve signing assertions, color samples, permission
+admission and duplication limits. Local results and remaining hosted/installed-app
+gates are recorded in [the remediation record](releases/release-readiness-2026-11-18.md).
+Fresh CI must verify the follow-up revision before any platform is marked qualified.
 
 ## Implemented in the repository
 

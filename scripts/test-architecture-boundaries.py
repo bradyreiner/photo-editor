@@ -1239,6 +1239,9 @@ def check_maintainability_boundaries() -> list[str]:
         REPO_ROOT
         / "scripts/color/plan-rendering-migration-refresh.py"
     ).read_text(encoding="utf-8")
+    rendering_migration_private_publication = (
+        REPO_ROOT / "scripts/color/private_publication.py"
+    ).read_text(encoding="utf-8")
     rendering_migration_report_identity = (
         REPO_ROOT
         / "scripts/color/rendering_migration_report_identity.py"
@@ -1600,7 +1603,14 @@ def check_maintainability_boundaries() -> list[str]:
         or "unanimously approved independent review is required" not in
         rendering_migration_refresh_planner
         or '"humanApprovalGate"' not in rendering_migration_refresh_planner
-        or "os.O_EXCL" not in rendering_migration_refresh_planner
+        or "from private_publication import publish_new_file" not in
+        rendering_migration_refresh_planner
+        or "from private_publication import publish_new_file" not in
+        rendering_migration_chunk_validator
+        or "os.O_EXCL" not in rendering_migration_private_publication
+        or "0o600" not in rendering_migration_private_publication
+        or "D:P(A;;FA;;;" not in rendering_migration_private_publication
+        or "CreateFileW" not in rendering_migration_private_publication
         or "publish_new_file" not in rendering_migration_refresh_planner
         or '"ratingsFileSha256"' not in rendering_migration_refresh_planner
         or '"validatorScriptSha256"' not in rendering_migration_refresh_planner

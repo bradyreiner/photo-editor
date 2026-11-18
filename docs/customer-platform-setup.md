@@ -107,6 +107,14 @@ private path, edit these fields in the uncommitted staging input:
 }
 ```
 
+This private test must stay on **Workers Free** and **Zero Trust Free**. Confirm
+those plans and existing account usage before deployment; do not enable a paid
+upgrade to resolve quota or CPU errors. Keep one staging Worker/database and
+owner-only staff access. Free Workers/D1 quota exhaustion stops requests or
+queries; temporary test unavailability is preferable to a paid upgrade. Keep
+Resend Free with **Transactional Overages disabled** and Paddle in **sandbox**.
+See the [verified free-plan limits and local handoff controls](releases/release-readiness-2026-11-18.md#free-only-private-staging-constraint).
+
 Replace both uppercase placeholders with actual account values. The issuer must
 be the exact generated worker name `looksy-customers-staging`, your Cloudflare
 account's workers.dev subdomain, HTTPS and no port/path/trailing slash. The
