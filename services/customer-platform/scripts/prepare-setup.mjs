@@ -59,8 +59,20 @@ export function validateSetupInput(input, { appVersion } = {}) {
   const accessAudience = requiredString(input.accessAudience, 'accessAudience', 256);
   if (!/^[A-Za-z0-9_-]{16,256}$/.test(accessAudience)) fail('accessAudience must be a Cloudflare Access audience tag');
   rejectPlaceholder(accessAudience, 'accessAudience');
-  const storeId = requiredString(input.storeId, 'storeId', 20);
-  if (!/^[1-9][0-9]{0,19}$/.test(storeId)) fail('storeId must be a positive numeric Lemon Squeezy store ID');
+  const billingProvider=input.billingProvider??'lemon';
+  if(!['paddle','lemon'].includes(billingProvider)) fail('billingProvider must be paddle or lemon');
+  const storeId=billingProvider==='lemon'?requiredString(input.storeId, 'storeId', 20):'';
+  if (billingProvider==='lemon' && !/^[1-9][0-9]{0,19}$/.test(storeId)) fail('storeId must be a positive numeric Lemon Squeezy store ID');
+  const emailFrom=requiredString(input.emailFrom,'emailFrom',254);
+  if(!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(emailFrom)) fail('emailFrom must be a verified sender email address');
+  rejectPlaceholder(emailFrom,'emailFrom');
+  let paddleCheckoutOrigin='';
+  if(billingProvider==='paddle') {
+    paddleCheckoutOrigin=requiredString(input.paddleCheckoutOrigin,'paddleCheckoutOrigin',300);
+    const origin=new URL(paddleCheckoutOrigin);
+    if(origin.protocol!=='https:'||origin.origin!==paddleCheckoutOrigin) fail('paddleCheckoutOrigin must be an exact HTTPS origin');
+    rejectPlaceholder(paddleCheckoutOrigin,'paddleCheckoutOrigin');
+  }
   const signingKeyId = requiredString(input.signingKeyId, 'signingKeyId', 80);
   if (!/^[A-Za-z0-9_-]+$/.test(signingKeyId)) fail('signingKeyId may contain only letters, numbers, underscore, and hyphen');
 
@@ -72,10 +84,10 @@ export function validateSetupInput(input, { appVersion } = {}) {
   let hasPerpetual = false, hasSubscription = false;
   const productPolicy = {};
   for (const [variantId, raw] of entries) {
-    if (!/^[1-9][0-9]{0,19}$/.test(variantId)) fail('productPolicy keys must be positive numeric variant IDs');
+    if (!(billingProvider==='paddle'?/^pri_[a-z0-9]{26}$/:/^[1-9][0-9]{0,19}$/).test(variantId)) fail('productPolicy keys must be positive numeric variant IDs');
     if (!isPlainObject(raw)) fail(`productPolicy variant ${variantId} must be an object`);
-    const productId = requiredString(raw.productId, `productPolicy ${variantId} productId`, 20);
-    if (!/^[1-9][0-9]{0,19}$/.test(productId)) fail(`productPolicy ${variantId} productId must be numeric`);
+    const productId = requiredString(raw.productId, `productPolicy ${variantId} productId`, 100);
+    if (!(billingProvider==='paddle'?/^pro_[a-z0-9]{26}$/:/^[1-9][0-9]{0,19}$/).test(productId)) fail(`productPolicy ${variantId} productId must be numeric`);
     const plan = requiredString(raw.plan, `productPolicy ${variantId} plan`, 40);
     rejectPlaceholder(plan, `productPolicy ${variantId} plan`);
     if (raw.mode !== 'perpetual' && raw.mode !== 'subscription') fail(`productPolicy ${variantId} mode must be perpetual or subscription`);
@@ -108,7 +120,7 @@ export function validateSetupInput(input, { appVersion } = {}) {
   }
 
   return {
-    issuer, databaseId, accessTeamDomain, accessAudience, storeId, signingKeyId, productPolicy, trustedKeys,
+    issuer, databaseId, accessTeamDomain, accessAudience, storeId, signingKeyId, productPolicy, trustedKeys, billingProvider, emailFrom, paddleCheckoutOrigin,
     trialDays: boundedInteger(input.trialDays, 1, 60, 'trialDays'),
     leaseDays: boundedInteger(input.leaseDays, 1, 30, 'leaseDays'),
   };
@@ -150,7 +162,13 @@ function setupArtifacts(config, keyPair, outputPath) {
     ISSUER: config.input.issuer,
     SIGNING_KEY_ID: config.input.signingKeyId,
     LEMON_STORE_ID: config.input.storeId,
-    PRODUCT_POLICY: JSON.stringify(config.input.productPolicy),
+    PRODUCT_POLICY: config.input.billingProvider==='lemon'?JSON.stringify(config.input.productPolicy):'{}',
+    PADDLE_PRODUCT_POLICY:config.input.billingProvider==='paddle'?JSON.stringify(config.input.productPolicy):'{}',
+    PADDLE_ENVIRONMENT:'sandbox',
+    PADDLE_CHECKOUT_ORIGIN:config.input.paddleCheckoutOrigin,
+    PADDLE_ONE_TIME_PRICE_ID:config.input.billingProvider==='paddle'?Object.keys(config.input.productPolicy).find(key=>config.input.productPolicy[key].mode==='perpetual'):'',
+    PADDLE_SUBSCRIPTION_PRICE_ID:config.input.billingProvider==='paddle'?Object.keys(config.input.productPolicy).find(key=>config.input.productPolicy[key].mode==='subscription'):'',
+    EMAIL_FROM:config.input.emailFrom,
     ALLOW_TEST_PURCHASES: 'true',
     TRIAL_DAYS: String(config.input.trialDays),
     LEASE_DAYS: String(config.input.leaseDays),
@@ -225,7 +243,8 @@ export async function prepareSetup({ input, outputPath, keyDirectory, serviceDir
       publicKeyPath: outputs.files[1].path,
       secretsPath: outputs.files[2].path,
       desktopConfigPath: outputs.files[3].path,
-      pendingOperatorSecret: 'LEMON_API_KEY',
+      pendingOperatorSecret: validated.billingProvider==='paddle'?'PADDLE_API_KEY':'LEMON_API_KEY',
+      pendingOperatorSecrets:validated.billingProvider==='paddle'?['PADDLE_API_KEY','PADDLE_WEBHOOK_SECRET','RESEND_API_KEY']:['LEMON_API_KEY','RESEND_API_KEY'],
     };
   } catch (error) {
     await Promise.allSettled([...createdFiles].map(file => unlink(file)));

@@ -8,12 +8,12 @@ function fixture() {
   return {
     config: { workers_dev: false, preview_urls: false, assets: { run_worker_first: true },
       d1_databases: [{ binding: 'DB', database_id: '12345678-1234-1234-1234-123456789abc' }],
-      vars: { ISSUER: 'https://accounts.looksy.test', SIGNING_KEY_ID: 'looksy-staging-1',
+      vars: { EMAIL_FROM:'accounts@looksy.test', ISSUER: 'https://accounts.looksy.test', SIGNING_KEY_ID: 'looksy-staging-1',
         ACCESS_TEAM_DOMAIN: 'looksy.cloudflareaccess.com', ACCESS_AUDIENCE: 'access-app-audience',
         LEMON_STORE_ID: '1', TRIAL_DAYS: '14', LEASE_DAYS: '7', ALLOW_TEST_PURCHASES: 'true',
         PRODUCT_POLICY: JSON.stringify({ '5': { productId: '4', plan: 'studio', mode: 'perpetual', major: 0, features: ['editor', 'agent'], deviceLimit: 2 } }) } },
     publicKey: { kid: 'looksy-staging-1', publicKeyBase64: Buffer.from(pair.publicKey.export({ format: 'jwk' }).x, 'base64url').toString('base64') },
-    secrets: { ENTITLEMENT_PRIVATE_KEY: pair.privateKey.export({ format: 'pem', type: 'pkcs8' }),
+    secrets: { RESEND_API_KEY:'synthetic-email-credential', ENTITLEMENT_PRIVATE_KEY: pair.privateKey.export({ format: 'pem', type: 'pkcs8' }),
       LEMON_API_KEY: 'synthetic-provider-credential', LEMON_WEBHOOK_SECRET: 'w'.repeat(48), RATE_LIMIT_SECRET: 'r'.repeat(48) }
   };
 }
@@ -39,7 +39,7 @@ test('rejects issuer paths, placeholders, shared secrets and missing provider cr
   assert(!errors.join().includes('sensitive-value')); assert(!errors.join().includes('<replace me>'));
 });
 test('requires secret verification and rejects unconfigured checkout placeholders', () => {
-  const errors = checkSetup({ vars: { ISSUER: 'https://accounts.example.invalid', PRODUCT_POLICY: '{}' } });
+  const errors = checkSetup({ vars: { EMAIL_FROM:'accounts@looksy.test', ISSUER: 'https://accounts.example.invalid', PRODUCT_POLICY: '{}' } });
   assert(errors.some(error => error.includes('ISSUER'))); assert(errors.some(error => error.includes('Worker secrets')));
 });
 test('accepts explicitly selected production policy with test purchases disabled', () => {
@@ -86,4 +86,19 @@ test('rejects primary and trusted key IDs longer than the native 80-character li
   f.publicKey.kid = 'looksy-staging-1';
   f.publicKey.trustedKeys = { ['t'.repeat(81)]: Buffer.from(trusted, 'base64url').toString('base64') };
   assert(checkSetup(f.config, f).some(error => error.includes('trustedKeys contains an invalid key ID')));
+});
+
+test('Paddle requires separate sandbox policy, checkout origin, both offers and operator secrets',()=>{
+  const f=fixture(),one='pri_'+'a'.repeat(26),sub='pri_'+'b'.repeat(26),productId='pro_'+'c'.repeat(26);
+  Object.assign(f.config.vars,{LEMON_STORE_ID:'',PRODUCT_POLICY:'{}',PADDLE_ENVIRONMENT:'sandbox',PADDLE_CHECKOUT_ORIGIN:'https://billing.looksy.test',
+    PADDLE_ONE_TIME_PRICE_ID:one,PADDLE_SUBSCRIPTION_PRICE_ID:sub,PADDLE_PRODUCT_POLICY:JSON.stringify({
+      [one]:{productId,plan:'studio',mode:'perpetual',major:0,features:['editor'],deviceLimit:2},
+      [sub]:{productId,plan:'studio-monthly',mode:'subscription',major:0,features:['editor'],deviceLimit:2},
+    })});
+  Object.assign(f.secrets,{PADDLE_API_KEY:'synthetic-paddle-credential',PADDLE_WEBHOOK_SECRET:'paddle-notification-secret'});
+  assert.deepEqual(checkSetup(f.config,f),[]);
+  f.config.vars.PADDLE_ENVIRONMENT='live';assert(checkSetup(f.config,f).some(x=>x.includes('PADDLE_ENVIRONMENT')));
+  f.config.vars.PADDLE_ENVIRONMENT='sandbox';f.config.vars.PADDLE_SUBSCRIPTION_PRICE_ID=one;
+  assert(checkSetup(f.config,f).some(x=>x.includes('SUBSCRIPTION_PRICE_ID')));
+  f.secrets.RESEND_API_KEY='';assert(checkSetup(f.config,f).some(x=>x.includes('RESEND_API_KEY')));
 });

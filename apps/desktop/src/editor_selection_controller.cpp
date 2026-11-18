@@ -261,12 +261,12 @@ QVariantMap EditorPreviewController::selectionEdgeControls() const {
 }
 
 bool EditorPreviewController::setSelectionEdgeAdjustment(const QString& key, double value) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || !std::isfinite(value)) return false;
   if (key == QStringLiteral("featherPixels")) {
     const auto scale = selectionEdgeControls().value("featherPixelScale").toDouble();
     return scale > 0.0 && setSelectionEdgeAdjustment(QStringLiteral("feather"), value / scale);
   }
-  const auto customer_edit_scope = customer_edit_access_.enter();
-  if (!customer_edit_scope || !std::isfinite(value)) return false;
   auto masks = mask_session_.stack();
   const auto index = selection_edge_target(masks, activeMaskIndex());
   if (index < 0) return false;

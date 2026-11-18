@@ -58,6 +58,32 @@ class AdmissionAuditTests(unittest.TestCase):
         }))
         self.assertEqual(AUDIT.audit(root), [])
 
+    def test_renamed_photo_implementation_and_helper_remain_audited(self):
+        root = fixture_root(
+            {'edit': {'mode': 'edit', 'delegates': ['guardedHelper']}, 'read': 'read'},
+            'bool EditorPreviewController::read() { return true; }\n',
+        )
+        source = root / 'apps/desktop/src'
+        (source / 'editor_selection_controller.cpp').write_text(
+            'bool EditorPreviewController::edit() { return guardedHelper(); }\n',
+        )
+        helper = source / 'editor_layer_tools.inc'
+        helper.write_text(
+            'bool EditorPreviewController::guardedHelper() {\n'
+            '  const auto access = customer_edit_access_.enter();\n'
+            '  if (!access) return false;\n'
+            '  document_ = replacement; return true;\n'
+            '}\n',
+        )
+        self.assertEqual(AUDIT.audit(root), [])
+        helper.write_text(helper.read_text().replace(
+            '  const auto access = customer_edit_access_.enter();\n'
+            '  if (!access) return false;\n', '',
+        ))
+        errors = AUDIT.audit(root)
+        self.assertTrue(any('delegate target has no direct admission guard' in error
+                            for error in errors), errors)
+
     def test_balanced_parser_accepts_nested_body_and_ignores_comment_fake_guard(self):
         root = fixture_root(
             {'edit': 'edit', 'read': 'read'},

@@ -5,6 +5,9 @@ const root=new URL('../public/',import.meta.url);
 const customer={id:'lemon:demo:7',email:'photographer@example.test',created_at:1790000000,last_seen_at:1790180000};
 createServer(async(req,res)=>{
   const url=new URL(req.url,'http://127.0.0.1:8788');
+  if(url.pathname==='/admin/api/accounts') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({accounts:[{id:'account:demo',email:customer.email,created_at:1790000000,disabled:0,active_devices:1}],role:'admin'}));return;}
+  if(url.pathname==='/admin/api/vip') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({codes:[{id:'demo-vip',plan:'Private launch',features:'[\"editor\",\"agent\"]',major:0,device_limit:2,redemption_limit:5,redemptions:1,expires_at:1800000000,access_ends_at:1810000000,revoked:0}]}));return;}
+  if(url.pathname==='/admin/api/account') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({account:{id:'account:demo',email:customer.email,disabled:0},licenses:[],devices:[],audit:[]}));return;}
   if(url.pathname==='/admin/api/customers') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({customers:[customer],next:null,role:'admin'}));return;}
   if(url.pathname==='/admin/api/customer') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({
     licenses:[{id:'10',plan:'Studio',mode:'perpetual',status:'active',blocked:0,device_limit:2,expires_at:null}],

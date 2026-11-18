@@ -4,6 +4,18 @@
 <form id="search"><label for="query">Email or customer ID</label><div class="search"><input id="query" type="search" autocomplete="off" placeholder="Exact email or ID"><button>Search</button></div></form>
 <p id="status" role="status">Loading…</p><section id="customers" aria-label="Customers"></section><button id="next" hidden>Next page</button>
 <section id="ops" aria-label="Operations" hidden><h2>Service health</h2><p id="ops-summary" class="muted"></p><div id="webhooks"></div></section>
+<section id="accounts-panel"><h2>Looksy accounts</h2><div id="accounts"></div></section>
+<section id="vip-panel" hidden><h2>Complimentary access</h2><button id="create-vip" type="button">Create VIP code</button><p id="vip-result" role="status"></p><div id="vip-codes"></div></section>
+<dialog id="vip-dialog"><form id="vip-form"><h2>Create VIP code</h2>
+<label>Plan name<input name="plan" value="VIP" maxlength="40" required></label>
+<label>Included features (comma separated)<input name="features" value="editor,agent" required></label>
+<label>App major version<input name="major" type="number" min="0" max="1000" value="0" required></label>
+<label>Devices per account<input name="deviceLimit" type="number" min="1" max="100" value="2" required></label>
+<label>Accounts that can redeem<input name="redemptionLimit" type="number" min="1" max="1000" value="1" required></label>
+<label>Redeem before<input name="expiresAt" type="datetime-local" required></label>
+<label>Access ends<input name="accessEndsAt" type="datetime-local" required></label>
+<label>Reason<textarea name="reason" maxlength="500" required></textarea></label>
+<p id="vip-error" role="alert"></p><div class="actions"><button type="button" id="vip-cancel">Cancel</button><button>Create code</button></div></form></dialog>
 <section id="detail" hidden><h2 id="customer-name"></h2><div id="privacy-actions" class="actions"></div><h3>Licenses</h3><div id="licenses"></div><h3>Devices</h3><div id="devices"></div><h3>Support history</h3><div id="audit"></div></section>
 <dialog id="action-dialog"><form id="action-form"><h2 id="action-title"></h2><label for="reason">Support reason</label><textarea id="reason" required maxlength="500"></textarea><p id="action-error" role="alert"></p><div class="actions"><button id="cancel" type="button">Cancel</button><button>Confirm</button></div></form></dialog>
 </main></body></html>

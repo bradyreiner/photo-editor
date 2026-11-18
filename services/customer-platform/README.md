@@ -1,28 +1,17 @@
 # Looksy customer operations
 
-Worker + D1 service, Cloudflare Access staff dashboard, Lemon Squeezy purchase
-validation, and device-bound Ed25519 desktop entitlements. No production resources
-are established by the checked-in setup; live deployment has not been verified
-in this checkout. The checked-in configuration intentionally cannot issue leases.
+Worker + D1 customer accounts, Cloudflare Access staff tools, Paddle billing and
+legacy Lemon Squeezy validation, with device-bound Ed25519 desktop entitlements.
+Verified email-code sign-in/recovery uses a configured Resend sender. Admins can
+create, revoke and reissue scoped VIP codes and manage customer sessions. No hosted
+resources, actual emails or merchant transactions are created by these source changes.
 
-**Launch planning update — 2026-11-17:** customer email sign-in/recovery and an
-admin-issued VIP grant workflow are required but not implemented. The pushed
-customer CI job also fails its edit-admission audit on newer APIs. Follow the
-[production launch checklist](../../docs/production-launch-checklist.md) before
-calling the installed customer journey ready.
-
-The existing Lemon Squeezy billing adapter is also pending replacement. The
-vendor announcement and dates are recorded in the production launch checklist.
-The provider-specific setup below documents the current implementation; choose
-the replacement/migration path before provisioning a new paid launch.
-
-For the guided account/guest/key/role setup, start with
-[Customer platform setup](../../docs/customer-platform-setup.md). `npm run
-setup:prepare` prepares staging files, `npm run setup:check` checks configuration
-and signing-key consistency without printing values, and `npm run setup:staff`
-generates audited enrollment/removal SQL for review. These commands do not deploy
-or contact a remote database. Customer sign-in remains license-key activation;
-email/password login is not implemented.
+Start with [Customer platform setup](../../docs/customer-platform-setup.md) for the
+current Paddle staging walkthrough and account/VIP behavior. `setup:prepare` writes
+private staging scaffolding, `setup:check` validates it offline, and `setup:staff`
+generates audited staff enrollment SQL. The checked-in configuration intentionally
+fails closed. Follow the [launch checklist](../../docs/production-launch-checklist.md)
+for installed-app, live delivery and signed-release acceptance.
 
 ## Product policy
 
@@ -60,46 +49,28 @@ the older transitive dependency. Revalidate both when updating the test plugin.
 `node scripts/preview-admin.mjs` serves synthetic dashboard records on loopback
 port 8788; it is only a visual fixture and never an authentication fallback.
 
-## Configure an isolated staging environment
+## Configure isolated staging
 
-1. Create a D1 database and put its real ID in a staging copy of `wrangler.jsonc`.
-   Set an HTTPS origin as `ISSUER`. The origin must exactly match the desktop
-   `LOOKSY_CUSTOMER_API_URL`, including any port and with no trailing slash/path.
-2. Generate an Ed25519 signing key outside the repository:
-   `node scripts/generate-signing-key.mjs /secure/looksy-staging looksy-1`.
-   Back up the PEM in your secret manager. The `.public.json` file contains the
-   only key material that belongs in the desktop build.
-3. Put `ENTITLEMENT_PRIVATE_KEY`, `LEMON_API_KEY`, `LEMON_WEBHOOK_SECRET`, and
-   `RATE_LIMIT_SECRET` into Worker secrets using `wrangler secret put`. For PEM,
-   redirect the key file into stdin. Never pass secret values as CLI arguments.
-   `.dev.vars.example` documents local names; `.dev.vars` is ignored.
-4. Set the store ID and explicit variant policies. Example shape (replace all IDs):
+Use [the staging walkthrough](../../docs/customer-platform-setup.md#prepare-staging)
+and `setup.example.json`. Set `billingProvider: "paddle"`, real sandbox `pri_` and
+`pro_` policy mappings, both purchase offers, an approved checkout origin, a verified
+sender email, D1/Access identifiers and a distinct signing key ID. Keep the database,
+merchant account credentials, sender, signing keys and domain separate from production.
 
-   ```json
-   {
-     "101": {"productId":"10","plan":"studio","mode":"perpetual","major":0,"features":["editor","agent"],"deviceLimit":2},
-     "102": {"productId":"11","plan":"studio-monthly","mode":"subscription","major":0,"features":["editor","agent"],"deviceLimit":2}
-   }
-   ```
+Add actual `RESEND_API_KEY`, `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET` to the private
+secrets file. Paddle supplies its notification secret; preparation generates only
+Looksy signing/rate-limit keys and the optional legacy Lemon webhook secret.
+Apply every migration, including accounts/VIP and Paddle. Enforce Access/MFA on
+`/admin*`, not customer `/v1/*` routes. Nothing here deploys automatically.
 
-   Enable license-key generation and key delivery for both provider products.
-   Set `ALLOW_TEST_PURCHASES=true` only in staging. The production environment
-   must have separate database, keys, secrets and store mappings, with this false.
-5. Apply all files in `migrations/` with `wrangler d1 migrations apply` against
-   the intended environment. These tables must never be added to a local photo
-   catalog. The only schema in this service is hosted customer operations.
-6. Create an Access application for `/admin*`, enforce MFA, and set its exact
-   `ACCESS_TEAM_DOMAIN` and `ACCESS_AUDIENCE`. Enroll staff subjects in the `staff`
-   table through the operator's authenticated Cloudflare account. Use an Access
-   subject ID, not an email supplied by the browser. Missing roles fail closed.
-   Do not protect `/v1/*` with an interactive staff login.
-7. Configure the provider webhook URL `/v1/webhooks/lemon` with its secret and
-   the order, license, subscription and subscription-payment events supported in
-   `src/index.ts`. A missing initial subscription event is recovered by an exact
-   order-item subscription query; invalid mappings still fail closed.
-8. Deploy staging only after reviewing the configuration. Set both checkout URLs
-   and price labels in the release configuration; keep commercial approval false
-   until the purchase, cancellation, refund and recovery checks pass.
+Paddle checkout is created by the authenticated service for one fixed offer and
+quantity. Fulfillment requires the matching stored checkout, exact owner/product
+and completed provider payment; caller metadata or email never grants access.
+Portal URLs are authenticated and constrained to Paddle's approved host. Webhooks
+are signed, deduplicated and refresh canonical provider state; the hourly job also
+recovers missed checkout fulfillment. Partial refunds are denied until reviewed.
+The legacy Lemon adapter remains available for existing verified keys, with
+numeric `storeId` and explicit policies when `billingProvider: "lemon"` is chosen.
 
 Canonical state is fetched from the provider, not trusted from event attributes.
 Duplicates are deduplicated by digest. Failed receipts persist attempts and a
@@ -121,7 +92,7 @@ The installation bearer credential lives in macOS Keychain or Windows Credential
 Manager, and only its hash is stored on the server. Cached signed leases use app
 preferences. A failed activation of a different key preserves valid existing
 access; a confirmed refresh revocation removes it. An outage never extends the
-original signed expiry. Customer IDs come from the provider; raw license keys
+original signed expiry. Looksy account IDs are independent of merchant customer IDs; raw license keys
 are transient request fields and are not stored in D1 or diagnostic logs.
 
 The Account panel lists devices and confirms revoke/deactivate actions. Purchase
@@ -211,9 +182,15 @@ npm run database:recovery -- rehearse --backup /private/backups/looksy-snapshot-
 ```
 
 Backup is read-only and checks SQLite integrity/foreign keys. Its manifest records
-SHA-256 plus counts and content fingerprints for every table. Rehearsal checks
+SHA-256 plus counts and content fingerprints for every table and schema/index/trigger
+fingerprints. Restore creates every table before loading rows so ALTER-added
+account foreign keys can reference tables that appear later in a D1 export. Rehearsal checks
 the checksum before importing into fresh isolated local D1 state and comparing
-every restored row. It never restores remote data or overwrites existing artifacts.
+every restored row. The required schema includes all account, authentication, VIP
+and Paddle tables (18 service tables); a snapshot missing them is rejected. This
+prevents a partial restore from silently losing sessions, grants or purchase links.
+Older pre-account snapshots need a separately reviewed migration rehearsal.
+It never restores remote data or overwrites existing artifacts.
 Keep artifacts encrypted and apply a reviewed retention schedule. Before any
 production recovery, replay current billing and staff/device revocations and test
 leases in staging before switching traffic.
@@ -221,7 +198,8 @@ Restoring an older database must not silently undo refunds or support blocks.
 Back up signing keys separately. Losing a key cannot be fixed just by changing a
 server environment variable; use the compiled overlap procedure above.
 
-Rate-limit buckets expire after two minutes; successful webhook receipts after
+IP rate-limit buckets expire after two minutes and email/device delivery buckets after fifteen minutes;
+email challenges expire after ten minutes and are removed by the hourly job after one day; successful webhook receipts after
 90 days. Customer/license/device and staff audit records are retained until an
 operator processes a verified retention/deletion request. No legally determined
 retention schedule is configured. Staff may export a scoped customer record;
@@ -235,7 +213,10 @@ separately. Backups and historical audit reasons need separate retention handlin
 ## Operational alerts
 
 `GET /admin/api/operations` requires verified Access identity and an enrolled staff
-role. It reports counts, retry/backlog age and stale license reconciliation. Run
+role. It reports counts, retry/backlog age, stale license reconciliation and unfulfilled
+Paddle checkouts. Pending checkout counts include unpaid/abandoned checkouts; they
+are not proof of failed payments. More than 100 due checkouts raises a reconciliation
+capacity alert; the hourly worker currently checks at most ten checkouts per run. Run
 `npm run operations:check -- response.json` on a private response file, or
 `npm run operations:monitor` with `LOOKSY_OPERATIONS_ORIGIN`,
 `LOOKSY_ACCESS_CLIENT_ID` and `LOOKSY_ACCESS_CLIENT_SECRET` from a secret manager.
@@ -257,7 +238,7 @@ separately and review restore reports.
 
 ## Remaining launch gates
 
-- Real products, prices, key-email delivery and both checkout journeys.
+- Real Paddle sandbox/live products, prices, verified email delivery and both checkout journeys.
 - Operator approval of the revised terms/privacy/refund disclosures for activation,
   recurring billing, offline grace, devices, retention and cancellation. Earlier
   receipt-only rights are preserved; commercial approval remains false.

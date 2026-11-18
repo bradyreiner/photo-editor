@@ -1,5 +1,9 @@
 #include "customer_credential_store.h"
 
+#include <QCryptographicHash>
+#include <QHash>
+#include <QUrl>
+
 #ifdef Q_OS_MACOS
 #include <Security/Security.h>
 #elif defined(Q_OS_WIN)
@@ -8,21 +12,34 @@
 #endif
 
 namespace photo_editor::desktop {
+QString customerCredentialScope(const QString& issuer) {
+  if (issuer.isEmpty()) return QStringLiteral("installation-v1");
+  QUrl canonical(issuer);
+  canonical.setScheme(canonical.scheme().toLower());
+  canonical.setHost(canonical.host().toLower());
+  if ((canonical.scheme() == QStringLiteral("https") && canonical.port() == 443) ||
+      (canonical.scheme() == QStringLiteral("http") && canonical.port() == 80)) canonical.setPort(-1);
+  canonical = canonical.adjusted(QUrl::NormalizePathSegments | QUrl::StripTrailingSlash);
+  return QStringLiteral("installation-v2-") + QString::fromLatin1(QCryptographicHash::hash(
+      canonical.toEncoded(QUrl::FullyEncoded), QCryptographicHash::Sha256).toHex());
+}
 #ifdef Q_OS_MACOS
 namespace {
-CFMutableDictionaryRef query() {
+CFMutableDictionaryRef query(const QString& scope) {
   auto result = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
   CFDictionarySetValue(result, kSecClass, kSecClassGenericPassword);
   CFDictionarySetValue(result, kSecAttrService, CFSTR("Looksy customer access"));
-  CFDictionarySetValue(result, kSecAttrAccount, CFSTR("installation-v1"));
+  const auto account = CFStringCreateWithCString(nullptr, scope.toUtf8().constData(), kCFStringEncodingUTF8);
+  CFDictionarySetValue(result, kSecAttrAccount, account);
+  CFRelease(account);
   return result;
 }
 }
 #endif
 
-QByteArray loadCustomerCredential(QString* error) {
+QByteArray loadCustomerCredential(QString* error, const QString& issuer) {
 #ifdef Q_OS_MACOS
-  auto attributes = query();
+  auto attributes = query(customerCredentialScope(issuer));
   CFDictionarySetValue(attributes, kSecReturnData, kCFBooleanTrue);
   CFTypeRef data = nullptr;
   const auto status = SecItemCopyMatching(attributes, &data);
@@ -38,7 +55,8 @@ QByteArray loadCustomerCredential(QString* error) {
   return result;
 #elif defined(Q_OS_WIN)
   PCREDENTIALW stored = nullptr;
-  if (!CredReadW(L"Looksy/customer-installation-v1", CRED_TYPE_GENERIC, 0, &stored)) {
+  const auto target = (QStringLiteral("Looksy/customer-") + customerCredentialScope(issuer)).toStdWString();
+  if (!CredReadW(target.c_str(), CRED_TYPE_GENERIC, 0, &stored)) {
     if (GetLastError() != ERROR_NOT_FOUND) *error = QStringLiteral("Windows Credential Manager is unavailable.");
     return {};
   }
@@ -46,14 +64,15 @@ QByteArray loadCustomerCredential(QString* error) {
   CredFree(stored);
   return result;
 #else
+  Q_UNUSED(issuer);
   *error = QStringLiteral("Secure license storage is not supported on this platform.");
   return {};
 #endif
 }
 
-bool saveCustomerCredential(const QByteArray& credential, QString* error) {
+bool saveCustomerCredential(const QByteArray& credential, QString* error, const QString& issuer) {
 #ifdef Q_OS_MACOS
-  auto attributes = query();
+  auto attributes = query(customerCredentialScope(issuer));
   const auto data = CFDataCreate(nullptr, reinterpret_cast<const UInt8*>(credential.constData()), credential.size());
   const void* keys[] = {kSecValueData};
   const void* values[] = {data};
@@ -69,28 +88,32 @@ bool saveCustomerCredential(const QByteArray& credential, QString* error) {
 #elif defined(Q_OS_WIN)
   CREDENTIALW stored{};
   stored.Type = CRED_TYPE_GENERIC;
-  stored.TargetName = const_cast<wchar_t*>(L"Looksy/customer-installation-v1");
+  const auto target = (QStringLiteral("Looksy/customer-") + customerCredentialScope(issuer)).toStdWString();
+  stored.TargetName = const_cast<wchar_t*>(target.c_str());
   stored.CredentialBlobSize = static_cast<DWORD>(credential.size());
   stored.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char*>(credential.constData()));
   stored.Persist = CRED_PERSIST_LOCAL_MACHINE;
   if (CredWriteW(&stored, 0)) return true;
 #else
   Q_UNUSED(credential);
+  Q_UNUSED(issuer);
 #endif
   *error = QStringLiteral("Your installation credential could not be saved securely.");
   return false;
 }
 
-bool clearCustomerCredential(QString* error) {
+bool clearCustomerCredential(QString* error, const QString& issuer) {
 #ifdef Q_OS_MACOS
-  auto attributes = query();
+  auto attributes = query(customerCredentialScope(issuer));
   const auto status = SecItemDelete(attributes);
   CFRelease(attributes);
   if (status == errSecSuccess || status == errSecItemNotFound) return true;
 #elif defined(Q_OS_WIN)
-  if (CredDeleteW(L"Looksy/customer-installation-v1", CRED_TYPE_GENERIC, 0) ||
+  const auto target = (QStringLiteral("Looksy/customer-") + customerCredentialScope(issuer)).toStdWString();
+  if (CredDeleteW(target.c_str(), CRED_TYPE_GENERIC, 0) ||
       GetLastError() == ERROR_NOT_FOUND) return true;
 #else
+  Q_UNUSED(issuer);
   *error = QStringLiteral("Secure license storage is not supported on this platform.");
   return false;
 #endif
@@ -101,16 +124,22 @@ bool clearCustomerCredential(QString* error) {
 namespace {
 class SystemCustomerCredentialStore final : public CustomerCredentialStore {
  public:
-  QByteArray load(QString* error) override { return loadCustomerCredential(error); }
+  explicit SystemCustomerCredentialStore(QString issuer) : issuer_(std::move(issuer)) {}
+  QByteArray load(QString* error) override { return loadCustomerCredential(error, issuer_); }
   bool save(const QByteArray& credential, QString* error) override {
-    return saveCustomerCredential(credential, error);
+    return saveCustomerCredential(credential, error, issuer_);
   }
-  bool clear(QString* error) override { return clearCustomerCredential(error); }
+  bool clear(QString* error) override { return clearCustomerCredential(error, issuer_); }
+ private:
+  QString issuer_;
 };
 }
 
-CustomerCredentialStore& systemCustomerCredentialStore() {
-  static SystemCustomerCredentialStore store;
-  return store;
+CustomerCredentialStore& systemCustomerCredentialStore(const QString& issuer) {
+  static QHash<QString, std::shared_ptr<SystemCustomerCredentialStore>> stores;
+  const auto scope = customerCredentialScope(issuer);
+  auto& store = stores[scope];
+  if (!store) store = std::make_shared<SystemCustomerCredentialStore>(issuer);
+  return *store;
 }
 }  // namespace photo_editor::desktop

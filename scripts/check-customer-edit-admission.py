@@ -160,19 +160,19 @@ def cpp_methods(source, class_name):
 
 def source_for(root, stem):
     source_root = root / 'apps/desktop/src'
-    paths = sorted(source_root.glob(stem + '*.cpp'))
-    if stem == 'timeline_document_controller':
-        # Tracking implementations are split into focused include units that
-        # are compiled by timeline_document_controller.cpp. They remain part
-        # of the controller's QML mutation surface and must not escape this
-        # admission audit merely because their definitions live in .inc files.
-        paths.extend(sorted(source_root.glob('timeline_*_controller.inc')))
-    text = '\n'.join(path.read_text() for path in paths)
-    if stem == 'editor_preview_controller':
-        migration = source_root / 'editor_rendering_migration.inc'
-        if migration.exists():
-            text += '\n' + migration.read_text()
-    return text
+    class_name = ''.join(word.title() for word in stem.split('_'))
+    # Controllers are split across translation units and included fragments
+    # whose names do not always share the main controller's filename prefix.
+    # Inspect every definition for this class, including helper methods used
+    # by reviewed delegates. A file rename must not remove admission coverage.
+    texts = []
+    for path in sorted(source_root.iterdir()):
+        if path.suffix not in {'.cpp', '.inc'}:
+            continue
+        source = path.read_text()
+        if re.search(r'\b' + re.escape(class_name) + r'::', source):
+            texts.append(source)
+    return '\n'.join(texts)
 
 
 def admission_call(body, mode):

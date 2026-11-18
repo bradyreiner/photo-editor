@@ -10,6 +10,8 @@ export function evaluateOperations(snapshot, { now = Math.floor(Date.now() / 100
     ['pending', 'failed', 'due', 'maxAttempts'].every(key => integer(snapshot.webhooks[key])) &&
     integer(snapshot.licenses.stale) &&
     (snapshot.webhooks.oldestPendingAt === null || integer(snapshot.webhooks.oldestPendingAt));
+  const checkouts=snapshot?.checkouts;
+  if(checkouts && (!integer(checkouts.pending)||!integer(checkouts.due)||(checkouts.oldestPendingAt!==null && !integer(checkouts.oldestPendingAt)))) throw new TypeError('Invalid checkout operations response');
   if (!valid) throw new TypeError('Invalid operations response');
   const alerts = [];
   if (snapshot.generatedAt > now + 60 || now - snapshot.generatedAt > maxSnapshotAge) alerts.push('operations_snapshot_stale');
@@ -17,6 +19,7 @@ export function evaluateOperations(snapshot, { now = Math.floor(Date.now() / 100
   if (snapshot.webhooks.maxAttempts >= 8) alerts.push('webhook_retry_exhausted');
   if (snapshot.webhooks.failed > 0) alerts.push('webhook_processing_failures');
   if (snapshot.licenses.stale > 0) alerts.push('license_reconciliation_stale');
+  if(checkouts && checkouts.due>100) alerts.push('checkout_reconciliation_capacity');
   return { healthy: alerts.length === 0, alerts, generatedAt: snapshot.generatedAt };
 }
 

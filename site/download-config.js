@@ -37,8 +37,8 @@ window.LooksyDownloads = {
     "mac-arm",
     "windows"
   ],
-  "paymentProvider": "lemonsqueezy",
-  "purchaseRecoveryUrl": "https://app.lemonsqueezy.com/my-orders/",
+  "paymentProvider": "paddle",
+  "purchaseRecoveryUrl": "",
   "priceLabel": "",
   "subscriptionPurchaseUrl": "",
   "subscriptionPriceLabel": "",

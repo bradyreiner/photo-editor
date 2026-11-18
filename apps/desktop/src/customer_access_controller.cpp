@@ -10,13 +10,12 @@
 #include <QJsonDocument>
 #include <QNetworkReply>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QUrl>
 
 namespace photo_editor::desktop {
 namespace {
-constexpr auto lease_key = "customerAccess/lease";
-constexpr auto clock_key = "customerAccess/lastObservedTime";
 
 CustomerAccessConfig compiledConfig() {
   CustomerAccessConfig config;
@@ -33,6 +32,11 @@ CustomerAccessConfig compiledConfig() {
   return config;
 }
 
+CustomerAccessConfig completeConfig(CustomerAccessConfig config) {
+  if (config.issuer.isEmpty()) config.issuer = config.apiUrl;
+  return config;
+}
+
 QByteArray newCredential() {
   QByteArray random(32, Qt::Uninitialized);
   for (int offset = 0; offset < random.size(); offset += 4) {
@@ -45,12 +49,12 @@ QByteArray newCredential() {
 }  // namespace
 
 CustomerAccessController::CustomerAccessController(QObject* parent)
-    : CustomerAccessController(compiledConfig(), &systemCustomerCredentialStore(), parent) {}
+    : CustomerAccessController(compiledConfig(), nullptr, parent) {}
 
 CustomerAccessController::CustomerAccessController(CustomerAccessConfig config,
     CustomerCredentialStore* credential_store, QObject* parent)
-    : QObject(parent), config_(std::move(config)),
-      credential_store_(credential_store ? credential_store : &systemCustomerCredentialStore()), network_(this) {
+    : QObject(parent), config_(completeConfig(std::move(config))),
+      credential_store_(credential_store ? credential_store : &systemCustomerCredentialStore(config_.issuer)), network_(this) {
   if (!configured()) {
     status_ = config_.apiUrl.isEmpty()
         ? QStringLiteral("This version uses receipt-based ownership. Keep your purchase receipt.")
@@ -72,6 +76,14 @@ CustomerAccessController::CustomerAccessController(CustomerAccessConfig config,
   }
 }
 
+QString CustomerAccessController::leaseKey() const {
+  return config_.issuer.isEmpty() ? QStringLiteral("customerAccess/lease") :
+      QStringLiteral("customerAccess/%1/lease").arg(customerCredentialScope(config_.issuer));
+}
+QString CustomerAccessController::clockKey() const {
+  return config_.issuer.isEmpty() ? QStringLiteral("customerAccess/lastObservedTime") :
+      QStringLiteral("customerAccess/%1/lastObservedTime").arg(customerCredentialScope(config_.issuer));
+}
 bool CustomerAccessController::configured() const {
   const QUrl url(config_.apiUrl);
   const bool test_loopback = config_.allowInsecureLoopbackForTests && url.scheme() == QStringLiteral("http") &&
@@ -111,12 +123,12 @@ bool CustomerAccessController::ensureCredential() {
 void CustomerAccessController::loadLease() {
   if (!configured() || credential_.isEmpty()) return;
   QSettings settings;
-  const auto result = verifyCustomerLeaseWithTrustedKeys(settings.value(lease_key).toByteArray(),
+  const auto result = verifyCustomerLeaseWithTrustedKeys(settings.value(leaseKey()).toByteArray(),
       config_.primaryPublicKey, config_.primaryKeyId, config_.trustedKeysJson, config_.issuer, credential_,
-      QDateTime::currentSecsSinceEpoch(), settings.value(clock_key, 0).toLongLong(), config_.appMajor);
+      QDateTime::currentSecsSinceEpoch(), settings.value(clockKey(), 0).toLongLong(), config_.appMajor);
   claims_ = result.claims;
   if (result.valid()) {
-    settings.setValue(clock_key, qMax(settings.value(clock_key, 0).toLongLong(), QDateTime::currentSecsSinceEpoch()));
+    settings.setValue(clockKey(), qMax(settings.value(clockKey(), 0).toLongLong(), QDateTime::currentSecsSinceEpoch()));
     status_ = QStringLiteral("Access is active. Offline access is available until %1.").arg(expires());
   } else status_ = result.error;
   emit changed();
@@ -126,7 +138,7 @@ void CustomerAccessController::request(const QString& path, const QJsonObject& i
   if (replacement_credential.isEmpty() && method != QByteArrayLiteral("GET") && !ensureCredential()) return;
   if (authenticated && credential_.isEmpty()) return;
   busy_ = true;
-  if (path != QStringLiteral("/v1/devices")) status_ = QStringLiteral("Contacting the license service…");
+  if (path != QStringLiteral("/v1/devices") && path != QStringLiteral("/v1/account")) status_ = QStringLiteral("Contacting the license service…");
   emit changed();
   QNetworkRequest network_request(QUrl(config_.apiUrl + path));
   network_request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -145,13 +157,69 @@ void CustomerAccessController::request(const QString& path, const QJsonObject& i
     reply->deleteLater();
     const auto object = QJsonDocument::fromJson(data).object();
     busy_ = false;
+    if (path == QStringLiteral("/v1/account/logout")) {
+      finishSignOut(http == 200 && network_error == QNetworkReply::NoError && object.value(QStringLiteral("ok")).toBool());
+      return;
+    }
     if (http == 200 && network_error == QNetworkReply::NoError) {
+      if (path == QStringLiteral("/v1/billing/checkout") || path == QStringLiteral("/v1/billing/portal")) {
+        const QUrl destination(object.value(QStringLiteral("url")).toString());
+        const auto safe_origin = [&destination](const QString& value) {
+          const QUrl configured(value);
+          return configured.scheme() == QStringLiteral("https") && !configured.host().isEmpty() &&
+              destination.host() == configured.host() && destination.port(443) == configured.port(443);
+        };
+        const bool paddle_host = destination.port(443) == 443 && (destination.host() == QStringLiteral("paddle.com") ||
+            destination.host().endsWith(QStringLiteral(".paddle.com")));
+        const bool permitted = destination.isValid() && destination.scheme() == QStringLiteral("https") &&
+            destination.userInfo().isEmpty() && (paddle_host || safe_origin(config_.purchaseUrl) ||
+                safe_origin(config_.subscriptionPurchaseUrl) || safe_origin(config_.billingPortalUrl));
+        if (!permitted || !QDesktopServices::openUrl(destination))
+          status_ = QStringLiteral("The secure billing page could not be opened. Contact support.");
+        else status_ = QStringLiteral("Billing opened in your browser. Refresh access after completing checkout.");
+        emit changed(); return;
+      }
+      if (path == QStringLiteral("/v1/account/email/request")) {
+        email_challenge_id_ = object.value(QStringLiteral("challengeId")).toString();
+        status_ = email_challenge_id_.isEmpty()
+            ? QStringLiteral("Sign-in could not start. Try again.")
+            : QStringLiteral("Check your email for the eight-digit sign-in code.");
+        emit changed();
+        return;
+      }
+      if (path == QStringLiteral("/v1/account")) {
+        applyAccount(object);
+        emit changed();
+        return;
+      }
+      if (path == QStringLiteral("/v1/account/email/verify")) {
+        const auto account = object.value(QStringLiteral("account")).toObject();
+        if (account.value(QStringLiteral("id")).toString().isEmpty() || account.value(QStringLiteral("email")).toString().isEmpty()) {
+          status_ = QStringLiteral("Sign-in could not be confirmed. Your existing access was preserved.");
+          emit changed(); return;
+        }
+        email_challenge_id_.clear();
+        applyAccount(object);
+        // Account identity is separate from editing entitlement. An expired trial
+        // can sign in successfully without receiving a new offline lease.
+        if (!object.value(QStringLiteral("lease")).isString()) {
+          QSettings().remove(leaseKey());
+          claims_ = {};
+          devices_.clear(); current_installation_id_.clear();
+          status_ = QStringLiteral("Signed in. Choose a license or redeem a VIP code to enable editing.");
+          emit changed();
+          loadAccount();
+          return;
+        }
+      }
+      if (object.contains(QStringLiteral("account"))) applyAccount(object);
       if (path == QStringLiteral("/v1/devices")) {
         devices_.clear();
         const auto array = object.value(QStringLiteral("devices")).toArray();
         for (const auto& item : array) if (item.isObject()) devices_.append(item.toObject().toVariantMap());
         current_installation_id_ = object.value(QStringLiteral("current")).toString();
         emit changed();
+        loadAccount();
         return;
       }
       if (path == QStringLiteral("/v1/devices/revoke")) {
@@ -182,12 +250,34 @@ void CustomerAccessController::request(const QString& path, const QJsonObject& i
     const auto code = object.value(QStringLiteral("error")).toString();
     const bool refresh_revoked = path == QStringLiteral("/v1/refresh") && (http == 401 || http == 403);
     const bool auth_revoked = authenticated &&
-        (code == QStringLiteral("device_revoked") || code == QStringLiteral("authentication_required"));
+        (code == QStringLiteral("device_revoked") || code == QStringLiteral("authentication_required") ||
+         code == QStringLiteral("account_disabled") || code == QStringLiteral("account_session_expired"));
     if (refresh_revoked || auth_revoked) {
-      QSettings().remove(lease_key); claims_ = {};
+      QSettings().remove(leaseKey()); claims_ = {};
       devices_.clear(); current_installation_id_.clear();
+      account_id_.clear(); account_email_.clear(); account_licenses_.clear();
     }
-    if (path == QStringLiteral("/v1/devices")) status_ = QStringLiteral("Could not load your device list. Try again when the service is available.");
+    if (code == QStringLiteral("account_session_required") || code == QStringLiteral("account_sign_in_required") ||
+        code == QStringLiteral("account_disabled") || code == QStringLiteral("account_session_expired")) {
+      account_id_.clear(); account_email_.clear(); account_licenses_.clear();
+    }
+    if (code == QStringLiteral("invalid_email_code") || code == QStringLiteral("invalid_code") ||
+        code == QStringLiteral("challenge_expired") || code == QStringLiteral("invalid_or_expired_code"))
+      status_ = QStringLiteral("That sign-in code is invalid or expired. Request a new code and try again.");
+    else if (code == QStringLiteral("sign_out_required")) status_ = QStringLiteral("Sign out before signing in with a different email address.");
+    else if (code == QStringLiteral("account_session_expired")) status_ = QStringLiteral("Your account session has expired. Sign in again with an email code.");
+    else if (code == QStringLiteral("account_disabled")) status_ = QStringLiteral("This account is disabled. Contact support.");
+    else if (code == QStringLiteral("rate_limited")) status_ = QStringLiteral("Too many attempts. Wait a moment before trying again.");
+    else if (path == QStringLiteral("/v1/account/email/request")) status_ = QStringLiteral("Sign-in email could not be sent. Check the address and try again.");
+    else if (path == QStringLiteral("/v1/account/email/verify")) status_ = QStringLiteral("Sign-in could not be completed. Request a new code and try again.");
+    else if (path.startsWith(QStringLiteral("/v1/billing/"))) status_ = QStringLiteral("Billing could not be opened. Sign in and try again when the service is available.");
+    else if (path == QStringLiteral("/v1/vip/redeem")) status_ = QStringLiteral("That VIP code could not be redeemed. Check its expiry and usage limit or contact support.");
+    else if (path == QStringLiteral("/v1/account")) {
+      // Network failure must not change verified offline editing access.
+      if (auth_revoked) status_ = QStringLiteral("This session has ended. Sign in again or contact support.");
+      emit changed(); return;
+    }
+    else if (path == QStringLiteral("/v1/devices")) status_ = QStringLiteral("Could not load your device list. Try again when the service is available.");
     else if (code == QStringLiteral("device_limit")) status_ = QStringLiteral("Your device limit is reached. Revoke an old device or contact support.");
     else if (code == QStringLiteral("invalid_license")) status_ = QStringLiteral("That purchase key could not be verified. Check it and try again.");
     else if (http == 401 || http == 403) status_ = QStringLiteral("Access could not be renewed. Check your purchase or contact support.");
@@ -195,6 +285,7 @@ void CustomerAccessController::request(const QString& path, const QJsonObject& i
     else status_ = QStringLiteral("The license service is unavailable. Existing offline access remains valid until its expiry.");
     if (path == QStringLiteral("/v1/devices/revoke")) deactivation_pending_ = false;
     emit changed();
+    if (path == QStringLiteral("/v1/refresh")) loadAccount();
   });
 }
 
@@ -203,7 +294,7 @@ void CustomerAccessController::applyVerifiedLease(const QByteArray& token, const
   QSettings settings;
   const auto verified = verifyCustomerLeaseWithTrustedKeys(token, config_.primaryPublicKey, config_.primaryKeyId,
       config_.trustedKeysJson, config_.issuer, credential, QDateTime::currentSecsSinceEpoch(),
-      settings.value(clock_key, 0).toLongLong(), config_.appMajor);
+      settings.value(clockKey(), 0).toLongLong(), config_.appMajor);
   if (!verified.valid()) {
     status_ = failure_status.isEmpty() ? verified.error : failure_status;
     emit changed();
@@ -219,10 +310,11 @@ void CustomerAccessController::applyVerifiedLease(const QByteArray& token, const
     credential_ = credential;
     pending_recovery_credential_.clear();
     pending_recovery_key_digest_.clear();
+    account_id_.clear(); account_email_.clear(); account_licenses_.clear();
     devices_.clear(); current_installation_id_.clear();
   }
-  settings.setValue(lease_key, token);
-  settings.setValue(clock_key, qMax(settings.value(clock_key, 0).toLongLong(), QDateTime::currentSecsSinceEpoch()));
+  settings.setValue(leaseKey(), token);
+  settings.setValue(clockKey(), qMax(settings.value(clockKey(), 0).toLongLong(), QDateTime::currentSecsSinceEpoch()));
   claims_ = verified.claims;
   status_ = QStringLiteral("Access is active. Offline access is available until %1.").arg(expires());
   emit changed();
@@ -231,10 +323,79 @@ void CustomerAccessController::applyVerifiedLease(const QByteArray& token, const
 
 void CustomerAccessController::clearLocalAccess(bool clear_credential) {
   if (clear_credential) credential_.clear();
+  pending_recovery_credential_.clear(); pending_recovery_key_digest_.clear();
   claims_ = {}; devices_.clear(); current_installation_id_.clear();
-  QSettings settings; settings.remove(lease_key); settings.remove(clock_key);
+  account_id_.clear(); account_email_.clear(); account_licenses_.clear(); email_challenge_id_.clear();
+  QSettings settings; settings.remove(leaseKey()); settings.remove(clockKey());
 }
 
+void CustomerAccessController::applyAccount(const QJsonObject& response) {
+  const auto account = response.value(QStringLiteral("account")).toObject();
+  account_id_ = account.value(QStringLiteral("id")).toString();
+  account_email_ = account.value(QStringLiteral("email")).toString();
+  if (response.contains(QStringLiteral("licenses"))) {
+    account_licenses_.clear();
+    for (const auto& item : response.value(QStringLiteral("licenses")).toArray())
+      if (item.isObject()) account_licenses_.append(item.toObject().toVariantMap());
+  }
+  if (account_id_.isEmpty()) account_licenses_.clear();
+}
+void CustomerAccessController::requestEmailSignIn(const QString& email) {
+  const auto address = email.trimmed().toLower();
+  if (!QRegularExpression(QStringLiteral("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")).match(address).hasMatch() || address.size() > 254) {
+    status_ = QStringLiteral("Enter a valid email address."); emit changed(); return;
+  }
+  if (!ensureCredential()) return;
+  request(QStringLiteral("/v1/account/email/request"), {{QStringLiteral("email"), address}}, true);
+}
+void CustomerAccessController::verifyEmailSignIn(const QString& code) {
+  const auto value = code.trimmed();
+  if (email_challenge_id_.isEmpty() || !QRegularExpression(QStringLiteral("^[0-9]{8}$")).match(value).hasMatch()) {
+    status_ = QStringLiteral("Enter the eight-digit code from your email."); emit changed(); return;
+  }
+  request(QStringLiteral("/v1/account/email/verify"), {{QStringLiteral("challengeId"), email_challenge_id_},
+      {QStringLiteral("code"), value}}, true);
+}
+void CustomerAccessController::cancelEmailSignIn() {
+  if (busy_) return;
+  email_challenge_id_.clear(); emit changed();
+}
+void CustomerAccessController::loadAccount() {
+  if (!configured() || busy_ || credential_.isEmpty()) return;
+  request(QStringLiteral("/v1/account"), {}, true, QByteArrayLiteral("GET"));
+}
+void CustomerAccessController::selectAccountLicense(const QString& license_id) {
+  if (!signedIn() || license_id.trimmed().isEmpty()) return;
+  request(QStringLiteral("/v1/account/license"), {{QStringLiteral("licenseId"), license_id.trimmed()}}, true);
+}
+void CustomerAccessController::redeemVip(const QString& code) {
+  if (!signedIn() || code.trimmed().isEmpty()) return;
+  request(QStringLiteral("/v1/vip/redeem"), {{QStringLiteral("code"), code.trimmed()}}, true);
+}
+void CustomerAccessController::startCheckout(const QString& offer) {
+  if (!signedIn() || (offer != QStringLiteral("one-time") && offer != QStringLiteral("subscription"))) return;
+  request(QStringLiteral("/v1/billing/checkout"), {{QStringLiteral("offer"), offer}}, true);
+}
+void CustomerAccessController::openBillingPortal() {
+  if (!signedIn()) return;
+  request(QStringLiteral("/v1/billing/portal"), {}, true);
+}
+void CustomerAccessController::signOut() {
+  if (!configured() || busy_ || credential_.isEmpty()) return;
+  request(QStringLiteral("/v1/account/logout"), {}, true);
+}
+void CustomerAccessController::finishSignOut(bool server_revoked) {
+  QString error;
+  const bool cleared = credential_store_->clear(&error);
+  const auto previous_account_id = account_id_;
+  const auto previous_account_email = account_email_;
+  clearLocalAccess(cleared);
+  if (!cleared) { account_id_ = previous_account_id; account_email_ = previous_account_email; }
+  if (!cleared) status_ = QStringLiteral("Sign-out could not remove the secure credential. Unlock secure storage and retry. %1").arg(error);
+  else if (!server_revoked) status_ = QStringLiteral("Signed out on this computer. The service could not confirm session revocation.");
+  else status_ = QStringLiteral("Signed out. You can still view, save, and export existing work.");
+  emit changed();
+}
 void CustomerAccessController::startTrial() {
   if (!ensureCredential()) return;
   request(QStringLiteral("/v1/trial"), {{QStringLiteral("credential"), QString::fromLatin1(credential_)}}, false);

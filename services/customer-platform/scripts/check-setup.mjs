@@ -35,13 +35,20 @@ export function checkSetup(config, { environment = 'staging', publicKey, secrets
   requireField(/^[A-Za-z0-9_-]{1,80}$/.test(vars.SIGNING_KEY_ID || ''), 'SIGNING_KEY_ID is invalid');
   requireField(/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(vars.ACCESS_TEAM_DOMAIN || ''), 'ACCESS_TEAM_DOMAIN is missing or invalid');
   requireField(populated(vars.ACCESS_AUDIENCE), 'ACCESS_AUDIENCE is missing');
-  requireField(/^\d{1,20}$/.test(vars.LEMON_STORE_ID || ''), 'LEMON_STORE_ID is missing or invalid');
+  const paddle=typeof vars.PADDLE_PRODUCT_POLICY==='string' && vars.PADDLE_PRODUCT_POLICY!=='{}';
+  requireField(/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(vars.EMAIL_FROM||'') && populated(vars.EMAIL_FROM),'EMAIL_FROM requires a verified sender');
+  if(paddle) {
+    requireField(vars.PADDLE_ENVIRONMENT===(environment==='production'?'live':'sandbox'),'PADDLE_ENVIRONMENT must match selected environment');
+    let origin;try{origin=new URL(vars.PADDLE_CHECKOUT_ORIGIN);}catch{}
+    requireField(origin?.protocol==='https:' && origin.origin===vars.PADDLE_CHECKOUT_ORIGIN && populated(vars.PADDLE_CHECKOUT_ORIGIN),'PADDLE_CHECKOUT_ORIGIN requires exact HTTPS origin');
+  }
+  if(!paddle) requireField(/^\d{1,20}$/.test(vars.LEMON_STORE_ID || ''), 'LEMON_STORE_ID is missing or invalid');
   requireField(integer(vars.TRIAL_DAYS, 1, 60), 'TRIAL_DAYS must be 1 to 60');
   requireField(integer(vars.LEASE_DAYS, 1, 30), 'LEASE_DAYS must be 1 to 30');
   requireField(vars.ALLOW_TEST_PURCHASES === (environment === 'production' ? 'false' : 'true'),
     'ALLOW_TEST_PURCHASES must match the selected environment');
   let policies;
-  try { policies = JSON.parse(vars.PRODUCT_POLICY); } catch { /* reported below */ }
+  try { policies = JSON.parse(paddle?vars.PADDLE_PRODUCT_POLICY:vars.PRODUCT_POLICY); } catch { /* reported below */ }
   requireField(policies && typeof policies === 'object' && !Array.isArray(policies) && Object.keys(policies).length > 0,
     'PRODUCT_POLICY needs explicit variant mappings');
   if (policies && typeof policies === 'object') {
@@ -49,7 +56,7 @@ export function checkSetup(config, { environment = 'staging', publicKey, secrets
     requireField(selectedMajor !== undefined, 'appVersion must be a semantic version in X.Y.Z form');
     const perpetualMajors = new Set();
     for (const [variant, policy] of Object.entries(policies)) {
-      requireField(/^\d{1,20}$/.test(variant) && policy && /^\d{1,20}$/.test(policy.productId || '') &&
+      requireField((paddle?/^pri_[a-z0-9]{26}$/:/^\d{1,20}$/).test(variant) && policy && (paddle?/^pro_[a-z0-9]{26}$/:/^\d{1,20}$/).test(policy.productId || '') &&
         populated(policy.plan) && policy.plan.length <= 40 && ['perpetual', 'subscription'].includes(policy.mode) &&
         integer(policy.major, 0, 1000) && integer(policy.deviceLimit, 1, 100) &&
         Array.isArray(policy.features) && policy.features.every(feature => ['editor', 'agent', 'beta'].includes(feature)),
@@ -59,6 +66,10 @@ export function checkSetup(config, { environment = 'staging', publicKey, secrets
         requireField(selectedMajor === undefined || Number(policy.major) === selectedMajor,
           'perpetual PRODUCT_POLICY major must match the selected app version major');
       }
+    }
+    if(paddle) {
+      requireField(policies[vars.PADDLE_ONE_TIME_PRICE_ID]?.mode==='perpetual','PADDLE_ONE_TIME_PRICE_ID needs perpetual policy');
+      requireField(policies[vars.PADDLE_SUBSCRIPTION_PRICE_ID]?.mode==='subscription','PADDLE_SUBSCRIPTION_PRICE_ID needs subscription policy');
     }
     requireField(perpetualMajors.size <= 1, 'perpetual PRODUCT_POLICY variants must use one app major');
   }
@@ -80,7 +91,9 @@ export function checkSetup(config, { environment = 'staging', publicKey, secrets
   }
   if (!secrets) errors.push('Worker secrets have not been checked; supply --secrets-file');
   else {
-    requireField(populated(secrets.LEMON_API_KEY), 'LEMON_API_KEY is missing');
+    requireField(populated(secrets.RESEND_API_KEY),'RESEND_API_KEY is missing');
+    if(paddle) {requireField(populated(secrets.PADDLE_API_KEY),'PADDLE_API_KEY is missing');requireField(populated(secrets.PADDLE_WEBHOOK_SECRET),'PADDLE_WEBHOOK_SECRET is missing');}
+    else requireField(populated(secrets.LEMON_API_KEY), 'LEMON_API_KEY is missing');
     for (const name of ['LEMON_WEBHOOK_SECRET', 'RATE_LIMIT_SECRET']) {
       requireField(populated(secrets[name]) && secrets[name].length >= 32, `${name} needs at least 32 characters`);
     }

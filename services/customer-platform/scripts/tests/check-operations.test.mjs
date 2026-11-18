@@ -24,3 +24,9 @@ test('invalid file CLI errors never echo file contents or raw filesystem message
   assert.equal(await runCli(['/missing/private-customer-email.json'], { stdout: { write() {} }, stderr: { write(text) { message += text; } } }), 2);
   assert.doesNotMatch(message, /customer-email/);
 });
+
+test('Paddle reconciliation backlog is bounded and malformed counts are rejected',()=>{
+  const input=healthy();input.checkouts={pending:101,due:101,oldestPendingAt:1};
+  assert.deepEqual(evaluateOperations(input,{now:10000}).alerts,['checkout_reconciliation_capacity']);
+  input.checkouts.due=-1;assert.throws(()=>evaluateOperations(input));
+});

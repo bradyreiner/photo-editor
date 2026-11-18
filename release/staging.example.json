@@ -1,0 +1,12 @@
+{
+  "environment": "staging",
+  "customerApiUrl": "https://accounts-staging.example.invalid",
+  "entitlementPublicKey": "REPLACE_WITH_STAGING_PUBLIC_KEY",
+  "entitlementKeyId": "looksy-staging-1",
+  "policyMajor": 0,
+  "sparkleFeedUrl": "https://downloads-staging.example.invalid/mac/appcast.xml",
+  "sparklePublicKey": "REPLACE_WITH_SEPARATE_SPARKLE_PUBLIC_KEY",
+  "downloadBaseUrl": "https://downloads-staging.example.invalid/artifacts/",
+  "windowsAppInstallerUrl": "https://downloads-staging.example.invalid/windows/Looksy.appinstaller",
+  "sentryDsn": ""
+}

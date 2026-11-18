@@ -24,12 +24,17 @@ def paid_environment():
         "LOOKSY_ACCESS_MODE": "paid-perpetual",
         "LOOKSY_SUPPORTED_PLATFORMS": "mac-arm",
         "LOOKSY_PURCHASE_URL": "https://fixture.lemonsqueezy.com/buy/example",
+        "LOOKSY_PURCHASE_RECOVERY_URL": "https://fixture.looksy.test/account",
         "LOOKSY_PRICE_LABEL": "Fixture price",
         "LOOKSY_COMMERCIAL_TERMS_APPROVED": "true",
     }
 
 
 class CommerceTests(unittest.TestCase):
+    def test_paddle_selected_and_unknown_provider_rejected(self):
+        self.assertEqual(self.config({}, require_ready=False)["paymentProvider"], "paddle")
+        with self.assertRaisesRegex(ValueError, "paymentProvider"):
+            self.config({"LOOKSY_PAYMENT_PROVIDER": "unknown"}, require_ready=False)
     def test_cmake_checkout_and_rotation_configuration_rejects_unsafe_build_values(self):
         import base64
         source = (ROOT / "cmake/CustomerPlatform.cmake").read_text()

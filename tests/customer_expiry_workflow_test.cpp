@@ -113,6 +113,11 @@ int main(int argc, char** argv) {
   timeline.addSelectedClipEffect("Exposure");
   const auto timeline_clips = timeline.clips();
   active = false;
+  for (const auto& result : {timeline.prepareCompoundRenderForAutomation("missing"),
+                             timeline.startCompoundRenderForAutomation("missing")}) {
+    if (result.value("ok").toBool() || result.value("errorCode").toString() != "access_required")
+      return fail("Expired automation cannot prepare or start new compound renders");
+  }
   timeline.removeSelectedClip(); timeline.undo(); timeline.addTitleClip();
   timeline.setSelectedFramePerspectiveX(0.7);
   timeline.setSelectedFramePerspectiveY(0.5);

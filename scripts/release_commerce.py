@@ -73,7 +73,7 @@ def commerce_config(get_value=None, *, require_ready: bool = True) -> dict:
     config = {
         "accessMode": mode,
         "supportedPlatforms": platforms,
-        "paymentProvider": "lemonsqueezy",
+        "paymentProvider": get_value("LOOKSY_PAYMENT_PROVIDER", product["paymentProvider"]),
         "purchaseUrl": get_value("LOOKSY_PURCHASE_URL", product["purchaseUrl"]),
         "supportPaymentUrl": get_value("LOOKSY_SUPPORT_PAYMENT_URL"),
         "purchaseRecoveryUrl": get_value("LOOKSY_PURCHASE_RECOVERY_URL", product["purchaseRecoveryUrl"]),
@@ -89,6 +89,8 @@ def commerce_config(get_value=None, *, require_ready: bool = True) -> dict:
 
 
 def validate_commerce(config: dict, *, require_ready: bool) -> None:
+    if config.get("paymentProvider") not in ("paddle", "lemonsqueezy"):
+        raise ValueError("paymentProvider must be paddle or lemonsqueezy")
     mode = config.get("accessMode")
     if mode not in ACCESS_MODES:
         raise ValueError("accessMode must be free-support, paid-perpetual or paid-both")

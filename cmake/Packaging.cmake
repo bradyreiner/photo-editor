@@ -83,6 +83,13 @@ function(photo_editor_install_desktop_runtime target_name)
     BUNDLE DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+  if(LOOKSY_ENABLE_CRASH_REPORTING AND WIN32)
+    # POST_BUILD places the handler beside the development executable, but
+    # install(TARGETS) does not copy that sibling into the MSIX staging tree.
+    install(PROGRAMS "${LOOKSY_CRASHPAD_HANDLER}"
+      DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME crashpad_handler.exe)
+  endif()
+
   if(APPLE)
     install(
       FILES "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"

@@ -60193,6 +60193,10 @@ QVariantMap TimelineDocumentController::prepareCompoundClipForAutomation(
 
 QVariantMap TimelineDocumentController::prepareCompoundRenderForAutomation(
     const QString& compound_clip_id) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return {{QStringLiteral("ok"), false},
+      {QStringLiteral("errorCode"), QStringLiteral("access_required")},
+      {QStringLiteral("error"), QStringLiteral("Editing requires an active trial or purchase.")}};
   const auto normalized_id = compound_clip_id.trimmed().toLower();
   const auto index = flattenedIndexForClipId(normalized_id);
   auto* compound = index >= 0 ? clipAt(index) : nullptr;
@@ -60341,6 +60345,10 @@ QVariantMap TimelineDocumentController::prepareCompoundRenderForAutomation(
 
 QVariantMap TimelineDocumentController::startCompoundRenderForAutomation(
     const QString& compound_clip_id) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return {{QStringLiteral("ok"), false},
+      {QStringLiteral("errorCode"), QStringLiteral("access_required")},
+      {QStringLiteral("error"), QStringLiteral("Editing requires an active trial or purchase.")}};
   const auto normalized_id = compound_clip_id.trimmed().toLower();
   const auto launch_spec = task_compound_launch_specs_.value(normalized_id);
   QString error_message;
@@ -60571,6 +60579,7 @@ QVariantMap TimelineDocumentController::compoundRenderStatusForAutomation(
 
 QVariantMap TimelineDocumentController::cancelCompoundRenderForAutomation(
     const QString& compound_clip_id) {
+  const auto customer_edit_scope = customer_edit_access_.restore();
   const auto normalized_id = compound_clip_id.trimmed().toLower();
   auto queued = std::find_if(
       compound_render_queue_.begin(), compound_render_queue_.end(),
@@ -60827,6 +60836,7 @@ QVariantMap TimelineDocumentController::settleCompoundRenderForAutomation(
     const QString& error_message,
     const QVariantMap& producer_launch_spec,
     const QVariantMap& producer_receipt) {
+  const auto customer_edit_scope = customer_edit_access_.restore();
   const auto normalized_id = compound_clip_id.trimmed().toLower();
   const auto normalized_status = terminal_status.trimmed().toLower();
   const QSet<QString> allowed_statuses{

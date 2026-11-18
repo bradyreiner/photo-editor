@@ -3,7 +3,7 @@
 The release targets **Apple silicon Macs and Windows x64**, distributed directly
 from the website as a signed/notarized DMG and a signed MSIX/App Installer. The
 configured offer includes subscriptions and one-time licenses. The current code
-uses Lemon Squeezy, but the billing provider now requires a replacement decision.
+selects Paddle for new sales and retains Lemon Squeezy compatibility for existing buyers.
 See [commercial-launch.md](commercial-launch.md). Intel Mac items apply only when
 `mac-intel` is added to `release/product.json`.
 
@@ -18,7 +18,7 @@ Scope confirmed on 2026-11-17: real customer **email sign-in and account
 recovery**, a downloadable Mac installer, account permissions, owner/admin
 operations, VIP access-code creation/revocation, payments, error reporting and
 desktop app updates. Email sign-in is required; the existing license-key-only
-Account panel does not satisfy this scope. "Updates" here means desktop app
+Account panel alone does not satisfy this scope. "Updates" here means desktop app
 updates using Sparkle and Windows App Installer.
 
 The first milestone is a private staging release that can complete the entire
@@ -29,27 +29,24 @@ the missing software and CI failures are addressed.
 
 | Area | Verified current state | Required next work |
 | --- | --- | --- |
-| Customer identity | Guest trials and purchase-key activation/recovery exist; customer email is purchase metadata | Add verified email sign-in, session management, sign-out and recovery; link purchases to an independent Looksy account |
-| Managed access | Device-bound signed leases and OS credential storage exist | Configure a real staging API and public verification key in a fresh installer; the current local build has neither |
-| Owner and staff | Cloudflare Access identity plus enrolled `support`/`admin` roles exist in source | Enroll the owner, enforce MFA and test backend authorization with separate customer/support/admin identities |
-| VIP codes | No independent admin-issued complimentary-license workflow | Implement audited creation, redemption, expiration, device/use limits, revocation and reissue; define version/feature coverage |
+| Customer identity | Email-code verification/recovery, 30-day device sessions, sign-out and independent account IDs implemented; local Worker/controller/QML tests pass | Configure verified sender and staging service; prove delivery, restart, recovery and session expiry in installed apps |
+| Managed access | Device-bound signed leases and issuer-scoped OS credential/cache namespaces implemented | Configure a real staging API and public verification key in a fresh installer; the current local default build has neither |
+| Owner and staff | Cloudflare Access staff plus backend support/admin boundaries; account lookup, disable/re-enable, session revocation and deletion implemented | Enroll the owner, enforce MFA and test backend authorization with separate real customer/support/admin identities |
+| VIP codes | Audited admin creation/reissue/revocation and verified-account redemption with expiry/device/use limits implemented; local concurrent redemption tests pass | Choose final policy and exercise owner/customer flows against staging |
 | Existing revocation | Device revocation and admin license blocking exist | Prove refresh denial and cached-lease expiry; customer polling is currently six hours and paid offline leases default to seven days |
-| Billing | Lemon Squeezy-specific adapter; checkout prices/URLs are blank | Select the replacement provider and implement verified fulfillment, subscriptions, refunds and reconciliation |
-| Error reports | Local diagnostics/support bundles exist; native crash reporting is off | Configure a reporting project, link/package/sign the real SDK and handler, upload matching symbols and prove delivery/consent behavior |
-| App updates | Sparkle and App Installer wiring exist; this Mac build has Sparkle off and no feed/key | Configure private signed feeds and test two actual installer versions, interruption, recovery and account/data preservation |
+| Billing | Paddle selected; account-bound checkout, portal, webhook fulfillment/refunds, paid-period subscription limits and reconciliation implemented and locally tested; legacy Lemon remains | Configure Paddle sandbox products/domain/secrets, sender and public checkout page; prove installed checkout/portal/refund/recovery end to end |
+| Error reports | Bounded reviewed support bundles, incident IDs, channel-isolated consent/queues and Windows Crashpad installation implemented; native crash reporting is off in default build | Configure a reporting project, link/package/sign the real SDK and handler, upload matching symbols and prove delivery/consent behavior |
+| App updates | Strict staging Sparkle channel and offline staging config/feed checks implemented; default Mac build has Sparkle off and no feed/key | Configure private signed feeds and test two actual installer versions, interruption, recovery and account/data preservation |
 
 "VIP code" means a complimentary product-access code. Staff roles and private
 signing keys are separate resources. Staff enrollment/removal currently uses the
 audited operator tool; a VIP customer never becomes an administrator.
 
 Lemon Squeezy announced on **November 16, 2026** that new store sign-ups are
-closed and payment processing ends **March 31, 2027**. A new launch must resolve
-the provider choice before further payment integration. Existing-store migration
+closed and payment processing ends **March 31, 2027**. Paddle was selected for
+new sales on November 17. Existing-store migration
 must preserve customer rights and purchase history. [Official announcement](https://www.lemonsqueezy.com/blog/saying-goodbye-to-lemon-squeezy).
-Stripe Managed Payments is a candidate subject to eligibility review; it is not
-a complete replacement for Lemon Squeezy's licensing/fulfillment features.
-[Eligibility](https://docs.stripe.com/payments/managed-payments/eligibility),
-[feature comparison](https://docs.lemonsqueezy.com/migration/comparison).
+See [Paddle configuration and fulfillment policy](commercial-launch.md).
 
 ### Ordered implementation and setup
 
@@ -57,13 +54,13 @@ a complete replacement for Lemon Squeezy's licensing/fulfillment features.
    duplication gates, cross-platform builds, dependency advisories and the
    secret-scanner setup. Audit every new edit/capture API for native permission
    admission; updating the inventory alone must not grant missing authorization.
-2. **Choose the billing and customer-auth integrations.** Preserve one-time and
-   subscription offers. Select a supported billing provider and verified email
-   identity/delivery flow. Keep Looksy account IDs independent of billing-provider
-   IDs. Purchase email alone must not authenticate a customer or grant access.
-3. **Build the missing account and VIP workflows.** Add email sign-in/recovery,
-   secure desktop sessions, verified purchase linking, and admin-only VIP grants.
-   Preserve guest-trial history, device limits and previous receipt-only rights.
+2. **Configure Paddle and verified email delivery.** The implemented integrations
+   use Paddle plus Resend email codes, preserving one-time and subscription offers.
+   Complete provider onboarding and sender-domain verification. Looksy account IDs
+   are independent of billing IDs; purchase email alone does not grant access.
+3. **Accept the implemented account and VIP workflows.** Run email sign-in/recovery,
+   secure sessions, verified purchase linking and admin-only VIP grants in staging.
+   Verify guest-trial history, device limits and previous receipt-only rights.
    VIP grants are customer entitlements; they never confer staff authority.
 4. **Configure isolated staging.** Use separate customer databases, signing
    keys, payment sandbox credentials, issuer/domain and update feeds from
@@ -95,9 +92,8 @@ a complete replacement for Lemon Squeezy's licensing/fulfillment features.
 - [ ] Apple Developer membership, stable legal publisher, Developer ID certificate
   and notarization credentials.
 - [ ] Cloudflare/domain access, staging D1/Worker and staff Access application/MFA.
-- [ ] Selected customer email-auth provider and working verification/recovery
-  delivery for the sender domain.
-- [ ] Selected billing provider account, sandbox products for both offers,
+- [ ] Resend account and working verification/recovery delivery for the sender domain.
+- [ ] Paddle account, sandbox products for both offers,
   webhook credentials and customer portal. Determine whether an existing Lemon
   Squeezy store/customer migration is needed before replacing its adapter.
 - [ ] Crash-reporting project and symbol-upload access; private update/download
@@ -201,7 +197,7 @@ audit merely to obtain a green badge.
 - [ ] Create the Sparkle EdDSA keypair, back up the private key offline, and configure public/private CI values.
 - [ ] Create a public binary-only GitHub repository and a least-privilege token that can publish releases there.
 - [ ] Create the Cloudflare Pages project, production domain, API token, and account variables.
-- [ ] Select the replacement billing provider and test both offers, fulfillment, checkout, portal and recovery. Preserve any existing Lemon Squeezy purchases during migration.
+- [ ] Configure selected Paddle provider and test both offers, fulfillment, checkout, portal and recovery. Preserve any existing Lemon Squeezy purchases during migration.
 - [ ] Configure the real support email and an operating process for refunds and security reports.
 - [ ] Have qualified counsel review the evaluation license, privacy policy, terms, refund policy, Qt distribution model, and tax posture.
 - [ ] Confirm every bundled AI model, codec, camera profile, font, image, and dependency is redistributable.

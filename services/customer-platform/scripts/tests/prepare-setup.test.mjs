@@ -9,6 +9,7 @@ import { checkSetup } from '../check-setup.mjs';
 
 const validInput = () => ({
   issuer: 'https://accounts.looksy.test',
+  emailFrom:'accounts@looksy.test',
   databaseId: '123e4567-e89b-12d3-a456-426614174000',
   accessTeamDomain: 'looksy.cloudflareaccess.com',
   accessAudience: 'a'.repeat(32),
@@ -119,8 +120,8 @@ test('generates a staging-only config, private secrets, matching key pair, and p
   assert.match(cmake, /LOOKSY_ENTITLEMENT_PUBLIC_KEY/);
   assert.match(cmake, /LOOKSY_ENTITLEMENT_KEY_ID/);
   assert.equal(result.pendingOperatorSecret, 'LEMON_API_KEY');
-  assert.deepEqual(checkSetup(wrangler, { publicKey: publicInfo, secrets }), ['LEMON_API_KEY is missing']);
-  assert.deepEqual(checkSetup(wrangler, { publicKey: publicInfo, secrets: { ...secrets, LEMON_API_KEY: 'synthetic-provider-credential' } }), []);
+  assert.deepEqual(checkSetup(wrangler, { publicKey: publicInfo, secrets }), ['RESEND_API_KEY is missing', 'LEMON_API_KEY is missing']);
+  assert.deepEqual(checkSetup(wrangler, { publicKey: publicInfo, secrets: { ...secrets, RESEND_API_KEY:'synthetic-email-credential', LEMON_API_KEY: 'synthetic-provider-credential' } }), []);
 
   const privatePath = result.privateKeyPath;
   const privatePem = await readFile(privatePath, 'utf8');
@@ -166,4 +167,34 @@ test('requires the private key directory to be outside the checkout', async t =>
     keyDirectory: path.join(path.dirname(new URL(import.meta.url).pathname), 'generated-test-keys'),
     serviceDirectory: service,
   }), /outside the repository checkout/);
+});
+
+test('Paddle scaffolding validates explicit product/price policies without a legacy store',()=>{
+  const input=validInput(),one='pri_'+'a'.repeat(26),sub='pri_'+'b'.repeat(26),productId='pro_'+'c'.repeat(26);
+  Object.assign(input,{billingProvider:'paddle',storeId:undefined,paddleCheckoutOrigin:'https://billing.looksy.test',productPolicy:{
+    [one]:{productId,plan:'studio',mode:'perpetual',major:0,features:['editor'],deviceLimit:2},
+    [sub]:{productId,plan:'studio-monthly',mode:'subscription',major:0,features:['editor'],deviceLimit:2},
+  }});
+  const validated=validateSetupInput(input);assert.equal(validated.billingProvider,'paddle');assert.equal(validated.storeId,'');
+  assert.throws(()=>validateSetupInput({...input,paddleCheckoutOrigin:'https://billing.looksy.test/path'}),/origin/);
+  assert.throws(()=>validateSetupInput({...input,emailFrom:'<placeholder>'}),/emailFrom/);
+});
+
+test('generates a complete Paddle staging fixture with public-only desktop settings',async t=>{
+  const temporary=await mkdtemp(path.join(os.tmpdir(),'looksy-paddle-setup-'));t.after(()=>rm(temporary,{recursive:true,force:true}));
+  const service=path.join(temporary,'service'),keyParent=path.join(temporary,'private');await mkdir(service);await mkdir(keyParent,{mode:0o700});
+  const one='pri_'+'a'.repeat(26),sub='pri_'+'b'.repeat(26),productId='pro_'+'c'.repeat(26);
+  const input={...validInput(),billingProvider:'paddle',storeId:undefined,paddleCheckoutOrigin:'https://billing.looksy.test',productPolicy:{
+    [one]:{productId,plan:'studio',mode:'perpetual',major:0,features:['editor','agent'],deviceLimit:2},
+    [sub]:{productId,plan:'studio-monthly',mode:'subscription',major:0,features:['editor','agent'],deviceLimit:2},
+  }};
+  const result=await prepareSetup({input,outputPath:path.join(service,'wrangler.staging.local.jsonc'),keyDirectory:path.join(keyParent,'keys'),serviceDirectory:service});
+  const config=JSON.parse(await readFile(result.configPath,'utf8')),publicKey=JSON.parse(await readFile(result.publicKeyPath,'utf8'));
+  const secrets={...JSON.parse(await readFile(result.secretsPath,'utf8')),RESEND_API_KEY:'synthetic-email-credential',PADDLE_API_KEY:'synthetic-paddle-key',PADDLE_WEBHOOK_SECRET:'synthetic-paddle-notification-secret'};
+  assert.deepEqual(checkSetup(config,{publicKey,secrets}),[]);
+  assert.equal(config.vars.PRODUCT_POLICY,'{}');assert.equal(config.vars.LEMON_STORE_ID,'');assert.equal(config.vars.PADDLE_ONE_TIME_PRICE_ID,one);
+  assert.equal(config.vars.PADDLE_SUBSCRIPTION_PRICE_ID,sub);assert.equal(config.vars.PADDLE_ENVIRONMENT,'sandbox');
+  assert.equal(result.pendingOperatorSecret,'PADDLE_API_KEY');
+  assert.deepEqual(result.pendingOperatorSecrets,['PADDLE_API_KEY','PADDLE_WEBHOOK_SECRET','RESEND_API_KEY']);
+  assert.doesNotMatch(await readFile(result.desktopConfigPath,'utf8'),/PADDLE_API_KEY|RESEND_API_KEY|PRIVATE_KEY/);
 });

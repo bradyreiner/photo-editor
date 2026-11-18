@@ -6,9 +6,10 @@
 #include <memory>
 
 namespace photo_editor::desktop {
-[[nodiscard]] QByteArray loadCustomerCredential(QString* error);
-[[nodiscard]] bool saveCustomerCredential(const QByteArray& credential, QString* error);
-[[nodiscard]] bool clearCustomerCredential(QString* error);
+[[nodiscard]] QString customerCredentialScope(const QString& issuer);
+[[nodiscard]] QByteArray loadCustomerCredential(QString* error, const QString& issuer = {});
+[[nodiscard]] bool saveCustomerCredential(const QByteArray& credential, QString* error, const QString& issuer = {});
+[[nodiscard]] bool clearCustomerCredential(QString* error, const QString& issuer = {});
 
 class CustomerCredentialStore {
  public:
@@ -18,5 +19,5 @@ class CustomerCredentialStore {
   [[nodiscard]] virtual bool clear(QString* error) = 0;
 };
 
-[[nodiscard]] CustomerCredentialStore& systemCustomerCredentialStore();
+[[nodiscard]] CustomerCredentialStore& systemCustomerCredentialStore(const QString& issuer = {});
 }  // namespace photo_editor::desktop

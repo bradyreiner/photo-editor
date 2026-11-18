@@ -356,6 +356,7 @@ bool TimelineDocumentController::restoreCarouselParentTimeline() {
 }
 
 bool TimelineDocumentController::cancelCarouselBoardSequence() {
+  const auto customer_edit_scope = customer_edit_access_.restore();
   if (carousel_board_session_.isEmpty()) return false;
   if (carousel_board_render_watcher_) {
     if (carousel_board_cancel_) carousel_board_cancel_->store(true, std::memory_order_relaxed);

@@ -10,7 +10,7 @@ ET.register_namespace('sparkle', SPARKLE)
 
 
 def configure(path, version, channel='stable', interval=86400, halt=False):
-    if channel not in ('stable', 'beta') or not 0 <= interval <= 604800:
+    if channel not in ('stable', 'beta', 'staging') or not 0 <= interval <= 604800:
         raise ValueError('Invalid channel or rollout interval')
     tree = ET.parse(path)
     matches = []
@@ -35,8 +35,8 @@ def configure(path, version, channel='stable', interval=86400, halt=False):
         for name in ('channel', 'phasedRolloutInterval'):
             for node in item.findall(f'{{{SPARKLE}}}{name}'):
                 item.remove(node)
-        if channel == 'beta':
-            ET.SubElement(item, f'{{{SPARKLE}}}channel').text = 'beta'
+        if channel != 'stable':
+            ET.SubElement(item, f'{{{SPARKLE}}}channel').text = channel
         if interval:
             ET.SubElement(item, f'{{{SPARKLE}}}phasedRolloutInterval').text = str(interval)
     # Same-directory replacement leaves the original intact on validation error.
@@ -49,7 +49,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('appcast', type=Path)
     parser.add_argument('--version', required=True)
-    parser.add_argument('--channel', choices=['stable', 'beta'], default='stable')
+    parser.add_argument('--channel', choices=['stable', 'beta', 'staging'], default='stable')
     parser.add_argument('--interval', type=int, default=86400)
     parser.add_argument('--halt', action='store_true')
     args = parser.parse_args()

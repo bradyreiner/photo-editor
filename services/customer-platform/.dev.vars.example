@@ -3,3 +3,8 @@ ENTITLEMENT_PRIVATE_KEY="<PKCS8 Ed25519 PEM, with escaped newlines>"
 LEMON_API_KEY="<staging API key>"
 LEMON_WEBHOOK_SECRET="<at least 32 random characters>"
 RATE_LIMIT_SECRET="<a separate random secret, at least 32 characters>"
+# Verified sender domain required. Delivery is disabled until configured.
+RESEND_API_KEY="<Resend sending-only API key>"
+# Optional Paddle replacement; keep sandbox/live credentials separate.
+PADDLE_API_KEY="<Paddle sandbox API key>"
+PADDLE_WEBHOOK_SECRET="<Paddle sandbox notification secret>"

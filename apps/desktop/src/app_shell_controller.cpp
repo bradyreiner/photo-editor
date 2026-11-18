@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QJsonParseError>
 #include <QImage>
 #include <QLinearGradient>
@@ -21,6 +22,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QUrl>
+#include <QUuid>
 #include <QVariant>
 
 #include <algorithm>
@@ -707,8 +709,9 @@ bool AppShellController::openTermsPage() const { return QDesktopServices::openUr
 
 QString AppShellController::createSupportBundle() const {
   const auto timestamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMddTHHmmssZ"));
+  const auto incident_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
   const auto bundle_path =
-      QDir(backupLocation()).filePath(QStringLiteral("support/FramehouseSupport-%1").arg(timestamp));
+      QDir(backupLocation()).filePath(QStringLiteral("support/LooksySupport-%1-%2").arg(timestamp, incident_id.left(8)));
   if (!QDir().mkpath(bundle_path)) {
     return {};
   }
@@ -716,6 +719,7 @@ QString AppShellController::createSupportBundle() const {
   QJsonObject manifest{
       {QStringLiteral("product"), productName()},
       {QStringLiteral("version"), appVersion()},
+      {QStringLiteral("incidentId"), incident_id},
       {QStringLiteral("createdAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
       {QStringLiteral("os"), QSysInfo::prettyProductName()},
       {QStringLiteral("kernelType"), QSysInfo::kernelType()},
@@ -726,17 +730,17 @@ QString AppShellController::createSupportBundle() const {
       {QStringLiteral("privacyNotice"),
        QStringLiteral("Review the included logs before sharing. They may contain local file paths but never include photo bytes.")},
   };
-  QFile manifest_file(QDir(bundle_path).filePath(QStringLiteral("support-manifest.json")));
-  if (!manifest_file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    QDir(bundle_path).removeRecursively();
-    return {};
-  }
-  manifest_file.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
-  manifest_file.close();
-
   const QDir runs_root(QDir(logLocation()).filePath(QStringLiteral("runs")));
-  const auto runs = runs_root.entryInfoList(
-      QDir::Dirs | QDir::NoDotAndDotDot,
+  // Explicit file names prevent accidental inclusion of a photo, credential
+  // database, dump or arbitrary helper output placed beside the diagnostics.
+  const QSet<QString> allowed_files{QStringLiteral("desktop.jsonl"), QStringLiteral("session.json"),
+      QStringLiteral("catalog_local_db.jsonl"), QStringLiteral("catalog_migrate.jsonl"),
+      QStringLiteral("import_catalog.jsonl")};
+  QJsonArray included_files;
+  qint64 included_bytes = 0;
+  constexpr qint64 total_limit = 20 * 1024 * 1024;
+  const auto runs = QFileInfo(runs_root.path()).isSymLink() ? QFileInfoList{} : runs_root.entryInfoList(
+      QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
       QDir::Time);
   const auto included_run_count = qMin(3, runs.size());
   for (int run_index = 0; run_index < included_run_count; ++run_index) {
@@ -744,12 +748,33 @@ QString AppShellController::createSupportBundle() const {
     const auto destination = QDir(bundle_path).filePath(QStringLiteral("logs/%1").arg(run.fileName()));
     QDir().mkpath(destination);
     const QDir source(run.absoluteFilePath());
-    const auto files = source.entryInfoList(QDir::Files | QDir::Readable, QDir::Name);
+    const auto files = source.entryInfoList(QDir::Files | QDir::Readable | QDir::NoSymLinks, QDir::Name);
     for (const auto& file : files) {
-      if (file.size() <= 10 * 1024 * 1024) {
-        QFile::copy(file.absoluteFilePath(), QDir(destination).filePath(file.fileName()));
-      }
+      if (!allowed_files.contains(file.fileName())) continue;
+      const auto remaining = qMin<qint64>(10 * 1024 * 1024, total_limit - included_bytes);
+      if (file.size() > remaining) continue;
+      QFile input(file.absoluteFilePath());
+      if (!input.open(QIODevice::ReadOnly)) continue;
+      // A live writer may append after entryInfoList. Bound the read and count
+      // the actual bytes written rather than the earlier filesystem size.
+      const auto data = input.read(remaining + 1);
+      if (input.error() != QFileDevice::NoError || data.size() > remaining) continue;
+      QSaveFile output(QDir(destination).filePath(file.fileName()));
+      if (!output.open(QIODevice::WriteOnly) || output.write(data) != data.size() || !output.commit()) continue;
+      included_bytes += data.size();
+      included_files.append(QStringLiteral("logs/%1/%2").arg(run.fileName(), file.fileName()));
     }
+  }
+
+  manifest.insert(QStringLiteral("includedFiles"), included_files);
+  manifest.insert(QStringLiteral("includedBytes"), included_bytes);
+  manifest.insert(QStringLiteral("maximumBytes"), total_limit);
+  QSaveFile manifest_file(QDir(bundle_path).filePath(QStringLiteral("support-manifest.json")));
+  if (!manifest_file.open(QIODevice::WriteOnly) ||
+      manifest_file.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented)) < 0 ||
+      !manifest_file.commit()) {
+    QDir(bundle_path).removeRecursively();
+    return {};
   }
 
   revealPath(bundle_path);

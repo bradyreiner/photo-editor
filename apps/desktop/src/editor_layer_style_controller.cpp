@@ -432,11 +432,12 @@ bool EditorPreviewController::setPhotoLayerStyleEnabled(
 
 bool EditorPreviewController::setPhotoLayerStyleLightAngle(int index,
                                                            double angle_degrees) {
+  const auto access = customer_edit_access_.enter();
+  if (!access) return false;
   const auto current_layers = layer_session_.layers();
   if (index < 0 || index >= current_layers.size()) return false;
   if (photo_layer_style_light::is_linked(current_layers.at(index).toMap()))
     return setDocumentPhotoLayerStyleLightAngle(angle_degrees);
-  const auto access = customer_edit_access_.enter();
   auto layers = layer_session_.layers();
   if (!access || professional_content_work_running_ || index < 0 ||
       index >= layers.size() || layer_or_ancestor_locked(layers, index) ||

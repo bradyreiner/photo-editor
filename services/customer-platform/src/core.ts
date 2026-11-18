@@ -5,6 +5,9 @@ export type ServiceEnv = Env & {
   LEMON_API_KEY: string;
   LEMON_WEBHOOK_SECRET: string;
   RATE_LIMIT_SECRET: string;
+  RESEND_API_KEY?: string;
+  PADDLE_API_KEY?: string;
+  PADDLE_WEBHOOK_SECRET?: string;
 };
 export class ApiError extends Error {
   constructor(public status: number, public code: string) { super(code); }
@@ -80,7 +83,7 @@ export async function rateLimit(request: Request, env: ServiceEnv, scope: string
 }
 export interface Installation {
   id: string; credential_hash: string; customer_id: string; license_id: string | null;
-  trial_ends_at: number; revoked: number;
+  trial_ends_at: number; revoked: number; account_id?: string | null; account_session_expires_at?: number | null;
 }
 export interface License {
   id: string; customer_id: string; order_id: string; order_item_id: string; variant_id: string;
@@ -92,13 +95,19 @@ export interface ProductPolicy {
   features: string[]; deviceLimit: number;
 }
 export function productPolicy(env: ServiceEnv, variant: string): ProductPolicy {
-  const raw = object(object(JSON.parse(env.PRODUCT_POLICY))[variant]);
-  const mode = raw.mode;
-  if (mode !== 'perpetual' && mode !== 'subscription') throw new ApiError(503, 'invalid_policy');
-  const features = raw.features;
-  if (!Array.isArray(features) || !features.every(f => ['editor', 'agent', 'beta'].includes(f))) throw new ApiError(503, 'invalid_policy');
-  return { productId: id(raw.productId), plan: str(raw.plan, 40), mode,
-    major: boundedInt(raw.major, 0, 1000), features, deviceLimit: boundedInt(raw.deviceLimit, 1, 100) };
+  return providerProductPolicy(env,variant,'lemon');
+}
+export function providerProductPolicy(env: ServiceEnv, variant: string, provider: 'lemon'|'paddle'): ProductPolicy {
+  let raw: Record<string,unknown>;
+  try { raw=object(object(JSON.parse(provider==='paddle'?env.PADDLE_PRODUCT_POLICY:env.PRODUCT_POLICY))[variant]); }
+  catch { throw new ApiError(503,'invalid_policy'); }
+  const mode=raw.mode;
+  if(mode!=='perpetual' && mode!=='subscription') throw new ApiError(503,'invalid_policy');
+  const features=raw.features;
+  if(!Array.isArray(features)||!features.length||!features.every(f=>['editor','agent','beta'].includes(f))) throw new ApiError(503,'invalid_policy');
+  const productId=provider==='paddle'?str(raw.productId,100):id(raw.productId);
+  if(provider==='paddle' && !/^pro_[a-z0-9]{26}$/.test(productId)) throw new ApiError(503,'invalid_policy');
+  return {productId,plan:str(raw.plan,40),mode,major:boundedInt(raw.major,0,1000),features,deviceLimit:boundedInt(raw.deviceLimit,1,100)};
 }
 export function timestamp(value: unknown): number | null {
   if (value === null || value === undefined) return null;
@@ -106,20 +115,36 @@ export function timestamp(value: unknown): number | null {
   if (!Number.isFinite(time)) throw new ApiError(502, 'invalid_provider_date');
   return Math.floor(time / 1000);
 }
-export async function authenticate(request: Request, env: ServiceEnv): Promise<Installation> {
+export async function authenticate(request: Request, env: ServiceEnv, allowExpiredAccountSession=false): Promise<Installation> {
   const token = request.headers.get('Authorization')?.replace(/^Bearer /, '');
   if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new ApiError(401, 'authentication_required');
   const device = await env.DB.prepare('SELECT * FROM installations WHERE credential_hash=?').bind(await hash(token)).first<Installation>();
   if (!device || device.revoked) throw new ApiError(401, 'device_revoked');
+  if (device.account_id) {
+    const account = await env.DB.prepare('SELECT disabled FROM accounts WHERE id=?').bind(device.account_id).first<{disabled:number}>();
+    if (!account || account.disabled) throw new ApiError(401, 'account_disabled');
+    if(!allowExpiredAccountSession && (!device.account_session_expires_at || device.account_session_expires_at<=now())) throw new ApiError(401,'account_session_expired');
+  }
   return device;
 }
 export async function issueLease(env: ServiceEnv, device: Installation): Promise<string> {
   const time = now();
   let plan = 'trial', mode = 'trial', major = -1, features = ['editor', 'agent'];
   let expires = device.trial_ends_at;
+  if(device.account_id) {
+    const account=await env.DB.prepare('SELECT disabled,trial_ends_at FROM accounts WHERE id=?').bind(device.account_id).first<{disabled:number;trial_ends_at:number}>();
+    if(!account || account.disabled) throw new ApiError(401,'account_disabled');
+    expires=Math.min(expires,account.trial_ends_at);
+  }
   if (device.license_id) {
     const license = await env.DB.prepare('SELECT * FROM licenses WHERE id=?').bind(device.license_id).first<License>();
     if (!license || license.blocked || !['active', 'inactive'].includes(license.status)) throw new ApiError(403, 'license_inactive');
+    if (license.id.startsWith('vip:')) {
+      const grant = await env.DB.prepare('SELECT c.revoked,c.access_ends_at FROM vip_redemptions r JOIN vip_codes c ON c.id=r.code_id WHERE r.license_id=?').bind(license.id).first<{revoked:number;access_ends_at:number}>();
+      if (!grant || grant.revoked || grant.access_ends_at<=time) throw new ApiError(403,'vip_revoked_or_expired');
+      license.checked_at=time;
+      license.expires_at=Math.min(license.expires_at ?? grant.access_ends_at,grant.access_ends_at);
+    }
     plan = license.plan; mode = license.mode; major = license.major;
     let deviceLimit = license.device_limit;
     features = JSON.parse(license.features);
@@ -131,7 +156,7 @@ export async function issueLease(env: ServiceEnv, device: Installation): Promise
         .bind(license.order_item_id).first<{status: string; ends_at: number | null; checked_at: number; variant_id: string}>();
       if (!subscription || !['active', 'cancelled', 'on_trial', 'past_due'].includes(subscription.status)) throw new ApiError(403, 'subscription_inactive');
       // Plan changes follow the currently verified subscription variant.
-      const policy = productPolicy(env, subscription.variant_id);
+      const policy = providerProductPolicy(env, subscription.variant_id,license.id.startsWith('paddle:')?'paddle':'lemon');
       if (policy.mode !== 'subscription') throw new ApiError(503, 'invalid_policy');
       plan = policy.plan; features = policy.features; major = policy.major;
       deviceLimit = policy.deviceLimit;
@@ -149,6 +174,7 @@ export async function issueLease(env: ServiceEnv, device: Installation): Promise
       .bind(device.id, license.id, license.id).first<{position: number}>();
     if (slot && slot.position > deviceLimit) throw new ApiError(409, 'device_limit');
   }
+  if(device.account_id) expires=Math.min(expires,device.account_session_expires_at??time);
   if (expires <= time || device.revoked) throw new ApiError(403, 'access_expired');
   if (!env.ISSUER.startsWith('https://') || env.ISSUER.includes('.invalid')) throw new ApiError(503, 'issuer_not_configured');
   const key = await importPKCS8(env.ENTITLEMENT_PRIVATE_KEY, 'EdDSA');

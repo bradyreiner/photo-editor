@@ -8,6 +8,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
@@ -364,11 +366,28 @@ int main(int argc, char** argv) {
     return fail("restore defaults should reset accessibility, density, and custom shortcuts");
   }
 
+  const auto diagnostic_run = QDir(persisted_controller.logLocation()).filePath(QStringLiteral("runs/support-proof"));
+  QDir().mkpath(diagnostic_run);
+  const auto write_diagnostic = [&](const QString& name) {
+    QFile file(QDir(diagnostic_run).filePath(name));
+    return file.open(QIODevice::WriteOnly) && file.write("controlled diagnostic fixture") > 0;
+  };
+  if (!write_diagnostic(QStringLiteral("desktop.jsonl")) || !write_diagnostic(QStringLiteral("private-photo.jpg")))
+    return fail("support fixture should be writable");
+  QFile::link(QDir(diagnostic_run).filePath(QStringLiteral("private-photo.jpg")),
+      QDir(diagnostic_run).filePath(QStringLiteral("catalog_local_db.jsonl")));
   const auto support_bundle = persisted_controller.createSupportBundle();
   if (support_bundle.isEmpty() ||
       !QFileInfo::exists(QDir(support_bundle).filePath(QStringLiteral("support-manifest.json")))) {
     return fail("support bundle should contain a privacy-scoped manifest");
   }
+  QFile support_manifest(QDir(support_bundle).filePath(QStringLiteral("support-manifest.json")));
+  if (!support_manifest.open(QIODevice::ReadOnly) ||
+      QJsonDocument::fromJson(support_manifest.readAll()).object().value(QStringLiteral("incidentId")).toString().isEmpty() ||
+      !QFileInfo::exists(QDir(support_bundle).filePath(QStringLiteral("logs/support-proof/desktop.jsonl"))) ||
+      QFileInfo::exists(QDir(support_bundle).filePath(QStringLiteral("logs/support-proof/private-photo.jpg"))) ||
+      QFileInfo::exists(QDir(support_bundle).filePath(QStringLiteral("logs/support-proof/catalog_local_db.jsonl"))))
+    return fail("support bundle should identify the incident and omit unrecognized files and symlinks");
 
   controller.setCurrentWorkspace(1);
   photo_editor::desktop::EditRecipeState recovered_state;

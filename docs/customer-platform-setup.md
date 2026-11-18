@@ -1,21 +1,22 @@
 # Customer accounts, guests, keys and roles
 
-**Launch scope update — 2026-11-17:** real customer email sign-in and account
-recovery are now required, along with owner-managed VIP code creation and
-revocation. Those workflows are not implemented by the setup commands below.
-Use the [production launch checklist](production-launch-checklist.md) for the
-ordered implementation and installed-app acceptance matrix.
+The service implements verified email-code sign-in/recovery, device-scoped sessions,
+independent Looksy account IDs, Paddle checkout/portal/webhook fulfillment, and
+owner-managed complimentary VIP codes. The existing Lemon Squeezy adapter remains
+for legacy purchases. These implementations are locally tested; hosted email,
+merchant sandbox delivery and a fresh installed staging app still need acceptance
+in the [production launch checklist](production-launch-checklist.md).
 
-The provider-specific instructions below describe the existing Lemon Squeezy
-adapter. Resolve billing replacement before new hosted payment setup; the
-vendor announcement and dates are in the production launch checklist. Retain
-these instructions for reviewing the current adapter and any legacy store.
-
-The existing account model uses guest trials and purchase license keys. A guest
-is an anonymous installation; a paid customer is identified by the verified
-Lemon Squeezy purchase. Email sign-in, passwords and cross-device guest recovery
-are not implemented. Customer email in the operations database is purchase
-metadata and does not grant access.
+Customer sign-in uses an eight-digit code sent through Resend to a verified sender
+address. Codes expire after ten minutes, permit five attempts, are bound to the
+requesting installation, and are stored as keyed hashes. Delivery is throttled by
+IP, email and installation. The OS-held installation bearer is the account session;
+only its hash is stored in D1. Verified account sessions last thirty days; leases
+never outlast the session, and a fresh email code renews it. Sign-out revokes that installation and the desktop
+removes its credential and cached lease. Account recovery on another installation
+requires another verified email code. Signing in never creates paid access or
+restarts an expired account trial. Signing out is required before changing accounts.
+Purchase email is metadata and never proves purchase ownership.
 
 ## Access matrix
 
@@ -25,13 +26,15 @@ metadata and does not grant access.
 | Paid editor | Verified purchase, configured variant features | `editor` enables editing; include `agent` to enable assistant work |
 | Expired access | Existing installation | View, save and export existing work; no new edits or agent work |
 | Support | Verified Cloudflare Access subject enrolled as `support` | Inspect customers, revoke devices, extend guest trials by up to 14 days per action |
-| Admin | Verified Cloudflare Access subject enrolled as `admin` | Support actions, trial extensions up to 60 days per action, block/restore licenses |
+| Admin | Verified Cloudflare Access subject enrolled as `admin` | Support actions, trial extensions up to 60 days, block/restore licenses, account session controls, VIP create/revoke/reissue |
+| VIP customer | Verified Looksy account plus redeemed complimentary code | Only the configured product features, major version and expiry; never staff authority |
 
 `beta` is a reserved customer feature; update eligibility currently follows the
 build channel. Customer capabilities never confer staff authority. Product
 features are configured in `productPolicy` and signed into device-bound leases.
-Customer activation keys come from Lemon Squeezy license-key generation and email
-delivery; the setup command does not invent paid license keys.
+Paddle purchases are linked to the signed-in account using a server-created checkout
+record and verified merchant state. Legacy keys require live provider validation;
+a linked purchase cannot move to a different account using only the key.
 
 ## Prepare staging
 
@@ -44,9 +47,11 @@ cp setup.example.json setup.local.json
 ```
 
 Edit `setup.local.json`: set your exact HTTPS API origin, existing staging D1
-database ID, Access team domain/application audience, Lemon store ID and real
-product/variant mappings. The sample IDs `101`, `102`, `10` and `11` must be
-replaced. Keep both perpetual and subscription products. Set a distinct staging
+database ID, Access team domain/application audience, verified Resend sender
+`emailFrom`, approved `paddleCheckoutOrigin`, and real Paddle `pri_`/`pro_` mappings.
+The checked-in sample uses `billingProvider: "paddle"`; replace every placeholder.
+Legacy store setup can explicitly use `billingProvider: "lemon"`, a numeric
+`storeId`, and numeric variant/product mappings. Keep both perpetual and subscription products. Set a distinct staging
 key ID; use a dedicated private directory outside this checkout for keys. Its
 parent directory must already exist; an existing key directory must be private
 (mode 700).
@@ -62,8 +67,10 @@ containing generated signing/webhook/rate-limit secrets, and
 existing output files. The staging configuration permits test purchases and
 keeps the default checked-in configuration intact.
 
-Add `LEMON_API_KEY` to the private `secrets.json` using your secret manager or
-editor. This is the provider's actual API credential. Keep the file mode 600;
+Add `RESEND_API_KEY`, `PADDLE_API_KEY` and the actual Paddle notification
+`PADDLE_WEBHOOK_SECRET` to private `secrets.json` using your secret manager or editor.
+The Paddle secret comes from its notification destination; it is not locally invented.
+Legacy stores additionally need `LEMON_API_KEY` and the generated Lemon webhook secret. Keep the file mode 600;
 never paste its contents into chat, commit it, or pass secret values as command
 arguments. Preserve an encrypted backup of the signing key before issuing clients.
 
@@ -80,7 +87,8 @@ explicit `--app-version X.Y.Z` for both preparation and checking. Optional
 `trustedKeys` holds up to four key IDs mapped to public Ed25519 keys for rotation
 overlap; no private keys belong there. It prints field names rather than
 values. It is an offline check: it cannot prove the remote database exists,
-secrets are deployed, MFA is enforced, staff are enrolled, or purchases deliver keys.
+secrets are deployed, sender DNS is verified, MFA is enforced, staff are enrolled,
+or checkout and email delivery work.
 
 ## Enroll staff
 
@@ -122,10 +130,13 @@ npx wrangler d1 execute DB --remote --config wrangler.staging.local.jsonc --file
 ```
 
 Add a Worker route/custom domain matching `issuer` before deployment; the generated
-configuration disables `workers.dev` and preview URLs. In Lemon Squeezy, enable
-license keys and email delivery for both configured products and set the signed
-webhook endpoint to `ISSUER/v1/webhooks/lemon` using the generated webhook secret.
-The route and provider fulfillment are operator configuration, not generated resources.
+configuration disables `workers.dev` and preview URLs. Configure a Paddle sandbox
+notification destination at `ISSUER/v1/webhooks/paddle` for transaction, subscription
+and adjustment events, and copy its notification secret into the Worker secrets.
+Use a separate verified Resend sender/domain for staging; configure `EMAIL_FROM`
+and a sending-only API key. No email is sent by the preparation commands.
+Legacy Lemon stores use `ISSUER/v1/webhooks/lemon`. The route, sender DNS and
+merchant fulfillment are operator configuration, not generated resources.
 
 Wrangler supports selected-config D1 migrations and file execution, and secret-file
 upload on deployment. See [D1 commands](https://developers.cloudflare.com/d1/wrangler-commands/)
@@ -159,7 +170,8 @@ customer rights, terms, signing and recovery.
 
 ## Additional readiness implementation
 
-Account controls include device listing, confirmed revoke/deactivate actions,
+Account controls include verified email sign-in/recovery, sign-out, linked license
+selection, VIP redemption, device listing, confirmed revoke/deactivate actions,
 verified purchase recovery with a fresh secure credential, and configured
 checkout/billing links. Recovery retains revoked records and never restarts guest
 access. Generated CMake includes the mandatory major guard and optional key map.
@@ -167,7 +179,7 @@ access. Generated CMake includes the mandatory major guard and optional key map.
 The [service runbook](../services/customer-platform/README.md) documents operations
 alerts, bounded webhook retries, scoped privacy processing, private backups and
 isolated local D1 restore rehearsal. Apply **all** migrations, including
-`0002_operations.sql`, before running the updated Worker. Real resources,
+`0002_operations.sql`, `0003_accounts_vip.sql` and `0004_paddle.sql`, before running the updated Worker. Real resources,
 staff/service-token enrollment, fulfillment and Apple signing remain operator setup.
 
 ## Setup verification on 2026-10-05
@@ -190,3 +202,30 @@ Existing desktop build tests for signed leases, account panel, expired document
 workflow and automation access passed. This verifies the local setup tooling and
 existing tested flows; no hosted resources were deployed and no live purchase,
 email sign-in or managed desktop staging workflow was proved.
+
+## Owner account and VIP tools
+
+The Access-protected dashboard lists independent Looksy accounts alongside legacy
+customer records. Admins can disable/enable accounts, revoke all account sessions,
+and anonymize account contact data. Support cannot perform these owner actions
+or mint complimentary codes. Staff enrollment remains the audited operator tool;
+customer or VIP sign-in cannot enroll staff.
+
+Create a VIP code with a reason, plan name, explicit feature list, covered app major,
+redemption deadline, access end date, account redemption limit and device limit.
+The high-entropy code appears once; only its hash is stored. Each account redeems
+at most once, and concurrent redemptions enforce the total cap in the database.
+Revoke stops future redemption and fresh leases for existing grants. Reissue
+revokes the old code and grants and creates a replacement code with the same policy;
+customers must redeem the replacement. An expired code requires a new policy.
+
+Already signed offline leases remain valid until their original expiry (seven
+days by default, capped by the access end date). Revocation cannot retract a lease
+from an offline app. Another valid linked entitlement can be selected in Account;
+revocation does not silently grant a new trial. The reserved `beta` feature does
+not by itself authorize a private update feed.
+
+Local Worker/D1 tests exercise verification/replay/expiry/throttling, account and
+staff boundaries, paid-key ownership, privacy processing, VIP concurrency and
+revocation. They use synthetic email/billing responses and ephemeral keys. Real
+email delivery, merchant sandbox and signed installed-app testing remain required.

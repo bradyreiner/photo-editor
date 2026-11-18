@@ -19,6 +19,8 @@ class RolloutTests(unittest.TestCase):
                 '<enclosure url="https://example.test/app.dmg" sparkle:shortVersionString="1.0" sparkle:edSignature="fixture" length="100" />'
                 '</item></channel></rss>')
             original = dict(ET.parse(path).find('.//enclosure').attrib)
+            rollout.configure(path, '1.0', 'staging')
+            self.assertEqual(ET.parse(path).findtext(f'.//{{{rollout.SPARKLE}}}channel'), 'staging')
             rollout.configure(path, '1.0', 'beta')
             self.assertEqual(ET.parse(path).findtext(f'.//{{{rollout.SPARKLE}}}channel'), 'beta')
             self.assertEqual(ET.parse(path).find('.//enclosure').attrib, original)

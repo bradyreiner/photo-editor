@@ -8,6 +8,7 @@ ColumnLayout {
     objectName: "customerAccountPanel"
     property var controller: null
     property string pendingDeviceId: ""
+    property bool showPurchaseKey: false
     readonly property bool serviceAvailable: controller !== null && controller.configured
     spacing: theme.space16
     Theme { id: theme }
@@ -25,6 +26,137 @@ ColumnLayout {
         text: root.controller ? "Plan: " + root.controller.plan : ""
         color: theme.textStrong
         font.pixelSize: 18
+    }
+    Label {
+        Layout.fillWidth: true
+        visible: root.serviceAvailable
+        text: root.serviceAvailable && root.controller.signedIn ? root.controller.accountEmail : "Sign in or create your Looksy account"
+        color: theme.textStrong
+        font.pixelSize: 16
+        wrapMode: Text.WordWrap
+    }
+    RowLayout {
+        Layout.fillWidth: true
+        visible: root.serviceAvailable && !root.controller.signedIn && !root.controller.emailCodePending
+        spacing: theme.space10
+        ToneTextField {
+            id: accountEmail
+            objectName: "customerAccountEmail"
+            Layout.fillWidth: true
+            accessibleLabel: "Account email"
+            placeholderText: "Your email address"
+            maximumLength: 254
+            inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoPredictiveText
+            enabled: root.serviceAvailable && !root.controller.busy
+            onAccepted: sendEmailCode.clicked()
+        }
+        ActionButton {
+            id: sendEmailCode
+            objectName: "customerSendEmailCode"
+            text: "Continue with email"
+            enabled: root.serviceAvailable && !root.controller.busy && accountEmail.text.trim().length > 0
+            onClicked: { if (enabled) root.controller.requestEmailSignIn(accountEmail.text) }
+        }
+    }
+    RowLayout {
+        Layout.fillWidth: true
+        visible: root.serviceAvailable && root.controller.emailCodePending
+        spacing: theme.space10
+        ToneTextField {
+            id: emailCode
+            objectName: "customerEmailCode"
+            Layout.fillWidth: true
+            accessibleLabel: "Email sign-in code"
+            numericEntry: true
+            placeholderText: "Eight-digit code from your email"
+            maximumLength: 8
+            inputMethodHints: Qt.ImhDigitsOnly | Qt.ImhSensitiveData
+            validator: RegularExpressionValidator { regularExpression: /[0-9]{0,8}/ }
+            enabled: root.serviceAvailable && !root.controller.busy
+            onAccepted: verifyEmailCode.clicked()
+        }
+        ActionButton {
+            id: verifyEmailCode
+            objectName: "customerVerifyEmailCode"
+            text: "Sign in"
+            enabled: root.serviceAvailable && !root.controller.busy && emailCode.text.length === 8
+            onClicked: {
+                if (!enabled) return
+                root.controller.verifyEmailSignIn(emailCode.text)
+                emailCode.clear()
+            }
+        }
+        ActionButton {
+            text: "Change email"
+            enabled: root.serviceAvailable && !root.controller.busy
+            onClicked: { emailCode.clear(); root.controller.cancelEmailSignIn() }
+        }
+    }
+    Label {
+        Layout.fillWidth: true
+        visible: root.serviceAvailable && !root.controller.signedIn
+        text: "Your email code also recovers your account on a new computer."
+        color: theme.textMuted
+        wrapMode: Text.WordWrap
+    }
+    RowLayout {
+        Layout.fillWidth: true
+        visible: root.serviceAvailable && root.controller.signedIn
+        spacing: theme.space10
+        ToneTextField {
+            id: vipCode
+            objectName: "customerVipCode"
+            Layout.fillWidth: true
+            accessibleLabel: "VIP access code"
+            placeholderText: "VIP access code"
+            maximumLength: 128
+            echoMode: TextInput.Password
+            enabled: root.serviceAvailable && !root.controller.busy
+            onAccepted: redeemVipCode.clicked()
+        }
+        ActionButton {
+            id: redeemVipCode
+            objectName: "customerRedeemVipCode"
+            text: "Redeem code"
+            enabled: root.serviceAvailable && !root.controller.busy && vipCode.text.trim().length > 0
+            onClicked: {
+                if (!enabled) return
+                root.controller.redeemVip(vipCode.text)
+                vipCode.clear()
+            }
+        }
+        ActionButton {
+            objectName: "customerSignOut"
+            text: "Sign out"
+            enabled: root.serviceAvailable && !root.controller.busy
+            onClicked: root.controller.signOut()
+        }
+    }
+    ActionButton {
+        objectName: "customerLocalSignOut"
+        text: "Sign out on this computer"
+        visible: root.serviceAvailable && root.controller.canSignOut && !root.controller.signedIn
+        enabled: root.serviceAvailable && !root.controller.busy
+        onClicked: root.controller.signOut()
+    }
+    Repeater {
+        model: root.serviceAvailable && root.controller.signedIn ? root.controller.accountLicenses : []
+        delegate: RowLayout {
+            id: accountLicenseRow
+            required property var modelData
+            Layout.fillWidth: true
+            Label {
+                Layout.fillWidth: true
+                text: accountLicenseRow.modelData.plan || "License"
+                color: theme.textMain
+                wrapMode: Text.WordWrap
+            }
+            ActionButton {
+                text: "Use on this device"
+                enabled: root.serviceAvailable && !root.controller.busy
+                onClicked: root.controller.selectAccountLicense(accountLicenseRow.modelData.id)
+            }
+        }
     }
     RowLayout {
         Layout.fillWidth: true
@@ -47,8 +179,14 @@ ColumnLayout {
         }
         Item { Layout.fillWidth: true }
     }
-    Label {
+    ActionButton {
+        objectName: "customerShowPurchaseKey"
         visible: root.serviceAvailable
+        text: root.showPurchaseKey ? "Hide purchase key" : "Use a purchase key"
+        onClicked: root.showPurchaseKey = !root.showPurchaseKey
+    }
+    Label {
+        visible: root.serviceAvailable && root.showPurchaseKey
         Layout.fillWidth: true
         text: "Your license key"
         color: theme.textMain
@@ -57,7 +195,7 @@ ColumnLayout {
         id: licenseKey
         objectName: "customerLicenseKey"
         accessibleLabel: "License key"
-        visible: root.serviceAvailable
+        visible: root.serviceAvailable && root.showPurchaseKey
         Layout.fillWidth: true
         echoMode: TextInput.Password
         placeholderText: "Paste the key from your purchase email"
@@ -71,6 +209,7 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         spacing: theme.space10
+        visible: root.serviceAvailable && root.showPurchaseKey
         ActionButton {
             id: activateButton
             text: "Activate purchase"
@@ -101,26 +240,25 @@ ColumnLayout {
     }
     RowLayout {
         Layout.fillWidth: true
-        visible: root.serviceAvailable && (root.controller.purchaseUrl.length > 0 ||
-            root.controller.subscriptionPurchaseUrl.length > 0 || root.controller.billingPortalUrl.length > 0)
+        visible: root.serviceAvailable && root.controller.signedIn
         spacing: theme.space10
         ActionButton {
             text: "Buy a license"
             objectName: "customerPurchaseLink"
-            visible: root.serviceAvailable && root.controller.purchaseUrl.length > 0
-            onClicked: Qt.openUrlExternally(root.controller.purchaseUrl)
+            enabled: root.serviceAvailable && !root.controller.busy && root.controller.signedIn
+            onClicked: root.controller.startCheckout("one-time")
         }
         ActionButton {
             text: "Subscribe"
             objectName: "customerSubscriptionLink"
-            visible: root.serviceAvailable && root.controller.subscriptionPurchaseUrl.length > 0
-            onClicked: Qt.openUrlExternally(root.controller.subscriptionPurchaseUrl)
+            enabled: root.serviceAvailable && !root.controller.busy && root.controller.signedIn
+            onClicked: root.controller.startCheckout("subscription")
         }
         ActionButton {
             text: "Manage subscription"
             objectName: "customerBillingPortalLink"
-            visible: root.serviceAvailable && root.controller.billingPortalUrl.length > 0
-            onClicked: Qt.openUrlExternally(root.controller.billingPortalUrl)
+            enabled: root.serviceAvailable && !root.controller.busy && root.controller.signedIn
+            onClicked: root.controller.openBillingPortal()
         }
         Item { Layout.fillWidth: true }
     }
@@ -173,7 +311,7 @@ ColumnLayout {
     Label {
         Layout.fillWidth: true
         visible: root.serviceAvailable
-        text: "Activation sends your license key and installation identity to the license service. Photos and catalogs remain on this computer."
+        text: "Sign-in sends your email and installation identity to the account service. Purchase activation also sends your license key. Photos and catalogs remain on this computer."
         color: theme.textMuted
         font.pixelSize: 12
         wrapMode: Text.WordWrap
@@ -221,7 +359,7 @@ ColumnLayout {
         background: PopupSurface {}
         Label {
             width: 340
-            text: "This installation will be signed out and its saved access removed. You can recover it later with your verified purchase key."
+            text: "This installation will be signed out and its saved access removed. You can recover it later by signing in or using your verified purchase key."
             color: theme.textMain
             wrapMode: Text.WordWrap
         }

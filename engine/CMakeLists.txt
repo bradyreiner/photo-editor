@@ -84,6 +84,10 @@ if(APPLE AND PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
   list(APPEND photo_engine_sources
     src/pipeline/metal/metal_pipeline_backend.mm
   )
+else()
+  list(APPEND photo_engine_sources
+    src/pipeline/metal/metal_pipeline_backend_stub.cpp
+  )
 endif()
 
 set(PHOTO_EDITOR_CUDA_BACKEND_AVAILABLE OFF)

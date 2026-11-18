@@ -2,6 +2,10 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { ApiError, authenticate, body, boundedInt, boundedText, DAY, hash, hmacKey, id, issueLease, json, now, object, rateLimit, str, type Installation, type ServiceEnv } from './core';
 import { processEvent, syncLicense, validatePurchase } from './billing';
 import { adminOperations } from './operations';
+import { accountRoute, accountSummary, linkLicense, registerInstallation } from './accounts';
+import { adminVip, redeemVip } from './vip';
+import { adminAccounts } from './admin-accounts';
+import { paddleRoute, syncPaddleLicense, processPaddleEvent, reconcilePaddleCheckouts } from './paddle';
 
 async function startTrial(request: Request, env: ServiceEnv): Promise<Response> {
   await rateLimit(request, env, 'trial', 5);
@@ -10,19 +14,6 @@ async function startTrial(request: Request, env: ServiceEnv): Promise<Response> 
   if (!/^[A-Za-z0-9_-]{43}$/.test(credential)) throw new ApiError(400, 'invalid_credential');
   const device = await registerInstallation(env, credential);
   return json({ lease: await issueLease(env, device), installationId: device.id });
-}
-
-async function registerInstallation(env: ServiceEnv, credential: string): Promise<Installation> {
-  const digest = await hash(credential), time = now();
-  const customerId = `guest:${digest}`, installationId = crypto.randomUUID();
-  await env.DB.batch([
-    env.DB.prepare('INSERT OR IGNORE INTO customers(id,created_at) VALUES(?,?)').bind(customerId, time),
-    env.DB.prepare(`INSERT OR IGNORE INTO installations(id,credential_hash,customer_id,trial_ends_at,created_at,last_seen_at)
-      VALUES(?,?,?,?,?,?)`).bind(installationId, digest, customerId, time + boundedInt(env.TRIAL_DAYS, 1, 60) * DAY, time, time),
-  ]);
-  const device = await env.DB.prepare('SELECT * FROM installations WHERE credential_hash=?').bind(digest).first<Installation>();
-  if (!device) throw new ApiError(503, 'storage_unavailable');
-  return device;
 }
 
 async function staffIdentity(request: Request, env: ServiceEnv): Promise<{subject: string; role: string; service: boolean}> {
@@ -56,6 +47,10 @@ async function staffIdentity(request: Request, env: ServiceEnv): Promise<{subjec
 async function admin(request: Request, env: ServiceEnv, path: string): Promise<Response> {
   const actor = await staffIdentity(request, env);
   if (actor.service && path !== '/admin/api/operations') throw new ApiError(403, 'service_read_scope_required');
+  const accounts = await adminAccounts(request, env, actor, path);
+  if (accounts) return accounts;
+  const vip = await adminVip(request, env, actor, path);
+  if (vip) return vip;
   const operational = await adminOperations(request, env, actor, path);
   if (operational) return operational;
   if (request.method === 'GET' && path === '/admin/api/customers') {
@@ -94,7 +89,7 @@ async function admin(request: Request, env: ServiceEnv, path: string): Promise<R
       } else statement = env.DB.prepare('UPDATE installations SET revoked=1 WHERE id=?').bind(target);
     } else if (action === 'block_license' || action === 'unblock_license') {
       if (actor.role !== 'admin') throw new ApiError(403, 'admin_required');
-      const license = await env.DB.prepare('SELECT customer_id FROM licenses WHERE id=?').bind(id(target)).first<{customer_id: string}>();
+      const license = await env.DB.prepare('SELECT customer_id FROM licenses WHERE id=?').bind(str(target)).first<{customer_id: string}>();
       if (!license) throw new ApiError(404, 'not_found');
       customer = license.customer_id;
       statement = env.DB.prepare('UPDATE licenses SET blocked=? WHERE id=?').bind(action === 'block_license' ? 1 : 0, target);
@@ -148,6 +143,7 @@ async function recover(request: Request, env: ServiceEnv): Promise<Response> {
   const input = await body(request), license = await validatePurchase(env, str(input.licenseKey, 128));
   const credential = str(input.credential, 43);
   if (!/^[A-Za-z0-9_-]{43}$/.test(credential)) throw new ApiError(400, 'invalid_credential');
+  await linkLicense(env, {id:'',credential_hash:'',customer_id:'',license_id:null,trial_ends_at:0,revoked:0}, license.id);
   if (!['perpetual', 'subscription'].includes(license.mode)) throw new ApiError(403, 'paid_license_required');
   const digest = await hash(credential);
   const existing = await env.DB.prepare('SELECT * FROM installations WHERE credential_hash=?').bind(digest).first<Installation>();
@@ -213,32 +209,43 @@ async function route(request: Request, env: ServiceEnv): Promise<Response> {
   if (path.startsWith('/admin')) return admin(request, env, path);
   if (request.method === 'GET' && path === '/health') return json({ service: 'looksy-customers', version: 1 });
   if (request.method === 'POST' && path === '/v1/webhooks/lemon') return webhook(request, env);
+  const paddle = await paddleRoute(request,env,path);
+  if(paddle) return paddle;
   if (request.method === 'POST' && path === '/v1/trial') return startTrial(request, env);
   if (request.method === 'POST' && path === '/v1/recover') return recover(request, env);
   await rateLimit(request, env, 'account', 30);
+  const accountResponse = await accountRoute(request, env, path);
+  if (accountResponse) return accountResponse;
   if (request.method === 'POST' && path === '/v1/activate') {
     const token = request.headers.get('Authorization')?.replace(/^Bearer /, '');
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new ApiError(401, 'authentication_required');
     const input = await body(request);
     const license = await validatePurchase(env, str(input.licenseKey, 128));
     const device = await registerInstallation(env, token);
+    if (device.revoked) throw new ApiError(403, 'device_revoked');
+    await linkLicense(env, device, license.id);
     // Verify access before consuming a device slot (e.g. refunded or missing subscription).
     await issueLease(env, { ...device, customer_id: license.customer_id, license_id: license.id });
     try {
-      await env.DB.prepare('UPDATE installations SET customer_id=?,license_id=? WHERE id=? AND revoked=0')
-        .bind(license.customer_id, license.id, device.id).run();
+      await env.DB.batch([
+        env.DB.prepare('UPDATE installations SET customer_id=?,license_id=? WHERE id=? AND revoked=0').bind(license.customer_id, license.id, device.id),
+        env.DB.prepare(`INSERT OR IGNORE INTO account_licenses(license_id,account_id,linked_at)
+          SELECT ?,account_id,? FROM installations WHERE id=? AND revoked=0 AND account_id IS NOT NULL`).bind(license.id,now(),device.id),
+      ]);
     } catch (error) {
       if (String(error).includes('device_limit')) throw new ApiError(409, 'device_limit');
+      if (String(error).includes('license_already_linked')) throw new ApiError(409,'license_already_linked');
       throw error;
     }
     // Re-read after admission: another request may have revoked the installation.
     return json({ lease: await issueLease(env, await authenticate(request, env)) });
   }
   const device = await authenticate(request, env);
+  if (request.method === 'POST' && path === '/v1/vip/redeem') return redeemVip(request, env, device);
   if (request.method === 'POST' && path === '/v1/refresh') {
     const input = await body(request);
-    if (device.license_id) {
-      try { await syncLicense(env, device.license_id); }
+    if (device.license_id && !device.license_id.startsWith('vip:')) {
+      try { if(device.license_id.startsWith('paddle:')) await syncPaddleLicense(env,device.license_id); else await syncLicense(env, device.license_id); }
       catch (error) {
         // A provider outage can use the remaining original grace, never renew it.
         if (!(error instanceof ApiError) || error.status !== 502) throw error;
@@ -247,16 +254,16 @@ async function route(request: Request, env: ServiceEnv): Promise<Response> {
     const version = str(input.version, 40), platform = str(input.platform, 40);
     if (!/^[0-9A-Za-z.+_-]+$/.test(version) || !['mac-arm', 'mac-intel', 'windows', 'linux'].includes(platform)) throw new ApiError(400, 'invalid_client_metadata');
     await env.DB.prepare('UPDATE installations SET last_seen_at=?,app_version=?,platform=? WHERE id=?').bind(now(), version, platform, device.id).run();
-    return json({ lease: await issueLease(env, device) });
+    return json({ lease: await issueLease(env, device), ...await accountSummary(env, device) });
   }
   if (request.method === 'GET' && path === '/v1/devices') {
-    const rows = await env.DB.prepare('SELECT id,app_version,platform,last_seen_at,revoked FROM installations WHERE customer_id=? ORDER BY last_seen_at DESC LIMIT 100')
-      .bind(device.customer_id).all();
+    const rows = await env.DB.prepare('SELECT id,app_version,platform,last_seen_at,revoked FROM installations WHERE (account_id IS NOT NULL AND account_id=?) OR (account_id IS NULL AND customer_id=?) ORDER BY last_seen_at DESC LIMIT 100')
+      .bind(device.account_id ?? null, device.customer_id).all();
     return json({ devices: rows.results, current: device.id });
   }
   if (request.method === 'POST' && path === '/v1/devices/revoke') {
     const input = await body(request), target = str(input.id);
-    const result = await env.DB.prepare('UPDATE installations SET revoked=1 WHERE id=? AND customer_id=?').bind(target, device.customer_id).run();
+    const result = await env.DB.prepare('UPDATE installations SET revoked=1 WHERE id=? AND ((account_id IS NOT NULL AND account_id=?) OR (account_id IS NULL AND customer_id=?))').bind(target, device.account_id ?? null, device.customer_id).run();
     if (!result.meta.changes) throw new ApiError(404, 'not_found');
     return json({ ok: true });
   }
@@ -281,16 +288,18 @@ export default {
       .all<{digest: string; event: string; resource_id: string}>();
     for (const item of pending.results) {
       try {
-        await processEvent(env, item.event, item.resource_id);
+        if(item.event.startsWith('paddle:')) await processPaddleEvent(env,item.event.slice(7),item.resource_id); else await processEvent(env, item.event, item.resource_id);
         await env.DB.prepare('UPDATE webhook_receipts SET processed_at=?,last_error_code=NULL WHERE digest=?').bind(now(), item.digest).run();
       } catch { await markWebhookFailure(env, item.digest); console.error(JSON.stringify({ event: 'billing_retry_failed', receipt: item.digest })); }
     }
-    const licenses = await env.DB.prepare('SELECT id FROM licenses WHERE checked_at<? ORDER BY checked_at LIMIT 20').bind(time - DAY).all<{id: string}>();
+    const licenses = await env.DB.prepare("SELECT id FROM licenses WHERE id NOT LIKE 'vip:%' AND blocked=0 AND checked_at<? ORDER BY checked_at LIMIT 20").bind(time - DAY).all<{id: string}>();
     for (const license of licenses.results) {
-      try { await syncLicense(env, license.id); }
+      try { if(license.id.startsWith('paddle:')) await syncPaddleLicense(env,license.id); else await syncLicense(env, license.id); }
       catch { console.error(JSON.stringify({ event: 'billing_reconcile_failed', licenseId: license.id })); }
     }
+    await reconcilePaddleCheckouts(env);
     await env.DB.batch([
+      env.DB.prepare('DELETE FROM email_challenges WHERE expires_at<?').bind(time - DAY),
       env.DB.prepare('DELETE FROM rate_buckets WHERE expires_at<?').bind(time),
       env.DB.prepare('DELETE FROM webhook_receipts WHERE processed_at IS NOT NULL AND received_at<?').bind(time - 90 * DAY),
     ]);

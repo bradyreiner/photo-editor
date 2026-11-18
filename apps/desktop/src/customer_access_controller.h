@@ -35,6 +35,11 @@ class CustomerAccessController final : public QObject {
   Q_PROPERTY(QString expires READ expires NOTIFY changed)
   Q_PROPERTY(QString customerId READ customerId NOTIFY changed)
   Q_PROPERTY(QVariantList devices READ devices NOTIFY changed)
+  Q_PROPERTY(bool signedIn READ signedIn NOTIFY changed)
+  Q_PROPERTY(bool canSignOut READ canSignOut NOTIFY changed)
+  Q_PROPERTY(QString accountEmail READ accountEmail NOTIFY changed)
+  Q_PROPERTY(bool emailCodePending READ emailCodePending NOTIFY changed)
+  Q_PROPERTY(QVariantList accountLicenses READ accountLicenses NOTIFY changed)
   Q_PROPERTY(QString currentInstallationId READ currentInstallationId NOTIFY changed)
   Q_PROPERTY(QString purchaseUrl READ purchaseUrl CONSTANT)
   Q_PROPERTY(QString subscriptionPurchaseUrl READ subscriptionPurchaseUrl CONSTANT)
@@ -52,6 +57,11 @@ class CustomerAccessController final : public QObject {
   [[nodiscard]] QString expires() const;
   [[nodiscard]] QString customerId() const;
   [[nodiscard]] QVariantList devices() const { return devices_; }
+  [[nodiscard]] bool signedIn() const { return !account_id_.isEmpty(); }
+  [[nodiscard]] bool canSignOut() const { return !credential_.isEmpty(); }
+  [[nodiscard]] QString accountEmail() const { return account_email_; }
+  [[nodiscard]] bool emailCodePending() const { return !email_challenge_id_.isEmpty(); }
+  [[nodiscard]] QVariantList accountLicenses() const { return account_licenses_; }
   [[nodiscard]] QString currentInstallationId() const { return current_installation_id_; }
   [[nodiscard]] QString purchaseUrl() const { return config_.purchaseUrl; }
   [[nodiscard]] QString subscriptionPurchaseUrl() const { return config_.subscriptionPurchaseUrl; }
@@ -65,6 +75,15 @@ class CustomerAccessController final : public QObject {
   Q_INVOKABLE void revokeDevice(const QString& installation_id);
   Q_INVOKABLE void deactivateCurrentDevice();
   Q_INVOKABLE void recoverPurchase() const;
+  Q_INVOKABLE void requestEmailSignIn(const QString& email);
+  Q_INVOKABLE void verifyEmailSignIn(const QString& code);
+  Q_INVOKABLE void cancelEmailSignIn();
+  Q_INVOKABLE void loadAccount();
+  Q_INVOKABLE void selectAccountLicense(const QString& license_id);
+  Q_INVOKABLE void redeemVip(const QString& code);
+  Q_INVOKABLE void signOut();
+  Q_INVOKABLE void startCheckout(const QString& offer);
+  Q_INVOKABLE void openBillingPortal();
  signals:
   void changed();
  private:
@@ -76,6 +95,10 @@ class CustomerAccessController final : public QObject {
                          bool replace_credential, const QString& failure_status = {});
   void clearLocalAccess(bool clear_credential = true);
   void loadLease();
+  void applyAccount(const QJsonObject& response);
+  void finishSignOut(bool server_revoked);
+  [[nodiscard]] QString leaseKey() const;
+  [[nodiscard]] QString clockKey() const;
   CustomerAccessConfig config_;
   CustomerCredentialStore* credential_store_ = nullptr;
   QNetworkAccessManager network_;
@@ -86,6 +109,10 @@ class CustomerAccessController final : public QObject {
   QByteArray pending_recovery_key_digest_;
   QJsonObject claims_;
   QVariantList devices_;
+  QVariantList account_licenses_;
+  QString account_id_;
+  QString account_email_;
+  QString email_challenge_id_;
   QString current_installation_id_;
   QString status_;
   bool busy_ = false;

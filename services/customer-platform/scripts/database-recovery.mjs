@@ -10,7 +10,7 @@ const execute = promisify(execFile);
 const serviceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = resolve(serviceRoot, '../..');
 const wrangler = resolve(serviceRoot, 'node_modules/wrangler/bin/wrangler.js');
-const requiredTables = ['customers', 'licenses', 'installations', 'webhook_receipts', 'staff', 'audit'];
+const requiredTables = ['customers','licenses','subscriptions','refresh_sequences','installations','webhook_receipts','staff','audit','rate_buckets','privacy_tombstones','accounts','account_licenses','email_challenges','vip_codes','vip_redemptions','paddle_accounts','paddle_checkouts','paddle_licenses'];
 
 async function command(program, args, cwd) {
   try {
@@ -45,11 +45,21 @@ async function hashFile(path) {
 
 // Inspect an exported snapshot using SQLite, rather than racing live database counts.
 async function inspectSql(path, cwd) {
-  const script = `import sqlite3,sys,json,hashlib\nc=sqlite3.connect(':memory:')\nc.executescript(open(sys.argv[1],encoding='utf8').read())\nassert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'\nassert not c.execute('PRAGMA foreign_key_check').fetchall()\ntables=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name")]\ncounts={}\nfingerprints={}\nfor name in tables:\n cursor=c.execute('SELECT * FROM "'+name.replace('"','""')+'"')\n rows=sorted(json.dumps(row,ensure_ascii=True,default=lambda x:{'blob':x.hex()}) for row in cursor)\n counts[name]=len(rows)\n columns=json.dumps([col[0] for col in cursor.description])\n fingerprints[name]=hashlib.sha256((columns+'\\n'+'\\n'.join(rows)).encode()).hexdigest()\nprint(json.dumps({'counts':counts,'fingerprints':fingerprints},sort_keys=True))\n`;
+  const script = `import sqlite3,sys,json,hashlib\nc=sqlite3.connect(':memory:')\nc.executescript(open(sys.argv[1],encoding='utf8').read())\nassert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'\nassert not c.execute('PRAGMA foreign_key_check').fetchall()\ntables=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name")]\ncounts={}\nfingerprints={}\nfor name in tables:\n cursor=c.execute('SELECT * FROM "'+name.replace('"','""')+'"')\n rows=sorted(json.dumps(row,ensure_ascii=True,default=lambda x:{'blob':x.hex()}) for row in cursor)\n counts[name]=len(rows)\n columns=json.dumps([col[0] for col in cursor.description])\n fingerprints[name]=hashlib.sha256((columns+'\\n'+'\\n'.join(rows)).encode()).hexdigest()\nschema=c.execute(\"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name\").fetchall()\nschema_hash=hashlib.sha256(json.dumps(schema,sort_keys=True).encode()).hexdigest()\nprint(json.dumps({'counts':counts,'fingerprints':fingerprints,'schemaFingerprint':schema_hash},sort_keys=True))\n`;
   const result = await command('python3', ['-c', script, path], cwd);
   const snapshot = JSON.parse(result.stdout);
   if (!requiredTables.every(name => Number.isSafeInteger(snapshot.counts[name]))) throw new Error('Backup is missing required customer-platform tables.');
   return snapshot;
+}
+
+// D1 exports interleave table DDL and rows. An ALTER-added foreign key can
+// reference a later table, and D1 rejects the early INSERT before that table
+// exists even with deferred checks. Create every table before loading rows.
+// SQLite's parser keeps trigger bodies and semicolons inside strings intact.
+async function prepareRestoreSql(source, target, cwd) {
+  const script = `import sqlite3,sys\ntext=open(sys.argv[1],encoding='utf8').read()\nparts=[]\nbuffer=''\nfor ch in text:\n buffer+=ch\n if ch==';' and sqlite3.complete_statement(buffer):\n  parts.append(buffer.strip()); buffer=''\nassert not buffer.strip()\ntables=[s for s in parts if s.upper().startswith('CREATE TABLE ')]\nother=[s for s in parts if not s.upper().startswith('CREATE TABLE ')]\nassert tables\nwith open(sys.argv[2],'w',encoding='utf8') as f: f.write('PRAGMA defer_foreign_keys=TRUE;\\n'+'\\n'.join(tables+other)+'\\n')\n`;
+  await writeFile(target,'',{flag:'wx',mode:0o600});
+  await command('python3',['-c',script,source,target],cwd);
 }
 
 export async function backupDatabase({ config, directory, mode }) {
@@ -78,7 +88,9 @@ export async function rehearseRestore({ backup, directory }) {
   const config = resolve(output, 'wrangler.json');
   await writeFile(config, JSON.stringify({ name: 'looksy-isolated-restore', compatibility_date: '2026-09-23', d1_databases: [{ binding: 'DB', database_name: 'looksy-isolated-restore', database_id: randomUUID() }] }), { flag: 'wx', mode: 0o600 });
   // A fresh, private config owns fresh local state. There is deliberately no remote restore path.
-  await command(process.execPath, [wrangler, 'd1', 'execute', 'DB', '--config', config, '--local', '--file', sql], output);
+  const restoreSql=resolve(output,'restore-input.sql');
+  await prepareRestoreSql(sql,restoreSql,output);
+  await command(process.execPath, [wrangler, 'd1', 'execute', 'DB', '--config', config, '--local', '--file', restoreSql], output);
   const restored = resolve(output, 'restored.sql');
   await writeFile(restored, '', { flag: 'wx', mode: 0o600 });
   await command(process.execPath, [wrangler, 'd1', 'export', 'DB', '--config', config, '--local', '--output', restored], output);

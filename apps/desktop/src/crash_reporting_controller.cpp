@@ -16,20 +16,42 @@
 namespace photo_editor::desktop {
 namespace {
 constexpr auto consent_key = "privacy/crashReportsEnabled";
+QString channelConsentKey() {
+  // Stable preserves the existing consent identity. A staging installer must ask
+  // separately before reporting to a different project.
+  return QString::fromUtf8(LOOKSY_RELEASE_CHANNEL) == QStringLiteral("stable")
+      ? QString::fromLatin1(consent_key)
+      : QStringLiteral("privacy/crashReportsEnabled/%1").arg(QString::fromUtf8(LOOKSY_RELEASE_CHANNEL));
+}
 QString databasePath() {
-  return QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(QStringLiteral("crash-reports"));
+  return QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+      .filePath(QStringLiteral("crash-reports/%1").arg(QString::fromUtf8(LOOKSY_RELEASE_CHANNEL)));
+}
+bool removeQueuedReports() {
+  const QFileInfo root(QFileInfo(databasePath()).absolutePath());
+  const QFileInfo directory(databasePath());
+  if (root.isSymLink() || directory.isSymLink()) return false;
+  return !directory.exists() || QDir(databasePath()).removeRecursively();
 }
 }
 CrashReportingController::CrashReportingController(QObject* parent) : QObject(parent) {
-  if (enabled()) start();
-  else status_ = available() ? QStringLiteral("Crash reporting is off.") : QStringLiteral("Automatic crash reporting is not available in this version. You can share a support bundle.");
+  if (enabled()) {
+    if (!start()) QSettings().setValue(channelConsentKey(), false);
+  } else {
+    // Consent can be withdrawn between launches, including while the SDK is
+    // absent. Do not leave that channel's previous dumps waiting for re-enable.
+    const bool removed = removeQueuedReports();
+    status_ = !removed ? QStringLiteral("Crash reporting is off. Some queued reports could not be removed.")
+        : available() ? QStringLiteral("Crash reporting is off.")
+        : QStringLiteral("Automatic crash reporting is not available in this version. You can share a support bundle.");
+  }
 }
 CrashReportingController::~CrashReportingController() { stop(); }
 bool CrashReportingController::available() const {
   const QUrl dsn(QString::fromUtf8(LOOKSY_SENTRY_DSN));
   return LOOKSY_HAS_SENTRY && dsn.isValid() && dsn.scheme() == QStringLiteral("https") && !dsn.host().isEmpty();
 }
-bool CrashReportingController::enabled() const { return available() && QSettings().value(consent_key, false).toBool(); }
+bool CrashReportingController::enabled() const { return available() && QSettings().value(channelConsentKey(), false).toBool(); }
 bool CrashReportingController::start() {
 #if LOOKSY_HAS_SENTRY
   if (started_) return true;
@@ -41,7 +63,7 @@ bool CrashReportingController::start() {
 #endif
   if (!QFileInfo::exists(handler)) { status_ = QStringLiteral("Crash reporting could not start. The crash handler is missing."); return false; }
   const QFileInfo queue(databasePath());
-  if (queue.isSymLink()) { status_ = QStringLiteral("Crash reporting could not start. Its storage location is not a dedicated folder."); return false; }
+  if (queue.isSymLink() || QFileInfo(queue.absolutePath()).isSymLink()) { status_ = QStringLiteral("Crash reporting could not start. Its storage location is not a dedicated folder."); return false; }
   qint64 bytes = 0;
   QDirIterator reports(databasePath(), QDir::Files | QDir::NoSymLinks, QDirIterator::Subdirectories);
   while (reports.hasNext()) { reports.next(); bytes += reports.fileInfo().size(); }
@@ -49,7 +71,7 @@ bool CrashReportingController::start() {
   if (bytes > 50 * 1024 * 1024 && !QDir(databasePath()).removeRecursively()) {
     status_ = QStringLiteral("Crash reporting could not start. Its report queue is full."); return false;
   }
-  QDir().mkpath(databasePath());
+  if (!QDir().mkpath(databasePath())) { status_ = QStringLiteral("Crash reporting could not start. Its report queue is unavailable."); return false; }
   auto* options = sentry_options_new();
   sentry_options_set_dsn(options, LOOKSY_SENTRY_DSN);
   sentry_options_set_release(options, "looksy@" LOOKSY_APP_VERSION);
@@ -84,16 +106,14 @@ void CrashReportingController::stop() {
 #endif
 }
 void CrashReportingController::setEnabled(bool value) {
-  if (!available()) return;
-  QSettings().setValue(consent_key, value);
+  if (value && !available()) return;
+  QSettings().setValue(channelConsentKey(), value);
   if (value) {
-    if (!start()) QSettings().setValue(consent_key, false);
+    if (!start()) QSettings().setValue(channelConsentKey(), false);
   } else {
     stop();
     // This dedicated SDK directory contains only queued reports, never user work.
-    const QFileInfo directory(databasePath());
-    const bool removed = !directory.exists() ||
-        (!directory.isSymLink() && QDir(databasePath()).removeRecursively());
+    const bool removed = removeQueuedReports();
     status_ = removed ? QStringLiteral("Crash reporting is off. Queued reports have been removed.")
                       : QStringLiteral("Crash reporting is off. Some queued reports could not be removed.");
   }

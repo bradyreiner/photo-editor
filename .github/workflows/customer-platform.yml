@@ -26,4 +26,7 @@ jobs:
         working-directory: .
         run: |
           python3 -B scripts/check-customer-edit-admission.py
+          python3 -B scripts/test-check-customer-edit-admission.py
           python3 -B scripts/test-appcast-rollout.py
+          python3 -B scripts/test-staging-desktop.py
+          node --test scripts/test-checkout-page.cjs

@@ -346,3 +346,90 @@ This is still a layered rollout rather than the full observability stack. The ma
 - OpenTelemetry metrics and traces from the Qt/C++ desktop shell
 - sampling/profiling for sustained render hotspots
 - dashboards and alert thresholds for render latency, job failure rate, and startup regressions
+
+## Private staging diagnostics and updates
+
+`release/staging.example.json` is the public configuration template. Replace its
+placeholder URLs and public keys with an isolated staging customer issuer,
+entitlement key, Sparkle key/feed, archive base and Windows App Installer URL.
+Keep all private keys, mail tokens, crash-report authentication tokens and billing
+credentials outside this file and the repository. The optional `sentryDsn` is a
+public ingestion DSN; leaving it empty disables the SDK.
+
+Prepare an initial CMake cache without publishing or overwriting files:
+
+```sh
+python3 scripts/prepare-staging-desktop.py /tmp/looksy-staging.json \
+  --output /tmp/looksy-staging.cmake
+cmake --preset release-macos -C /tmp/looksy-staging.cmake \
+  -DPHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR=/path/to/Sparkle
+```
+
+The same cache can be used with the Windows release preset. Windows packaging
+must additionally pass the template's `windowsAppInstallerUrl` as
+`-AppInstallerUri` and `downloadBaseUrl` as `-PackageBaseUri` to
+`scripts/package-windows-msix.ps1`, alongside the existing publisher and signing
+arguments. These are packaging arguments rather than desktop CMake variables.
+When crash reporting
+is enabled, also configure the matching Sentry Native SDK package and
+`LOOKSY_CRASHPAD_HANDLER`; those local SDK paths and private distribution signing
+credentials are deliberately not generated. Runtime libraries, symbols and the
+handler must be verified in the installed package. Windows installation now
+explicitly includes the configured handler beside Looksy.exe.
+
+The prepared cache pins `LOOKSY_RELEASE_CHANNEL=staging`. After signing the actual
+Mac archive, tag its feed item using the existing rollout tool:
+
+```sh
+python3 scripts/configure-appcast-rollout.py /tmp/appcast.xml \
+  --version 0.1.1 --channel staging --interval 0
+python3 scripts/prepare-staging-desktop.py /tmp/looksy-staging.json \
+  --appcast /tmp/appcast.xml --appinstaller /tmp/Looksy.appinstaller
+```
+
+The metadata check requires every Mac item to be explicitly tagged `staging`,
+archive URLs under the configured private download base, signature metadata and
+the existing Windows `Virel.Studio` package identity. It rejects automatic
+App Installer downgrades. It checks structure and routing; it does **not** verify
+archive signatures or prove an installed update. Sparkle and Windows verify the
+real downloaded artifacts. The Mac updater independently rejects untagged/default
+or other-channel updates in staging; Sparkle's allowed-channel API alone always
+includes the default channel.
+
+Pass `--production-config /path/to/public-production.json` when production
+resources are known to compare issuer, keys, feeds, archives and crash project.
+Without that comparison the tool explicitly reports that production isolation
+has not been checked. A separate feed is routing isolation, not authentication:
+protect private download hosting through a supported distribution mechanism;
+do not embed bearer tokens in feed URLs. Preserve `com.virel.studio` and the
+Windows package/publisher identities and use a separate macOS/Windows test user
+and disposable catalog for installed tests.
+
+Crash-report consent and report queues are now scoped to the build channel.
+Stable retains its existing preference identity; installing staging cannot reuse
+stable consent or upload stable queued reports. Consent-off launch and disabling
+reporting purge only that channel's dedicated queue, including builds without the
+SDK. Symlinked queue locations are refused. Older pre-channel `crash-reports`
+files are never imported or uploaded by this code; they remain local and can be
+reviewed/removed separately. Reports can contain process memory, so real capture,
+consent revocation and matching dSYM/PDB symbolication still require a controlled
+crash in an installed test process.
+
+Support bundles remain local and review-before-sharing. Each bundle now includes
+a unique `incidentId`, a copied-file inventory and byte counts. Only the known
+session/desktop/catalog structured-log names from the last three regular run
+directories are included, with a 10 MiB per-file and 20 MiB total ceiling. Arbitrary
+files and symlinks are omitted. Logs can still include paths or user-entered text;
+this file allowlist is not a content-redaction guarantee. The local bundle ID is
+not a server incident ID: retain backend request/incident IDs from the failed
+operation as well when correlating a support case. Nothing uploads the bundle.
+
+Before promotion, record version A and B installer checksums, OS and source
+revision, then prove real signed A-to-B download/install/relaunch, account and
+catalog preservation, wrong signature/channel rejection, interrupted/full-disk
+handling and recovery via a corrected higher build. Run the same journey on
+Windows. Do not treat the local metadata/unit tests as that acceptance evidence.
+
+References: [Sparkle updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
+[Sparkle publishing](https://sparkle-project.org/documentation/publishing/),
+[Sentry Native options and consent](https://docs.sentry.io/platforms/native/configuration/options/).

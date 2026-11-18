@@ -3,13 +3,35 @@
   "databaseId": "00000000-0000-0000-0000-000000000000",
   "accessTeamDomain": "replace-me.cloudflareaccess.com",
   "accessAudience": "replace-with-access-application-audience",
-  "storeId": "replace-with-store-id",
   "signingKeyId": "looksy-staging-1",
   "trialDays": 14,
   "leaseDays": 7,
   "trustedKeys": {},
   "productPolicy": {
-    "101": { "productId": "10", "plan": "studio", "mode": "perpetual", "major": 0, "features": ["editor", "agent"], "deviceLimit": 2 },
-    "102": { "productId": "11", "plan": "studio-monthly", "mode": "subscription", "major": 0, "features": ["editor", "agent"], "deviceLimit": 2 }
-  }
+    "pri_replace_with_one_time_price": {
+      "productId": "pro_replace_with_product_id",
+      "plan": "studio",
+      "mode": "perpetual",
+      "major": 0,
+      "features": [
+        "editor",
+        "agent"
+      ],
+      "deviceLimit": 2
+    },
+    "pri_replace_with_subscription_price": {
+      "productId": "pro_replace_with_product_id",
+      "plan": "studio-monthly",
+      "mode": "subscription",
+      "major": 0,
+      "features": [
+        "editor",
+        "agent"
+      ],
+      "deviceLimit": 2
+    }
+  },
+  "billingProvider": "paddle",
+  "emailFrom": "accounts@example.invalid",
+  "paddleCheckoutOrigin": "https://billing.example.invalid"
 }

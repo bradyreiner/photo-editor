@@ -1,4 +1,5 @@
 import { ApiError, body, hash, json, now, str, type ServiceEnv } from './core';
+import { accountDeletionStatements } from './admin-accounts';
 
 type Actor = { subject: string; role: string };
 
@@ -9,19 +10,20 @@ async function audit(env: ServiceEnv, actor: Actor, action: string, target: stri
 
 export async function operationsSummary(env: ServiceEnv): Promise<Response> {
   const time = now();
-  const [webhooks, stale] = await Promise.all([
+  const [webhooks, stale, checkouts] = await Promise.all([
     env.DB.prepare(`SELECT count(*) AS pending,
       sum(CASE WHEN attempts>0 THEN 1 ELSE 0 END) AS failed,
       sum(CASE WHEN next_retry_at<=? THEN 1 ELSE 0 END) AS due,
       min(received_at) AS oldestPendingAt,
       max(attempts) AS maxAttempts
       FROM webhook_receipts WHERE processed_at IS NULL`).bind(time).first<Record<string, number | null>>(),
-    env.DB.prepare('SELECT count(*) AS stale FROM licenses WHERE checked_at<? AND blocked=0').bind(time - 86400).first<{stale: number}>(),
+    env.DB.prepare("SELECT count(*) AS stale FROM licenses WHERE id NOT LIKE 'vip:%' AND checked_at<? AND blocked=0").bind(time - 86400).first<{stale: number}>(),
+    env.DB.prepare(`SELECT count(*) AS pending,sum(CASE WHEN checked_at<? THEN 1 ELSE 0 END) AS due,min(created_at) AS oldestPendingAt FROM paddle_checkouts WHERE fulfilled_at IS NULL`).bind(time-300).first<{pending:number;due:number|null;oldestPendingAt:number|null}>(),
   ]);
   return json({ generatedAt: time, webhooks: {
     pending: webhooks?.pending ?? 0, failed: webhooks?.failed ?? 0, due: webhooks?.due ?? 0,
     oldestPendingAt: webhooks?.oldestPendingAt ?? null, maxAttempts: webhooks?.maxAttempts ?? 0,
-  }, licenses: { stale: stale?.stale ?? 0 }, backup: { lastSuccessfulAt: null } });
+  }, checkouts:{pending:checkouts?.pending??0,due:checkouts?.due??0,oldestPendingAt:checkouts?.oldestPendingAt??null}, licenses: { stale: stale?.stale ?? 0 }, backup: { lastSuccessfulAt: null } });
 }
 
 export async function customerExport(request: Request, env: ServiceEnv, actor: Actor): Promise<Response> {
@@ -29,19 +31,20 @@ export async function customerExport(request: Request, env: ServiceEnv, actor: A
   const customerId = str(input.customerId, 200), reason = str(input.reason, 500);
   const customer = await env.DB.prepare('SELECT id,email,created_at FROM customers WHERE id=?').bind(customerId).first();
   if (!customer) throw new ApiError(404, 'not_found');
-  const [licenses, devices, auditRows] = await Promise.all([
+  const [licenses, devices, auditRows, accounts] = await Promise.all([
     env.DB.prepare(`SELECT id,order_id,order_item_id,variant_id,plan,mode,major,features,device_limit,status,
       expires_at,checked_at,blocked FROM licenses WHERE customer_id=? LIMIT 1001`).bind(customerId).all(),
     env.DB.prepare(`SELECT id,license_id,trial_ends_at,revoked,created_at,last_seen_at,app_version,platform
       FROM installations WHERE customer_id=? LIMIT 1001`).bind(customerId).all(),
     env.DB.prepare('SELECT actor,action,target,reason,created_at FROM audit WHERE target=? ORDER BY created_at LIMIT 1001').bind(customerId).all(),
+    env.DB.prepare('SELECT id,email,created_at,disabled,trial_ends_at FROM accounts WHERE id IN (SELECT account_id FROM installations WHERE customer_id=? AND account_id IS NOT NULL)').bind(customerId).all(),
   ]);
   if (licenses.results.length > 1000 || devices.results.length > 1000 || auditRows.results.length > 1000) {
     throw new ApiError(413, 'export_too_large');
   }
   await audit(env, actor, 'customer_export', customerId, reason);
   return json({ export: { schema: 1, generatedAt: now(), customer, licenses: licenses.results,
-    devices: devices.results, audit: auditRows.results } });
+    devices: devices.results, audit: auditRows.results, accounts:accounts.results } });
 }
 
 export async function deleteCustomer(env: ServiceEnv, actor: Actor, customerIdValue: unknown, reasonValue: unknown): Promise<Response> {
@@ -52,7 +55,15 @@ export async function deleteCustomer(env: ServiceEnv, actor: Actor, customerIdVa
   if (!customer) throw new ApiError(404, 'not_found');
   const providerHash = customer.provider_customer_id ? await hash(customer.provider_customer_id) : null;
   const time = now();
+  const accountRows=await env.DB.prepare(`SELECT DISTINCT account_id AS id FROM installations WHERE customer_id=? AND account_id IS NOT NULL
+    UNION SELECT account_id AS id FROM account_licenses WHERE license_id IN(SELECT id FROM licenses WHERE customer_id=?)`).bind(customerId,customerId).all<{id:string}>();
+  const accountStatements:D1PreparedStatement[]=[];
+  for(const linked of accountRows.results) {
+    const account=await env.DB.prepare('SELECT email FROM accounts WHERE id=?').bind(linked.id).first<{email:string}>();
+    if(account) accountStatements.push(...accountDeletionStatements(env,linked.id,account.email));
+  }
   await env.DB.batch([
+    ...accountStatements,
     env.DB.prepare(`INSERT INTO privacy_tombstones(customer_id,provider_customer_hash,deleted_at) VALUES(?,?,?)
       ON CONFLICT(customer_id) DO UPDATE SET provider_customer_hash=excluded.provider_customer_hash,deleted_at=excluded.deleted_at`)
       .bind(customerId, providerHash, time),
