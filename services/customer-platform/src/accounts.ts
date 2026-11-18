@@ -59,6 +59,11 @@ async function emailRequest(request: Request, env: ServiceEnv): Promise<Response
   const input = await body(request), email = str(input.email, 254).trim().toLowerCase();
   if (!/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,63}$/.test(email)) throw new ApiError(400, 'invalid_email');
   if (!env.EMAIL_FROM || env.EMAIL_FROM.includes('.invalid') || !env.RESEND_API_KEY) throw new ApiError(503, 'email_not_configured');
+  if(env.EMAIL_FROM.toLowerCase().includes('@resend.dev')) {
+    if(env.EMAIL_FROM.toLowerCase()!=='onboarding@resend.dev' || env.ALLOW_TEST_PURCHASES!=='true' ||
+      !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(env.EMAIL_TEST_RECIPIENT)) throw new ApiError(503,'email_not_configured');
+    if(email!==env.EMAIL_TEST_RECIPIENT.toLowerCase()) throw new ApiError(403,'staging_email_only');
+  }
   await registerInstallation(env, bearer(request));
   const device = await authenticate(request, env, true);
   const current = await account(env, device);

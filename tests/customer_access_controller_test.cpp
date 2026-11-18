@@ -116,6 +116,7 @@ class FakeService final : public QObject {
   QString lastPath;
   QStringList paths;
   QByteArray lastAuthorization;
+  QByteArray lastUserAgent;
   QJsonObject lastInput;
   QJsonObject lastRecoveryInput;
   QByteArray lastRecoveryAuthorization;
@@ -148,8 +149,10 @@ class FakeService final : public QObject {
     lastPath = QString::fromLatin1(request_line.value(1));
     paths.append(lastPath);
     lastAuthorization.clear();
+    lastUserAgent.clear();
     for (const auto& line : request_header) {
       if (line.toLower().startsWith("authorization:")) lastAuthorization = line.mid(line.indexOf(':') + 1).trimmed();
+      if (line.toLower().startsWith("user-agent:")) lastUserAgent = line.mid(line.indexOf(':') + 1).trimmed();
     }
     const auto body = buffer.mid(split + 4, body_size);
     lastInput = QJsonDocument::fromJson(body).object();
@@ -279,6 +282,9 @@ int main(int argc, char** argv) {
       controller.customerId() != QStringLiteral("customer:controller-test") || controller.devices().size() != 2) {
     std::cerr << "recovery assertions failed: path=" << service.lastPath.toStdString() << " devices="
               << controller.devices().size() << " customer=" << controller.customerId().toStdString() << '\n'; return 1;
+  }
+  if (service.lastUserAgent != QByteArrayLiteral("Looksy/0.1.0 (native desktop)")) {
+    std::cerr << "customer requests need a descriptive native User-Agent\n"; return 1;
   }
   auto active_credential = credentials.credential;
   {

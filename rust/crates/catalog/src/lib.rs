@@ -1,6 +1,6 @@
-pub mod helper_arguments;
 mod asset_metadata;
-pub use asset_metadata::{AssetMetadataRecord, validate_asset_metadata};
+pub mod helper_arguments;
+pub use asset_metadata::{validate_asset_metadata, AssetMetadataRecord};
 mod importer;
 mod local_database;
 pub mod observability;
@@ -364,12 +364,7 @@ fn validate_canonical_edit_recipe_v13_input(
             let capabilities = object
                 .get("requiredCapabilities")
                 .and_then(Value::as_array)
-                .and_then(|items| {
-                    items
-                        .iter()
-                        .map(Value::as_str)
-                        .collect::<Option<Vec<_>>>()
-                });
+                .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>());
             let valid_capabilities = capabilities.as_ref().is_some_and(|items| {
                 let allowed = [
                     "component-object-assets-v1",
@@ -400,9 +395,9 @@ fn validate_canonical_edit_recipe_v13_input(
                     && items.iter().all(|item| allowed.contains(item))
                     && items.as_slice() == canonical.as_slice()
             });
-            let has_document_light = capabilities.as_ref().is_some_and(|items| {
-                items.contains(&"document-layer-style-light-v1")
-            });
+            let has_document_light = capabilities
+                .as_ref()
+                .is_some_and(|items| items.contains(&"document-layer-style-light-v1"));
             let valid_angle = object
                 .get("documentLayerStyleLightAngle")
                 .and_then(Value::as_f64)
@@ -1392,7 +1387,7 @@ impl CatalogService {
         .await?;
 
         for asset_batch in summary.assets.chunks(ASSET_IMPORT_BATCH_SIZE) {
-            let mut query_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
+            let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
                 r#"
                 INSERT INTO assets (
                     asset_id,
@@ -1498,16 +1493,11 @@ impl CatalogService {
         &self,
         limit: i64,
     ) -> Result<Vec<CatalogAssetSnapshot>, sqlx::Error> {
-        let base_query = ASSET_SNAPSHOT_QUERY;
-
-        let rows = if limit > 0 {
-            sqlx::query(&format!("{base_query}\nLIMIT $1"))
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
-        } else {
-            sqlx::query(base_query).fetch_all(&self.pool).await?
-        };
+        let mut query = QueryBuilder::<Postgres>::new(ASSET_SNAPSHOT_QUERY);
+        if limit > 0 {
+            query.push("\nLIMIT ").push_bind(limit);
+        }
+        let rows = query.build().fetch_all(&self.pool).await?;
 
         rows.into_iter().map(map_asset_snapshot_row).collect()
     }
@@ -1516,19 +1506,11 @@ impl CatalogService {
         &self,
         limit: i64,
     ) -> Result<Vec<CatalogAssetLibrarySnapshot>, sqlx::Error> {
-        let query_text = if limit > 0 {
-            format!("{ASSET_LIBRARY_SNAPSHOT_QUERY}\nLIMIT $1")
-        } else {
-            ASSET_LIBRARY_SNAPSHOT_QUERY.to_owned()
-        };
-        let rows = if limit > 0 {
-            sqlx::query(&query_text)
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
-        } else {
-            sqlx::query(&query_text).fetch_all(&self.pool).await?
-        };
+        let mut query = QueryBuilder::<Postgres>::new(ASSET_LIBRARY_SNAPSHOT_QUERY);
+        if limit > 0 {
+            query.push("\nLIMIT ").push_bind(limit);
+        }
+        let rows = query.build().fetch_all(&self.pool).await?;
 
         rows.into_iter()
             .map(map_asset_library_snapshot_row)
@@ -1563,15 +1545,11 @@ impl CatalogService {
         limit: i64,
         writer: &mut W,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let query_text = if limit > 0 {
-            format!("{ASSET_SNAPSHOT_QUERY}\nLIMIT $1")
-        } else {
-            ASSET_SNAPSHOT_QUERY.to_owned()
-        };
-        let mut query = sqlx::query(&query_text);
+        let mut query_builder = QueryBuilder::<Postgres>::new(ASSET_SNAPSHOT_QUERY);
         if limit > 0 {
-            query = query.bind(limit);
+            query_builder.push("\nLIMIT ").push_bind(limit);
         }
+        let query = query_builder.build();
         // One SELECT preserves ordering and statement-level consistency without
         // retaining the full PgRow collection or converted asset vector.
         let mut rows = query.fetch(&self.pool);
@@ -1594,15 +1572,11 @@ impl CatalogService {
         limit: i64,
         writer: &mut W,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let query_text = if limit > 0 {
-            format!("{ASSET_LIBRARY_SNAPSHOT_QUERY}\nLIMIT $1")
-        } else {
-            ASSET_LIBRARY_SNAPSHOT_QUERY.to_owned()
-        };
-        let mut query = sqlx::query(&query_text);
+        let mut query_builder = QueryBuilder::<Postgres>::new(ASSET_LIBRARY_SNAPSHOT_QUERY);
         if limit > 0 {
-            query = query.bind(limit);
+            query_builder.push("\nLIMIT ").push_bind(limit);
         }
+        let query = query_builder.build();
         let mut rows = query.fetch(&self.pool);
         writer.write_all(b"[")?;
         let mut first = true;
@@ -4222,7 +4196,7 @@ fn same_json_value(actual: &Value, expected: &Value) -> bool {
 
 fn normalized_json_number(number: &serde_json::Number) -> Option<(bool, String, i64)> {
     let text = number.to_string();
-    let (mantissa, exponent) = match text.find(|character| character == 'e' || character == 'E') {
+    let (mantissa, exponent) = match text.find(['e', 'E']) {
         Some(index) => {
             let (mantissa, exponent) = text.split_at(index);
             (mantissa, exponent[1..].parse::<i64>().ok()?)
@@ -4549,10 +4523,8 @@ mod tests {
         });
         let mut v5 = base.clone();
         v5["schema"] = "photo-editor-edit-recipe-provenance:v5".into();
-        v5["requiredCapabilities"] = serde_json::json!([
-            "component-object-assets-v1",
-            "smart-object-documents-v1"
-        ]);
+        v5["requiredCapabilities"] =
+            serde_json::json!(["component-object-assets-v1", "smart-object-documents-v1"]);
         let mut v6 = base.clone();
         v6["schema"] = "photo-editor-edit-recipe-provenance:v6".into();
         v6["requiredCapabilities"] = serde_json::json!([
@@ -4576,13 +4548,20 @@ mod tests {
         assert!(check(&v6).is_ok());
         assert!(check(&v7).is_ok());
 
-        for bad_angle in [Value::Null, serde_json::json!(3600.1), serde_json::json!(-3600.1)] {
+        for bad_angle in [
+            Value::Null,
+            serde_json::json!(3600.1),
+            serde_json::json!(-3600.1),
+        ] {
             let mut invalid = v7.clone();
             invalid["documentLayerStyleLightAngle"] = bad_angle;
             assert!(check(&invalid).is_err());
         }
         let mut missing_angle = v7.clone();
-        missing_angle.as_object_mut().unwrap().remove("documentLayerStyleLightAngle");
+        missing_angle
+            .as_object_mut()
+            .unwrap()
+            .remove("documentLayerStyleLightAngle");
         assert!(check(&missing_angle).is_err());
         let mut missing_capability = v7.clone();
         missing_capability["requiredCapabilities"] = serde_json::json!([
@@ -4592,10 +4571,8 @@ mod tests {
         ]);
         assert!(check(&missing_capability).is_err());
         let mut unknown_capability = v7;
-        unknown_capability["requiredCapabilities"] = serde_json::json!([
-            "document-layer-style-light-v1",
-            "future-light-capability"
-        ]);
+        unknown_capability["requiredCapabilities"] =
+            serde_json::json!(["document-layer-style-light-v1", "future-light-capability"]);
         assert!(check(&unknown_capability).is_err());
     }
 
@@ -4608,8 +4585,7 @@ mod tests {
         });
         let mut dimension_only = base.clone();
         dimension_only["schema"] = "photo-editor-edit-recipe-provenance:v8".into();
-        dimension_only["requiredCapabilities"] =
-            serde_json::json!(["text-dimension-v1"]);
+        dimension_only["requiredCapabilities"] = serde_json::json!(["text-dimension-v1"]);
 
         let mut dimension_with_light = base;
         dimension_with_light["schema"] = "photo-editor-edit-recipe-provenance:v8".into();
@@ -4636,7 +4612,11 @@ mod tests {
             invalid["requiredCapabilities"] = capabilities;
             assert!(check(&invalid).is_err());
         }
-        for invalid_angle in [Value::Null, serde_json::json!(3600.1), serde_json::json!(-3600.1)] {
+        for invalid_angle in [
+            Value::Null,
+            serde_json::json!(3600.1),
+            serde_json::json!(-3600.1),
+        ] {
             let mut invalid = dimension_with_light.clone();
             invalid["documentLayerStyleLightAngle"] = invalid_angle;
             assert!(check(&invalid).is_err());
@@ -4780,11 +4760,15 @@ mod tests {
             .unwrap();
         // This test creates only its own schema. Never touch production tables.
         let schema = format!("culling_test_{}", std::process::id());
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        QueryBuilder::<Postgres>::new("CREATE SCHEMA ")
+            .push(&schema)
+            .build()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        QueryBuilder::<Postgres>::new("SET search_path TO ")
+            .push(&schema)
+            .build()
             .execute(&pool)
             .await
             .unwrap();
@@ -4853,7 +4837,10 @@ mod tests {
             .unwrap();
         assert_eq!(result.applied, vec!["b"]);
         assert_eq!(result.missing, vec!["a"]);
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        QueryBuilder::<Postgres>::new("DROP SCHEMA ")
+            .push(&schema)
+            .push(" CASCADE")
+            .build()
             .execute(&pool)
             .await
             .unwrap();
@@ -4870,11 +4857,15 @@ mod tests {
             .await
             .unwrap();
         let schema = format!("agent_task_test_{}", std::process::id());
-        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        QueryBuilder::<Postgres>::new("CREATE SCHEMA ")
+            .push(&schema)
+            .build()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(&format!("SET search_path TO {schema}"))
+        QueryBuilder::<Postgres>::new("SET search_path TO ")
+            .push(&schema)
+            .build()
             .execute(&pool)
             .await
             .unwrap();
@@ -4901,6 +4892,10 @@ mod tests {
                    asset_id text PRIMARY KEY REFERENCES assets(asset_id) ON DELETE CASCADE,
                    rating integer NOT NULL DEFAULT 0, picked boolean NOT NULL DEFAULT false,
                    rejected boolean NOT NULL DEFAULT false, color_label text NOT NULL DEFAULT '',
+                   updated_at timestamptz NOT NULL DEFAULT NOW());
+               CREATE TABLE asset_metadata (
+                   asset_id text PRIMARY KEY REFERENCES assets(asset_id) ON DELETE CASCADE,
+                   metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
                    updated_at timestamptz NOT NULL DEFAULT NOW());
                CREATE TABLE asset_relinks (
                    asset_id text PRIMARY KEY REFERENCES assets(asset_id) ON DELETE CASCADE,
@@ -5273,7 +5268,10 @@ mod tests {
             .agent_asset_recipe_snapshot("manual", second_source.to_str().unwrap())
             .await
             .is_ok());
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        QueryBuilder::<Postgres>::new("DROP SCHEMA ")
+            .push(&schema)
+            .push(" CASCADE")
+            .build()
             .execute(&pool)
             .await
             .unwrap();

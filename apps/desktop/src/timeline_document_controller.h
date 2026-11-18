@@ -2347,6 +2347,11 @@ signals:
   [[nodiscard]] QVector<ClipRef> orderedVideoClipRefs() const;
   [[nodiscard]] QVector<ClipRef> orderedSelectableClipRefs() const;
   [[nodiscard]] ClipRef clipRefAt(int index) const;
+  [[nodiscard]] ClipRef findClipRefById(const QString& clip_id) const;
+  [[nodiscard]] ClipRef prepareSelectedClipEdit();
+  void appendGeneratedClip(Track* target_track, const Clip& clip, double start_seconds);
+  [[nodiscard]] Track* sourcePatchedTrackForClip(Clip& clip);
+  void appendPreparedClip(Track* target_track, const Clip& clip, TrackKind target_kind);
   [[nodiscard]] ClipRef selectedClipRef() const;
   [[nodiscard]] ClipRef keyframeEditClipRef() const;
   [[nodiscard]] const Clip* clipAt(int index) const;

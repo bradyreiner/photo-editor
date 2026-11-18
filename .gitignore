@@ -74,6 +74,10 @@ perf-corpora/preview-synthetic-v1/
 # Temporary migration fixtures created by local checks
 /photo-editor-migration-*/
 
+# Installed JavaScript dependencies, including local symlinks
+node_modules
+.wrangler/
+
 # Rust
 rust/target/
 /target/

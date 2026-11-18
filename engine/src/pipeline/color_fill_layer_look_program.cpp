@@ -3,6 +3,7 @@
 #include "color_layer_runtime.h"
 #include "color_lut_runtime.h"
 
+#include <algorithm>
 #include <cmath>
 #include <ranges>
 

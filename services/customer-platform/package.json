@@ -1,7 +1,16 @@
 {
   "name": "looksy-customer-platform",
   "private": true,
-  "overrides": { "workerd": "1.20260921.1", "sharp": "0.35.4" },
+  "overrides": {
+    "workerd": "1.20261006.1",
+    "sharp": "0.35.5",
+    "wrangler": "$wrangler",
+    "miniflare": "5.20261006.1-alpha",
+    "undici": "7.30.1",
+    "zod": "4.6.6",
+    "vite": "8.3.3",
+    "source-map-js": "1.2.2"
+  },
   "type": "module",
   "scripts": {
     "test": "vitest run",
@@ -24,7 +33,7 @@
     "@cloudflare/vitest-pool-workers": "0.22.0",
     "@cloudflare/workers-types": "5.20260923.1",
     "typescript": "7.0.2",
-    "vitest": "4.1.11",
-    "wrangler": "4.137.0"
+    "vitest": "4.1.12",
+    "wrangler": "4.149.0"
   }
 }

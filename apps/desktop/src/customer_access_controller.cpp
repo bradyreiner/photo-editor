@@ -142,6 +142,7 @@ void CustomerAccessController::request(const QString& path, const QJsonObject& i
   emit changed();
   QNetworkRequest network_request(QUrl(config_.apiUrl + path));
   network_request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+  network_request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Looksy/%1 (native desktop)").arg(config_.appVersion));
   network_request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
   network_request.setTransferTimeout(15000);
   if (authenticated) network_request.setRawHeader("Authorization", "Bearer " + credential_);
@@ -268,6 +269,7 @@ void CustomerAccessController::request(const QString& path, const QJsonObject& i
     else if (code == QStringLiteral("account_session_expired")) status_ = QStringLiteral("Your account session has expired. Sign in again with an email code.");
     else if (code == QStringLiteral("account_disabled")) status_ = QStringLiteral("This account is disabled. Contact support.");
     else if (code == QStringLiteral("rate_limited")) status_ = QStringLiteral("Too many attempts. Wait a moment before trying again.");
+    else if (code == QStringLiteral("staging_email_only")) status_ = QStringLiteral("This staging build sends sign-in codes only to the configured test email. Use that address to continue.");
     else if (path == QStringLiteral("/v1/account/email/request")) status_ = QStringLiteral("Sign-in email could not be sent. Check the address and try again.");
     else if (path == QStringLiteral("/v1/account/email/verify")) status_ = QStringLiteral("Sign-in could not be completed. Request a new code and try again.");
     else if (path.startsWith(QStringLiteral("/v1/billing/"))) status_ = QStringLiteral("Billing could not be opened. Sign in and try again when the service is available.");

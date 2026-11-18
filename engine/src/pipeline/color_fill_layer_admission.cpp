@@ -5,6 +5,7 @@
 #include "color_layer_runtime.h"
 #include "color_tone_runtime.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>

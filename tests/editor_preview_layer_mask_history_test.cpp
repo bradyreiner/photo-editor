@@ -1,6 +1,9 @@
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 #include <QCoreApplication>
 #include <QStringList>
@@ -464,6 +467,48 @@ int main(int argc, char** argv) {
     if (reopened.previewPhotoLayerEffect(0, type)) return fail("Locked target must reject preview");
     reopened.undo();
     if (reopened.photoLayers() != applied) return fail("Rejected preview must not consume undo");
+  }
+
+  const std::vector<std::pair<QString, std::function<bool(const QString&)>>> additional_effects{
+      {QStringLiteral("dragged_shutter"), [&](const QString& id) {
+        return reopened.setPhotoLayerDraggedShutter(0, id, 28, 23, 0.4, 0.3, true, 0.65, true);
+      }},
+      {QStringLiteral("optical_diffusion"), [&](const QString& id) {
+        return reopened.setPhotoLayerOpticalDiffusion(0, id, 24, 0.7, 0.2, 1, 0.1, 0.4, 0.65, true);
+      }},
+      {QStringLiteral("imperfect_print"), [&](const QString& id) {
+        return reopened.setPhotoLayerImperfectPrint(0, id, 32, 0.2, 0.1, 1, 1, 0, 0, 1, 123, 0.65, true);
+      }},
+  };
+  bool editing_allowed = true;
+  reopened.setEditAccessPolicy([&] { return editing_allowed; });
+  for (const auto& [type, create_or_edit] : additional_effects) {
+    const auto baseline = reopened.photoLayers();
+    if (!create_or_edit({})) return fail("Creative effect creation must succeed");
+    const auto effect = reopened.photoLayerEffects(0).last().toMap();
+    const auto id = effect.value("id").toString();
+    const auto created = reopened.photoLayers();
+    if (id.isEmpty() || effect.value("type").toString() != type ||
+        !almost_equal(effect.value("amount").toDouble(), 0.65) || !effect.value("enabled").toBool())
+      return fail("Creative effect must preserve type, identity and common controls");
+    if (create_or_edit(id) || create_or_edit(QStringLiteral("missing-effect")) ||
+        create_or_edit(box_id) || reopened.photoLayers() != created)
+      return fail("No-op and wrong effect identities must not change the recipe");
+    reopened.undo();
+    if (reopened.photoLayers() != baseline) return fail("Creative effect creation must be one undo step");
+    reopened.redo();
+    if (reopened.photoLayers() != created) return fail("Creative effect redo must preserve exact encoded settings");
+    reopened.undo();
+    editing_allowed = false;
+    if (create_or_edit({}) || reopened.photoLayers() != baseline)
+      return fail("Expired access must reject creative effect creation");
+    editing_allowed = true;
+    if (!reopened.setPhotoLayerLocked(0, true)) return fail("Creative target must lock");
+    const auto locked = reopened.photoLayers();
+    if (create_or_edit({}) || reopened.photoLayers() != locked)
+      return fail("Locked layers must reject creative effect creation");
+    reopened.undo();
+    if (reopened.photoLayers() != baseline) return fail("Rejected creative edits must preserve undo history");
   }
 
   return EXIT_SUCCESS;

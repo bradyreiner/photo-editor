@@ -198,3 +198,26 @@ test('generates a complete Paddle staging fixture with public-only desktop setti
   assert.deepEqual(result.pendingOperatorSecrets,['PADDLE_API_KEY','PADDLE_WEBHOOK_SECRET','RESEND_API_KEY']);
   assert.doesNotMatch(await readFile(result.desktopConfigPath,'utf8'),/PADDLE_API_KEY|RESEND_API_KEY|PRIVATE_KEY/);
 });
+
+test('requires explicit no-domain routing and an owner-only email sender recipient',()=>{
+  const input={...validInput(),issuer:'https://looksy-customers-staging.private-tests.workers.dev',routingMode:'workers-dev',emailFrom:'onboarding@resend.dev',emailTestRecipient:'owner@looksy.test'};
+  assert.equal(validateSetupInput(input).routingMode,'workers-dev');
+  assert.throws(()=>validateSetupInput({...input,routingMode:undefined}),/explicit workers-dev/);
+  assert.throws(()=>validateSetupInput({...input,issuer:'https://another-worker.private-tests.workers.dev'}),/exact/);
+  assert.throws(()=>validateSetupInput({...input,issuer:'https://looksy-customers-staging.private-tests.workers.dev:8443'}),/no port/);
+  assert.throws(()=>validateSetupInput({...input,emailTestRecipient:''}),/emailTestRecipient/);
+  assert.throws(()=>validateSetupInput({...input,emailFrom:'someone@resend.dev'}),/onboarding sender/);
+});
+
+test('generates no-domain private staging without enabling preview URLs or bypassing staff roles',async t=>{
+  const temporary=await mkdtemp(path.join(os.tmpdir(),'looksy-no-domain-setup-'));t.after(()=>rm(temporary,{recursive:true,force:true}));
+  const service=path.join(temporary,'service'),keyParent=path.join(temporary,'private');await mkdir(service);await mkdir(keyParent,{mode:0o700});
+  const input={...validInput(),issuer:'https://looksy-customers-staging.private-tests.workers.dev',routingMode:'workers-dev',emailFrom:'onboarding@resend.dev',emailTestRecipient:'owner@looksy.test'};
+  const result=await prepareSetup({input,outputPath:path.join(service,'wrangler.staging.local.jsonc'),keyDirectory:path.join(keyParent,'keys'),serviceDirectory:service});
+  const config=JSON.parse(await readFile(result.configPath,'utf8')),publicKey=JSON.parse(await readFile(result.publicKeyPath,'utf8'));
+  const secrets={...JSON.parse(await readFile(result.secretsPath,'utf8')),RESEND_API_KEY:'synthetic-email-credential',LEMON_API_KEY:'synthetic-provider-key'};
+  assert.deepEqual(checkSetup(config,{publicKey,secrets}),[]);assert.equal(config.workers_dev,true);assert.equal(config.preview_urls,false);
+  assert.equal(config.vars.ALLOW_TEST_PURCHASES,'true');assert.equal(config.vars.EMAIL_TEST_RECIPIENT,'owner@looksy.test');
+  assert.equal(config.vars.ACCESS_AUDIENCE,input.accessAudience);assert.equal(config.vars.ACCESS_TEAM_DOMAIN,input.accessTeamDomain);
+  assert.match(await readFile(result.desktopConfigPath,'utf8'),/looksy-customers-staging\.private-tests\.workers\.dev/);
+});

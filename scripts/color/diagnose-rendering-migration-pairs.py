@@ -75,7 +75,10 @@ def decode_ppm(path: Path, max_width: int, ffmpeg: str) -> tuple[int, int, bytes
         "ppm",
         "-",
     ]
-    result = subprocess.run(command, check=False, capture_output=True)
+    try:
+        result = subprocess.run(command, check=False, capture_output=True)
+    except FileNotFoundError as error:
+        raise ValueError("FFmpeg decoder was not found. Install FFmpeg or pass --ffmpeg with its executable path.") from error
     if result.returncode != 0:
         raise ValueError(f"ffmpeg could not decode {path}: {result.stderr.decode(errors='replace').strip()}")
     data = result.stdout

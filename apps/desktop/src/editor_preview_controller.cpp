@@ -9061,6 +9061,25 @@ QJsonArray preset_adjustment_groups_to_json(const QStringList& groups) {
   return group_array;
 }
 
+QJsonObject user_preset_json(const PresetService& presets, const QString& name,
+                             const EditRecipeState& state) {
+  const auto pack = presets.userPacks().value(name, QStringLiteral("User Presets"));
+  const auto groups = presets.userGroups().value(name, declared_preset_groups_for_state(state));
+  QJsonObject object;
+  object.insert(QStringLiteral("name"), name);
+  object.insert(QStringLiteral("pack"), pack);
+  object.insert(QStringLiteral("category"), presets.userCategories().value(
+      name, normalized_preset_category(pack, QStringLiteral("User"))));
+  object.insert(QStringLiteral("adjustmentGroups"), preset_adjustment_groups_to_json(groups));
+  const auto rules = presets.userAdaptiveRules().value(name);
+  if (!rules.isEmpty()) object.insert(QStringLiteral("adaptiveRules"), rules);
+  insert_preset_contract_fields(&object,
+      presets.userContracts().value(name, normalized_preset_contract({}, state)));
+  object.insert(QStringLiteral("adjustmentPatch"),
+      serialize_adjustment_patch(state, groups, AdjustmentPatchScope::SourceAgnostic));
+  return object;
+}
+
 QString preset_sync_manifest_file_path(const QString& folder_path) {
   const auto normalized_folder = folder_path.trimmed();
   if (normalized_folder.isEmpty()) {
@@ -18241,7 +18260,7 @@ RenderResult render_preview_request(RenderRequest request) {
   return result;
 }
 
-QVariantMap render_stage_queued_fields(
+QVariantMap render_stage_fields(
     const RenderRequest& request,
     const QString& stage) {
   return {
@@ -31764,35 +31783,7 @@ bool EditorPreviewController::exportPresetPack(const QString& file_path, const Q
     if (!normalized_pack.isEmpty() && preset_pack.compare(normalized_pack, Qt::CaseInsensitive) != 0) {
       continue;
     }
-    QJsonObject preset_object;
-    preset_object.insert(QStringLiteral("name"), iterator.key());
-    preset_object.insert(QStringLiteral("pack"), preset_pack);
-    preset_object.insert(
-        QStringLiteral("category"),
-        preset_service_.userCategories().value(iterator.key(), normalized_preset_category(preset_pack, QStringLiteral("User"))));
-    preset_object.insert(
-        QStringLiteral("adjustmentGroups"),
-        preset_adjustment_groups_to_json(
-            preset_service_.userGroups().value(iterator.key(), declared_preset_groups_for_state(iterator.value()))));
-    const auto adaptive_rules = preset_service_.userAdaptiveRules().value(iterator.key());
-    if (!adaptive_rules.isEmpty()) {
-      preset_object.insert(QStringLiteral("adaptiveRules"), adaptive_rules);
-    }
-    insert_preset_contract_fields(
-        &preset_object,
-        preset_service_.userContracts().value(
-            iterator.key(),
-            normalized_preset_contract(
-                {},
-                iterator.value())));
-    preset_object.insert(QStringLiteral("adjustmentPatch"),
-        serialize_adjustment_patch(
-            iterator.value(),
-            preset_service_.userGroups().value(
-                iterator.key(),
-                declared_preset_groups_for_state(iterator.value())),
-            AdjustmentPatchScope::SourceAgnostic));
-    preset_array.push_back(preset_object);
+    preset_array.push_back(user_preset_json(preset_service_, iterator.key(), iterator.value()));
   }
   if (preset_array.isEmpty()) {
     return false;
@@ -31874,38 +31865,7 @@ bool EditorPreviewController::importPresetPack(const QString& file_path, bool ov
 QString EditorPreviewController::presetSyncManifestJson() const {
   QJsonArray preset_array;
   for (auto iterator = preset_service_.userPresets().cbegin(); iterator != preset_service_.userPresets().cend(); ++iterator) {
-    const auto preset_pack = preset_service_.userPacks().value(iterator.key(), QStringLiteral("User Presets"));
-    QJsonObject preset_object;
-    preset_object.insert(QStringLiteral("name"), iterator.key());
-    preset_object.insert(QStringLiteral("pack"), preset_pack);
-    preset_object.insert(
-        QStringLiteral("category"),
-        preset_service_.userCategories().value(
-            iterator.key(),
-            normalized_preset_category(preset_pack, QStringLiteral("User"))));
-    preset_object.insert(
-        QStringLiteral("adjustmentGroups"),
-        preset_adjustment_groups_to_json(
-            preset_service_.userGroups().value(iterator.key(), declared_preset_groups_for_state(iterator.value()))));
-    const auto adaptive_rules = preset_service_.userAdaptiveRules().value(iterator.key());
-    if (!adaptive_rules.isEmpty()) {
-      preset_object.insert(QStringLiteral("adaptiveRules"), adaptive_rules);
-    }
-    insert_preset_contract_fields(
-        &preset_object,
-        preset_service_.userContracts().value(
-            iterator.key(),
-            normalized_preset_contract(
-                {},
-                iterator.value())));
-    preset_object.insert(QStringLiteral("adjustmentPatch"),
-        serialize_adjustment_patch(
-            iterator.value(),
-            preset_service_.userGroups().value(
-                iterator.key(),
-                declared_preset_groups_for_state(iterator.value())),
-            AdjustmentPatchScope::SourceAgnostic));
-    preset_array.push_back(preset_object);
+    preset_array.push_back(user_preset_json(preset_service_, iterator.key(), iterator.value()));
   }
 
   QJsonArray favorite_array;
@@ -37406,47 +37366,64 @@ bool EditorPreviewController::setPhotoLayerDisplacementMap(int index, const QStr
       path.isEmpty() ? QStringLiteral("Clear displacement map") : QStringLiteral("Import displacement map"));
 }
 
-bool EditorPreviewController::setPhotoLayerGaussianBlur(int index, const QString& effect_id,
-    double sigma, double amount, bool enabled) {
-  const auto customer_edit_scope = customer_edit_access_.enter();
-  if (!customer_edit_scope) return {};
-  if (index < 0 || index >= layer_session_.layers().size() || !std::isfinite(sigma) ||
-      !std::isfinite(amount) || sigma < 0 || sigma > 4096 || amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
+namespace {
+std::optional<QVariantList> edited_photo_layer_effect(
+    const QVariantList& current_layers, const std::function<QSize()>& canvas, int index,
+    const QString& effect_id, const char* type, double amount, bool enabled,
+    const std::function<void(photo_editor::pipeline::PhotoEffectInstance&)>& edit) {
+  if (index < 0 || index >= current_layers.size()) return std::nullopt;
+  auto layers = current_layers;
   auto layer = layers.at(index).toMap();
   const auto kind = layer.value(QStringLiteral("kind")).toString();
   if (layer.value(QStringLiteral("locked")).toBool() ||
       (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
        kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
+       kind != QStringLiteral("fill"))) return std::nullopt;
   auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
+  if (!effects) return std::nullopt;
   auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
     return effect.id == effect_id.toStdString();
   });
   if (effect_id.isEmpty()) {
     photo_editor::pipeline::PhotoEffectInstance effect;
+    effect.type_id = type;
     effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     effect.input_scope = kind == QStringLiteral("adjustment")
         ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
         : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
     effects->push_back(effect);
     found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "gaussian_blur" || found->algorithm_version != 1) {
-    return false;
+  } else if (found == effects->end() || found->type_id != type || found->algorithm_version != 1) {
+    return std::nullopt;
   }
-  found->gaussian.sigma = sigma;
+  edit(*found);
   found->amount = amount;
   found->enabled = enabled;
   const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
+  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return std::nullopt;
   layer.insert(QStringLiteral("effectStack"), *encoded);
   if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
+    const auto size = canvas();
+    layer.insert(QStringLiteral("canvasWidth"), size.width());
+    layer.insert(QStringLiteral("canvasHeight"), size.height());
   }
   layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  return layers;
+}
+}  // namespace
+
+bool EditorPreviewController::setPhotoLayerGaussianBlur(int index, const QString& effect_id,
+    double sigma, double amount, bool enabled) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return {};
+  if (index < 0 || index >= layer_session_.layers().size() || !std::isfinite(sigma) ||
+      !std::isfinite(amount) || sigma < 0 || sigma > 4096 || amount < 0 || amount > 1) return false;
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "gaussian_blur", amount, enabled,
+      [&](auto& effect) {
+        effect.gaussian.sigma = sigma;
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add Gaussian blur") : QStringLiteral("Edit Gaussian blur"));
 }
 
@@ -37456,42 +37433,12 @@ bool EditorPreviewController::setPhotoLayerBoxBlur(int index, const QString& eff
   if (!customer_edit_scope) return {};
   if (index < 0 || index >= layer_session_.layers().size() || 
       !std::isfinite(amount) || radius < 0 || radius > 4096 || amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
-  auto layer = layers.at(index).toMap();
-  const auto kind = layer.value(QStringLiteral("kind")).toString();
-  if (layer.value(QStringLiteral("locked")).toBool() ||
-      (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
-       kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
-  auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
-  auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
-    return effect.id == effect_id.toStdString();
-  });
-  if (effect_id.isEmpty()) {
-    photo_editor::pipeline::PhotoEffectInstance effect;
-    effect.type_id = "box_blur";
-    effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    effect.input_scope = kind == QStringLiteral("adjustment")
-        ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
-        : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
-    effects->push_back(effect);
-    found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "box_blur" || found->algorithm_version != 1) {
-    return false;
-  }
-  found->box.radius = radius;
-  found->amount = amount;
-  found->enabled = enabled;
-  const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
-  layer.insert(QStringLiteral("effectStack"), *encoded);
-  if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
-  }
-  layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "box_blur", amount, enabled,
+      [&](auto& effect) {
+        effect.box.radius = radius;
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add box blur") : QStringLiteral("Edit box blur"));
 }
 
@@ -37502,43 +37449,13 @@ bool EditorPreviewController::setPhotoLayerMotionBlur(int index, const QString& 
   if (index < 0 || index >= layer_session_.layers().size() ||
       !std::isfinite(amount) || !std::isfinite(distance) || distance < 0 || distance > 4096 ||
       !std::isfinite(angle) || angle < -180 || angle > 180 || amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
-  auto layer = layers.at(index).toMap();
-  const auto kind = layer.value(QStringLiteral("kind")).toString();
-  if (layer.value(QStringLiteral("locked")).toBool() ||
-      (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
-       kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
-  auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
-  auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
-    return effect.id == effect_id.toStdString();
-  });
-  if (effect_id.isEmpty()) {
-    photo_editor::pipeline::PhotoEffectInstance effect;
-    effect.type_id = "motion_blur";
-    effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    effect.input_scope = kind == QStringLiteral("adjustment")
-        ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
-        : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
-    effects->push_back(effect);
-    found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "motion_blur" || found->algorithm_version != 1) {
-    return false;
-  }
-  found->motion.distance = distance;
-  found->motion.angle = angle;
-  found->amount = amount;
-  found->enabled = enabled;
-  const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
-  layer.insert(QStringLiteral("effectStack"), *encoded);
-  if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
-  }
-  layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "motion_blur", amount, enabled,
+      [&](auto& effect) {
+        effect.motion.distance = distance;
+        effect.motion.angle = angle;
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add motion blur") : QStringLiteral("Edit motion blur"));
 }
 
@@ -37552,46 +37469,16 @@ bool EditorPreviewController::setPhotoLayerDraggedShutter(int index, const QStri
       angle < -180 || angle > 180 || !std::isfinite(falloff) || falloff < 0 || falloff > 1 ||
       !std::isfinite(highlight_weighting) || highlight_weighting < 0 || highlight_weighting > 1 ||
       amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
-  auto layer = layers.at(index).toMap();
-  const auto kind = layer.value(QStringLiteral("kind")).toString();
-  if (layer.value(QStringLiteral("locked")).toBool() ||
-      (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
-       kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
-  auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
-  auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
-    return effect.id == effect_id.toStdString();
-  });
-  if (effect_id.isEmpty()) {
-    photo_editor::pipeline::PhotoEffectInstance effect;
-    effect.type_id = "dragged_shutter";
-    effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    effect.input_scope = kind == QStringLiteral("adjustment")
-        ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
-        : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
-    effects->push_back(effect);
-    found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "dragged_shutter" || found->algorithm_version != 1) {
-    return false;
-  }
-  found->dragged_shutter.distance = distance;
-  found->dragged_shutter.angle = angle;
-  found->dragged_shutter.falloff = falloff;
-  found->dragged_shutter.highlight_weighting = highlight_weighting;
-  found->dragged_shutter.protect_subject = protect_subject;
-  found->amount = amount;
-  found->enabled = enabled;
-  const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
-  layer.insert(QStringLiteral("effectStack"), *encoded);
-  if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
-  }
-  layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "dragged_shutter", amount, enabled,
+      [&](auto& effect) {
+        effect.dragged_shutter.distance = distance;
+        effect.dragged_shutter.angle = angle;
+        effect.dragged_shutter.falloff = falloff;
+        effect.dragged_shutter.highlight_weighting = highlight_weighting;
+        effect.dragged_shutter.protect_subject = protect_subject;
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add dragged shutter") : QStringLiteral("Edit dragged shutter"));
 }
 
@@ -37603,44 +37490,14 @@ bool EditorPreviewController::setPhotoLayerUnsharpMask(int index, const QString&
       !std::isfinite(amount) || !std::isfinite(sigma) || sigma < 0 || sigma > 4096 ||
       !std::isfinite(strength) || strength < 0 || strength > 5 ||
       !std::isfinite(threshold) || threshold < 0 || threshold > 1 || amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
-  auto layer = layers.at(index).toMap();
-  const auto kind = layer.value(QStringLiteral("kind")).toString();
-  if (layer.value(QStringLiteral("locked")).toBool() ||
-      (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
-       kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
-  auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
-  auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
-    return effect.id == effect_id.toStdString();
-  });
-  if (effect_id.isEmpty()) {
-    photo_editor::pipeline::PhotoEffectInstance effect;
-    effect.type_id = "unsharp_mask";
-    effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    effect.input_scope = kind == QStringLiteral("adjustment")
-        ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
-        : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
-    effects->push_back(effect);
-    found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "unsharp_mask" || found->algorithm_version != 1) {
-    return false;
-  }
-  found->unsharp.sigma = sigma;
-  found->unsharp.strength = strength;
-  found->unsharp.threshold = threshold;
-  found->amount = amount;
-  found->enabled = enabled;
-  const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
-  layer.insert(QStringLiteral("effectStack"), *encoded);
-  if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
-  }
-  layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "unsharp_mask", amount, enabled,
+      [&](auto& effect) {
+        effect.unsharp.sigma = sigma;
+        effect.unsharp.strength = strength;
+        effect.unsharp.threshold = threshold;
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add unsharp mask") : QStringLiteral("Edit unsharp mask"));
 }
 
@@ -37650,42 +37507,12 @@ bool EditorPreviewController::setPhotoLayerPosterize(int index, const QString& e
   if (!customer_edit_scope) return {};
   if (index < 0 || index >= layer_session_.layers().size() || 
       !std::isfinite(amount) || levels < 2 || levels > 256 || amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
-  auto layer = layers.at(index).toMap();
-  const auto kind = layer.value(QStringLiteral("kind")).toString();
-  if (layer.value(QStringLiteral("locked")).toBool() ||
-      (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
-       kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
-  auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
-  auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
-    return effect.id == effect_id.toStdString();
-  });
-  if (effect_id.isEmpty()) {
-    photo_editor::pipeline::PhotoEffectInstance effect;
-    effect.type_id = "posterize_linear_rgb";
-    effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    effect.input_scope = kind == QStringLiteral("adjustment")
-        ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
-        : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
-    effects->push_back(effect);
-    found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "posterize_linear_rgb" || found->algorithm_version != 1) {
-    return false;
-  }
-  found->posterize_levels = levels;
-  found->amount = amount;
-  found->enabled = enabled;
-  const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
-  layer.insert(QStringLiteral("effectStack"), *encoded);
-  if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
-  }
-  layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "posterize_linear_rgb", amount, enabled,
+      [&](auto& effect) {
+        effect.posterize_levels = levels;
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add posterize") : QStringLiteral("Edit posterize"));
 }
 
@@ -37702,42 +37529,12 @@ bool EditorPreviewController::setPhotoLayerOpticalDiffusion(int index, const QSt
       !std::isfinite(warmth) || warmth < -1 || warmth > 1 ||
       !std::isfinite(highlight_protection) || highlight_protection < 0 || highlight_protection > 1 ||
       !std::isfinite(amount) || amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
-  auto layer = layers.at(index).toMap();
-  const auto kind = layer.value(QStringLiteral("kind")).toString();
-  if (layer.value(QStringLiteral("locked")).toBool() ||
-      (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
-       kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
-  auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
-  auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
-    return effect.id == effect_id.toStdString();
-  });
-  if (effect_id.isEmpty()) {
-    photo_editor::pipeline::PhotoEffectInstance effect;
-    effect.type_id = "optical_diffusion";
-    effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    effect.input_scope = kind == QStringLiteral("adjustment")
-        ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
-        : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
-    effects->push_back(effect);
-    found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "optical_diffusion" || found->algorithm_version != 1) {
-    return false;
-  }
-  found->diffusion = {radius, threshold, knee, strength, warmth, highlight_protection};
-  found->amount = amount;
-  found->enabled = enabled;
-  const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
-  layer.insert(QStringLiteral("effectStack"), *encoded);
-  if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
-  }
-  layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "optical_diffusion", amount, enabled,
+      [&](auto& effect) {
+        effect.diffusion = {radius, threshold, knee, strength, warmth, highlight_protection};
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add optical diffusion") : QStringLiteral("Edit optical diffusion"));
 }
 
@@ -37758,45 +37555,16 @@ bool EditorPreviewController::setPhotoLayerImperfectPrint(int index, const QStri
       !std::isfinite(blue_offset_y) || std::abs(blue_offset_y) > 8 ||
       !std::isfinite(seed) || seed < 0 || seed > 4294967295.0 || std::floor(seed) != seed ||
       !std::isfinite(amount) || amount < 0 || amount > 1) return false;
-  auto layers = layer_session_.layers();
-  auto layer = layers.at(index).toMap();
-  const auto kind = layer.value(QStringLiteral("kind")).toString();
-  if (layer.value(QStringLiteral("locked")).toBool() ||
-      (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
-       kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
-       kind != QStringLiteral("fill"))) return false;
-  auto effects = decode_photo_layer_effects(layer);
-  if (!effects) return false;
-  auto found = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
-    return effect.id == effect_id.toStdString();
-  });
-  if (effect_id.isEmpty()) {
-    photo_editor::pipeline::PhotoEffectInstance effect;
-    effect.type_id = "imperfect_print";
-    effect.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
-    effect.input_scope = kind == QStringLiteral("adjustment")
-        ? photo_editor::pipeline::PhotoEffectInputScope::CompositeBelow
-        : photo_editor::pipeline::PhotoEffectInputScope::LayerContent;
-    effects->push_back(effect);
-    found = std::prev(effects->end());
-  } else if (found == effects->end() || found->type_id != "imperfect_print" || found->algorithm_version != 1) {
-    return false;
-  }
-  found->imperfect_print = {paper_scale, paper_texture, ink_spread, ink_density,
-      red_offset_x, red_offset_y, blue_offset_x, blue_offset_y, static_cast<std::uint32_t>(seed)};
-  found->amount = amount;
-  found->enabled = enabled;
-  const auto encoded = encode_photo_layer_effects(*effects);
-  if (!encoded || layer.value(QStringLiteral("effectStack")).toString() == *encoded) return false;
-  layer.insert(QStringLiteral("effectStack"), *encoded);
-  if (!layer.contains(QStringLiteral("canvasWidth"))) {
-    layer.insert(QStringLiteral("canvasWidth"), sourceImageWidth());
-    layer.insert(QStringLiteral("canvasHeight"), sourceImageHeight());
-  }
-  layers[index] = layer;
-  return applyPhotoLayerStackChange(layers, QStringLiteral("photo_layer_stack"), false,
+  const auto layers = edited_photo_layer_effect(layer_session_.layers(),
+      [&] { return QSize(sourceImageWidth(), sourceImageHeight()); }, index, effect_id, "imperfect_print", amount, enabled,
+      [&](auto& effect) {
+        effect.imperfect_print = {paper_scale, paper_texture, ink_spread, ink_density,
+            red_offset_x, red_offset_y, blue_offset_x, blue_offset_y, static_cast<std::uint32_t>(seed)};
+      });
+  return layers && applyPhotoLayerStackChange(*layers, QStringLiteral("photo_layer_stack"), false,
       effect_id.isEmpty() ? QStringLiteral("Add imperfect print") : QStringLiteral("Edit imperfect print"));
 }
+
 
 bool EditorPreviewController::setPhotoLayerEffectParameters(int index, const QString& type,
     const QString& effect_id, const QVariantMap& parameters, double amount, bool enabled) {
@@ -46320,40 +46088,7 @@ void EditorPreviewController::renderPreviewStage(bool full_resolution) {
   observability::logInfo(
       photoEditorPreviewLog(),
       QStringLiteral("preview.render.stage_started"),
-      {
-          {QStringLiteral("stage"), full_resolution ? QStringLiteral("full") : QStringLiteral("interactive")},
-          {QStringLiteral("file_path"), request.file_path},
-          {QStringLiteral("generation"), request.generation},
-          {QStringLiteral("render_reason"), request.render_reason},
-          {QStringLiteral("interaction_mode"), request.interaction_mode},
-          {QStringLiteral("render_mode"), request.render_mode},
-          {QStringLiteral("render_priority"), request.render_priority},
-          {QStringLiteral("observability_active_target"), request.active_target},
-          {QStringLiteral("observability_active_layer_id"), request.active_layer_id},
-          {QStringLiteral("observability_active_mask_id"), request.active_mask_id},
-          {QStringLiteral("observability_active_mask_set_id"), request.active_mask_set_id},
-          {QStringLiteral("cancelled_render_count"), request.cancelled_render_count},
-          {QStringLiteral("stale_preview_fallback"), request.stale_preview_fallback},
-          {QStringLiteral("async_job_id"), request.async_job.job_id},
-          {QStringLiteral("async_job_kind"), request.async_job.job_kind},
-          {QStringLiteral("async_job_stage"), request.async_job.stage},
-          {QStringLiteral("async_job_asset_id"), request.async_job.asset_id},
-          {QStringLiteral("async_job_file_path"), request.async_job.file_path},
-          {QStringLiteral("async_job_state_signature"), request.async_job.state_signature},
-          {QStringLiteral("async_job_generation"), request.async_job.generation},
-          {QStringLiteral("async_job_state_revision"), request.async_job.state_revision},
-          {QStringLiteral("render_latency_budget_ms"), request.render_latency_budget_ms},
-          {QStringLiteral("dirty_domain"), request.dirty_domain},
-          {QStringLiteral("dirty_stages"), request.dirty_stages},
-          {QStringLiteral("full_invalidation"), request.full_invalidation},
-          {QStringLiteral("tile_visible_region_active"), request.tile_visible_region_active},
-          {QStringLiteral("tile_size"), request.tile_size},
-          {QStringLiteral("tile_padding_px"), request.tile_padding_px},
-          {QStringLiteral("planned_tile_count"), request.planned_tile_count},
-          {QStringLiteral("planned_visible_tile_count"), request.planned_visible_tile_count},
-          {QStringLiteral("planned_adjacent_tile_count"), request.planned_adjacent_tile_count},
-          {QStringLiteral("planned_background_tile_count"), request.planned_background_tile_count},
-      });
+      render_stage_fields(request, full_resolution ? QStringLiteral("full") : QStringLiteral("interactive")));
 
   auto& watcher = full_resolution ? full_render_watcher_ : interactive_render_watcher_;
   auto& pending_request = full_resolution ? pending_full_request_ : pending_interactive_request_;
@@ -46512,7 +46247,7 @@ void EditorPreviewController::startOverlayRenderStage(const RenderRequest& reque
   observability::logInfo(
       photoEditorPreviewLog(),
       QStringLiteral("preview.render.stage_queued"),
-      render_stage_queued_fields(queued_request, QStringLiteral("overlay")));
+      render_stage_fields(queued_request, QStringLiteral("overlay")));
   last_overlay_render_request_ = queued_request;
   queued_request.worker_submitted_at_msecs =
       QDateTime::currentMSecsSinceEpoch();
@@ -48038,7 +47773,7 @@ void EditorPreviewController::startRenderStage(bool full_resolution, const Rende
   observability::logInfo(
       photoEditorPreviewLog(),
       QStringLiteral("preview.render.stage_queued"),
-      render_stage_queued_fields(
+      render_stage_fields(
           queued_request,
           full_resolution ? QStringLiteral("full") : QStringLiteral("interactive")));
   // A fresh disk cache still needs image decoding and may disappear or become
@@ -48376,9 +48111,6 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
               ? preview_viewport_patch_max_edge_
               : 0,
       .draft_interactive = draft_interactive,
-      // Ordinary CPU device conversion is exact and shares the bounded image
-      // worker pool. Keep small images on the executor's serial path.
-      .allow_parallel_cpu_device_transform = image_provider_ != nullptr,
       .allow_native_srgb_surface =
           display_preview_texture_ != nullptr &&
           display_preview_texture_->supportsNativeOutputSurface() &&
@@ -48391,6 +48123,9 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
           history_service_.transactionActive() &&
           last_edit_intent_.operation == QStringLiteral("photo_layer_transform") &&
           last_render_graph_resolution_.dirty_domain == QStringLiteral("layers_composite"),
+      // Ordinary CPU device conversion is exact and shares the bounded image
+      // worker pool. Keep small images on the executor's serial path.
+      .allow_parallel_cpu_device_transform = image_provider_ != nullptr,
       // Regional paint needs an immutable display base, not float CPU working pixels.
       .require_cpu_display_image = compare_mode_ ||
           std::any_of(state.layers.cbegin(), state.layers.cend(), [](const QVariant& value) {
@@ -50486,41 +50221,7 @@ bool EditorPreviewController::savePresets(QString* error) const {
 
   QJsonArray preset_array;
   for (auto iterator = preset_service_.userPresets().cbegin(); iterator != preset_service_.userPresets().cend(); ++iterator) {
-    QJsonObject preset_object;
-    preset_object.insert(QStringLiteral("name"), iterator.key());
-    preset_object.insert(
-        QStringLiteral("pack"),
-        preset_service_.userPacks().value(iterator.key(), QStringLiteral("User Presets")));
-    preset_object.insert(
-        QStringLiteral("category"),
-        preset_service_.userCategories().value(
-            iterator.key(),
-            normalized_preset_category(
-                preset_service_.userPacks().value(iterator.key(), QStringLiteral("User Presets")),
-                QStringLiteral("User"))));
-    preset_object.insert(
-        QStringLiteral("adjustmentGroups"),
-        preset_adjustment_groups_to_json(
-            preset_service_.userGroups().value(iterator.key(), declared_preset_groups_for_state(iterator.value()))));
-    const auto adaptive_rules = preset_service_.userAdaptiveRules().value(iterator.key());
-    if (!adaptive_rules.isEmpty()) {
-      preset_object.insert(QStringLiteral("adaptiveRules"), adaptive_rules);
-    }
-    insert_preset_contract_fields(
-        &preset_object,
-        preset_service_.userContracts().value(
-            iterator.key(),
-            normalized_preset_contract(
-                {},
-                iterator.value())));
-    preset_object.insert(QStringLiteral("adjustmentPatch"),
-        serialize_adjustment_patch(
-            iterator.value(),
-            preset_service_.userGroups().value(
-                iterator.key(),
-                declared_preset_groups_for_state(iterator.value())),
-            AdjustmentPatchScope::SourceAgnostic));
-    preset_array.push_back(preset_object);
+    preset_array.push_back(user_preset_json(preset_service_, iterator.key(), iterator.value()));
   }
 
   QJsonArray favorite_array;

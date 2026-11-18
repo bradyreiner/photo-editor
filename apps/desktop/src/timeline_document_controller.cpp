@@ -400,6 +400,39 @@ qint64 available_memory_bytes() {
   return installed_memory_bytes() / 2;
 }
 
+double track_automation_parameter_range(const QString& normalized) {
+  auto parameter_range = 36.0;
+  if (normalized == QStringLiteral("opacity") || normalized == QStringLiteral("audioDeEsserAmount")) {
+    parameter_range = 1.0;
+  } else if (normalized == QStringLiteral("audioPan")) {
+    parameter_range = 2.0;
+  } else if (normalized.startsWith(QStringLiteral("audioEq"))) {
+    parameter_range = 24.0;
+  } else if (normalized == QStringLiteral("audioCompressorThresholdDb")) {
+    parameter_range = 47.0;
+  } else if (normalized == QStringLiteral("audioCompressorRatio")) {
+    parameter_range = 19.0;
+  } else if (normalized == QStringLiteral("audioCompressorMakeupDb")) {
+    parameter_range = 18.0;
+  } else if (normalized == QStringLiteral("audioLimiterCeilingDb")) {
+    parameter_range = 12.0;
+  } else if (normalized == QStringLiteral("audioGateThresholdDb")) {
+    parameter_range = 70.0;
+  } else if (normalized == QStringLiteral("audioHighPassHz")) {
+    parameter_range = 980.0;
+  } else if (normalized == QStringLiteral("audioLowPassHz")) {
+    parameter_range = 19000.0;
+  }
+  return parameter_range;
+}
+
+QVariantMap missing_clip_lookup_result(const QString& clip_id) {
+  return {{QStringLiteral("ok"), false},
+          {QStringLiteral("error"), clip_id.isEmpty()
+               ? QStringLiteral("clipId is required.")
+               : QStringLiteral("No active timeline clip has id '%1'.").arg(clip_id)}};
+}
+
 constexpr double kDefaultFramesPerSecond = 30.0;
 constexpr int kDefaultSequenceWidth = 1080;
 constexpr int kDefaultSequenceHeight = 1350;
@@ -22047,24 +22080,7 @@ void TimelineDocumentController::selectClip(int index) {
   emit playbackStateChanged();
 }
 
-void TimelineDocumentController::addClipFromGallery(
-    const QString& asset_id,
-    const QString& file_path,
-    const QString& display_label,
-    double duration_seconds,
-    const QString& poster_source) {
-  const auto customer_edit_scope = customer_edit_access_.enter();
-  if (!customer_edit_scope) return;
-  if (!has_active_timeline_) {
-    setStatus(QStringLiteral("Create a timeline before adding media."));
-    return;
-  }
-  auto clip = buildGalleryClip(asset_id, file_path, display_label, duration_seconds, 0.0, 0.0, poster_source);
-  if (clip.duration_seconds <= 0.0) {
-    setStatus(QStringLiteral("Unable to read the selected media."));
-    return;
-  }
-
+TimelineDocumentController::Track* TimelineDocumentController::sourcePatchedTrackForClip(Clip& clip) {
   const auto source_media_type = clip.media_type;
   const auto source_has_audio = clip.has_audio;
   auto* video_target = targetedTrack(TrackKind::Video);
@@ -22090,15 +22106,11 @@ void TimelineDocumentController::addClipFromGallery(
     clip.poster_source = clip.waveform_source;
     clip.audio_lane_index = -1;
   }
-  if (target_track == nullptr) {
-    setStatus(QStringLiteral("Enable a compatible V or A source patch before adding media."));
-    return;
-  }
-  const auto target_kind = target_track->kind;
-  const auto target_label = target_track->display_label;
+  return target_track;
+}
 
-  pushUndoSnapshot();
-  clip.start_seconds = qMax(sequence_playhead_seconds_, trackEndSeconds(*target_track));
+void TimelineDocumentController::appendPreparedClip(
+    Track* target_track, const Clip& clip, TrackKind target_kind) {
   target_track->clips.push_back(clip);
   sort_track_clips(target_track);
   syncAudioTracks();
@@ -22125,6 +22137,37 @@ void TimelineDocumentController::addClipFromGallery(
   emitAllState(true);
   emit mediaAnalysisChanged();
   setDirty(true);
+}
+
+void TimelineDocumentController::addClipFromGallery(
+    const QString& asset_id,
+    const QString& file_path,
+    const QString& display_label,
+    double duration_seconds,
+    const QString& poster_source) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return;
+  if (!has_active_timeline_) {
+    setStatus(QStringLiteral("Create a timeline before adding media."));
+    return;
+  }
+  auto clip = buildGalleryClip(asset_id, file_path, display_label, duration_seconds, 0.0, 0.0, poster_source);
+  if (clip.duration_seconds <= 0.0) {
+    setStatus(QStringLiteral("Unable to read the selected media."));
+    return;
+  }
+
+  auto* target_track = sourcePatchedTrackForClip(clip);
+  if (target_track == nullptr) {
+    setStatus(QStringLiteral("Enable a compatible V or A source patch before adding media."));
+    return;
+  }
+  const auto target_kind = target_track->kind;
+  const auto target_label = target_track->display_label;
+
+  pushUndoSnapshot();
+  clip.start_seconds = qMax(sequence_playhead_seconds_, trackEndSeconds(*target_track));
+  appendPreparedClip(target_track, clip, target_kind);
   setStatus(QStringLiteral("Added '%1' to %2 · %3.").arg(clip.display_label, target_label, sourcePatchSummary()));
 }
 
@@ -22205,6 +22248,22 @@ void TimelineDocumentController::addTitleClip() {
   (void)addTitleClipFromTemplate(QStringLiteral("basic"));
 }
 
+void TimelineDocumentController::appendGeneratedClip(
+    Track* target_track, const Clip& clip, double start_seconds) {
+  target_track->clips.push_back(clip);
+  sort_track_clips(target_track);
+  selected_clip_id_ = clip.clip_id;
+  selected_clip_ids_ = {clip.clip_id};
+  syncAudioTracks();
+  updateCurrentIndexFromSelection();
+  preview_source_.clear();
+  current_clip_playhead_seconds_ = 0.0;
+  sequence_playhead_seconds_ = start_seconds;
+  sequence_playing_ = false;
+  emitAllState();
+  setDirty(true);
+}
+
 bool TimelineDocumentController::addTitleClipFromTemplate(const QString& template_key) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return {};
@@ -22263,18 +22322,7 @@ bool TimelineDocumentController::addTitleClipFromTemplate(const QString& templat
     setStatus(QStringLiteral("That title template is unavailable."));
     return false;
   }
-  target_track->clips.push_back(clip);
-  sort_track_clips(target_track);
-  selected_clip_id_ = clip.clip_id;
-  selected_clip_ids_ = {clip.clip_id};
-  syncAudioTracks();
-  updateCurrentIndexFromSelection();
-  preview_source_.clear();
-  current_clip_playhead_seconds_ = 0.0;
-  sequence_playhead_seconds_ = start_seconds;
-  sequence_playing_ = false;
-  emitAllState();
-  setDirty(true);
+  appendGeneratedClip(target_track, clip, start_seconds);
   setStatus(QStringLiteral("Added the %1 title template at %2.")
                 .arg(clip.title_template_key, formatDurationText(start_seconds)));
   return true;
@@ -22348,18 +22396,7 @@ bool TimelineDocumentController::addGraphicShape(const QString& shape_type) {
                        : normalized_shape == QStringLiteral("ellipse")
                            ? QStringLiteral("Ellipse")
                            : QStringLiteral("Rectangle");
-  target_track->clips.push_back(clip);
-  sort_track_clips(target_track);
-  selected_clip_id_ = clip.clip_id;
-  selected_clip_ids_ = {clip.clip_id};
-  syncAudioTracks();
-  updateCurrentIndexFromSelection();
-  preview_source_.clear();
-  current_clip_playhead_seconds_ = 0.0;
-  sequence_playhead_seconds_ = start_seconds;
-  sequence_playing_ = false;
-  emitAllState();
-  setDirty(true);
+  appendGeneratedClip(target_track, clip, start_seconds);
   setStatus(QStringLiteral("Added an editable %1 at %2.")
                 .arg(clip.display_label.toLower(), formatDurationText(start_seconds)));
   return true;
@@ -22455,18 +22492,7 @@ bool TimelineDocumentController::addAdjustmentClipAt(
   clip.has_audio = false;
   clip.audio_detached = true;
   clip.audio_lane_index = -2;
-  target_track->clips.push_back(clip);
-  sort_track_clips(target_track);
-  selected_clip_id_ = clip.clip_id;
-  selected_clip_ids_ = {clip.clip_id};
-  syncAudioTracks();
-  updateCurrentIndexFromSelection();
-  preview_source_.clear();
-  current_clip_playhead_seconds_ = 0.0;
-  sequence_playhead_seconds_ = start_seconds;
-  sequence_playing_ = false;
-  emitAllState();
-  setDirty(true);
+  appendGeneratedClip(target_track, clip, start_seconds);
   setStatus(QStringLiteral("Added an adjustment clip at %1. Add effects in the existing Effects panel.")
                 .arg(formatDurationText(start_seconds)));
   return true;
@@ -27174,32 +27200,7 @@ void TimelineDocumentController::insertClipFromGalleryResolved(
   shiftTrackClipsFrom(target_track, insert_start, insert_duration);
   shiftMarkersFrom(insert_start, insert_duration);
   clip.start_seconds = insert_start;
-  target_track->clips.push_back(clip);
-  sort_track_clips(target_track);
-  syncAudioTracks();
-  {
-    // Warm media caches can apply metadata/posters/waveforms synchronously.
-    // Publish once after selection and playback state are complete instead of
-    // rebuilding the QML track projection for each intermediate state.
-    const QScopedValueRollback<bool> scheduling(bulk_media_hydration_scheduling_, true);
-    const QScopedValueRollback<bool> changed(bulk_media_hydration_changed_);
-    requestMediaAnalysis(clip.file_path);
-    if (clip.has_audio) {
-      requestAudioWaveform(clip.clip_id, clip.file_path);
-    }
-    refreshSequenceSizeFromContent();
-  }
-  if (target_kind == TrackKind::Video) {
-    selected_clip_id_ = clip.clip_id;
-    updateCurrentIndexFromSelection();
-    preview_source_ = clip.poster_source;
-    current_clip_playhead_seconds_ = clip.trim_start_seconds;
-    sequence_playhead_seconds_ = clip.start_seconds;
-  }
-  sequence_playing_ = false;
-  emitAllState(true);
-  emit mediaAnalysisChanged();
-  setDirty(true);
+  appendPreparedClip(target_track, clip, target_kind);
   setStatus(
       QStringLiteral("Inserted '%1' to %2 at %3 · %4.")
           .arg(clip.display_label,
@@ -27257,31 +27258,7 @@ void TimelineDocumentController::overwriteClipFromGalleryResolved(
     return;
   }
 
-  const auto source_media_type = clip.media_type;
-  const auto source_has_audio = clip.has_audio;
-  auto* video_target = targetedTrack(TrackKind::Video);
-  auto* audio_target = targetedTrack(TrackKind::Audio);
-  Track* target_track = nullptr;
-  if (source_media_type == QStringLiteral("audio")) {
-    target_track = audio_target;
-  } else if (video_target != nullptr) {
-    target_track = video_target;
-    const auto audio_expected = source_has_audio || clip.audio_presence_provisional;
-    clip.has_audio = source_has_audio && audio_target != nullptr;
-    clip.audio_lane_index = !audio_expected
-                                ? -1
-                                : audio_target == nullptr
-                                      ? -2
-                                      : audio_target->lane_index == video_target->lane_index
-                                            ? -1
-                                            : audio_target->lane_index;
-  } else if (source_media_type == QStringLiteral("video") && source_has_audio && audio_target != nullptr) {
-    target_track = audio_target;
-    clip.media_type = QStringLiteral("audio");
-    clip.display_label = QStringLiteral("%1 Audio").arg(clip.display_label);
-    clip.poster_source = clip.waveform_source;
-    clip.audio_lane_index = -1;
-  }
+  auto* target_track = sourcePatchedTrackForClip(clip);
   if (target_track == nullptr) {
     setStatus(QStringLiteral("Enable a compatible V or A source patch before overwriting."));
     return;
@@ -27294,32 +27271,7 @@ void TimelineDocumentController::overwriteClipFromGalleryResolved(
   const auto overwrite_end = overwrite_start + overwrite_duration;
   overwriteTrackRange(target_track, overwrite_start, overwrite_end);
   clip.start_seconds = overwrite_start;
-  target_track->clips.push_back(clip);
-  sort_track_clips(target_track);
-  syncAudioTracks();
-  {
-    // Warm media caches can apply metadata/posters/waveforms synchronously.
-    // Publish once after selection and playback state are complete instead of
-    // rebuilding the QML track projection for each intermediate state.
-    const QScopedValueRollback<bool> scheduling(bulk_media_hydration_scheduling_, true);
-    const QScopedValueRollback<bool> changed(bulk_media_hydration_changed_);
-    requestMediaAnalysis(clip.file_path);
-    if (clip.has_audio) {
-      requestAudioWaveform(clip.clip_id, clip.file_path);
-    }
-    refreshSequenceSizeFromContent();
-  }
-  if (target_kind == TrackKind::Video) {
-    selected_clip_id_ = clip.clip_id;
-    updateCurrentIndexFromSelection();
-    preview_source_ = clip.poster_source;
-    current_clip_playhead_seconds_ = clip.trim_start_seconds;
-    sequence_playhead_seconds_ = clip.start_seconds;
-  }
-  sequence_playing_ = false;
-  emitAllState(true);
-  emit mediaAnalysisChanged();
-  setDirty(true);
+  appendPreparedClip(target_track, clip, target_kind);
   setStatus(
       QStringLiteral("Overwrote %1 at %2 · %3.")
           .arg(target_label,
@@ -32371,28 +32323,7 @@ bool TimelineDocumentController::setTrackAutomationKeyframeSpeedForSide(
   const auto keyframe_index = parameter_indices.at(position);
   const auto previous_index = position > 0 ? parameter_indices.at(position - 1) : -1;
   const auto next_index = position + 1 < parameter_indices.size() ? parameter_indices.at(position + 1) : -1;
-  auto parameter_range = 36.0;
-  if (normalized == QStringLiteral("opacity") || normalized == QStringLiteral("audioDeEsserAmount")) {
-    parameter_range = 1.0;
-  } else if (normalized == QStringLiteral("audioPan")) {
-    parameter_range = 2.0;
-  } else if (normalized.startsWith(QStringLiteral("audioEq"))) {
-    parameter_range = 24.0;
-  } else if (normalized == QStringLiteral("audioCompressorThresholdDb")) {
-    parameter_range = 47.0;
-  } else if (normalized == QStringLiteral("audioCompressorRatio")) {
-    parameter_range = 19.0;
-  } else if (normalized == QStringLiteral("audioCompressorMakeupDb")) {
-    parameter_range = 18.0;
-  } else if (normalized == QStringLiteral("audioLimiterCeilingDb")) {
-    parameter_range = 12.0;
-  } else if (normalized == QStringLiteral("audioGateThresholdDb")) {
-    parameter_range = 70.0;
-  } else if (normalized == QStringLiteral("audioHighPassHz")) {
-    parameter_range = 980.0;
-  } else if (normalized == QStringLiteral("audioLowPassHz")) {
-    parameter_range = 19000.0;
-  }
+  const auto parameter_range = track_automation_parameter_range(normalized);
   const auto safe_speed = qBound(-parameter_range * 1000.0, value_per_second, parameter_range * 1000.0);
   const auto bounded_handle_time = [this](double time_offset, double span, bool incoming) {
     const auto minimum = qMin(span * 0.25, qMax(kBoundaryEpsilon, 0.25 / framesPerSecond()));
@@ -32576,28 +32507,7 @@ bool TimelineDocumentController::setTrackAutomationKeyframeBezierHandle(
                                          time_offset_seconds,
                                          span - minimum_handle_time);
 
-  auto parameter_range = 36.0;
-  if (normalized == QStringLiteral("opacity") || normalized == QStringLiteral("audioDeEsserAmount")) {
-    parameter_range = 1.0;
-  } else if (normalized == QStringLiteral("audioPan")) {
-    parameter_range = 2.0;
-  } else if (normalized.startsWith(QStringLiteral("audioEq"))) {
-    parameter_range = 24.0;
-  } else if (normalized == QStringLiteral("audioCompressorThresholdDb")) {
-    parameter_range = 47.0;
-  } else if (normalized == QStringLiteral("audioCompressorRatio")) {
-    parameter_range = 19.0;
-  } else if (normalized == QStringLiteral("audioCompressorMakeupDb")) {
-    parameter_range = 18.0;
-  } else if (normalized == QStringLiteral("audioLimiterCeilingDb")) {
-    parameter_range = 12.0;
-  } else if (normalized == QStringLiteral("audioGateThresholdDb")) {
-    parameter_range = 70.0;
-  } else if (normalized == QStringLiteral("audioHighPassHz")) {
-    parameter_range = 980.0;
-  } else if (normalized == QStringLiteral("audioLowPassHz")) {
-    parameter_range = 19000.0;
-  }
+  const auto parameter_range = track_automation_parameter_range(normalized);
   const auto bounded_value = qBound(-parameter_range * 3.0, value_offset, parameter_range * 3.0);
   const auto current_time = normalized_side == QStringLiteral("in")
                                 ? keyframe.bezier_in_time_seconds
@@ -33892,13 +33802,7 @@ void TimelineDocumentController::trimSelectedClipStartToSequenceSeconds(double s
   if (!validateSelectedTrimMutation(ripple, initial_end_seconds, ripple_delta_seconds)) {
     return;
   }
-  if (!continuous_edit_active_) {
-    pushUndoSnapshot();
-  }
-  if (shouldEditSelectedClipIndependently()) {
-    detachSelectedClipAudio(false);
-  }
-  const auto ref = selectedClipRef();
+  const auto ref = prepareSelectedClipEdit();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
   if (track == nullptr || clip == nullptr) {
@@ -34027,13 +33931,7 @@ void TimelineDocumentController::trimSelectedClipEndToSequenceSeconds(double sec
   if (!validateSelectedTrimMutation(ripple, initial_end_seconds, ripple_delta_seconds)) {
     return;
   }
-  if (!continuous_edit_active_) {
-    pushUndoSnapshot();
-  }
-  if (shouldEditSelectedClipIndependently()) {
-    detachSelectedClipAudio(false);
-  }
-  const auto ref = selectedClipRef();
+  const auto ref = prepareSelectedClipEdit();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
   if (clip == nullptr || track == nullptr) {
@@ -34341,16 +34239,20 @@ QVariantMap TimelineDocumentController::selectOtherEditPointSide(const QString& 
   return updated;
 }
 
-bool TimelineDocumentController::rollSelectedClipStartToSequenceSeconds(double seconds) {
-  const auto customer_edit_scope = customer_edit_access_.enter();
-  if (!customer_edit_scope) return {};
+TimelineDocumentController::ClipRef TimelineDocumentController::prepareSelectedClipEdit() {
   if (!continuous_edit_active_) {
     pushUndoSnapshot();
   }
   if (shouldEditSelectedClipIndependently()) {
     detachSelectedClipAudio(false);
   }
-  const auto ref = selectedClipRef();
+  return selectedClipRef();
+}
+
+bool TimelineDocumentController::rollSelectedClipStartToSequenceSeconds(double seconds) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return {};
+  const auto ref = prepareSelectedClipEdit();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
   if (track == nullptr || clip == nullptr || track->kind != TrackKind::Video) {
@@ -34409,13 +34311,7 @@ bool TimelineDocumentController::rollSelectedClipStartToSequenceSeconds(double s
 bool TimelineDocumentController::rollSelectedClipEndToSequenceSeconds(double seconds) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return {};
-  if (!continuous_edit_active_) {
-    pushUndoSnapshot();
-  }
-  if (shouldEditSelectedClipIndependently()) {
-    detachSelectedClipAudio(false);
-  }
-  const auto ref = selectedClipRef();
+  const auto ref = prepareSelectedClipEdit();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
   if (track == nullptr || clip == nullptr || track->kind != TrackKind::Video) {
@@ -34477,13 +34373,7 @@ bool TimelineDocumentController::rollSelectedClipEndToSequenceSeconds(double sec
 bool TimelineDocumentController::slipSelectedClipBySeconds(double delta_seconds) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return {};
-  if (!continuous_edit_active_) {
-    pushUndoSnapshot();
-  }
-  if (shouldEditSelectedClipIndependently()) {
-    detachSelectedClipAudio(false);
-  }
-  const auto ref = selectedClipRef();
+  const auto ref = prepareSelectedClipEdit();
   auto* clip = clipAt(ref);
   auto* track = trackAt(ref.track_index);
   if (clip == nullptr || track == nullptr || track->kind != TrackKind::Video) {
@@ -34540,13 +34430,7 @@ bool TimelineDocumentController::slipSelectedClipBySeconds(double delta_seconds)
 bool TimelineDocumentController::slideSelectedClipBySeconds(double delta_seconds) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return {};
-  if (!continuous_edit_active_) {
-    pushUndoSnapshot();
-  }
-  if (shouldEditSelectedClipIndependently()) {
-    detachSelectedClipAudio(false);
-  }
-  const auto ref = selectedClipRef();
+  const auto ref = prepareSelectedClipEdit();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
   if (track == nullptr || clip == nullptr || track->kind != TrackKind::Video) {
@@ -38196,26 +38080,10 @@ QVariantMap TimelineDocumentController::setClipColorLutForAutomation(
              QStringLiteral("Editing requires an active trial or purchase.")}};
   }
   const auto requested_id = clip_id.trimmed();
-  ClipRef target_ref;
-  const Clip* target = nullptr;
-  for (int track_index = 0; track_index < tracks_.size() && target == nullptr;
-       ++track_index) {
-    const auto& track = tracks_.at(track_index);
-    for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
-      const auto& candidate = track.clips.at(clip_index);
-      if (candidate.clip_id == requested_id) {
-        target_ref = ClipRef{track_index, clip_index};
-        target = &candidate;
-        break;
-      }
-    }
-  }
+  const auto target_ref = findClipRefById(requested_id);
+  const auto* target = clipAt(target_ref);
   if (requested_id.isEmpty() || target == nullptr) {
-    return {{QStringLiteral("ok"), false},
-            {QStringLiteral("error"),
-             requested_id.isEmpty()
-                 ? QStringLiteral("clipId is required.")
-                 : QStringLiteral("No active timeline clip has id '%1'.").arg(requested_id)}};
+    return missing_clip_lookup_result(requested_id);
   }
   if (target->media_type == QStringLiteral("audio")) {
     return {{QStringLiteral("ok"), false},
@@ -38315,26 +38183,10 @@ QVariantMap TimelineDocumentController::clearClipColorLutForAutomation(
              QStringLiteral("Editing requires an active trial or purchase.")}};
   }
   const auto requested_id = clip_id.trimmed();
-  ClipRef target_ref;
-  const Clip* target = nullptr;
-  for (int track_index = 0; track_index < tracks_.size() && target == nullptr;
-       ++track_index) {
-    const auto& track = tracks_.at(track_index);
-    for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
-      const auto& candidate = track.clips.at(clip_index);
-      if (candidate.clip_id == requested_id) {
-        target_ref = ClipRef{track_index, clip_index};
-        target = &candidate;
-        break;
-      }
-    }
-  }
+  const auto target_ref = findClipRefById(requested_id);
+  const auto* target = clipAt(target_ref);
   if (requested_id.isEmpty() || target == nullptr) {
-    return {{QStringLiteral("ok"), false},
-            {QStringLiteral("error"),
-             requested_id.isEmpty()
-                 ? QStringLiteral("clipId is required.")
-                 : QStringLiteral("No active timeline clip has id '%1'.").arg(requested_id)}};
+    return missing_clip_lookup_result(requested_id);
   }
   if (target->color_lut_path.isEmpty()) {
     auto result = inspectClipColorForAutomation(requested_id);
@@ -38617,11 +38469,7 @@ QVariantMap TimelineDocumentController::setClipVideoInputTransformForAutomation(
     }
   }
   if (requested_id.isEmpty() || selected == nullptr) {
-    return {{QStringLiteral("ok"), false},
-            {QStringLiteral("error"),
-             requested_id.isEmpty()
-                 ? QStringLiteral("clipId is required.")
-                 : QStringLiteral("No active timeline clip has id '%1'.").arg(requested_id)}};
+    return missing_clip_lookup_result(requested_id);
   }
   if (selected->media_type != QStringLiteral("video")) {
     return {{QStringLiteral("ok"), false},
@@ -38721,26 +38569,10 @@ QVariantMap TimelineDocumentController::setClipShotMatchGainsForAutomation(
              QStringLiteral("Editing requires an active trial or purchase.")}};
   }
   const auto requested_id = clip_id.trimmed();
-  ClipRef target_ref;
-  const Clip* target = nullptr;
-  for (int track_index = 0; track_index < tracks_.size() && target == nullptr;
-       ++track_index) {
-    const auto& track = tracks_.at(track_index);
-    for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
-      const auto& candidate = track.clips.at(clip_index);
-      if (candidate.clip_id == requested_id) {
-        target_ref = ClipRef{track_index, clip_index};
-        target = &candidate;
-        break;
-      }
-    }
-  }
+  const auto target_ref = findClipRefById(requested_id);
+  const auto* target = clipAt(target_ref);
   if (requested_id.isEmpty() || target == nullptr) {
-    return {{QStringLiteral("ok"), false},
-            {QStringLiteral("error"),
-             requested_id.isEmpty()
-                 ? QStringLiteral("clipId is required.")
-                 : QStringLiteral("No active timeline clip has id '%1'.").arg(requested_id)}};
+    return missing_clip_lookup_result(requested_id);
   }
   if (target->media_type == QStringLiteral("audio")) {
     return {{QStringLiteral("ok"), false},
@@ -39085,26 +38917,10 @@ QVariantMap TimelineDocumentController::setClipColorGradeRecipe(
              QStringLiteral("Editing requires an active trial or purchase.")}};
   }
   const auto requested_id = clip_id.trimmed();
-  ClipRef target_ref;
-  const Clip* target = nullptr;
-  for (int track_index = 0; track_index < tracks_.size() && target == nullptr;
-       ++track_index) {
-    const auto& track = tracks_.at(track_index);
-    for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
-      const auto& candidate = track.clips.at(clip_index);
-      if (candidate.clip_id == requested_id) {
-        target_ref = ClipRef{track_index, clip_index};
-        target = &candidate;
-        break;
-      }
-    }
-  }
+  const auto target_ref = findClipRefById(requested_id);
+  const auto* target = clipAt(target_ref);
   if (requested_id.isEmpty() || target == nullptr) {
-    return {{QStringLiteral("ok"), false},
-            {QStringLiteral("error"),
-             requested_id.isEmpty()
-                 ? QStringLiteral("clipId is required.")
-                 : QStringLiteral("No active timeline clip has id '%1'.").arg(requested_id)}};
+    return missing_clip_lookup_result(requested_id);
   }
   const auto* target_track = trackAt(target_ref.track_index);
   if (target_track == nullptr || target_track->locked) {
@@ -39798,26 +39614,10 @@ QVariantMap TimelineDocumentController::editClipEffectStackForAutomation(
 
   const auto requested_id = clip_id.trimmed();
   const auto normalized_operation = operation.trimmed().toLower();
-  ClipRef target_ref;
-  const Clip* target = nullptr;
-  for (int track_index = 0; track_index < tracks_.size() && target == nullptr;
-       ++track_index) {
-    const auto& track = tracks_.at(track_index);
-    for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
-      const auto& candidate = track.clips.at(clip_index);
-      if (candidate.clip_id == requested_id) {
-        target_ref = ClipRef{track_index, clip_index};
-        target = &candidate;
-        break;
-      }
-    }
-  }
+  const auto target_ref = findClipRefById(requested_id);
+  const auto* target = clipAt(target_ref);
   if (requested_id.isEmpty() || target == nullptr) {
-    return {{QStringLiteral("ok"), false},
-            {QStringLiteral("error"),
-             requested_id.isEmpty()
-                 ? QStringLiteral("clipId is required.")
-                 : QStringLiteral("No active timeline clip has id '%1'.").arg(requested_id)}};
+    return missing_clip_lookup_result(requested_id);
   }
   if (target->media_type == QStringLiteral("audio")) {
     return {{QStringLiteral("ok"), false},
@@ -40088,19 +39888,8 @@ QVariantMap TimelineDocumentController::setClipOpacityForAutomation(
              QStringLiteral("opacity must be finite and between 0 and 1.")}};
   }
 
-  ClipRef target_ref;
-  const Clip* target = nullptr;
-  for (int track_index = 0; track_index < tracks_.size() && target == nullptr;
-       ++track_index) {
-    const auto& track = tracks_.at(track_index);
-    for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
-      if (track.clips.at(clip_index).clip_id == requested_id) {
-        target_ref = ClipRef{track_index, clip_index};
-        target = &track.clips.at(clip_index);
-        break;
-      }
-    }
-  }
+  const auto target_ref = findClipRefById(requested_id);
+  const auto* target = clipAt(target_ref);
   if (target == nullptr || target->media_type == QStringLiteral("audio")) {
     return {{QStringLiteral("ok"), false},
             {QStringLiteral("error"),
@@ -42005,31 +41794,7 @@ void TimelineDocumentController::appendSourceClipToTimeline() {
     return;
   }
 
-  const auto source_media_type = clip.media_type;
-  const auto source_has_audio = clip.has_audio;
-  auto* video_target = targetedTrack(TrackKind::Video);
-  auto* audio_target = targetedTrack(TrackKind::Audio);
-  Track* target_track = nullptr;
-  if (source_media_type == QStringLiteral("audio")) {
-    target_track = audio_target;
-  } else if (video_target != nullptr) {
-    target_track = video_target;
-    const auto audio_expected = source_has_audio || clip.audio_presence_provisional;
-    clip.has_audio = source_has_audio && audio_target != nullptr;
-    clip.audio_lane_index = !audio_expected
-                                ? -1
-                                : audio_target == nullptr
-                                      ? -2
-                                      : audio_target->lane_index == video_target->lane_index
-                                            ? -1
-                                            : audio_target->lane_index;
-  } else if (source_media_type == QStringLiteral("video") && source_has_audio && audio_target != nullptr) {
-    target_track = audio_target;
-    clip.media_type = QStringLiteral("audio");
-    clip.display_label = QStringLiteral("%1 Audio").arg(clip.display_label);
-    clip.poster_source = clip.waveform_source;
-    clip.audio_lane_index = -1;
-  }
+  auto* target_track = sourcePatchedTrackForClip(clip);
   if (target_track == nullptr) {
     setStatus(QStringLiteral("Enable a compatible V or A source patch before appending."));
     return;
@@ -42039,32 +41804,7 @@ void TimelineDocumentController::appendSourceClipToTimeline() {
 
   pushUndoSnapshot();
   clip.start_seconds = trackEndSeconds(*target_track);
-  target_track->clips.push_back(clip);
-  sort_track_clips(target_track);
-  syncAudioTracks();
-  {
-    // Warm media caches can apply metadata/posters/waveforms synchronously.
-    // Publish once after selection and playback state are complete instead of
-    // rebuilding the QML track projection for each intermediate state.
-    const QScopedValueRollback<bool> scheduling(bulk_media_hydration_scheduling_, true);
-    const QScopedValueRollback<bool> changed(bulk_media_hydration_changed_);
-    requestMediaAnalysis(clip.file_path);
-    if (clip.has_audio) {
-      requestAudioWaveform(clip.clip_id, clip.file_path);
-    }
-    refreshSequenceSizeFromContent();
-  }
-  if (target_kind == TrackKind::Video) {
-    selected_clip_id_ = clip.clip_id;
-    updateCurrentIndexFromSelection();
-    preview_source_ = clip.poster_source;
-    current_clip_playhead_seconds_ = clip.trim_start_seconds;
-    sequence_playhead_seconds_ = clip.start_seconds;
-  }
-  sequence_playing_ = false;
-  emitAllState(true);
-  emit mediaAnalysisChanged();
-  setDirty(true);
+  appendPreparedClip(target_track, clip, target_kind);
   setStatus(
       QStringLiteral("Appended '%1' to %2 · %3.")
           .arg(clip.display_label, target_label, sourcePatchSummary()));
@@ -45893,6 +45633,19 @@ TimelineDocumentController::ClipRef TimelineDocumentController::keyframeEditClip
     }
     for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
       if (track.clips.at(clip_index).clip_id == clip_keyframe_edit_target_id_) {
+        return ClipRef{track_index, clip_index};
+      }
+    }
+  }
+  return {};
+}
+
+TimelineDocumentController::ClipRef TimelineDocumentController::findClipRefById(
+    const QString& clip_id) const {
+  for (int track_index = 0; track_index < tracks_.size(); ++track_index) {
+    const auto& track = tracks_.at(track_index);
+    for (int clip_index = 0; clip_index < track.clips.size(); ++clip_index) {
+      if (track.clips.at(clip_index).clip_id == clip_id) {
         return ClipRef{track_index, clip_index};
       }
     }

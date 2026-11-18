@@ -19,7 +19,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "set-asset-metadata" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Changes { records: Vec<photo_catalog::AssetMetadataRecord> }
+            struct Changes {
+                records: Vec<photo_catalog::AssetMetadataRecord>,
+            }
             let path = required_arg(&arguments, 2, "missing metadata payload path")?;
             let changes: Changes = serde_json::from_slice(&std::fs::read(path)?)?;
             let result = catalog.upsert_asset_metadata(&changes.records).await?;
@@ -80,7 +82,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "agent-asset-recipe-snapshot" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields, rename_all = "camelCase")]
-            struct Request { asset_id: String, source_path: String }
+            struct Request {
+                asset_id: String,
+                source_path: String,
+            }
             let request_path = required_arg(&arguments, 2, "missing request payload path")?;
             let result_path = required_arg(&arguments, 3, "missing snapshot result path")?;
             let request: Request = serde_json::from_slice(&std::fs::read(request_path)?)?;
@@ -105,22 +110,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "agent-catalog-row-snapshot" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields, rename_all = "camelCase")]
-            struct Request { source_path: String }
+            struct Request {
+                source_path: String,
+            }
             let request_path = required_arg(&arguments, 2, "missing request payload path")?;
             let result_path = required_arg(&arguments, 3, "missing snapshot result path")?;
             let request: Request = serde_json::from_slice(&std::fs::read(request_path)?)?;
-            let snapshot = catalog.agent_catalog_row_snapshot(&request.source_path).await?;
+            let snapshot = catalog
+                .agent_catalog_row_snapshot(&request.source_path)
+                .await?;
             std::fs::write(result_path, serde_json::to_vec(&snapshot)?)?;
         }
         "remove-agent-catalog-row" => {
             let request_path = required_arg(&arguments, 2, "missing catalog row receipt path")?;
-            let expected: AgentCatalogRowSnapshot = serde_json::from_slice(&std::fs::read(request_path)?)?;
-            catalog.remove_agent_catalog_row_if_unchanged(&expected).await?;
+            let expected: AgentCatalogRowSnapshot =
+                serde_json::from_slice(&std::fs::read(request_path)?)?;
+            catalog
+                .remove_agent_catalog_row_if_unchanged(&expected)
+                .await?;
         }
         "set-review-states" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct ReviewChanges { states: Vec<AssetReviewStateRecord> }
+            struct ReviewChanges {
+                states: Vec<AssetReviewStateRecord>,
+            }
             let path = required_arg(&arguments, 2, "missing review payload path")?;
             let changes: ReviewChanges = serde_json::from_slice(&std::fs::read(path)?)?;
             let result = catalog.upsert_asset_review_states(&changes.states).await?;

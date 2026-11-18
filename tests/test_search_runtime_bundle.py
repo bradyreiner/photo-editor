@@ -62,9 +62,15 @@ class SearchRuntimeBundleTest(unittest.TestCase):
             BUNDLE.inventory(self.root)
 
     def test_missing_executable_and_symlinked_receipt(self):
-        (self.root / BUNDLE.NAME).chmod(0o600)
-        with self.assertRaises(ValueError):
-            BUNDLE.verify(self.root, self.expected)
+        # Windows does not represent POSIX executable mode bits. Exercise the
+        # denied-execution result on every host, then real mode bits on POSIX.
+        with patch.object(BUNDLE.os, "access", return_value=False):
+            with self.assertRaises(ValueError):
+                BUNDLE.verify(self.root, self.expected)
+        if os.name != "nt":
+            (self.root / BUNDLE.NAME).chmod(0o600)
+            with self.assertRaises(ValueError):
+                BUNDLE.verify(self.root, self.expected)
         receipt = self.root / BUNDLE.RECEIPT
         receipt.rename(self.root / "saved-receipt")
         receipt.symlink_to("saved-receipt")

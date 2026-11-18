@@ -518,12 +518,14 @@ impl LocalCatalogDatabaseManager {
                 .await?;
 
         if !exists {
-            query(&format!(
-                "CREATE DATABASE {}",
-                quote_identifier(&state.database_name)
-            ))
-            .execute(maintenance_catalog.pool())
-            .await?;
+            // Identifiers cannot be bind parameters. Preserve explicit identifier
+            // quoting while building the fixed CREATE DATABASE statement.
+            let mut statement = sqlx::QueryBuilder::<sqlx::Postgres>::new("CREATE DATABASE ");
+            statement.push(quote_identifier(&state.database_name));
+            statement
+                .build()
+                .execute(maintenance_catalog.pool())
+                .await?;
         }
 
         Ok(())

@@ -127,6 +127,18 @@ describe('verified device-scoped customer accounts',()=>{
       expect([firstResult.status,secondResult.status].filter(x=>x===200).length).toBeLessThanOrEqual(1);
     } else expect(replacement.status).toBe(409);
   });
+  it('restricts the no-domain Resend sender to its configured owner and refuses production use',async()=>{
+    const original=service;
+    try {
+      service={...service,EMAIL_FROM:'onboarding@resend.dev',EMAIL_TEST_RECIPIENT:'owner@example.test'};
+      expect((await call('/v1/account/email/request',{email:'someone-else@example.test'})).status).toBe(403);
+      expect(deliveries).toBe(0);
+      const signed=await signIn();expect(signed.account.email).toBe('owner@example.test');expect(deliveries).toBe(1);
+      service={...service,ALLOW_TEST_PURCHASES:'false'};
+      expect((await call('/v1/account/email/request',{email:'owner@example.test'})).status).toBe(503);
+      expect(deliveries).toBe(1);
+    } finally {service=original;}
+  });
   it('fails closed if email delivery is unconfigured or fails and never logs tokens/codes',async()=>{
     const original=service;service={...service,RESEND_API_KEY:undefined};expect((await call('/v1/account/email/request',{email:'owner@example.test'})).status).toBe(503);service=original;
     vi.stubGlobal('fetch',async()=>new Response('provider-secret-details',{status:500}));

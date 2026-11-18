@@ -335,6 +335,13 @@ jobs:
       - name: Configure MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Install media test decoder
+        shell: pwsh
+        run: |
+          choco install ffmpeg --version=9.0.2 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ffmpeg -version
+
       - name: Configure CMake
         run: cmake --preset ci-headless
 
@@ -355,6 +362,13 @@ jobs:
 
       - name: Configure MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install media test decoder
+        shell: pwsh
+        run: |
+          choco install ffmpeg --version=9.0.2 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ffmpeg -version
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4

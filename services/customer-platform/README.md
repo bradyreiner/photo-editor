@@ -42,12 +42,72 @@ commercial approval remains false until operator review and approval.
 Use Node 24. `npm ci --legacy-peer-deps`, then `npm run check`. Tests run a real
 local D1/Worker runtime with synthetic provider responses and ephemeral signing
 keys. No billing account or remote database is used. The workerd override keeps
-the test runtime compatible with the configured date; the sharp override removes
-the older transitive dependency. Revalidate both when updating the test plugin.
+the test runtime compatible with the configured date. Security overrides align
+the pooled Wrangler/Miniflare runtime and patch its image, HTTP and schema
+dependencies; Vite and source-map-js are pinned to patched compatible releases.
+Revalidate the integration suite and backup rehearsal when updating these tools.
 
 `npx wrangler deploy --dry-run` checks the deployable bundle without deployment.
 `node scripts/preview-admin.mjs` serves synthetic dashboard records on loopback
 port 8788; it is only a visual fixture and never an authentication fallback.
+
+## Toolchain security maintenance (2026-11-18)
+
+The official npm audit initially reported 13 affected dependency packages (12 high,
+one moderate), all in development tooling. The patched set retains the existing
+Cloudflare pool API and updates Vitest to 4.1.12, Wrangler to 4.149.0, Miniflare to
+5.20261006.1-alpha with its matching workerd, sharp to 0.35.5, undici to 7.30.1,
+Zod to 4.6.6, Vite to 8.3.3, and source-map-js to 1.2.2. The overrides prevent the
+pool's older exact transitive pins from reintroducing those dependencies.
+
+`npm audit --omit=dev` reports zero findings for the deployed Worker dependency
+set. The remaining six full npm audit package findings all derive from
+[GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), which the
+GitHub advisory database withdrew on November 18. npm still returns that advisory
+for picomatch 4.0.7 and its dependency chain; no patched 4.x version is published.
+The finding is documented, not suppressed or hidden with an audit allowlist.
+Recheck the official registry as the advisory metadata updates:
+
+```sh
+npm audit --registry=https://registry.npmjs.org
+```
+
+The configured npm mirror does not implement the audit endpoint. Primary patch
+references: [Vitest](https://github.com/advisories/GHSA-qxg6-89mg-rqv8),
+[sharp](https://github.com/advisories/GHSA-wq5f-xc86-pv6w),
+[undici](https://github.com/advisories/GHSA-2m5v-pch6-74hx),
+[Zod](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5),
+[Vite](https://github.com/advisories/GHSA-9jrq-w75r-8gcw),
+[source-map-js](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).
+
+## Staging values still required
+
+The committed configuration is a fail-closed template. These are missing
+nonsecret operator inputs, not evidence about resources in a hosted account:
+
+| Input | Current committed value | Needed for staging |
+| --- | --- | --- |
+| Customer API origin | `accounts.example.invalid` | Exact HTTPS origin: an explicit private staging `workers.dev` hostname or custom domain/route |
+| D1 database ID | All-zero UUID | Dedicated staging database UUID |
+| Staff Access team/audience | Empty | Access team domain, application audience and MFA policy |
+| Email sender | Empty | Verified sender/domain, or staging-only `onboarding@resend.dev` with explicit owner recipient |
+| Paddle checkout origin | `billing.example.invalid` | An actual HTTPS checkout page with Paddle.js; sandbox does not require domain approval |
+| Paddle offers | Empty price IDs and policy | Sandbox one-time and subscription `pri_` IDs, `pro_` IDs and explicit feature/version/device policies |
+| Signing key label | `looksy-1` template | Distinct staging key ID and generated matching public desktop configuration |
+
+The private operator secret file must supply `ENTITLEMENT_PRIVATE_KEY`,
+`RATE_LIMIT_SECRET`, `RESEND_API_KEY`, `PADDLE_API_KEY` and the actual Paddle
+notification `PADDLE_WEBHOOK_SECRET`. Do not put their values in source or chat.
+Preparation generates the Looksy signing/rate-limit material and optional legacy
+Lemon webhook secret; merchant and email credentials come from their providers.
+For the no-domain private path, explicitly select `routingMode: "workers-dev"`
+and set `emailTestRecipient` to the email registered with Resend. Only that
+recipient can request codes with its onboarding sender. Production rejects both
+the workers.dev route and the test sender. See the [no-domain staging guide](../../docs/customer-platform-setup.md#private-staging-without-a-domain).
+Staff subjects still need enrollment through the audited operator tool. Apply all
+four migrations, configure the signed Paddle notification destination, and prove
+email delivery and both sandbox purchase flows using a fresh managed installer.
+No remote resources are provisioned by this inventory.
 
 ## Configure isolated staging
 

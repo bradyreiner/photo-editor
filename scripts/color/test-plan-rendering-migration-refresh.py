@@ -11,6 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from private_publication import is_private_file
+
 
 SCRIPT = Path(__file__).with_name("plan-rendering-migration-refresh.py")
 REVIEW_SCRIPT = Path(__file__).with_name("rendering-migration-review-packet.py")
@@ -220,12 +222,15 @@ def main() -> int:
             or plan["humanApprovalGate"]["ratingsFileSha256"] != sha(
                 approved_ratings.read_bytes()
             )
-            or output.stat().st_mode & 0o777 != 0o600
+            or not is_private_file(output)
         ):
             raise AssertionError(
                 "planner did not enforce budgets, approval, or private publication"
             )
+        preserved_plan = output.read_bytes()
         run(*common, expect=1)
+        if output.read_bytes() != preserved_plan:
+            raise AssertionError("refusing an existing evidence path changed its contents")
         output.unlink()
         ratings["cases"]["asset-0000000000000001"]["decision"] = "reject"
         write(approved_ratings, ratings)

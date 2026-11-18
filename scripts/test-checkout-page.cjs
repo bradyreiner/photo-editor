@@ -158,3 +158,13 @@ test('checkout accessibility, noindex and page-scoped CSP are present without we
   assert.match(checkoutHeaders, /script-src 'self' https:\/\/cdn.paddle.com/);
   assert.match(headers.split('/checkout.html\n')[0], /script-src 'self';/);
 });
+
+test('Pages clean checkout and legal URLs avoid canonical HTML rewrite loops', () => {
+  const redirects = fs.readFileSync(path.join(__dirname, '../site/_redirects'), 'utf8');
+  const rules = redirects.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+  for (const alias of ['checkout', 'privacy', 'terms', 'refunds', 'support', 'licenses']) {
+    assert.ok(fs.existsSync(path.join(__dirname, '../site', alias + '.html')));
+    assert.ok(!rules.some(line => new RegExp('^/' + alias + '\\s+/' + alias + '\\.html\\s+200(?:\\s|$)').test(line)),
+      alias + ' must use native Pages clean URL serving');
+  }
+});

@@ -1282,6 +1282,22 @@ QVariantMap refresh_style_memory_backlinks(
   return report;
 }
 
+void finalize_memory_note_report(
+    QVariantMap& report,
+    bool ok,
+    const QString& error_message,
+    const QVariantMap& backlink_report = {}) {
+  report.insert(QStringLiteral("memorySchemaVersion"), kAgentMemorySchemaVersion);
+  report.insert(QStringLiteral("format"), QStringLiteral("markdown-yaml-frontmatter"));
+  report.insert(QStringLiteral("storesImageBytes"), false);
+  if (!backlink_report.isEmpty()) {
+    report.insert(QStringLiteral("styleBacklinkRefresh"), backlink_report);
+  }
+  if (!ok) {
+    report.insert(QStringLiteral("errors"), QStringList{error_message});
+  }
+}
+
 }  // namespace
 
 QString agent_memory_root_directory(const QString& app_data_location) {
@@ -1681,13 +1697,8 @@ QVariantMap write_agent_style_memory_note(
       {QStringLiteral("type"), QStringLiteral("style-memory-note")},
       {QStringLiteral("path"), path},
       {QStringLiteral("styleId"), style_id},
-      {QStringLiteral("memorySchemaVersion"), kAgentMemorySchemaVersion},
-      {QStringLiteral("format"), QStringLiteral("markdown-yaml-frontmatter")},
-      {QStringLiteral("storesImageBytes"), false},
   };
-  if (!ok) {
-    report.insert(QStringLiteral("errors"), QStringList{error_message});
-  }
+  finalize_memory_note_report(report, ok, error_message);
   return report;
 }
 
@@ -1709,16 +1720,8 @@ QVariantMap write_agent_project_memory_note(
       {QStringLiteral("path"), path},
       {QStringLiteral("styleId"), style_id},
       {QStringLiteral("scope"), scope},
-      {QStringLiteral("memorySchemaVersion"), kAgentMemorySchemaVersion},
-      {QStringLiteral("format"), QStringLiteral("markdown-yaml-frontmatter")},
-      {QStringLiteral("storesImageBytes"), false},
   };
-  if (!backlink_report.isEmpty()) {
-    report.insert(QStringLiteral("styleBacklinkRefresh"), backlink_report);
-  }
-  if (!ok) {
-    report.insert(QStringLiteral("errors"), QStringList{error_message});
-  }
+  finalize_memory_note_report(report, ok, error_message, backlink_report);
   return report;
 }
 
@@ -1748,16 +1751,8 @@ QVariantMap write_agent_feedback_memory_note(
       {QStringLiteral("type"), QStringLiteral("feedback-memory-note")},
       {QStringLiteral("path"), path},
       {QStringLiteral("styleId"), style_id},
-      {QStringLiteral("memorySchemaVersion"), kAgentMemorySchemaVersion},
-      {QStringLiteral("format"), QStringLiteral("markdown-yaml-frontmatter")},
-      {QStringLiteral("storesImageBytes"), false},
   };
-  if (!backlink_report.isEmpty()) {
-    report.insert(QStringLiteral("styleBacklinkRefresh"), backlink_report);
-  }
-  if (!ok) {
-    report.insert(QStringLiteral("errors"), QStringList{error_message});
-  }
+  finalize_memory_note_report(report, ok, error_message, backlink_report);
   return report;
 }
 
@@ -1783,16 +1778,8 @@ QVariantMap write_agent_run_memory_note(
       {QStringLiteral("styleId"), style.value(QStringLiteral("id")).toString()},
       {QStringLiteral("runId"), run_id},
       {QStringLiteral("mode"), mode},
-      {QStringLiteral("memorySchemaVersion"), kAgentMemorySchemaVersion},
-      {QStringLiteral("format"), QStringLiteral("markdown-yaml-frontmatter")},
-      {QStringLiteral("storesImageBytes"), false},
   };
-  if (!backlink_report.isEmpty()) {
-    report.insert(QStringLiteral("styleBacklinkRefresh"), backlink_report);
-  }
-  if (!ok) {
-    report.insert(QStringLiteral("errors"), QStringList{error_message});
-  }
+  finalize_memory_note_report(report, ok, error_message, backlink_report);
   return report;
 }
 
@@ -1827,16 +1814,8 @@ QVariantMap write_agent_issue_memory_note(
       {QStringLiteral("runId"), run_id},
       {QStringLiteral("mode"), mode},
       {QStringLiteral("issueSummary"), issue_summary},
-      {QStringLiteral("memorySchemaVersion"), kAgentMemorySchemaVersion},
-      {QStringLiteral("format"), QStringLiteral("markdown-yaml-frontmatter")},
-      {QStringLiteral("storesImageBytes"), false},
   };
-  if (!backlink_report.isEmpty()) {
-    report.insert(QStringLiteral("styleBacklinkRefresh"), backlink_report);
-  }
-  if (!ok) {
-    report.insert(QStringLiteral("errors"), QStringList{error_message});
-  }
+  finalize_memory_note_report(report, ok, error_message, backlink_report);
   return report;
 }
 
@@ -1856,16 +1835,8 @@ QVariantMap write_agent_tool_memory_note(
       {QStringLiteral("path"), path},
       {QStringLiteral("styleId"), style_id},
       {QStringLiteral("toolCount"), tool_knowledge_map(style).size()},
-      {QStringLiteral("memorySchemaVersion"), kAgentMemorySchemaVersion},
-      {QStringLiteral("format"), QStringLiteral("markdown-yaml-frontmatter")},
-      {QStringLiteral("storesImageBytes"), false},
   };
-  if (!backlink_report.isEmpty()) {
-    report.insert(QStringLiteral("styleBacklinkRefresh"), backlink_report);
-  }
-  if (!ok) {
-    report.insert(QStringLiteral("errors"), QStringList{error_message});
-  }
+  finalize_memory_note_report(report, ok, error_message, backlink_report);
   return report;
 }
 

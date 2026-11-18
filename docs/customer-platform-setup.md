@@ -48,7 +48,7 @@ cp setup.example.json setup.local.json
 
 Edit `setup.local.json`: set your exact HTTPS API origin, existing staging D1
 database ID, Access team domain/application audience, verified Resend sender
-`emailFrom`, approved `paddleCheckoutOrigin`, and real Paddle `pri_`/`pro_` mappings.
+`emailFrom`, an actual HTTPS sandbox `paddleCheckoutOrigin`, and real Paddle `pri_`/`pro_` mappings.
 The checked-in sample uses `billingProvider: "paddle"`; replace every placeholder.
 Legacy store setup can explicitly use `billingProvider: "lemon"`, a numeric
 `storeId`, and numeric variant/product mappings. Keep both perpetual and subscription products. Set a distinct staging
@@ -65,7 +65,9 @@ Ed25519 PEM, its desktop public configuration, an outside-checkout `secrets.json
 containing generated signing/webhook/rate-limit secrets, and
 `desktop-customer.local.cmake` containing only desktop public settings. It refuses
 existing output files. The staging configuration permits test purchases and
-keeps the default checked-in configuration intact.
+keeps the default checked-in configuration intact. `routingMode` defaults to
+`custom-domain`; `workers-dev` is an explicit private staging exception described
+below. Preview URLs remain disabled in both modes.
 
 Add `RESEND_API_KEY`, `PADDLE_API_KEY` and the actual Paddle notification
 `PADDLE_WEBHOOK_SECRET` to private `secrets.json` using your secret manager or editor.
@@ -89,6 +91,60 @@ overlap; no private keys belong there. It prints field names rather than
 values. It is an offline check: it cannot prove the remote database exists,
 secrets are deployed, sender DNS is verified, MFA is enforced, staff are enrolled,
 or checkout and email delivery work.
+
+## Private staging without a domain
+
+A purchased domain is not required for the owner's private account/VIP and Paddle
+sandbox tests. The default custom-domain setup remains unchanged. To choose the
+private path, edit these fields in the uncommitted staging input:
+
+```json
+{
+  "routingMode": "workers-dev",
+  "issuer": "https://looksy-customers-staging.YOUR-ACCOUNT-SUBDOMAIN.workers.dev",
+  "emailFrom": "onboarding@resend.dev",
+  "emailTestRecipient": "YOUR-REGISTERED-RESEND-EMAIL"
+}
+```
+
+Replace both uppercase placeholders with actual account values. The issuer must
+be the exact generated worker name `looksy-customers-staging`, your Cloudflare
+account's workers.dev subdomain, HTTPS and no port/path/trailing slash. The
+preparation command still writes staging-only policy; it enables `workers_dev`
+only for this explicit mode and keeps preview URLs off. `setup:check` rejects
+this route in production, a wrong worker hostname, or missing staff settings.
+Cloudflare documents [the workers.dev hostname format and Access support](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/).
+
+Use the email registered to the Resend account as `emailTestRecipient`. Resend's
+[onboarding sender can only deliver to that account's own email](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain).
+The Worker enforces the same recipient restriction before sending. It will not
+send codes to other customers through that sender, and it rejects the sender in
+live mode. A verified email domain is needed to invite other testers or launch
+public email sign-in. The setup tools do not send an email.
+
+Staff protection is still required: configure an Access application/policy for
+the exact staging hostname's `/admin*` paths with MFA, set its audience/team,
+and enroll the owner's trusted subject using the operator tool. The Worker still
+validates the Access JWT and the enrolled role on every staff route. Do not put a
+blanket interactive staff login on `/v1/*`; native email sign-in and merchant
+webhooks use their own authentication. Before deploying, verify the actual Access
+configuration protects staff pages while native API and notification requests can
+reach their handlers. No Access policy is automatically created by preparation.
+
+Paddle's [sandbox](https://developer.paddle.com/sdks/sandbox/) needs no website
+approval. Its [default checkout URL settings](https://developer.paddle.com/api-reference/settings/update-checkout-url/)
+accept any HTTPS URL in sandbox; live accounts require an approved domain. Set
+`paddleCheckoutOrigin` to an actual HTTPS page containing the existing Paddle.js
+checkout integration, such as a reviewed staging website on a hosting provider's
+subdomain. The customer API Worker does not serve a public checkout page, so its
+API origin alone is not a working checkout URL. Keep the sandbox client token,
+products, prices and notification destination separate from live configuration.
+
+When moving to production, use a reviewed custom-domain route with `workers_dev`
+and preview URLs disabled, a verified sender domain, approved Paddle checkout
+setup and separate live credentials/database/signing keys. Neither the no-domain
+path nor a successful offline setup check is proof of hosted deployment or email
+and payment delivery.
 
 ## Enroll staff
 
@@ -130,11 +186,14 @@ npx wrangler d1 execute DB --remote --config wrangler.staging.local.jsonc --file
 ```
 
 Add a Worker route/custom domain matching `issuer` before deployment; the generated
-configuration disables `workers.dev` and preview URLs. Configure a Paddle sandbox
+default custom-domain configuration disables `workers.dev` and preview URLs.
+The explicit no-domain staging mode enables only its exact workers.dev host;
+preview URLs remain disabled. Configure a Paddle sandbox
 notification destination at `ISSUER/v1/webhooks/paddle` for transaction, subscription
 and adjustment events, and copy its notification secret into the Worker secrets.
-Use a separate verified Resend sender/domain for staging; configure `EMAIL_FROM`
-and a sending-only API key. No email is sent by the preparation commands.
+Use a separate verified Resend sender/domain for staging, or the owner-only
+onboarding sender described above; configure `EMAIL_FROM`, any required
+`EMAIL_TEST_RECIPIENT`, and a sending-only API key. No email is sent by the preparation commands.
 Legacy Lemon stores use `ISSUER/v1/webhooks/lemon`. The route, sender DNS and
 merchant fulfillment are operator configuration, not generated resources.
 

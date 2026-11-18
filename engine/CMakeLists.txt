@@ -296,6 +296,10 @@ if(PHOTO_EDITOR_LCMS_TARGET)
   endif()
 endif()
 if(PHOTO_EDITOR_LCMS_TARGET)
+  # Share the exact validated backend (vcpkg, pinned, or pkg-config) with ICC
+  # oracle tests, including its headers and imported-target directory context.
+  add_library(photo_editor_lcms_backend INTERFACE)
+  target_link_libraries(photo_editor_lcms_backend INTERFACE ${PHOTO_EDITOR_LCMS_TARGET})
   target_link_libraries(photo_engine PRIVATE ${PHOTO_EDITOR_LCMS_TARGET})
   target_compile_definitions(
     photo_engine

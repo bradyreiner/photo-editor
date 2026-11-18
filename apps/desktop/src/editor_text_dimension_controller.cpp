@@ -452,7 +452,10 @@ EditState EditorPreviewController::applyPhotoTextDimensionGesturePreview(EditSta
 
 bool EditorPreviewController::finishTextDimensionGesture(int index, const QString& layer_id,
     bool commit, const QString& document_token, const QString& revision) {
-  const auto access = commit ? customer_edit_access_.enter() : customer_edit_access_.restore();
+  const auto access = [&]() -> CustomerEditAccess::Scope {
+    if (commit) return customer_edit_access_.enter();
+    return customer_edit_access_.restore();
+  }();
   if (!photo_text_dimension_gesture_ || photo_text_dimension_gesture_->layer_id != layer_id ||
       photo_text_dimension_gesture_->asset_id != document_token || photo_text_dimension_gesture_->revision != revision) return false;
   const auto gesture = *photo_text_dimension_gesture_;

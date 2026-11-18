@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from private_publication import is_private_file
+
 
 SCRIPT = Path(__file__).with_name("validate-rendering-migration-refresh-chunk.py")
 AUTHORIZATION_SCRIPT = Path(__file__).with_name(
@@ -139,10 +141,13 @@ def main() -> int:
             != "photo-editor-rendering-migration-refresh-chunk-authorization:v1"
             or authorized["assetIds"] != [asset_id]
             or authorized["totalPixels"] != 20_000_000
-            or authorization.stat().st_mode & 0o777 != 0o600
+            or not is_private_file(authorization)
         ):
             raise AssertionError("native chunk authorization is incomplete")
+        preserved_authorization = authorization.read_bytes()
         run_authorize(*authorization_args, expect=1)
+        if authorization.read_bytes() != preserved_authorization:
+            raise AssertionError("refusing an existing authorization changed its contents")
         report = root / "component.json"
         artifacts = Path(str(report) + ".assets")
         artifacts.mkdir()
@@ -191,7 +196,7 @@ def main() -> int:
             or output["status"] != "validated-evidence"
             or output["assetIds"] != [asset_id]
             or output["artifactCount"] != 3
-            or receipt.stat().st_mode & 0o777 != 0o600
+            or not is_private_file(receipt)
         ):
             raise AssertionError("valid chunk receipt is incomplete")
         run(*common, expect=1)

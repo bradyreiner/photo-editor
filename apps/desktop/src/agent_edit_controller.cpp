@@ -8598,13 +8598,75 @@ QString normalized_agent_phase(const QString& phase) {
   return QStringLiteral("sample");
 }
 
+QString calibration_file_sha256(const QString& path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return QString{};
+  }
+  QCryptographicHash hash(QCryptographicHash::Sha256);
+  while (!file.atEnd()) {
+    const auto chunk = file.read(1024 * 1024);
+    if (chunk.isEmpty() && file.error() != QFileDevice::NoError) {
+      return QString{};
+    }
+    hash.addData(chunk);
+  }
+  return QString::fromLatin1(hash.result().toHex());
+}
+
+bool apply_memory_write_failure(QVariantMap& report, const QVariantMap& write_report) {
+  if (write_report.value(QStringLiteral("ok")).toBool()) return false;
+  report.insert(QStringLiteral("errors"), write_report.value(QStringLiteral("errors")));
+  report.insert(QStringLiteral("failureReason"),
+                write_report.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; ")));
+  return true;
+}
+
+QVariantMap write_project_memory_entry(
+    QVariantMap& state, QVariantMap& projects, const QString& project_key, QVariantMap& entry) {
+  entry.insert(QStringLiteral("tasteUpdatedAtUtc"),
+               QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+  projects.insert(project_key, entry);
+  state.insert(QStringLiteral("projects"), projects);
+  return write_agent_memory_continuity_state(AppBootstrap::appDataLocation(), state);
+}
+
+QStringList mcp_edit_observation_tools(bool include_selection) {
+  QStringList tools{QStringLiteral("photo.live_status")};
+  if (include_selection) {
+    tools.append(QStringLiteral("photo.selected_assets"));
+    tools.append(QStringLiteral("photo.read_adjustments"));
+  }
+  tools.append({
+      QStringLiteral("photo.read_asset"),
+      QStringLiteral("photo.read_recipe"),
+      QStringLiteral("photo.inspect_composition"),
+      QStringLiteral("photo.edit_composition"),
+      QStringLiteral("app.list_commands"),
+      QStringLiteral("app.command_schema"),
+      QStringLiteral("app.inspect_command"),
+      QStringLiteral("app.invoke_command"),
+      QStringLiteral("photo.render_current_proof"),
+      QStringLiteral("photo.get_style_rulebook"),
+      QStringLiteral("photo.get_recipe_patch_schema"),
+      QStringLiteral("photo.validate_recipe_patch"),
+  });
+  return tools;
+}
+
+QStringList mcp_reversible_edit_completion_tools() {
+  return {
+      QStringLiteral("photo.create_mask"),
+      QStringLiteral("photo.apply_mask_adjustment"),
+      QStringLiteral("photo.cancel_agent_run"),
+      QStringLiteral("photo.rollback_agent_draft"),
+  };
+}
+
 QStringList mcp_tools_for_agent_phase(const QString& phase) {
   const auto normalized = normalized_agent_phase(phase);
   if (normalized == QStringLiteral("setup")) {
-    return {
-        QStringLiteral("photo.live_status"),
-        QStringLiteral("photo.list_models"),
-    };
+    return {QStringLiteral("photo.live_status"), QStringLiteral("photo.list_models")};
   }
   if (normalized == QStringLiteral("style")) {
     return {
@@ -8613,81 +8675,6 @@ QStringList mcp_tools_for_agent_phase(const QString& phase) {
         QStringLiteral("photo.read_asset"),
         QStringLiteral("photo.get_style_rulebook"),
         QStringLiteral("photo.get_recipe_patch_schema"),
-    };
-  }
-  if (normalized == QStringLiteral("revision")) {
-    return {
-        QStringLiteral("photo.live_status"),
-        QStringLiteral("photo.selected_assets"),
-        QStringLiteral("photo.read_adjustments"),
-        QStringLiteral("photo.read_asset"),
-        QStringLiteral("photo.read_recipe"),
-        QStringLiteral("photo.inspect_composition"),
-        QStringLiteral("photo.edit_composition"),
-        QStringLiteral("app.list_commands"),
-        QStringLiteral("app.command_schema"),
-        QStringLiteral("app.inspect_command"),
-        QStringLiteral("app.invoke_command"),
-        QStringLiteral("photo.render_current_proof"),
-        QStringLiteral("photo.get_style_rulebook"),
-        QStringLiteral("photo.get_recipe_patch_schema"),
-        QStringLiteral("photo.validate_recipe_patch"),
-        QStringLiteral("photo.validate_edit"),
-        QStringLiteral("photo.apply_recipe_patch_draft"),
-        QStringLiteral("photo.create_mask"),
-        QStringLiteral("photo.apply_mask_adjustment"),
-        QStringLiteral("photo.cancel_agent_run"),
-        QStringLiteral("photo.rollback_agent_draft"),
-    };
-  }
-  if (normalized == QStringLiteral("batch")) {
-    return {
-        QStringLiteral("photo.live_status"),
-        QStringLiteral("photo.selected_assets"),
-        QStringLiteral("photo.read_adjustments"),
-        QStringLiteral("photo.read_asset"),
-        QStringLiteral("photo.read_recipe"),
-        QStringLiteral("photo.inspect_composition"),
-        QStringLiteral("photo.edit_composition"),
-        QStringLiteral("app.list_commands"),
-        QStringLiteral("app.command_schema"),
-        QStringLiteral("app.inspect_command"),
-        QStringLiteral("app.invoke_command"),
-        QStringLiteral("photo.render_current_proof"),
-        QStringLiteral("photo.get_style_rulebook"),
-        QStringLiteral("photo.get_recipe_patch_schema"),
-        QStringLiteral("photo.validate_recipe_patch"),
-        QStringLiteral("photo.plan_bulk_edit"),
-        QStringLiteral("photo.validate_batch"),
-        QStringLiteral("photo.apply_recipe_patch_draft"),
-        QStringLiteral("photo.apply_bulk_draft"),
-        QStringLiteral("photo.create_mask"),
-        QStringLiteral("photo.apply_mask_adjustment"),
-        QStringLiteral("photo.cancel_agent_run"),
-        QStringLiteral("photo.rollback_agent_draft"),
-    };
-  }
-  if (normalized == QStringLiteral("outlier")) {
-    return {
-        QStringLiteral("photo.live_status"),
-        QStringLiteral("photo.read_asset"),
-        QStringLiteral("photo.read_recipe"),
-        QStringLiteral("photo.inspect_composition"),
-        QStringLiteral("photo.edit_composition"),
-        QStringLiteral("app.list_commands"),
-        QStringLiteral("app.command_schema"),
-        QStringLiteral("app.inspect_command"),
-        QStringLiteral("app.invoke_command"),
-        QStringLiteral("photo.render_current_proof"),
-        QStringLiteral("photo.get_style_rulebook"),
-        QStringLiteral("photo.get_recipe_patch_schema"),
-        QStringLiteral("photo.validate_recipe_patch"),
-        QStringLiteral("photo.validate_edit"),
-        QStringLiteral("photo.apply_recipe_patch_draft"),
-        QStringLiteral("photo.create_mask"),
-        QStringLiteral("photo.apply_mask_adjustment"),
-        QStringLiteral("photo.cancel_agent_run"),
-        QStringLiteral("photo.rollback_agent_draft"),
     };
   }
   if (normalized == QStringLiteral("commit-export")) {
@@ -8699,29 +8686,20 @@ QStringList mcp_tools_for_agent_phase(const QString& phase) {
         QStringLiteral("photo.export_batch"),
     };
   }
-  return {
-      QStringLiteral("photo.live_status"),
-      QStringLiteral("photo.selected_assets"),
-      QStringLiteral("photo.read_adjustments"),
-      QStringLiteral("photo.read_asset"),
-      QStringLiteral("photo.read_recipe"),
-        QStringLiteral("photo.inspect_composition"),
-        QStringLiteral("photo.edit_composition"),
-        QStringLiteral("app.list_commands"),
-        QStringLiteral("app.command_schema"),
-        QStringLiteral("app.inspect_command"),
-        QStringLiteral("app.invoke_command"),
-      QStringLiteral("photo.render_current_proof"),
-      QStringLiteral("photo.get_style_rulebook"),
-      QStringLiteral("photo.get_recipe_patch_schema"),
-      QStringLiteral("photo.validate_recipe_patch"),
-      QStringLiteral("photo.validate_edit"),
-      QStringLiteral("photo.apply_recipe_patch_draft"),
-      QStringLiteral("photo.create_mask"),
-      QStringLiteral("photo.apply_mask_adjustment"),
-      QStringLiteral("photo.cancel_agent_run"),
-      QStringLiteral("photo.rollback_agent_draft"),
-  };
+  auto tools = mcp_edit_observation_tools(normalized != QStringLiteral("outlier"));
+  if (normalized == QStringLiteral("batch")) {
+    tools.append({
+        QStringLiteral("photo.plan_bulk_edit"),
+        QStringLiteral("photo.validate_batch"),
+        QStringLiteral("photo.apply_recipe_patch_draft"),
+        QStringLiteral("photo.apply_bulk_draft"),
+    });
+  } else {
+    tools.append({QStringLiteral("photo.validate_edit"),
+                  QStringLiteral("photo.apply_recipe_patch_draft")});
+  }
+  tools.append(mcp_reversible_edit_completion_tools());
+  return tools;
 }
 
 QVariantList filter_mcp_tools_for_phase(const QVariantList& tools, const QString& phase) {
@@ -8737,8 +8715,7 @@ QVariantList filter_mcp_tools_for_phase(const QVariantList& tools, const QString
   return filtered;
 }
 
-bool approved_task_is_composition_only(const QVariantMap& approved_snapshot) {
-  if (approved_snapshot.isEmpty()) return false;
+QStringList approved_task_capabilities(const QVariantMap& approved_snapshot) {
   QStringList capabilities;
   const auto raw_capabilities =
       approved_snapshot.value(QStringLiteral("taskScopedCapabilities"));
@@ -8750,6 +8727,12 @@ bool approved_task_is_composition_only(const QVariantMap& approved_snapshot) {
     for (const auto& value : raw_capabilities.toList())
       capabilities.append(value.toString());
   }
+  return capabilities;
+}
+
+bool approved_task_is_composition_only(const QVariantMap& approved_snapshot) {
+  if (approved_snapshot.isEmpty()) return false;
+  const auto capabilities = approved_task_capabilities(approved_snapshot);
 
   QSet<QString> normalized_capabilities;
   for (const auto& capability : capabilities) {
@@ -8783,17 +8766,7 @@ bool approved_task_is_composition_only(const QVariantMap& approved_snapshot) {
 
 bool approved_task_has_graphic_text_action(const QVariantMap& approved_snapshot) {
   if (approved_snapshot.isEmpty()) return false;
-  QStringList capabilities;
-  const auto raw_capabilities =
-      approved_snapshot.value(QStringLiteral("taskScopedCapabilities"));
-  if (raw_capabilities.metaType().id() == QMetaType::QString) {
-    capabilities.append(raw_capabilities.toString());
-  } else if (raw_capabilities.metaType().id() == QMetaType::QStringList) {
-    capabilities = raw_capabilities.toStringList();
-  } else if (raw_capabilities.metaType().id() == QMetaType::QVariantList) {
-    for (const auto& value : raw_capabilities.toList())
-      capabilities.append(value.toString());
-  }
+  const auto capabilities = approved_task_capabilities(approved_snapshot);
   const auto has_graphics_capability = std::any_of(
       capabilities.cbegin(), capabilities.cend(), [](const QString& capability) {
         return normalized_task_capability_name(capability) == QStringLiteral("graphics");
@@ -12781,21 +12754,9 @@ QVariantMap AgentEditController::importPhotographerCalibrationProfile(
   auto entry = projects.value(project_key).toMap();
   entry.insert(QStringLiteral("projectKey"), project_key);
   entry.insert(QStringLiteral("photographerCalibration"), compact);
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(
-        QStringLiteral("failureReason"),
-        write_report.value(QStringLiteral("errors"))
-            .toStringList()
-            .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     return report;
   }
   const auto card = photographer_calibration_card(compact);
@@ -13155,13 +13116,8 @@ QVariantMap AgentEditController::importPhotographerTastePassportFile(
   auto entry = projects.value(project_key).toMap();
   entry.insert(QStringLiteral("projectKey"), project_key);
   entry.insert(QStringLiteral("photographerCalibration"), compact);
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
   if (!write_report.value(QStringLiteral("ok")).toBool()) {
     return fail_import(
         write_report.value(QStringLiteral("errors"))
@@ -13305,21 +13261,6 @@ QVariantMap AgentEditController::openPhotographerCalibrationReviewPacketFile(
     return fail_review(QStringLiteral(
         "The blind calibration review page must stay inside its packet."));
   }
-  const auto file_sha256 = [](const QString& path) {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-      return QString{};
-    }
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    while (!file.atEnd()) {
-      const auto chunk = file.read(1024 * 1024);
-      if (chunk.isEmpty() && file.error() != QFileDevice::NoError) {
-        return QString{};
-      }
-      hash.addData(chunk);
-    }
-    return QString::fromLatin1(hash.result().toHex());
-  };
   for (const auto& case_value : cases) {
     const auto review_case = case_value.toMap();
     if (review_case.value(QStringLiteral("caseId")).toString().trimmed().isEmpty()) {
@@ -13345,7 +13286,7 @@ QVariantMap AgentEditController::openPhotographerCalibrationReviewPacketFile(
       if (!proof_info.isFile() || canonical_proof.isEmpty() ||
           (!canonical_proof.startsWith(canonical_packet_root + QDir::separator()) &&
            canonical_proof != canonical_packet_root) ||
-          file_sha256(canonical_proof) != expected_digest) {
+          calibration_file_sha256(canonical_proof) != expected_digest) {
         return fail_review(QStringLiteral(
             "A calibration proof is missing, outside the packet, or altered."));
       }
@@ -13653,28 +13594,13 @@ QVariantMap AgentEditController::finalizePhotographerCalibrationReviewPayload(
         });
   }
 
-  const auto file_sha256 = [](const QString& path) {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-      return QString{};
-    }
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    while (!file.atEnd()) {
-      const auto chunk = file.read(1024 * 1024);
-      if (chunk.isEmpty() && file.error() != QFileDevice::NoError) {
-        return QString{};
-      }
-      hash.addData(chunk);
-    }
-    return QString::fromLatin1(hash.result().toHex());
-  };
   const auto source_manifest_path = source_to_path(
       packet.value(QStringLiteral("sourceManifest")).toString());
   const auto machine_report_path = source_to_path(
       packet.value(QStringLiteral("sourceMachineReport")).toString());
-  if (file_sha256(source_manifest_path) !=
+  if (calibration_file_sha256(source_manifest_path) !=
           packet.value(QStringLiteral("manifestSha256")).toString() ||
-      file_sha256(machine_report_path) !=
+      calibration_file_sha256(machine_report_path) !=
           packet.value(QStringLiteral("machineReportSha256")).toString()) {
     return fail_finalize(QStringLiteral(
         "The source manifest or machine report changed after blind review began."));
@@ -14155,21 +14081,9 @@ QVariantMap AgentEditController::forgetPhotographerCalibrationProfile(
     return report;
   }
   entry.remove(QStringLiteral("photographerCalibration"));
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(currentContinuityProjectKey(), entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(
-        QStringLiteral("failureReason"),
-        write_report.value(QStringLiteral("errors"))
-            .toStringList()
-            .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, currentContinuityProjectKey(), entry);
+  if (apply_memory_write_failure(report, write_report)) {
     report.insert(QStringLiteral("confirmationRequired"), false);
     return report;
   }
@@ -14321,19 +14235,9 @@ QVariantMap AgentEditController::saveProjectNorthStar(
   auto entry = projects.value(project_key).toMap();
   entry.insert(QStringLiteral("projectKey"), project_key);
   entry.insert(QStringLiteral("projectNorthStar"), north_star);
-  entry.insert(QStringLiteral("tasteUpdatedAtUtc"),
-               QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(QStringLiteral("failureReason"),
-                  write_report.value(QStringLiteral("errors"))
-                      .toStringList()
-                      .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     return report;
   }
 
@@ -14404,19 +14308,9 @@ QVariantMap AgentEditController::forgetProjectNorthStar(
   auto projects = state.value(QStringLiteral("projects")).toMap();
   auto entry = projects.value(project_key).toMap();
   entry.remove(QStringLiteral("projectNorthStar"));
-  entry.insert(QStringLiteral("tasteUpdatedAtUtc"),
-               QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(QStringLiteral("failureReason"),
-                  write_report.value(QStringLiteral("errors"))
-                      .toStringList()
-                      .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     report.insert(QStringLiteral("confirmationRequired"), false);
     return report;
   }
@@ -14999,21 +14893,9 @@ QVariantMap AgentEditController::renameProjectTaste(
   auto entry = projects.value(project_key).toMap();
   entry.insert(QStringLiteral("projectKey"), project_key);
   entry.insert(QStringLiteral("tasteName"), normalized_name);
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(
-        QStringLiteral("failureReason"),
-        write_report.value(QStringLiteral("errors"))
-            .toStringList()
-            .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     return report;
   }
 
@@ -15157,21 +15039,9 @@ QVariantMap AgentEditController::forgetProjectTasteEvidence(
                entry.value(QStringLiteral("visualReferents")).toList().size());
   entry.insert(QStringLiteral("storyPreferenceCount"),
                entry.value(QStringLiteral("storyPreferences")).toList().size());
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(
-        QStringLiteral("failureReason"),
-        write_report.value(QStringLiteral("errors"))
-            .toStringList()
-            .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     report.insert(QStringLiteral("confirmationRequired"), false);
     return report;
   }
@@ -15289,21 +15159,9 @@ QVariantMap AgentEditController::forgetTwoSpeedTastePreference(
     return report;
   }
   entry.insert(QStringLiteral("approvedEdits"), approvals);
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(
-        QStringLiteral("failureReason"),
-        write_report.value(QStringLiteral("errors"))
-            .toStringList()
-            .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     report.insert(QStringLiteral("confirmationRequired"), false);
     return report;
   }
@@ -16053,13 +15911,8 @@ QVariantMap AgentEditController::persistApprovedProjectTaste(
   entry.insert(QStringLiteral("approvedEditCount"), approvals.size());
   entry.insert(QStringLiteral("approvedCorrections"), corrections);
   entry.insert(QStringLiteral("approvedCorrectionCount"), corrections.size());
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report =
-      write_agent_memory_continuity_state(AppBootstrap::appDataLocation(), state);
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
   if (write_report.value(QStringLiteral("ok")).toBool()) {
     emit projectTasteChanged();
   }
@@ -16146,13 +15999,8 @@ QVariantMap AgentEditController::persistRejectedProjectDraft(
   entry.insert(QStringLiteral("projectKey"), project_key);
   entry.insert(QStringLiteral("rejectedDrafts"), rejected_drafts);
   entry.insert(QStringLiteral("rejectedDraftCount"), rejected_drafts.size());
-  entry.insert(
-      QStringLiteral("tasteUpdatedAtUtc"),
-      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report =
-      write_agent_memory_continuity_state(AppBootstrap::appDataLocation(), state);
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
   if (write_report.value(QStringLiteral("ok")).toBool()) {
     emit projectTasteChanged();
   }
@@ -18544,19 +18392,9 @@ QVariantMap AgentEditController::rememberApprovedStoryPreference(
   entry.insert(QStringLiteral("projectKey"), project_key);
   entry.insert(QStringLiteral("storyPreferences"), preferences);
   entry.insert(QStringLiteral("storyPreferenceCount"), preferences.size());
-  entry.insert(QStringLiteral("tasteUpdatedAtUtc"),
-               QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(QStringLiteral("failureReason"),
-                  write_report.value(QStringLiteral("errors"))
-                      .toStringList()
-                      .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     report.insert(QStringLiteral("confirmationRequired"), false);
     return report;
   }
@@ -18664,19 +18502,9 @@ QVariantMap AgentEditController::forgetApprovedStoryPreference(
   }
   entry.insert(QStringLiteral("storyPreferences"), preferences);
   entry.insert(QStringLiteral("storyPreferenceCount"), preferences.size());
-  entry.insert(QStringLiteral("tasteUpdatedAtUtc"),
-               QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-  projects.insert(project_key, entry);
-  state.insert(QStringLiteral("projects"), projects);
-  const auto write_report = write_agent_memory_continuity_state(
-      AppBootstrap::appDataLocation(), state);
-  if (!write_report.value(QStringLiteral("ok")).toBool()) {
-    report.insert(QStringLiteral("errors"),
-                  write_report.value(QStringLiteral("errors")));
-    report.insert(QStringLiteral("failureReason"),
-                  write_report.value(QStringLiteral("errors"))
-                      .toStringList()
-                      .join(QStringLiteral("; ")));
+  const auto write_report = write_project_memory_entry(
+      state, projects, project_key, entry);
+  if (apply_memory_write_failure(report, write_report)) {
     report.insert(QStringLiteral("confirmationRequired"), false);
     return report;
   }

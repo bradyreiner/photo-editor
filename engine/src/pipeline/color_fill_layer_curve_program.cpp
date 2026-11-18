@@ -1,5 +1,6 @@
 #include "color_fill_layer_curve_program.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <ranges>

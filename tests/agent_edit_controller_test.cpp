@@ -1397,6 +1397,76 @@ int main(int argc, char** argv) {
 
   QCoreApplication app(argc, argv);
   const auto arguments = app.arguments();
+  if (arguments.contains(QStringLiteral("--project-memory-controls"))) {
+    QTemporaryDir root;
+    if (!root.isValid()) return fail("project memory controls need an isolated profile");
+    qputenv("PHOTO_EDITOR_APP_DATA_DIR", root.path().toUtf8());
+    photo_editor::desktop::CatalogAssetModel catalog;
+    catalog.setProjectFilter(QStringLiteral("Helper Project A"));
+    photo_editor::desktop::AgentEditController controller;
+    controller.setCatalogModel(&catalog);
+    const auto brief_a = QStringLiteral("Keep client portraits natural with restrained contrast.");
+    if (!controller.saveProjectNorthStar(brief_a).value(QStringLiteral("ok")).toBool() ||
+        !controller.renameProjectTaste(QStringLiteral("Natural portraits")).value(QStringLiteral("ok")).toBool() ||
+        controller.projectNorthStarStatus().value(QStringLiteral("brief")).toString() != brief_a)
+      return fail("renaming project taste must preserve the saved North Star");
+    const auto declined = controller.forgetProjectNorthStar(false);
+    if (declined.value(QStringLiteral("ok")).toBool() ||
+        !declined.value(QStringLiteral("confirmationRequired")).toBool() ||
+        controller.projectNorthStarStatus().value(QStringLiteral("brief")).toString() != brief_a)
+      return fail("unconfirmed memory removal must preserve the existing project entry");
+    photo_editor::desktop::AgentEditController restored;
+    restored.setCatalogModel(&catalog);
+    if (restored.projectNorthStarStatus().value(QStringLiteral("brief")).toString() != brief_a)
+      return fail("project memory writes must survive controller reconstruction");
+    catalog.setProjectFilter(QStringLiteral("Helper Project B"));
+    const auto brief_b = QStringLiteral("Preserve the landscape's neutral daylight and soft shadows.");
+    if (controller.projectNorthStarStatus().value(QStringLiteral("available")).toBool() ||
+        !controller.saveProjectNorthStar(brief_b).value(QStringLiteral("ok")).toBool())
+      return fail("project entries must remain isolated when saving a second North Star");
+    catalog.setProjectFilter(QStringLiteral("Helper Project A"));
+    const auto forgotten = controller.forgetProjectNorthStar(true);
+    if (!forgotten.value(QStringLiteral("ok")).toBool() ||
+        forgotten.value(QStringLiteral("confirmationRequired")).toBool() ||
+        controller.projectNorthStarStatus().value(QStringLiteral("available")).toBool())
+      return fail("confirmed memory removal must persist and close its confirmation state");
+    catalog.setProjectFilter(QStringLiteral("Helper Project B"));
+    if (controller.projectNorthStarStatus().value(QStringLiteral("brief")).toString() != brief_b)
+      return fail("removing one project's memory must preserve other project entries");
+    std::cout << "Project memory save, rename, confirmation, reconstruction and cross-project preservation passed.\n";
+    return EXIT_SUCCESS;
+  }
+  if (arguments.contains(QStringLiteral("--phase-tool-policy"))) {
+    QTemporaryDir root;
+    if (!root.isValid()) return fail("phase tool policy needs an isolated profile");
+    qputenv("PHOTO_EDITOR_APP_DATA_DIR", root.path().toUtf8());
+    QFile fixture(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/tests/fixtures/agent_phase_tool_policy.json"));
+    if (!fixture.open(QIODevice::ReadOnly)) return fail("phase tool policy fixture could not be read");
+    const auto expected = QJsonDocument::fromJson(fixture.readAll()).object();
+    if (expected.size() != 7) return fail("phase tool policy fixture is incomplete");
+    photo_editor::desktop::AgentEditController controller;
+    for (auto phase = expected.begin(); phase != expected.end(); ++phase) {
+      QStringList names;
+      for (const auto& name : phase.value().toArray()) names.append(name.toString());
+      const auto actual = controller.mcpToolPolicyForPhase(phase.key());
+      if (actual.value(QStringLiteral("toolNames")).toStringList() != names ||
+          actual.value(QStringLiteral("toolCount")).toInt() != names.size() ||
+          !actual.value(QStringLiteral("leastPrivilege")).toBool()) {
+        std::cerr << "phase tool policy changed for " << phase.key().toStdString() << '\n';
+        return EXIT_FAILURE;
+      }
+    }
+    const auto policy = [&controller](const QString& phase) {
+      return controller.mcpToolPolicyForPhase(phase).value(QStringLiteral("toolNames")).toStringList();
+    };
+    if (policy(QStringLiteral("COMMIT")) != policy(QStringLiteral("commit-export")) ||
+        policy(QStringLiteral("commit_export")) != policy(QStringLiteral("commit-export")) ||
+        policy(QStringLiteral("export")) != policy(QStringLiteral("commit-export")) ||
+        policy(QStringLiteral("unknown")) != policy(QStringLiteral("sample")))
+      return fail("phase aliases must retain the original least-privilege defaults");
+    std::cout << "All seven ordered phase tool policies and normalized aliases preserve their authority.\n";
+    return EXIT_SUCCESS;
+  }
   if (arguments.contains(QStringLiteral("--managed-download-handoff"))) {
     using namespace photo_editor::desktop;
     QTemporaryDir root;

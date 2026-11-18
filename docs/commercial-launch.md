@@ -19,13 +19,15 @@ portal links are generated on demand for the mapped account customer.
 ### Configure Paddle sandbox first
 
 1. Create a Paddle sandbox account and separate live account; complete the live
-   seller/domain approval before sales. Configure an approved default payment-link
-   page that loads Paddle.js and opens the server-created transaction. The supplied
+   seller/domain approval before sales. Sandbox accepts HTTPS payment-link pages
+   without domain approval, including a staging `pages.dev` address. Configure a
+   default payment-link page that loads Paddle.js and opens the server-created transaction. The supplied
    `site/checkout.html` does this; deploy it on your approved website and set the
    default payment link to its full URL. Configure its public token with
    `python3 scripts/configure-paddle-checkout.py --help`. The page rejects a visit
    without a server-created transaction and does not sell an unlinked license.
-   Website hosting/domain approval remain external setup.
+   Website hosting remains external setup; live checkout needs domain approval.
+   [Paddle sandbox requirements](https://developer.paddle.com/sdks/sandbox/).
 2. Create one non-recurring price and one recurring price, each for one named user.
    Configure `PADDLE_ENVIRONMENT`, `PADDLE_ONE_TIME_PRICE_ID`,
    `PADDLE_SUBSCRIPTION_PRICE_ID`, `PADDLE_CHECKOUT_ORIGIN` and

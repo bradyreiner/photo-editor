@@ -1,6 +1,3 @@
-/privacy /privacy.html 200
-/terms /terms.html 200
-/refunds /refunds.html 200
-/support /support.html 200
-/licenses /licenses.html 200
-/checkout /checkout.html 200
+# Cloudflare Pages serves matching .html files at extensionless URLs itself.
+# Rewriting a clean URL back to .html triggers the platform's canonical redirect
+# to the same clean URL, causing a redirect loop for checkout and legal pages.

@@ -33,5 +33,7 @@
   },
   "billingProvider": "paddle",
   "emailFrom": "accounts@example.invalid",
-  "paddleCheckoutOrigin": "https://billing.example.invalid"
+  "paddleCheckoutOrigin": "https://billing.example.invalid",
+  "routingMode": "custom-domain",
+  "emailTestRecipient": ""
 }

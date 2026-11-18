@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from private_publication import publish_new_file
+
 from rendering_migration_report_identity import (
     file_sha256,
     validate_report_identity,
@@ -53,19 +55,6 @@ def value_sha256(value: Any) -> str:
 
 def valid_sha256(value: Any) -> bool:
     return isinstance(value, str) and SHA256_PATTERN.fullmatch(value) is not None
-
-
-def publish_new_file(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
 
 
 def validate_plan(plan_path: Path, executable: Path) -> tuple[dict[str, Any], dict[str, Any]]:

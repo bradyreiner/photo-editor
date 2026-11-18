@@ -28,6 +28,13 @@ the missing software and CI failures are addressed.
 Local implementation checks and Account-panel fixture captures are recorded in
 [the customer-system verification record](releases/customer-platform-2026-11-17/README.md).
 
+A purchased domain is not required for the owner's private sandbox test. Explicit
+staging configuration supports a Cloudflare `workers.dev` account API and a hosted
+`pages.dev` checkout. Resend's onboarding sender is restricted to the owner's
+registered email; Looksy enforces that recipient restriction before sending. These
+staging exceptions are rejected by production setup checks. See
+[no-domain staging setup](customer-platform-setup.md#private-staging-without-a-domain).
+
 ### Current state and implementation gaps
 
 | Area | Verified current state | Required next work |
@@ -37,7 +44,7 @@ Local implementation checks and Account-panel fixture captures are recorded in
 | Owner and staff | Cloudflare Access staff plus backend support/admin boundaries; account lookup, disable/re-enable, session revocation and deletion implemented | Enroll the owner, enforce MFA and test backend authorization with separate real customer/support/admin identities |
 | VIP codes | Audited admin creation/reissue/revocation and verified-account redemption with expiry/device/use limits implemented; local concurrent redemption tests pass | Choose final policy and exercise owner/customer flows against staging |
 | Existing revocation | Device revocation and admin license blocking exist | Prove refresh denial and cached-lease expiry; customer polling is currently six hours and paid offline leases default to seven days |
-| Billing | Paddle selected; account-bound checkout, portal, webhook fulfillment/refunds, paid-period subscription limits and reconciliation implemented and locally tested; legacy Lemon remains | Configure Paddle sandbox products/domain/secrets, sender and public checkout page; prove installed checkout/portal/refund/recovery end to end |
+| Billing | Paddle selected; account-bound checkout, portal, webhook fulfillment/refunds, paid-period subscription limits and reconciliation implemented and locally tested; legacy Lemon remains | Configure Paddle sandbox products/secrets, owner test email delivery and a working HTTPS checkout page; prove installed checkout/portal/refund/recovery end to end |
 | Error reports | Bounded reviewed support bundles, incident IDs, channel-isolated consent/queues and Windows Crashpad installation implemented; native crash reporting is off in default build | Configure a reporting project, link/package/sign the real SDK and handler, upload matching symbols and prove delivery/consent behavior |
 | App updates | Strict staging Sparkle channel and offline staging config/feed checks implemented; default Mac build has Sparkle off and no feed/key | Configure private signed feeds and test two actual installer versions, interruption, recovery and account/data preservation |
 
@@ -59,7 +66,8 @@ See [Paddle configuration and fulfillment policy](commercial-launch.md).
    admission; updating the inventory alone must not grant missing authorization.
 2. **Configure Paddle and verified email delivery.** The implemented integrations
    use Paddle plus Resend email codes, preserving one-time and subscription offers.
-   Complete provider onboarding and sender-domain verification. Looksy account IDs
+   Complete provider onboarding and configure owner-restricted test delivery for
+   staging; verify the sender domain before public delivery. Looksy account IDs
    are independent of billing IDs; purchase email alone does not grant access.
 3. **Accept the implemented account and VIP workflows.** Run email sign-in/recovery,
    secure sessions, verified purchase linking and admin-only VIP grants in staging.
@@ -94,8 +102,9 @@ See [Paddle configuration and fulfillment policy](commercial-launch.md).
 
 - [ ] Apple Developer membership, stable legal publisher, Developer ID certificate
   and notarization credentials.
-- [ ] Cloudflare/domain access, staging D1/Worker and staff Access application/MFA.
-- [ ] Resend account and working verification/recovery delivery for the sender domain.
+- [ ] Cloudflare account access, staging D1/Worker and staff Access application/MFA.
+- [ ] Resend account and working owner-only staging verification/recovery delivery;
+  verified sender domain before public sign-ups.
 - [ ] Paddle account, sandbox products for both offers,
   webhook credentials and customer portal. Determine whether an existing Lemon
   Squeezy store/customer migration is needed before replacing its adapter.
@@ -150,20 +159,23 @@ part of acceptance. Sparkle update archives require cryptographic signatures.
 
 ### Pushed CI snapshot
 
-The user pushed `7fae62e2` to `main`; the earlier PAT/push blocker is resolved.
-At the 2026-11-17 check, [CI](https://github.com/bradyreiner/photo-editor/actions/runs/44161557484)
-has repository hygiene passing, Windows desktop still running, Windows headless
-failing with missing Metal backend symbols, and the Mac jobs cancelled. Other
-native/source jobs are not green. A cancelled job is not platform qualification.
+`55932696` was pushed to `main` on November 18; the earlier PAT/push blocker is
+resolved. Its [customer-platform run](https://github.com/bradyreiner/photo-editor/actions/runs/44348880475)
+passes, including the native permission-admission audit. Its
+[native CI run](https://github.com/bradyreiner/photo-editor/actions/runs/44348880554)
+passes repository hygiene and the Windows headless build; Windows headless tests
+still fail seven portability/dependency checks. Linux builds fail missing
+standard-library includes, Rust formatting fails, source export finds tracked
+out-of-tree dependency symlinks, and Mac jobs are cancelled. Windows desktop
+was still building at this check. A cancelled job is not platform qualification.
 
-The [customer job](https://github.com/bradyreiner/photo-editor/actions/runs/44161557686)
-reaches its admission audit and fails on unreviewed APIs and missing/delegated
-guards, including timeline color-grade automation and Gaussian capture.
-The [security run](https://github.com/bradyreiner/photo-editor/actions/runs/44161557434)
-reports Rust dependency vulnerabilities and a secret-scanner action license/API
-setup failure. Customer dependency installation also reports JavaScript
-advisories. Review and remediate the findings; do not suppress a failing guard or
-audit merely to obtain a green badge.
+The [security run](https://github.com/bradyreiner/photo-editor/actions/runs/44348880405)
+fails on the earlier dependency graph and scanner setup. The next source revision
+repairs these failures, replaces the licensed scanner wrapper with the verified
+open-source CLI, and consolidates duplicate implementation without increasing
+the duplication limits. Local results and remaining hosted/installed-app gates
+are recorded in [the remediation record](releases/release-readiness-2026-11-18.md).
+Fresh CI must verify that revision before any platform is marked qualified.
 
 ## Implemented in the repository
 

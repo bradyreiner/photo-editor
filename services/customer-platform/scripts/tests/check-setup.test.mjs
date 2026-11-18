@@ -102,3 +102,29 @@ test('Paddle requires separate sandbox policy, checkout origin, both offers and 
   assert(checkSetup(f.config,f).some(x=>x.includes('SUBSCRIPTION_PRICE_ID')));
   f.secrets.RESEND_API_KEY='';assert(checkSetup(f.config,f).some(x=>x.includes('RESEND_API_KEY')));
 });
+
+test('permits explicit workers.dev private staging with unchanged staff authentication',()=>{
+  const f=fixture();f.config.name='looksy-customers-staging';f.config.workers_dev=true;
+  f.config.vars.ISSUER='https://looksy-customers-staging.private-tests.workers.dev';
+  f.config.vars.EMAIL_FROM='onboarding@resend.dev';f.config.vars.EMAIL_TEST_RECIPIENT='owner@looksy.test';
+  assert.deepEqual(checkSetup(f.config,f),[]);
+  f.config.vars.ACCESS_AUDIENCE='';assert(checkSetup(f.config,f).some(x=>x.includes('ACCESS_AUDIENCE')));
+  f.config.vars.ACCESS_AUDIENCE='access-app-audience';f.config.preview_urls=true;
+  assert(checkSetup(f.config,f).some(x=>x.includes('preview_urls')));
+});
+test('rejects workers.dev or Resend onboarding testing configuration in production',()=>{
+  const f=fixture();f.config.name='looksy-customers-staging';f.config.workers_dev=true;
+  f.config.vars.ISSUER='https://looksy-customers-staging.private-tests.workers.dev';
+  f.config.vars.EMAIL_FROM='onboarding@resend.dev';f.config.vars.EMAIL_TEST_RECIPIENT='owner@looksy.test';f.config.vars.ALLOW_TEST_PURCHASES='false';
+  const errors=checkSetup(f.config,{...f,environment:'production'});
+  assert(errors.some(x=>x.includes('workers_dev')));assert(errors.some(x=>x.includes('onboarding sender')));
+});
+test('rejects wrong workers.dev worker names, implicit routing and missing owner test recipient',()=>{
+  const f=fixture();f.config.name='looksy-customers-staging';f.config.workers_dev=true;
+  f.config.vars.ISSUER='https://other-worker.private-tests.workers.dev';
+  assert(checkSetup(f.config,f).some(x=>x.includes('exact configured worker')));
+  f.config.vars.ISSUER='https://looksy-customers-staging.private-tests.workers.dev';f.config.workers_dev=false;
+  assert(checkSetup(f.config,f).some(x=>x.includes('explicit staging workers_dev')));
+  f.config.workers_dev=true;f.config.vars.EMAIL_FROM='onboarding@resend.dev';
+  assert(checkSetup(f.config,f).some(x=>x.includes('EMAIL_TEST_RECIPIENT')));
+});

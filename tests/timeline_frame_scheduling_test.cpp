@@ -1423,10 +1423,27 @@ int main(int argc, char** argv) {
         return fail("The fresh worker-thread decoder fixture should emit the native QVideoSink signal");
       }
       QCoreApplication::processEvents(QEventLoop::AllEvents);
-      if (!TimelinePlaybackFrameTestAccess::hasSeekCandidate(seek_playback) ||
-          !TimelinePlaybackFrameTestAccess::acknowledgePosition(seek_playback, 600) ||
-          !wait_until([&] { return TimelinePlaybackFrameTestAccess::idle(seek_playback); }) ||
+      // The native decoder signal crosses a thread boundary. A single event-loop
+      // pass need not drain queued admission; require the candidate before sending
+      // the synthetic position acknowledgment, within the existing test deadline.
+      const auto fresh_candidate = wait_until([&] {
+        return TimelinePlaybackFrameTestAccess::hasSeekCandidate(seek_playback);
+      });
+      const auto fresh_acknowledged = fresh_candidate &&
+          TimelinePlaybackFrameTestAccess::acknowledgePosition(seek_playback, 600);
+      const auto fresh_idle = fresh_acknowledged && wait_until([&] {
+        return TimelinePlaybackFrameTestAccess::idle(seek_playback);
+      });
+      if (!fresh_candidate || !fresh_acknowledged || !fresh_idle ||
           seek_presented.size() != previous + 1 || seek_presented.last().green() < 200) {
+        const auto diagnostic = TimelinePlaybackFrameTestAccess::seekDiagnostics(seek_playback);
+        std::cerr << "Fresh paused seek diagnostic: candidate=" << fresh_candidate
+                  << " acknowledged=" << fresh_acknowledged << " idle=" << fresh_idle
+                  << " previousPresented=" << previous << " presented=" << seek_presented.size()
+                  << " lastGreen=" << (seek_presented.isEmpty() ? -1 : seek_presented.last().green());
+        for (auto entry = diagnostic.cbegin(); entry != diagnostic.cend(); ++entry)
+          std::cerr << " " << entry.key().toStdString() << "=" << entry.value().toString().toStdString();
+        std::cerr << '\n';
         return fail("A fresh paused-seek frame arriving before position acknowledgment should publish after acknowledgment");
       }
 

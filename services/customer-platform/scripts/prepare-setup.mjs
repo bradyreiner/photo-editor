@@ -48,6 +48,13 @@ export function validateSetupInput(input, { appVersion } = {}) {
   }
   if (!/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]+)?$/.test(issuer)) fail('issuer must match the desktop HTTPS origin format (ASCII DNS name and optional port)');
   rejectPlaceholder(issuer, 'issuer');
+  const routingMode=input.routingMode??'custom-domain';
+  if(!['custom-domain','workers-dev'].includes(routingMode)) fail('routingMode must be custom-domain or workers-dev');
+  if(routingMode==='workers-dev') {
+    if(!/^looksy-customers-staging\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.workers\.dev$/.test(parsedIssuer.hostname) || parsedIssuer.port) {
+      fail('workers-dev issuer must be the exact looksy-customers-staging account hostname with no port');
+    }
+  } else if(parsedIssuer.hostname.endsWith('.workers.dev')) fail('workers.dev requires explicit workers-dev staging routingMode');
 
   const databaseId = requiredString(input.databaseId, 'databaseId', 36);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(databaseId) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/i.test(databaseId)) {
@@ -66,6 +73,13 @@ export function validateSetupInput(input, { appVersion } = {}) {
   const emailFrom=requiredString(input.emailFrom,'emailFrom',254);
   if(!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(emailFrom)) fail('emailFrom must be a verified sender email address');
   rejectPlaceholder(emailFrom,'emailFrom');
+  const emailTestRecipient=input.emailTestRecipient??'';
+  if(emailFrom.toLowerCase().endsWith('@resend.dev')) {
+    if(emailFrom.toLowerCase()!=='onboarding@resend.dev') fail('Only the Resend onboarding sender is supported for private testing');
+    requiredString(emailTestRecipient,'emailTestRecipient',254);
+    if(!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(emailTestRecipient)) fail('emailTestRecipient must be the registered Resend owner email');
+    rejectPlaceholder(emailTestRecipient,'emailTestRecipient');
+  } else if(emailTestRecipient!=='') fail('emailTestRecipient is only used with the Resend onboarding sender');
   let paddleCheckoutOrigin='';
   if(billingProvider==='paddle') {
     paddleCheckoutOrigin=requiredString(input.paddleCheckoutOrigin,'paddleCheckoutOrigin',300);
@@ -120,7 +134,7 @@ export function validateSetupInput(input, { appVersion } = {}) {
   }
 
   return {
-    issuer, databaseId, accessTeamDomain, accessAudience, storeId, signingKeyId, productPolicy, trustedKeys, billingProvider, emailFrom, paddleCheckoutOrigin,
+    issuer, databaseId, accessTeamDomain, accessAudience, storeId, signingKeyId, productPolicy, trustedKeys, billingProvider, emailFrom, paddleCheckoutOrigin, routingMode, emailTestRecipient,
     trialDays: boundedInteger(input.trialDays, 1, 60, 'trialDays'),
     leaseDays: boundedInteger(input.leaseDays, 1, 30, 'leaseDays'),
   };
@@ -154,6 +168,8 @@ function setupArtifacts(config, keyPair, outputPath) {
   const publicConfig = { kid: config.input.signingKeyId, publicKeyBase64: publicKey, trustedKeys };
   const wrangler = JSON.parse(JSON.stringify(config.baseConfig));
   wrangler.name = 'looksy-customers-staging';
+  wrangler.workers_dev=config.input.routingMode==='workers-dev';
+  wrangler.preview_urls=false;
   wrangler.d1_databases = wrangler.d1_databases.map(binding => ({
     ...binding, database_name: 'looksy-customers-staging', database_id: config.input.databaseId,
   }));
@@ -169,6 +185,7 @@ function setupArtifacts(config, keyPair, outputPath) {
     PADDLE_ONE_TIME_PRICE_ID:config.input.billingProvider==='paddle'?Object.keys(config.input.productPolicy).find(key=>config.input.productPolicy[key].mode==='perpetual'):'',
     PADDLE_SUBSCRIPTION_PRICE_ID:config.input.billingProvider==='paddle'?Object.keys(config.input.productPolicy).find(key=>config.input.productPolicy[key].mode==='subscription'):'',
     EMAIL_FROM:config.input.emailFrom,
+    EMAIL_TEST_RECIPIENT:config.input.emailTestRecipient.toLowerCase(),
     ALLOW_TEST_PURCHASES: 'true',
     TRIAL_DAYS: String(config.input.trialDays),
     LEASE_DAYS: String(config.input.leaseDays),

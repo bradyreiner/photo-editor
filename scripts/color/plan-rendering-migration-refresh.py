@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from private_publication import publish_new_file
+
 from rendering_migration_report_identity import validate_report_identity
 
 
@@ -54,20 +56,6 @@ def file_sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def publish_new_file(path: Path, payload: bytes) -> None:
-    """Publish evidence without ever replacing an existing path."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
 
 
 def string_list(value: Any) -> list[str]:

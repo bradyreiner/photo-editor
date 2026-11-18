@@ -95,8 +95,10 @@ int main(int argc, char** argv) {
 
   controller.setVibrance(66.0);
   controller.addMask(QStringLiteral("linear"));
-  if (controller.photoLayerCount() != 1) {
-    return fail("test should prepare an adjustment layer source");
+  if (controller.photoLayerCount() != 0 || !controller.hasWorkingSelection() ||
+      controller.createAdjustmentLayerFromWorkingSelection(QStringLiteral("Preset Source")) != 0 ||
+      controller.photoLayerCount() != 1) {
+    return fail("test should explicitly prepare an adjustment layer from its independent working selection");
   }
   if (!controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("exposure"), 0.31)) {
     return fail("test should prepare a layer-local exposure value");

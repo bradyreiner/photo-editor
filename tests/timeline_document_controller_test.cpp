@@ -13319,7 +13319,8 @@ int main(int argc, char** argv) {
       !nearly_equal(transformed_clip.value(QStringLiteral("frameOffsetY")).toDouble(), -0.25) ||
       !nearly_equal(transformed_clip.value(QStringLiteral("frameRotationDegrees")).toDouble(), 17.5) ||
       !nearly_equal(transformed_clip.value(QStringLiteral("opacity")).toDouble(), 0.62) ||
-      !nearly_equal(transformed_clip.value(QStringLiteral("audioGainDb")).toDouble(), -4.5) ||
+      transformed_clip.value(QStringLiteral("hasAudio")).toBool() ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("audioGainDb")).toDouble(), 0.0) ||
       !nearly_equal(transformed_clip.value(QStringLiteral("fadeInSeconds")).toDouble(), 0.35) ||
       !nearly_equal(transformed_clip.value(QStringLiteral("fadeOutSeconds")).toDouble(), 0.40) ||
       !nearly_equal(transformed_clip.value(QStringLiteral("playbackRate")).toDouble(), 1.25) ||
@@ -13331,11 +13332,35 @@ int main(int argc, char** argv) {
       !nearly_equal(transformed_clip.value(QStringLiteral("transitionInSeconds")).toDouble(), 0.30) ||
       !nearly_equal(transformed_clip.value(QStringLiteral("transitionOutSeconds")).toDouble(), 0.45) ||
       overwrite_controller.sequenceMarkers().size() != 1) {
+    const QStringList fields{QStringLiteral("frameMode"), QStringLiteral("frameScale"),
+        QStringLiteral("frameOffsetX"), QStringLiteral("frameOffsetY"), QStringLiteral("frameRotationDegrees"),
+        QStringLiteral("opacity"), QStringLiteral("audioGainDb"), QStringLiteral("fadeInSeconds"),
+        QStringLiteral("fadeOutSeconds"), QStringLiteral("playbackRate"), QStringLiteral("effectStack"),
+        QStringLiteral("transitionInName"), QStringLiteral("transitionOutName"),
+        QStringLiteral("transitionInSeconds"), QStringLiteral("transitionOutSeconds")};
+    QVariantMap diagnostic;
+    for (const auto& field : fields) diagnostic.insert(field, transformed_clip.value(field));
+    diagnostic.insert(QStringLiteral("markerCount"), overwrite_controller.sequenceMarkers().size());
+    diagnostic.insert(QStringLiteral("status"), overwrite_controller.status());
+    std::cerr << QJsonDocument::fromVariant(diagnostic).toJson(QJsonDocument::Compact).constData() << '\n';
     return fail("extended clip controls, effects, transitions, and markers should persist on the selected clip");
   }
   if (overwrite_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("status")).toString() != QStringLiteral("approved")) {
     return fail("marker status should update independently of clip controls");
   }
+
+  // Placeholder video sources have no confirmed audio stream. Gain must stay
+  // unavailable there; exercise gain persistence on a declared audio clip.
+  TimelineDocumentController audio_gain_controls;
+  audio_gain_controls.createTimeline(QStringLiteral("Audio Gain Controls"));
+  audio_gain_controls.addClipFromGallery(QStringLiteral("audio:gain-controls"),
+      audio_clip, QStringLiteral("Audio Gain Source"), 4.0, QString{});
+  audio_gain_controls.setSelectedClipAudioGain(-4.5);
+  const auto gain_clip = audio_gain_controls.currentClip();
+  if (gain_clip.value(QStringLiteral("mediaType")).toString() != QStringLiteral("audio") ||
+      !gain_clip.value(QStringLiteral("hasAudio")).toBool() ||
+      !nearly_equal(gain_clip.value(QStringLiteral("audioGainDb")).toDouble(), -4.5))
+    return fail("declared audio clips should preserve their selected gain while unknown video audio stays unavailable");
 
   TimelineDocumentController rate_truth_controller;
   rate_truth_controller.createTimeline(QStringLiteral("Playback Rate Truth"));

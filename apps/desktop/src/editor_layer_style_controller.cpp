@@ -278,6 +278,30 @@ QString local_path(const QString& path) {
   return url.isLocalFile() ? url.toLocalFile() : path;
 }
 
+struct EditableStyleTarget {
+  QVariantList layers;
+  QVariantMap layer;
+  LayerStyleStack stack;
+};
+
+std::optional<EditableStyleTarget> editable_style_target(
+    const QVariantList& layers, int index, bool content_work_running,
+    const std::function<void(const QString&)>& report_error) {
+  if (content_work_running || index < 0 || index >= layers.size() ||
+      layer_or_ancestor_locked(layers, index)) return std::nullopt;
+  EditableStyleTarget target{layers, layers.at(index).toMap(), {}};
+  if (!style_target_supported(target.layer)) {
+    report_error(QStringLiteral("Layer styles are not supported for this layer type."));
+    return std::nullopt;
+  }
+  QString error;
+  if (!load_stack(target.layer, &target.stack, &error)) {
+    report_error(QStringLiteral("Layer styles could not be read: %1").arg(error));
+    return std::nullopt;
+  }
+  return target;
+}
+
 }  // namespace
 
 QVariantList EditorPreviewController::photoLayerStyles(int index) const {
@@ -312,20 +336,12 @@ double EditorPreviewController::documentPhotoLayerStyleLightAngle() const {
 
 bool EditorPreviewController::addPhotoLayerStyle(int index, const QString& type) {
   const auto access = customer_edit_access_.enter();
-  auto layers = layer_session_.layers();
-  if (!access || professional_content_work_running_ || index < 0 ||
-      index >= layers.size() || layer_or_ancestor_locked(layers, index)) return false;
-  auto layer = layers.at(index).toMap();
-  if (!style_target_supported(layer)) {
-    setStatus(QStringLiteral("Layer styles are not supported for this layer type."));
-    return false;
-  }
-  LayerStyleStack stack;
+  if (!access) return false;
+  auto target = editable_style_target(layer_session_.layers(), index, professional_content_work_running_,
+      [&](const QString& message) { setStatus(message); });
+  if (!target) return false;
+  auto& [layers, layer, stack] = *target;
   QString error;
-  if (!load_stack(layer, &stack, &error)) {
-    setStatus(QStringLiteral("Layer styles could not be read: %1").arg(error));
-    return false;
-  }
   LayerStyleOperation operation;
   if (!codec::create_default_operation(type,
           QUuid::createUuid().toString(QUuid::WithoutBraces), &operation, &error)) {
@@ -348,20 +364,12 @@ bool EditorPreviewController::addPhotoLayerStyle(int index, const QString& type)
 bool EditorPreviewController::setPhotoLayerStyleParameters(
     int index, const QString& style_id, const QVariantMap& parameters) {
   const auto access = customer_edit_access_.enter();
-  auto layers = layer_session_.layers();
-  if (!access || professional_content_work_running_ || index < 0 ||
-      index >= layers.size() || layer_or_ancestor_locked(layers, index)) return false;
-  auto layer = layers.at(index).toMap();
-  if (!style_target_supported(layer)) {
-    setStatus(QStringLiteral("Layer styles are not supported for this layer type."));
-    return false;
-  }
-  LayerStyleStack stack;
+  if (!access) return false;
+  auto target = editable_style_target(layer_session_.layers(), index, professional_content_work_running_,
+      [&](const QString& message) { setStatus(message); });
+  if (!target) return false;
+  auto& [layers, layer, stack] = *target;
   QString error;
-  if (!load_stack(layer, &stack, &error)) {
-    setStatus(QStringLiteral("Layer styles could not be read: %1").arg(error));
-    return false;
-  }
   const auto position = operation_index(stack, style_id);
   if (position < 0) return false;
   auto& current = stack.operations[static_cast<std::size_t>(position)];
@@ -393,20 +401,12 @@ bool EditorPreviewController::setPhotoLayerStyleParameters(
 bool EditorPreviewController::setPhotoLayerStyleEnabled(
     int index, const QString& style_id, bool enabled) {
   const auto access = customer_edit_access_.enter();
-  auto layers = layer_session_.layers();
-  if (!access || professional_content_work_running_ || index < 0 ||
-      index >= layers.size() || layer_or_ancestor_locked(layers, index)) return false;
-  auto layer = layers.at(index).toMap();
-  if (!style_target_supported(layer)) {
-    setStatus(QStringLiteral("Layer styles are not supported for this layer type."));
-    return false;
-  }
-  LayerStyleStack stack;
+  if (!access) return false;
+  auto target = editable_style_target(layer_session_.layers(), index, professional_content_work_running_,
+      [&](const QString& message) { setStatus(message); });
+  if (!target) return false;
+  auto& [layers, layer, stack] = *target;
   QString error;
-  if (!load_stack(layer, &stack, &error)) {
-    setStatus(QStringLiteral("Layer styles could not be read: %1").arg(error));
-    return false;
-  }
   const auto position = operation_index(stack, style_id);
   if (position < 0) return false;
   auto& operation = stack.operations[static_cast<std::size_t>(position)];
@@ -521,20 +521,12 @@ bool EditorPreviewController::setPhotoLayerStyleLightLinked(int index,
 bool EditorPreviewController::movePhotoLayerStyle(
     int index, const QString& style_id, int destination) {
   const auto access = customer_edit_access_.enter();
-  auto layers = layer_session_.layers();
-  if (!access || professional_content_work_running_ || index < 0 ||
-      index >= layers.size() || layer_or_ancestor_locked(layers, index)) return false;
-  auto layer = layers.at(index).toMap();
-  if (!style_target_supported(layer)) {
-    setStatus(QStringLiteral("Layer styles are not supported for this layer type."));
-    return false;
-  }
-  LayerStyleStack stack;
+  if (!access) return false;
+  auto target = editable_style_target(layer_session_.layers(), index, professional_content_work_running_,
+      [&](const QString& message) { setStatus(message); });
+  if (!target) return false;
+  auto& [layers, layer, stack] = *target;
   QString error;
-  if (!load_stack(layer, &stack, &error)) {
-    setStatus(QStringLiteral("Layer styles could not be read: %1").arg(error));
-    return false;
-  }
   const auto source = operation_index(stack, style_id);
   if (source < 0 || destination < 0 || destination >= static_cast<int>(stack.operations.size()) ||
       source == destination) return false;
@@ -552,20 +544,12 @@ bool EditorPreviewController::movePhotoLayerStyle(
 
 bool EditorPreviewController::removePhotoLayerStyle(int index, const QString& style_id) {
   const auto access = customer_edit_access_.enter();
-  auto layers = layer_session_.layers();
-  if (!access || professional_content_work_running_ || index < 0 ||
-      index >= layers.size() || layer_or_ancestor_locked(layers, index)) return false;
-  auto layer = layers.at(index).toMap();
-  if (!style_target_supported(layer)) {
-    setStatus(QStringLiteral("Layer styles are not supported for this layer type."));
-    return false;
-  }
-  LayerStyleStack stack;
+  if (!access) return false;
+  auto target = editable_style_target(layer_session_.layers(), index, professional_content_work_running_,
+      [&](const QString& message) { setStatus(message); });
+  if (!target) return false;
+  auto& [layers, layer, stack] = *target;
   QString error;
-  if (!load_stack(layer, &stack, &error)) {
-    setStatus(QStringLiteral("Layer styles could not be read: %1").arg(error));
-    return false;
-  }
   const auto position = operation_index(stack, style_id);
   if (position < 0) return false;
   stack.operations.erase(stack.operations.begin() + position);

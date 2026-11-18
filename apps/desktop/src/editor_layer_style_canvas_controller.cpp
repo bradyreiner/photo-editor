@@ -365,7 +365,10 @@ EditState EditorPreviewController::applyPhotoLayerStyleGesturePreview(EditState 
 
 bool EditorPreviewController::finishPhotoLayerStyleGesture(int index, const QString& layer_id,
     const QString& style_id, bool commit) {
-  const auto access = commit ? customer_edit_access_.enter() : customer_edit_access_.restore();
+  const auto access = [&]() -> CustomerEditAccess::Scope {
+    if (commit) return customer_edit_access_.enter();
+    return customer_edit_access_.restore();
+  }();
   if (!photo_layer_style_gesture_ || photo_layer_style_gesture_->layer_id != layer_id ||
       photo_layer_style_gesture_->style_id != style_id) return false;
   const auto gesture = *photo_layer_style_gesture_;

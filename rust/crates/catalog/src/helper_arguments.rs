@@ -153,11 +153,17 @@ mod tests {
         }))
         .unwrap();
         let arguments = decode_helper_arguments(
-            vec!["catalog_carousel_documents".into(), "--stdin-json-v1".into()],
+            vec![
+                "catalog_carousel_documents".into(),
+                "--stdin-json-v1".into(),
+            ],
             envelope.as_slice(),
         )
         .unwrap();
-        assert_eq!(arguments, vec!["catalog_carousel_documents", "upsert", &payload]);
+        assert_eq!(
+            arguments,
+            vec!["catalog_carousel_documents", "upsert", &payload]
+        );
         let restored: PersistedCarouselDocument = serde_json::from_str(&arguments[2]).unwrap();
         assert_eq!(restored, expected);
     }

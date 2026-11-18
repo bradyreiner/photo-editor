@@ -31,12 +31,28 @@ export function checkSetup(config, { environment = 'staging', publicKey, secrets
   requireField(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(db?.database_id || '') &&
     db.database_id !== '00000000-0000-0000-0000-000000000000', 'DB requires a real D1 database ID');
   requireField(config?.assets?.run_worker_first === true, 'ASSETS must run the Worker before serving staff pages');
-  requireField(config?.workers_dev === false && config?.preview_urls === false, 'disable workers_dev and preview_urls for staff access');
+  requireField(config?.preview_urls===false,'disable preview_urls for staff access');
+  if(config?.workers_dev===true) {
+    const worker=config.name;
+    requireField(environment==='staging' && vars.ALLOW_TEST_PURCHASES==='true','workers_dev is restricted to explicit staging');
+    requireField(typeof worker==='string' && /^[a-z0-9-]+$/.test(worker) && issuer?.port==='' &&
+      new RegExp('^'+worker+'\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.workers\\.dev$').test(issuer?.hostname||''),
+      'workers_dev issuer must match the exact configured worker account hostname');
+  } else {
+    requireField(config?.workers_dev===false,'workers_dev must be explicitly disabled for custom domains');
+    requireField(!issuer?.hostname.endsWith('.workers.dev'),'workers.dev requires explicit staging workers_dev mode');
+  }
   requireField(/^[A-Za-z0-9_-]{1,80}$/.test(vars.SIGNING_KEY_ID || ''), 'SIGNING_KEY_ID is invalid');
   requireField(/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(vars.ACCESS_TEAM_DOMAIN || ''), 'ACCESS_TEAM_DOMAIN is missing or invalid');
   requireField(populated(vars.ACCESS_AUDIENCE), 'ACCESS_AUDIENCE is missing');
   const paddle=typeof vars.PADDLE_PRODUCT_POLICY==='string' && vars.PADDLE_PRODUCT_POLICY!=='{}';
   requireField(/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(vars.EMAIL_FROM||'') && populated(vars.EMAIL_FROM),'EMAIL_FROM requires a verified sender');
+  if(typeof vars.EMAIL_FROM==='string' && vars.EMAIL_FROM.toLowerCase().endsWith('@resend.dev')) {
+    requireField(environment==='staging' && vars.ALLOW_TEST_PURCHASES==='true' && vars.EMAIL_FROM.toLowerCase()==='onboarding@resend.dev',
+      'Resend onboarding sender is restricted to private staging');
+    requireField(/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(vars.EMAIL_TEST_RECIPIENT||'') && populated(vars.EMAIL_TEST_RECIPIENT),
+      'EMAIL_TEST_RECIPIENT requires the registered Resend owner email');
+  } else requireField(!vars.EMAIL_TEST_RECIPIENT,'EMAIL_TEST_RECIPIENT is only used with the Resend onboarding sender');
   if(paddle) {
     requireField(vars.PADDLE_ENVIRONMENT===(environment==='production'?'live':'sandbox'),'PADDLE_ENVIRONMENT must match selected environment');
     let origin;try{origin=new URL(vars.PADDLE_CHECKOUT_ORIGIN);}catch{}

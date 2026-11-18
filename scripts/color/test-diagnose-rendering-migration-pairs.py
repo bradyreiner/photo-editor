@@ -69,6 +69,9 @@ def main() -> int:
         (packet / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         output = root / "diagnosis.json"
         common = ("--packet", str(packet), "--output", str(output), "--max-width", "16")
+        missing_decoder = run(*common, "--ffmpeg", str(root / "missing-ffmpeg-decoder"), expect=1)
+        if "Install FFmpeg or pass --ffmpeg" not in missing_decoder.stderr:
+            raise AssertionError("missing media decoder did not report an actionable prerequisite")
         run(*common)
         diagnosis = json.loads(output.read_text(encoding="utf-8"))
         metrics = diagnosis["assets"][0]["metrics"]

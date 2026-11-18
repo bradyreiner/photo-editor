@@ -304,7 +304,8 @@ def main():
     paths = sorted((args.root / "apps/desktop/qml").rglob("*.qml"))
     if not paths:
         parser.error("no production QML found")
-    report = audit_sources({str(path.relative_to(args.root)): path.read_text() for path in paths})
+    report = audit_sources({path.relative_to(args.root).as_posix(): path.read_text(encoding="utf-8")
+                            for path in paths})
     report["qml_files"] = len(paths)
     print(json.dumps(report, indent=2))
     return 0 if report["passed"] else 1
