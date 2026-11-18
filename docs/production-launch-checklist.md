@@ -25,6 +25,9 @@ The first milestone is a private staging release that can complete the entire
 customer journey. Apple enrollment and infrastructure setup can proceed while
 the missing software and CI failures are addressed.
 
+Local implementation checks and Account-panel fixture captures are recorded in
+[the customer-system verification record](releases/customer-platform-2026-11-17/README.md).
+
 ### Current state and implementation gaps
 
 | Area | Verified current state | Required next work |
